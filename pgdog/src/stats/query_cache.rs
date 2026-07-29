@@ -19,15 +19,16 @@ pub struct QueryCache {
     stats: Stats,
     len: usize,
     prepared_statements: usize,
+    prepared_statements_capacity: usize,
     prepared_statements_memory: usize,
 }
 
 impl QueryCache {
     pub(crate) fn load() -> Self {
-        let (prepared_statements, prepared_statements_memory) = {
+        let (prepared_statements, prepared_statements_capacity, prepared_statements_memory) = {
             let global = PreparedStatements::global();
             let guard = global.read();
-            (guard.len(), guard.memory_usage())
+            (guard.len(), guard.capacity(), guard.memory_usage())
         };
 
         let (stats, len) = Cache::stats();
@@ -36,6 +37,7 @@ impl QueryCache {
             stats,
             len,
             prepared_statements,
+            prepared_statements_capacity,
             prepared_statements_memory,
         }
     }
@@ -88,6 +90,12 @@ impl QueryCache {
                 name: "prepared_statements".into(),
                 help: "Number of prepared statements in the cache".into(),
                 value: self.prepared_statements,
+                gauge: true,
+            }),
+            Metric::new(QueryCacheMetric {
+                name: "prepared_statements_capacity".into(),
+                help: "Number of slots allocated by the prepared statements cache".into(),
+                value: self.prepared_statements_capacity,
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {
@@ -173,6 +181,7 @@ mod tests {
             },
             len: 5,
             prepared_statements: 6,
+            prepared_statements_capacity: 8,
             prepared_statements_memory: 7,
         };
 
@@ -189,6 +198,7 @@ mod tests {
                 "query_cache_parse_time".to_string(),
                 "query_cache_fingerprints".to_string(),
                 "prepared_statements".to_string(),
+                "prepared_statements_capacity".to_string(),
                 "prepared_statements_memory_used".to_string(),
             ]
         );

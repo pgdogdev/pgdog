@@ -40,7 +40,7 @@ impl MemoryUsage for GlobalCache {
         self.statements.memory_usage()
             + self.names.memory_usage()
             + self.counter.memory_usage()
-            + self.unused.capacity() * 1usize.memory_usage()
+            + self.unused.memory_usage()
     }
 }
 
@@ -184,6 +184,12 @@ impl GlobalCache {
     /// Number of prepared statements in the local cache.
     pub(crate) fn len(&self) -> usize {
         self.statements.len()
+    }
+
+    /// Number of slots allocated by the statements table. A capacity far
+    /// above `len` means the cache is holding on to memory from a past spike.
+    pub fn capacity(&self) -> usize {
+        self.statements.capacity()
     }
 
     /// True if the local cache is empty.
@@ -611,5 +617,34 @@ mod test {
         assert!(cache.statements.is_empty());
         assert!(cache.names.is_empty());
         assert!(cache.unused.is_empty());
+    }
+
+    #[test]
+    fn test_memory_usage_counts_table_capacity() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let spike_capacity = cache.capacity();
+        assert!(spike_capacity >= 10_000);
+
+        for i in 1..=10_000 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(100);
+        assert_eq!(cache.len(), 100);
+
+        // The table holds on to its allocation after the spike (capacity()
+        // may dip slightly due to tombstones); the accounting must report
+        // that memory.
+        assert!(cache.capacity() * 2 >= spike_capacity);
+        let table_floor = cache.capacity() * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
+        assert!(
+            cache.memory_usage() >= table_floor,
+            "memory_usage {} must include table capacity {}",
+            cache.memory_usage(),
+            table_floor
+        );
     }
 }
