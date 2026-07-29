@@ -77,7 +77,7 @@ mod tests {
         let mut binding = Binding::Direct(guard, 0);
 
         let result = binding
-            .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1)
+            .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)
             .await;
 
         // Should fail with TwoPcMultiShardOnly error
@@ -97,7 +97,7 @@ mod tests {
         let mut binding = Binding::Admin(admin_server);
 
         let result = binding
-            .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1)
+            .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)
             .await;
 
         // Should fail with TwoPcMultiShardOnly error
@@ -113,7 +113,7 @@ mod tests {
         let transaction = TwoPcTransaction::new();
 
         // Test Phase1 - PREPARE TRANSACTION
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase1).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase1, false).await;
 
         // Should succeed
         if let Err(ref error) = result {
@@ -122,7 +122,9 @@ mod tests {
         assert!(result.is_ok());
 
         // Cleanup: Rollback the prepared transaction to avoid leaving dangling transactions
-        let _cleanup = binding.two_pc(transaction, TwoPcPhase::Rollback).await;
+        let _cleanup = binding
+            .two_pc(transaction, TwoPcPhase::Rollback, false)
+            .await;
     }
 
     #[tokio::test]
@@ -132,12 +134,12 @@ mod tests {
 
         // First prepare the transaction
         binding
-            .two_pc(transaction, TwoPcPhase::Phase1)
+            .two_pc(transaction, TwoPcPhase::Phase1, false)
             .await
             .expect("Phase1 should succeed");
 
         // Then commit it
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase2).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase2, false).await;
         assert!(result.is_ok());
     }
 
@@ -148,12 +150,14 @@ mod tests {
 
         // First prepare the transaction
         binding
-            .two_pc(transaction, TwoPcPhase::Phase1)
+            .two_pc(transaction, TwoPcPhase::Phase1, false)
             .await
             .expect("Phase1 should succeed");
 
         // Then rollback
-        let result = binding.two_pc(transaction, TwoPcPhase::Rollback).await;
+        let result = binding
+            .two_pc(transaction, TwoPcPhase::Rollback, false)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -164,18 +168,17 @@ mod tests {
 
         // First prepare the transaction
         binding
-            .two_pc(transaction, TwoPcPhase::Phase1)
+            .two_pc(transaction, TwoPcPhase::Phase1, false)
             .await
             .expect("Phase1 should succeed");
 
         // Then commit it
         binding
-            .two_pc(transaction, TwoPcPhase::Phase2)
+            .two_pc(transaction, TwoPcPhase::Phase2, true)
             .await
             .expect("Phase2 should succeed");
 
-        // Try to commit again - should succeed because skip_missing is true for Phase2
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase2).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase2, true).await;
         assert!(
             result.is_ok(),
             "Committing non-existent prepared transaction should be skipped"
@@ -189,18 +192,20 @@ mod tests {
 
         // First prepare the transaction
         binding
-            .two_pc(transaction, TwoPcPhase::Phase1)
+            .two_pc(transaction, TwoPcPhase::Phase1, true)
             .await
             .expect("Phase1 should succeed");
 
         // Then rollback it
         binding
-            .two_pc(transaction, TwoPcPhase::Rollback)
+            .two_pc(transaction, TwoPcPhase::Rollback, true)
             .await
             .expect("Rollback should succeed");
 
         // Try to rollback again - should succeed because skip_missing is true for Rollback
-        let result = binding.two_pc(transaction, TwoPcPhase::Rollback).await;
+        let result = binding
+            .two_pc(transaction, TwoPcPhase::Rollback, true)
+            .await;
         assert!(
             result.is_ok(),
             "Rolling back non-existent prepared transaction should be skipped"
@@ -216,19 +221,17 @@ mod tests {
         let transaction = TwoPcTransaction::new();
 
         // 1. Prepare transaction
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase1).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase1, false).await;
         assert!(result.is_ok(), "Phase1 preparation should succeed");
 
         // 2. Try to prepare the same transaction again - PostgreSQL behavior may vary
-        let _result = binding.two_pc(transaction, TwoPcPhase::Phase1).await;
-        // Note: PostgreSQL behavior for duplicate PREPARE TRANSACTION can vary depending on context
+        let _result = binding.two_pc(transaction, TwoPcPhase::Phase1, true).await;
 
         // 3. Commit the prepared transaction
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase2).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase2, true).await;
         assert!(result.is_ok(), "Phase2 commit should succeed");
 
-        // 4. Try to commit again - should succeed (skip_missing = true)
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase2).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase2, true).await;
         assert!(
             result.is_ok(),
             "Committing non-existent transaction should be skipped"
@@ -241,15 +244,17 @@ mod tests {
         let transaction = TwoPcTransaction::new();
 
         // 1. Prepare transaction
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase1).await;
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase1, false).await;
         assert!(result.is_ok(), "Phase1 preparation should succeed");
 
         // 2. Rollback the prepared transaction
-        let result = binding.two_pc(transaction, TwoPcPhase::Rollback).await;
+        let result = binding
+            .two_pc(transaction, TwoPcPhase::Rollback, true)
+            .await;
         assert!(result.is_ok(), "Rollback should succeed");
 
-        // 3. Try to commit after rollback - should succeed (skip_missing = true)
-        let result = binding.two_pc(transaction, TwoPcPhase::Phase2).await;
+        // 3. Try to commit after rollback
+        let result = binding.two_pc(transaction, TwoPcPhase::Phase2, true).await;
         assert!(
             result.is_ok(),
             "Committing rolled back transaction should be skipped"

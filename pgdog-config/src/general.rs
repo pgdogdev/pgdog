@@ -626,7 +626,7 @@ pub struct General {
     #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
     pub two_phase_commit_wal_fsync_interval: u64,
 
-    /// How often, in seconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
+    /// How often, in milliseconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
     ///
     /// _Default:_ `60`
     ///

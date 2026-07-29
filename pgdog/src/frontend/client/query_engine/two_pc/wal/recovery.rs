@@ -1,7 +1,7 @@
 //! Handle recovering the state
 //! of the 2pc manager from WAL segments.
 
-use super::{super::Manager, EXTENSION, Segment, WalWriter};
+use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
 use crate::net::Error;
 use std::path::PathBuf;
 use tokio::fs::read_dir;
@@ -14,6 +14,13 @@ pub(crate) struct Recovery {
 }
 
 impl Recovery {
+    /// Load all segments from the WAL directory in preparation
+    /// for recovery.
+    ///
+    /// # Arguments
+    ///
+    /// - `path`: WAL directory
+    ///
     pub(crate) async fn new(path: &PathBuf) -> Result<Self, Error> {
         let mut dir = read_dir(path).await?;
         let mut files = vec![];
@@ -66,7 +73,17 @@ impl Recovery {
         })
     }
 
-    pub(crate) async fn run(self, manager: &Manager) -> Result<WalWriter, Error> {
+    /// Run the recovery.
+    ///
+    /// # Arguments
+    ///
+    /// - `manager`: 2pc manager.
+    ///
+    pub(crate) async fn run(
+        self,
+        manager: &Manager,
+        segment_size: usize,
+    ) -> Result<WalWriter, Error> {
         let mut counter = 0;
         let mut size = 0;
         let start = Instant::now();
@@ -79,6 +96,11 @@ impl Recovery {
             size += segment.size();
 
             segment.replay(manager)?;
+
+            // These can be checkpointed,
+            // we are going to create a new segment at the end of
+            // recovery.
+            SegmentRegistry::get().record(segment.counter, SegmentStatus::Inactive);
         }
 
         info!(
@@ -91,6 +113,7 @@ impl Recovery {
         // in its state.
         manager.cleanup_all();
 
-        WalWriter::new(&self.path, counter + 1).await
+        // Create the writer with a brand new segment.
+        WalWriter::new(&self.path, counter + 1, segment_size).await
     }
 }

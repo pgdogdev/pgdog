@@ -4,7 +4,7 @@
 //!
 use bytes::{Buf, BufMut, Bytes};
 
-use crate::net::{Error, FromBytes, Payload, ToBytes};
+use crate::net::{Payload, ToBytes};
 
 pub(crate) mod add;
 pub(crate) mod records;
@@ -40,59 +40,11 @@ impl Record {
     }
 }
 
-impl FromBytes for Record {
-    fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
-        if bytes.len() < 5 {
-            return Err(Error::UnexpectedEof);
-        }
-
-        let code = bytes.get_u8() as char;
-        let len = bytes.get_i32();
-        if len < 4 {
-            return Err(Error::UnexpectedEof);
-        }
-
-        let data_len = len as usize - 4;
-        if bytes.remaining() < data_len {
-            return Err(Error::UnexpectedEof);
-        }
-
-        let data = bytes.split_to(data_len);
-
-        Ok(Self { code, data })
-    }
-}
-
 impl ToBytes for Record {
     fn to_bytes(&self) -> Bytes {
         let mut payload = Payload::named(self.code);
         payload.put(self.data.clone());
 
         payload.freeze()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_invalid_length() {
-        let bytes = Bytes::from_static(&[b'1', 0, 0, 0, 3]);
-
-        assert!(matches!(
-            Record::from_bytes(bytes),
-            Err(Error::UnexpectedEof)
-        ));
-    }
-
-    #[test]
-    fn test_truncated_record() {
-        let bytes = Bytes::from_static(&[b'1', 0, 0, 0, 5]);
-
-        assert!(matches!(
-            Record::from_bytes(bytes),
-            Err(Error::UnexpectedEof)
-        ));
     }
 }

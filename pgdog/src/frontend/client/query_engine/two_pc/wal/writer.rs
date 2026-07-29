@@ -22,6 +22,7 @@ pub(crate) struct WalWriter {
     segment: Arc<ArcSwap<LiveSegment>>,
     path: PathBuf,
     inner: Arc<Inner>,
+    segment_size: usize,
 }
 
 #[derive(Debug, Default)]
@@ -45,7 +46,7 @@ impl WalWriter {
         //
         // This is safe, the old segment will flush all records
         // written to it on shutdown.
-        if total > 16_000_000 {
+        if total > self.segment_size {
             let can_swap = self.inner.swapping.swap(true, Ordering::SeqCst);
 
             if can_swap {
@@ -79,9 +80,15 @@ impl WalWriter {
         Ok(())
     }
 
-    pub(crate) async fn new(path: &PathBuf, counter: u64) -> Result<Self, Error> {
+    pub(crate) async fn new(
+        path: &PathBuf,
+        counter: u64,
+        segment_size: usize,
+    ) -> Result<Self, Error> {
         // Create the first segment.
         let segment = LiveSegment::new(path, counter).await?;
+
+        SegmentRegistry::get().record(counter, SegmentStatus::Active);
 
         Ok(Self {
             path: path.clone(),
@@ -90,6 +97,7 @@ impl WalWriter {
                 number: AtomicU64::new(counter + 1),
                 ..Default::default()
             }),
+            segment_size,
         })
     }
 }

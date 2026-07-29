@@ -4,12 +4,14 @@ use super::super::super::Manager;
 use super::*;
 
 #[derive(Debug, Clone)]
-pub enum Records {
+pub(crate) enum Records {
     Add(TwoPcRecordAdd),
     Remove(TwoPcRecordRemove),
 }
 
 impl Records {
+    /// Replay record against the two phase commit
+    /// transaction manager.
     pub(crate) fn replay(&self, manager: &Manager) {
         match self {
             Records::Add(add) => manager.transaction_state_manual(

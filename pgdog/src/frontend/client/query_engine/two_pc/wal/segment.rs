@@ -10,13 +10,16 @@ use tokio::{
 };
 use tracing::debug;
 
-use super::{super::Manager, Record, record::Records};
+use super::{super::Manager, Record, Records};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Segment {
     pub(super) counter: u64,
+    // Keeping the version around. Allows us to switch WAL format
+    // versions later.
+    #[allow(dead_code)]
     version: u32,
-    records: Vec<Record>,
+    pub(super) records: Vec<Record>,
 }
 
 impl Segment {
@@ -104,6 +107,7 @@ impl Segment {
         path.join(format!("{}.{}", number, EXTENSION))
     }
 
+    #[cfg(test)]
     pub(super) fn records(&self) -> &[Record] {
         &self.records
     }

@@ -3,6 +3,7 @@
 use std::fs::read_to_string;
 use std::path::Path;
 use std::process::exit;
+use std::time::Duration;
 
 use clap::Parser;
 use pgdog::backend::databases;
@@ -154,7 +155,19 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             }
 
             if general.two_phase_commit {
-                warn!("[2pc] wal disabled, 2pc will run without durability")
+                if let Some(ref path) = general.two_phase_commit_wal_dir {
+                    let checkpoint_interval =
+                        Duration::from_millis(general.two_phase_commit_wal_checkpoint_interval);
+                    Manager::get()
+                        .enable_wal(
+                            path,
+                            checkpoint_interval,
+                            general.two_phase_commit_wal_segment_size as usize,
+                        )
+                        .await?;
+                } else {
+                    warn!("[2pc] wal disabled, 2pc will run without crash recovery")
+                }
             }
 
             let mut listener = Listener::new(format!("{}:{}", general.host, general.port));

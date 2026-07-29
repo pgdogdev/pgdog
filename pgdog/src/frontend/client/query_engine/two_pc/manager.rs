@@ -34,7 +34,7 @@ use crate::{
 
 use super::{
     Error, TwoPcGuard, TwoPcPhase, TwoPcStats, TwoPcTransaction,
-    wal::{Recovery, TwoPcRecordAction, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
+    wal::{Checkpointer, Recovery, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
 };
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
@@ -80,16 +80,27 @@ impl Manager {
     ///
     /// # Arguments
     ///
-    /// - `path`: WAL directory.
+    /// - `wal_directory`: WAL directory.
+    /// - `checkpoint_interval`: How frequently to run the checkpointer.
+    /// - `segment_size`: Maximum size of a WAL segment. Soft limit.
     ///
-    pub(crate) async fn enable_wal(&self, path: &PathBuf) -> Result<(), Error> {
-        let writer = Recovery::new(path).await?.run(self).await?;
+    pub async fn enable_wal(
+        &self,
+        wal_directory: &PathBuf,
+        checkpoint_interval: Duration,
+        segment_size: usize,
+    ) -> Result<(), Error> {
+        let writer = Recovery::new(wal_directory)
+            .await?
+            .run(self, segment_size)
+            .await?;
         self.wal.store(Some(Arc::new(writer)));
+
+        Checkpointer::spawn(wal_directory.clone(), self.clone(), checkpoint_interval);
 
         Ok(())
     }
 
-    #[cfg(test)]
     pub(super) fn transaction(&self, transaction: &TwoPcTransaction) -> Option<TransactionInfo> {
         self.inner.lock().transactions.get(transaction).cloned()
     }
@@ -305,7 +316,7 @@ impl Manager {
                 &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
             )
             .await?;
-        connection.two_pc(transaction, phase).await?;
+        connection.two_pc(transaction, phase, true).await?;
         connection.disconnect();
 
         Ok(())

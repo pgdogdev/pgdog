@@ -8,33 +8,6 @@ use super::Record;
 
 use crate::net::{Payload, c_string_buf};
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TwoPcRecordAction {
-    Add,
-    Remove,
-}
-
-impl TryFrom<u8> for TwoPcRecordAction {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Ok(match value {
-            0 => TwoPcRecordAction::Add,
-            1 => TwoPcRecordAction::Remove,
-            _ => return Err(()),
-        })
-    }
-}
-
-impl From<TwoPcRecordAction> for u8 {
-    fn from(value: TwoPcRecordAction) -> Self {
-        match value {
-            TwoPcRecordAction::Add => 0,
-            TwoPcRecordAction::Remove => 1,
-        }
-    }
-}
-
 /// Two phase commit transaction record.
 /// Contains all the information we need to replay it against
 /// the manager.
@@ -86,33 +59,5 @@ impl TryFrom<Record> for TwoPcRecordAdd {
                 identifier: Arc::new(User { user, database }),
             },
         })
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::net::{FromBytes, ToBytes};
-
-    use super::*;
-
-    #[test]
-    fn test_roundtrip() {
-        let record = TwoPcRecordAdd {
-            transaction: TwoPcTransaction(123456),
-            info: TransactionInfo {
-                phase: TwoPcPhase::Phase1,
-                identifier: Arc::new(User {
-                    user: "pgdog".into(),
-                    database: "prod".into(),
-                }),
-            },
-        };
-
-        let wal_record = Record::from(record.clone());
-        let bytes = wal_record.to_bytes();
-        let wal_record = Record::from_bytes(bytes).unwrap();
-        let wal_record = TwoPcRecordAdd::try_from(wal_record).unwrap();
-
-        assert_eq!(wal_record, record);
     }
 }

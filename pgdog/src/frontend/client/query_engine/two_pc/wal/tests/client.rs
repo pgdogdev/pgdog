@@ -1,10 +1,11 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
 use crate::backend::pool::Request;
 use crate::backend::{Cluster, databases::databases};
-use crate::config;
+use crate::config::{self, config};
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::statement::phase_control;
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction, wal::Segment};
@@ -25,6 +26,7 @@ impl TwoPcTestClient {
     //
     pub(super) async fn execute(&self) {
         let mut conns = vec![];
+
         for shard in self.cluster.shards() {
             conns.push(shard.primary(&Request::default()).await.unwrap());
         }
@@ -68,10 +70,22 @@ impl TwoPcTestClient {
 
         let manager = Manager::init();
         let tmp = TempDir::new().unwrap();
-        manager.enable_wal(&tmp.path().to_owned()).await.unwrap();
+        manager
+            .enable_wal(
+                &tmp.path().to_owned(),
+                Duration::from_millis(
+                    config()
+                        .config
+                        .general
+                        .two_phase_commit_wal_checkpoint_interval,
+                ),
+                1_000_000, // 1MB
+            )
+            .await
+            .unwrap();
         let cluster = databases()
             .cluster(("pgdog", Some("pgdog")))
-            .expect("test database is configured");
+            .expect("test database is not configured");
 
         Self {
             cluster,
@@ -113,7 +127,16 @@ impl TwoPcTestClient {
     pub(super) async fn recover(&self) -> Manager {
         let manager = Manager::init();
         manager
-            .enable_wal(&self.tmp.path().to_owned())
+            .enable_wal(
+                &self.tmp.path().to_owned(),
+                Duration::from_millis(
+                    config()
+                        .config
+                        .general
+                        .two_phase_commit_wal_checkpoint_interval,
+                ),
+                1_000_000, // 1MB
+            )
             .await
             .unwrap();
         manager

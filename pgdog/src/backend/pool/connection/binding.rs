@@ -366,9 +366,8 @@ impl Binding {
         servers: &mut [Guard],
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
+        ignore_missing: bool,
     ) -> Result<(), Error> {
-        let skip_missing = matches!(phase, TwoPcPhase::Phase2 | TwoPcPhase::Rollback);
-
         let mut futures = Vec::new();
         for (shard, server) in servers.iter_mut().enumerate() {
             let query = phase_control(transaction, shard, phase);
@@ -380,7 +379,7 @@ impl Binding {
         for (shard, result) in results.into_iter().enumerate() {
             match result {
                 Err(Error::ExecutionError(err)) => {
-                    if !(skip_missing && err.code == "42704") {
+                    if !(ignore_missing && err.code == "42704") {
                         return Err(Error::ExecutionError(err));
                     }
                 }
@@ -401,10 +400,11 @@ impl Binding {
         &mut self,
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
+        ignore_missing: bool,
     ) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers, _) => {
-                Self::two_pc_on_guards(servers, transaction, phase).await
+                Self::two_pc_on_guards(servers, transaction, phase, ignore_missing).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),

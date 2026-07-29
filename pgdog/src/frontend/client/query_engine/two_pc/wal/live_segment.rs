@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{Record, Segment};
+use super::{Record, Segment, SegmentRegistry, SegmentStatus};
 use crate::{
     net::{Error, ToBytes},
     tasks,
@@ -35,6 +35,7 @@ pub(crate) struct LiveSegment {
     notify: Arc<Notify>,
     shutdown: CancellationToken,
     path: PathBuf,
+    counter: u64,
 }
 
 impl LiveSegment {
@@ -60,6 +61,7 @@ impl LiveSegment {
             notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
             path: filename,
+            counter: number,
         };
 
         let write = segment.clone();
@@ -95,6 +97,7 @@ impl LiveSegment {
     /// the writer.
     pub(crate) fn shutdown(&self) {
         self.shutdown.cancel();
+        SegmentRegistry::get().record(self.counter, SegmentStatus::ShuttingDown);
     }
 
     async fn writer(self, mut file: File) {
@@ -110,6 +113,9 @@ impl LiveSegment {
                 }
             }
         }
+
+        // Mark this segment ready for cleanup.
+        SegmentRegistry::get().record(self.counter, SegmentStatus::Inactive);
     }
 
     async fn write_records(&self, file: &mut File) -> Result<(), Error> {
