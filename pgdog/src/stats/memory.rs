@@ -131,9 +131,10 @@ mod tests {
         // The allocation survives removals; capacity() may dip slightly
         // due to tombstones but stays the same order of magnitude.
         assert!(map.capacity() * 2 >= capacity);
+        let floor = map.capacity() * (std::mem::size_of::<(usize, usize)>() + 1);
         assert!(
-            map.memory_usage() >= map.capacity() * (std::mem::size_of::<(usize, usize)>() + 1),
-            "spare capacity left by removed entries must be counted"
+            map.memory_usage() >= floor,
+            "spare capacity must be counted"
         );
     }
 
