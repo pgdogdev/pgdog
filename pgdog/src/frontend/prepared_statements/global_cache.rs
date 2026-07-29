@@ -692,7 +692,7 @@ mod test {
         let usage = cache.memory_usage();
         assert!(
             usage >= table_floor,
-            "memory_usage {usage} must include table capacity {table_floor}"
+            "memory_usage {usage} < table {table_floor}"
         );
     }
 
@@ -715,7 +715,7 @@ mod test {
         let shrunk_capacity = cache.capacity();
         assert!(
             shrunk_capacity < spike_capacity / 8,
-            "capacity {shrunk_capacity} must shrink well below spike {spike_capacity}"
+            "capacity {shrunk_capacity} not shrunk"
         );
         assert!(cache.memory_usage() < spike_memory / 8);
 
