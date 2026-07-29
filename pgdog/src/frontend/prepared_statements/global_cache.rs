@@ -654,11 +654,10 @@ mod test {
         // The table allocates capacity, not len; the accounting
         // must report that memory.
         let table_floor = spike_capacity * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
+        let usage = cache.memory_usage();
         assert!(
-            cache.memory_usage() >= table_floor,
-            "memory_usage {} must include table capacity {}",
-            cache.memory_usage(),
-            table_floor
+            usage >= table_floor,
+            "memory_usage {usage} must include table capacity {table_floor}"
         );
     }
 
@@ -678,11 +677,10 @@ mod test {
         cache.close_unused(100);
         assert_eq!(cache.len(), 100);
 
+        let shrunk_capacity = cache.capacity();
         assert!(
-            cache.capacity() < spike_capacity / 8,
-            "capacity {} must shrink well below spike {}",
-            cache.capacity(),
-            spike_capacity
+            shrunk_capacity < spike_capacity / 8,
+            "capacity {shrunk_capacity} must shrink well below spike {spike_capacity}"
         );
         assert!(cache.memory_usage() < spike_memory / 8);
 
