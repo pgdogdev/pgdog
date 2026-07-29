@@ -60,6 +60,7 @@ async fn test_recovery_skips_incomplete_segment_header() {
         .await
         .unwrap();
 
+    assert!(!incomplete.exists());
     assert!(Segment::path(tmp.path(), 43).exists());
     manager.shutdown().await;
 }

@@ -4,7 +4,7 @@
 use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
 use crate::net::Error;
 use std::{io::ErrorKind, path::PathBuf};
-use tokio::fs::read_dir;
+use tokio::fs::{read_dir, remove_file};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -79,6 +79,10 @@ impl Recovery {
         info!("[2pc] recovery replaying {} WAL segments", self.files.len());
 
         for (segment_file_id, file) in &self.files {
+            // The filename reserves this segment ID even when the contents are
+            // incomplete. A new writer must never reuse an existing ID.
+            current_segment_id = *segment_file_id;
+
             let segment = match Segment::load(file).await {
                 Ok(segment) => segment,
                 Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof => {
@@ -86,6 +90,18 @@ impl Recovery {
                         r#"[2pc] recovery skipping WAL segment with incomplete header "{}""#,
                         file.display()
                     );
+                    match remove_file(file).await {
+                        Ok(()) => info!(
+                            r#"[2pc] recovery removed WAL segment with incomplete header "{}""#,
+                            file.display()
+                        ),
+                        Err(err) if err.kind() == ErrorKind::NotFound => {}
+                        Err(err) => warn!(
+                            r#"[2pc] recovery couldn't remove incomplete WAL segment "{}": {}"#,
+                            file.display(),
+                            err
+                        ),
+                    }
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -97,7 +113,6 @@ impl Recovery {
 
             size += segment.size();
             segment.replay(manager)?;
-            current_segment_id = segment.segment_id;
 
             // These can be checkpointed,
             // we are going to create a new segment at the end of
