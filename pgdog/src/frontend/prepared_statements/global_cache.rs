@@ -239,6 +239,8 @@ impl GlobalCache {
         // unused will hold the remaining elements that was not extracted above
         self.unused = unused;
 
+        self.maybe_shrink();
+
         removed
     }
 
@@ -250,6 +252,23 @@ impl GlobalCache {
     /// Get all prepared statements in the global cache, keyed by global unique key.
     pub(crate) fn statements(&self) -> &HashMap<CacheKey, CachedStmt> {
         &self.statements
+    }
+
+    /// Return table memory to the allocator after a spike of unique
+    /// statements. Hysteresis (mostly-empty table, above a minimum size)
+    /// avoids rehashing on every sweep; shrinking to twice the current
+    /// len leaves headroom for new statements.
+    fn maybe_shrink(&mut self) {
+        const SHRINK_FACTOR: usize = 8;
+        const MIN_CAPACITY: usize = 4096;
+
+        if self.statements.capacity() > MIN_CAPACITY
+            && self.statements.capacity() / SHRINK_FACTOR > self.statements.len()
+        {
+            self.statements.shrink_to(self.statements.len() * 2);
+            self.names.shrink_to(self.names.len() * 2);
+            self.unused.shrink_to(self.unused.len() * 2);
+        }
     }
 
     /// Remove statement from global cache.
@@ -629,22 +648,81 @@ mod test {
         let spike_capacity = cache.capacity();
         assert!(spike_capacity >= 10_000);
 
-        for i in 1..=10_000 {
-            cache.close(&global_name(i));
-        }
-        cache.close_unused(100);
-        assert_eq!(cache.len(), 100);
-
-        // The table holds on to its allocation after the spike (capacity()
-        // may dip slightly due to tombstones); the accounting must report
-        // that memory.
-        assert!(cache.capacity() * 2 >= spike_capacity);
-        let table_floor = cache.capacity() * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
+        // The table allocates capacity, not len; the accounting
+        // must report that memory.
+        let table_floor = spike_capacity * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
         assert!(
             cache.memory_usage() >= table_floor,
             "memory_usage {} must include table capacity {}",
             cache.memory_usage(),
             table_floor
         );
+    }
+
+    #[test]
+    fn test_close_unused_shrinks_tables_after_spike() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let spike_capacity = cache.capacity();
+        let spike_memory = cache.memory_usage();
+
+        for i in 1..=10_000 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(100);
+        assert_eq!(cache.len(), 100);
+
+        // The sweep returns table memory to the allocator.
+        assert!(
+            cache.capacity() < spike_capacity / 8,
+            "capacity {} must shrink well below spike {}",
+            cache.capacity(),
+            spike_capacity
+        );
+        assert!(cache.memory_usage() < spike_memory / 8);
+
+        // Statements that survived the sweep are still usable.
+        let survivors: Vec<String> = cache.names().keys().cloned().collect();
+        assert_eq!(survivors.len(), 100);
+        for name in survivors {
+            assert!(cache.parse(&name).is_some());
+        }
+    }
+
+    #[test]
+    fn test_no_shrink_below_min_capacity() {
+        let mut cache = GlobalCache::default();
+        for i in 0..1_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let capacity = cache.capacity();
+
+        for i in 1..=1_000 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(10);
+
+        // Small tables are not worth rehashing.
+        assert!(cache.capacity() >= capacity / 2);
+    }
+
+    #[test]
+    fn test_no_shrink_when_mostly_full() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let capacity = cache.capacity();
+
+        cache.close_unused(20_000);
+
+        // Nothing was removed; the table must not shrink.
+        assert_eq!(cache.len(), 10_000);
+        assert!(cache.capacity() >= capacity / 2);
     }
 }
