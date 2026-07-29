@@ -690,10 +690,7 @@ mod test {
         // must report that memory.
         let table_floor = spike_capacity * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
         let usage = cache.memory_usage();
-        assert!(
-            usage >= table_floor,
-            "memory_usage {usage} < table {table_floor}"
-        );
+        assert!(usage >= table_floor);
     }
 
     #[test]
@@ -713,10 +710,7 @@ mod test {
         assert_eq!(cache.len(), 100);
 
         let shrunk_capacity = cache.capacity();
-        assert!(
-            shrunk_capacity < spike_capacity / 8,
-            "capacity {shrunk_capacity} not shrunk"
-        );
+        assert!(shrunk_capacity < spike_capacity / 8);
         assert!(cache.memory_usage() < spike_memory / 8);
 
         // Statements that survived the sweep are still usable.
