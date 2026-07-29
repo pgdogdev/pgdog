@@ -1,4 +1,4 @@
-//! Recycle WAL segments we no longer need.
+//! Delete WAL segments we no longer need.
 
 use crate::net::Error;
 use crate::tasks;
@@ -16,6 +16,8 @@ use tracing::{debug, error, info};
 use super::super::{Manager, TwoPcTransaction};
 use super::*;
 
+// In charge of automatically removing WAL segments
+// that refer to transactions we already comitted/rolled back.
 #[derive(Debug, Clone)]
 pub(crate) struct Checkpointer {
     wal_directory: PathBuf,
@@ -29,7 +31,9 @@ impl Checkpointer {
     ///
     /// # Arguments
     ///
-    /// - `wal_directory`: WAL directory.
+    /// - `wal_directory`: Where the WAL segments live.
+    /// - `manager: 2pc manager.
+    /// - `checkpoint_interval`: How often to run the checkpointer.
     ///
     pub(crate) fn new(
         wal_directory: &Path,
@@ -44,6 +48,11 @@ impl Checkpointer {
         }
     }
 
+    /// Run the checkpointer.
+    ///
+    /// Note to caller: don't call this more than once.
+    /// I don't have to add an atomic to gate this, right?
+    ///
     pub(crate) fn spawn(&self) {
         let checkpointer = self.clone();
 
@@ -70,7 +79,8 @@ impl Checkpointer {
         });
     }
 
-    pub(super) async fn run_once(&self) -> Result<(), Error> {
+    // Clean up unused segments.
+    async fn run_once(&self) -> Result<(), Error> {
         let segments = SegmentRegistry::get()
             .inactive()
             .into_iter()
@@ -111,12 +121,20 @@ impl Checkpointer {
         Ok(())
     }
 
+    /// Ask the checkpointer to shut down immediately.
+    /// You don't have to wait for it to shut down. The WAL
+    /// can be left in a dirty state and recovery will take care of it.
     pub(super) fn shutdown(&self) {
         self.shutdown.cancel();
     }
 
-    async fn read_tids(path: &Path) -> Result<Vec<TwoPcTransaction>, Error> {
-        let segment = Segment::load(path).await?;
+    // Fetch transaction IDs referred to in the segment.
+    //
+    // The idea is if all of them are not present in the in-memory state of
+    // the transaction manager, we can delete that segment, i.e., we don't need
+    // it for recovery anymore.
+    async fn read_tids(segment_path: &Path) -> Result<Vec<TwoPcTransaction>, Error> {
+        let segment = Segment::load(segment_path).await?;
 
         let mut tids = vec![];
 

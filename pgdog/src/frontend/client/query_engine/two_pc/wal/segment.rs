@@ -1,4 +1,8 @@
 //! Two-phase commit WAL segment.
+//!
+//! It's fully written to disk and will not receive
+//! any more updates from the 2pc manager.
+//!
 
 use std::path::{Path, PathBuf};
 
@@ -12,13 +16,16 @@ use tracing::debug;
 
 use super::{super::Manager, Record, Records};
 
+/// A WAL segment, fully committed to disk.
 #[derive(Debug, Clone)]
 pub(crate) struct Segment {
+    /// Unique segment ID, monotonically increasing.
     pub(super) segment_id: u64,
     // Keeping the version around. Allows us to switch WAL format
     // versions later.
     #[allow(dead_code)]
     version: u32,
+    /// Valid records in this segment.
     pub(super) records: Vec<Record>,
 }
 
@@ -27,7 +34,7 @@ impl Segment {
     /// restore in-memory state.
     pub(super) fn replay(&self, manager: &Manager) -> Result<(), Error> {
         for record in &self.records {
-            let record = Records::try_from(record.clone()).expect("invalid record");
+            let record = Records::try_from(record.clone()).expect("invalid record"); // file corruption, panic
             record.replay(manager);
         }
 
@@ -35,11 +42,19 @@ impl Segment {
     }
 
     /// Load segment from file.
-    pub(super) async fn load(path: &Path) -> Result<Self, Error> {
+    ///
+    /// This gracefully handles partially written records, i.e.,
+    /// those that were in the process of being flushed when PgDog crashed.
+    ///
+    /// However, this will return an error if the segment doesn't have a valid header.
+    /// The recovery process will handle that gracefully, but other callers should definitely
+    /// treat such errors as suspicious.
+    ///
+    pub(super) async fn load(segment_path: &Path) -> Result<Self, Error> {
         use std::io::ErrorKind;
-        debug!(r#"[2pc] opening segment "{}""#, path.display());
+        debug!(r#"[2pc] opening segment "{}""#, segment_path.display());
 
-        let segment = File::open(path).await?;
+        let segment = File::open(segment_path).await?;
         let file_len = segment.metadata().await?.len() as usize;
         let mut buffer = BufReader::new(segment);
 
@@ -96,15 +111,17 @@ impl Segment {
         })
     }
 
+    /// Get the segment size in bytes.
     pub(crate) fn size(&self) -> usize {
         self.records.iter().map(|record| record.len()).sum()
     }
 
-    // Path to the segment.
-    pub(super) fn path(path: &Path, number: u64) -> PathBuf {
+    /// Construct a canonical path to a segment given the WAL directory
+    /// and the segment number.
+    pub(super) fn path(wal_directory: &Path, number: u64) -> PathBuf {
         use super::EXTENSION;
 
-        path.join(format!("{}.{}", number, EXTENSION))
+        wal_directory.join(format!("{}.{}", number, EXTENSION))
     }
 
     #[cfg(test)]

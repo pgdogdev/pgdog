@@ -1,6 +1,8 @@
 use super::super::super::TwoPcTransaction;
 use super::*;
 
+/// Record indicating the transaction was safely
+/// removed from the 2pc manager.
 #[derive(Debug, Clone)]
 pub(crate) struct TwoPcRecordRemove {
     pub(crate) transaction: TwoPcTransaction,

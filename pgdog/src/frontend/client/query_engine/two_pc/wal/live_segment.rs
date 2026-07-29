@@ -1,3 +1,5 @@
+//! Reference to the currently open WAL segment.
+
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -20,8 +22,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 // WAL data format version.
+// Not used, but nice to have to avoid breaking compatibility.
 const VERSION: u32 = 0;
-// WAL filename extension
+// WAL filename extension.
 pub(super) const EXTENSION: &str = "2pc";
 
 #[derive(Debug)]
@@ -43,17 +46,19 @@ pub(super) struct Waiter {
 }
 
 impl Waiter {
+    /// Wait for the segment to be flushed to disk.
     pub(super) async fn wait_flush(&self) {
         self.waiter.cancelled().await
     }
 }
 
+/// The currently open WAL segment.
 #[derive(Debug, Clone)]
 pub(crate) struct LiveSegment {
     queue: Arc<Mutex<Queue>>,
     writer_signal: Arc<Notify>,
     shutdown: CancellationToken,
-    path: PathBuf,
+    segment_path: PathBuf,
     counter: u64,
 }
 
@@ -81,12 +86,14 @@ impl LiveSegment {
             queue: Arc::new(Mutex::new(Queue::default())),
             writer_signal: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
-            path: filename,
+            segment_path: filename,
             counter: number,
         };
 
         let write = segment.clone();
 
+        // Each segment is responsible for writing to itself.
+        // No global WALWriteLock :)
         tasks::spawn("live segment writer", async move {
             write.writer(file).await;
         });
@@ -94,8 +101,9 @@ impl LiveSegment {
         Ok(segment)
     }
 
-    /// Write a record to the WAL and wait for it
-    /// to be flushed to disk.
+    /// Write a record to the WAL. The returned waiter
+    /// should be awaited if you care that your write
+    /// actually makes it to disk.
     #[must_use]
     pub(super) fn add(&self, record: Record) -> Waiter {
         let len = record.len();
@@ -166,7 +174,7 @@ impl LiveSegment {
         debug!(
             "[wal] wrote {} records to \"{}\"",
             records.len(),
-            self.path.display()
+            self.segment_path.display()
         );
 
         // Tell clients we flushed their records

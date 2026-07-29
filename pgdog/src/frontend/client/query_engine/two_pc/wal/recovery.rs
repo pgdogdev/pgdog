@@ -1,5 +1,4 @@
-//! Handle recovering the state
-//! of the 2pc manager from WAL segments.
+//! Handle recovering the state of the 2pc manager from WAL segments.
 
 use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
 use crate::net::Error;
@@ -8,8 +7,11 @@ use tokio::fs::{read_dir, remove_file};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
+/// 2pc state recovery.
 pub(crate) struct Recovery {
-    pub(crate) path: PathBuf,
+    /// Where the WAL files live.
+    pub(crate) wal_directory: PathBuf,
+    /// WAL segments, sorted in ascending order by segment ID.
     pub(super) files: Vec<(u64, PathBuf)>,
 }
 
@@ -19,10 +21,10 @@ impl Recovery {
     ///
     /// # Arguments
     ///
-    /// - `path`: WAL directory
+    /// - `wal_directory`: Where the WAL segments live.
     ///
-    pub(crate) async fn new(path: &PathBuf) -> Result<Self, Error> {
-        let mut dir = read_dir(path).await?;
+    pub(crate) async fn new(wal_directory: &PathBuf) -> Result<Self, Error> {
+        let mut dir = read_dir(wal_directory).await?;
         let mut files = vec![];
 
         while let Some(entry) = dir.next_entry().await? {
@@ -56,7 +58,7 @@ impl Recovery {
         files.sort_by_key(|(segment_id, _)| *segment_id);
 
         Ok(Self {
-            path: path.clone(),
+            wal_directory: wal_directory.clone(),
             files,
         })
     }
@@ -65,7 +67,10 @@ impl Recovery {
     ///
     /// # Arguments
     ///
-    /// - `manager`: 2pc manager.
+    /// - `manager`: 2pc manager. Transactions will be replayed into it, restoring it to the state it was before
+    ///              PgDog crashed.
+    /// - `segment_size`: The size of the segments in bytes. This will be used to create the next segment
+    ///                   once recovery is complete.
     ///
     pub(crate) async fn run(
         self,
@@ -114,14 +119,19 @@ impl Recovery {
             size += segment.size();
             segment.replay(manager)?;
 
-            // These can be checkpointed,
-            // we are going to create a new segment at the end of
-            // recovery.
+            info!(
+                r#"[2pc] recovery replayed "{}" ({:.3}MB)"#,
+                file.display(),
+                segment.size() as f64 / 1024.0 / 1024.0
+            );
+
+            // Checkpointer will pick them up
+            // and delete them later.
             SegmentRegistry::get().record(segment.segment_id, SegmentStatus::Inactive);
         }
 
         info!(
-            "[2pc] recovery replayed {:.3}MB in {:.3}s",
+            "[2pc] recovery finished, replayed {:.3}MB in {:.3}s",
             size as f64 / 1024.0 / 1024.0,
             start.elapsed().as_secs_f32()
         );
@@ -131,6 +141,6 @@ impl Recovery {
         manager.cleanup_all();
 
         // Create the writer with a brand new segment.
-        WalWriter::new(&self.path, current_segment_id + 1, segment_size).await
+        WalWriter::new(&self.wal_directory, current_segment_id + 1, segment_size).await
     }
 }

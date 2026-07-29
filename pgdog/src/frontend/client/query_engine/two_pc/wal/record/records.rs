@@ -1,4 +1,9 @@
-//! Two-pc WAL records.
+//! Two-pc WAL records enum.
+//!
+//! If adding records, add it here too and
+//! tell us how to handle it during recovery.
+//! Thank you!
+//!
 
 use super::super::super::Manager;
 use super::*;
