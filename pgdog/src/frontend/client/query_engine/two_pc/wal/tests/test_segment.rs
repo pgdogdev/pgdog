@@ -1,6 +1,7 @@
 use bytes::{BufMut, BytesMut};
 use tempfile::TempDir;
 
+use super::super::super::Manager;
 use super::super::*;
 use crate::net::Error;
 
@@ -24,7 +25,7 @@ async fn test_load_complete_and_incomplete_records() {
     tokio::fs::write(&path, bytes).await.unwrap();
 
     let segment = Segment::load(&path).await.unwrap();
-    assert_eq!(segment.counter, 1);
+    assert_eq!(segment.segment_id, 1);
     assert_eq!(segment.size(), 13);
 }
 
@@ -45,4 +46,20 @@ async fn test_load_rejects_invalid_record_length() {
         Segment::load(&path).await,
         Err(Error::MalformedMessageLength(3))
     ));
+}
+
+#[tokio::test]
+async fn test_recovery_skips_incomplete_segment_header() {
+    let tmp = TempDir::new().unwrap();
+    let incomplete = Segment::path(tmp.path(), 42);
+    tokio::fs::write(&incomplete, [0; 4]).await.unwrap();
+
+    let manager = Manager::init();
+    manager
+        .enable_wal(&tmp.path().to_owned(), None, 50)
+        .await
+        .unwrap();
+
+    assert!(Segment::path(tmp.path(), 43).exists());
+    manager.shutdown().await;
 }

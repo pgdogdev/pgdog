@@ -6,13 +6,32 @@ use rand::Rng;
 use tokio::time::sleep;
 
 use super::*;
+use crate::frontend::client::query_engine::two_pc::wal::SegmentRegistry;
 
-#[tokio::test]
-async fn test_recovery_cleans_up_aborted_clients() {
+macro_rules! chaos_test {
+    ($name:ident, $wal_segment_size:expr) => {
+        #[tokio::test]
+        async fn $name() {
+            recovery_cleans_up_aborted_clients($wal_segment_size, None).await;
+        }
+    };
+}
+
+chaos_test!(test_recovery_with_50_byte_segments, 50);
+chaos_test!(test_recovery_with_100_byte_segments, 100);
+chaos_test!(test_recovery_with_1000_byte_segments, 1_000);
+chaos_test!(test_recovery_with_1_mb_segments, 1_000_000);
+chaos_test!(test_recovery_with_16_mb_segments, 16_000_000);
+
+pub(super) async fn recovery_cleans_up_aborted_clients(
+    wal_segment_size: usize,
+    checkpoint_interval: Option<Duration>,
+) {
     const CLIENTS: usize = 100;
 
-    let client = Arc::new(TwoPcTestClient::new().await);
+    let client = Arc::new(TwoPcTestClient::new(wal_segment_size, checkpoint_interval).await);
     assert_eq!(client.prepared_transactions().await, 0);
+    let transactions_before = client.pool_transactions();
 
     let mut handles = Vec::with_capacity(CLIENTS);
     for _ in 0..CLIENTS {
@@ -32,10 +51,28 @@ async fn test_recovery_cleans_up_aborted_clients() {
         let _ = handle.await;
     }
 
+    let transactions = client
+        .pool_transactions()
+        .saturating_sub(transactions_before);
+    println!("clients executed {transactions} transactions");
+    assert!(
+        transactions > 0,
+        "expected clients to execute transactions before cancellation"
+    );
+
     let dangling = client.prepared_transactions().await;
     assert!(
         dangling > 0,
         "expected aborted clients to leave prepared transactions"
+    );
+
+    let wal_segments_created = SegmentRegistry::get().len();
+    println!(
+        "created {wal_segments_created} WAL segments with a {wal_segment_size}-byte segment size"
+    );
+    assert!(
+        wal_segments_created > 0,
+        "expected the chaos workload to create WAL segments"
     );
 
     let recovered = client.recover().await;

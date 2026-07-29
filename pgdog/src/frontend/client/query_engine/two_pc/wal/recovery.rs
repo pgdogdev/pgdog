@@ -3,14 +3,14 @@
 
 use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
 use crate::net::Error;
-use std::path::PathBuf;
+use std::{io::ErrorKind, path::PathBuf};
 use tokio::fs::read_dir;
 use tokio::time::Instant;
 use tracing::{info, warn};
 
 pub(crate) struct Recovery {
     pub(crate) path: PathBuf,
-    pub(super) files: Vec<PathBuf>,
+    pub(super) files: Vec<(u64, PathBuf)>,
 }
 
 impl Recovery {
@@ -27,33 +27,19 @@ impl Recovery {
 
         while let Some(entry) = dir.next_entry().await? {
             let path = entry.path();
-            let mut skip = false;
 
-            if let Some(extenstion) = path.extension() {
-                let extension = extenstion
-                    .to_str()
-                    .expect("wal 2pc extension must be utf-8");
+            let mut skip = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext != EXTENSION)
+                .unwrap_or(true);
 
-                if !EXTENSION.contains(extension) {
-                    skip = true
-                }
-            } else {
-                skip = true;
-            }
+            let segment_id = path
+                .file_stem()
+                .and_then(|prefix| prefix.to_str())
+                .and_then(|prefix| prefix.parse::<u64>().ok());
 
-            if let Some(prefix) = path.file_prefix() {
-                if skip {
-                    continue;
-                }
-
-                files.push((
-                    prefix
-                        .to_str()
-                        .expect("wal 2pc prefix must be utf-8")
-                        .to_string(),
-                    path.clone(),
-                ))
-            } else {
+            if segment_id.is_none() {
                 skip = true;
             }
 
@@ -62,14 +48,16 @@ impl Recovery {
                     r#"[2pc] recovery ignoring unknown file "{}""#,
                     path.display()
                 );
+            } else if let Some(segment_id) = segment_id {
+                files.push((segment_id, path));
             }
         }
 
-        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by_key(|(segment_id, _)| *segment_id);
 
         Ok(Self {
             path: path.clone(),
-            files: files.into_iter().map(|file| file.1).collect(),
+            files,
         })
     }
 
@@ -84,23 +72,37 @@ impl Recovery {
         manager: &Manager,
         segment_size: usize,
     ) -> Result<WalWriter, Error> {
-        let mut counter = 0;
+        let mut current_segment_id = 0;
         let mut size = 0;
         let start = Instant::now();
 
         info!("[2pc] recovery replaying {} WAL segments", self.files.len());
 
-        for file in &self.files {
-            let segment = Segment::load(&file).await?;
-            counter = segment.counter;
-            size += segment.size();
+        for (segment_file_id, file) in &self.files {
+            let segment = match Segment::load(file).await {
+                Ok(segment) => segment,
+                Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof => {
+                    warn!(
+                        r#"[2pc] recovery skipping WAL segment with incomplete header "{}""#,
+                        file.display()
+                    );
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
 
+            if *segment_file_id != segment.segment_id {
+                panic!("segment ID doesn't match file number");
+            }
+
+            size += segment.size();
             segment.replay(manager)?;
+            current_segment_id = segment.segment_id;
 
             // These can be checkpointed,
             // we are going to create a new segment at the end of
             // recovery.
-            SegmentRegistry::get().record(segment.counter, SegmentStatus::Inactive);
+            SegmentRegistry::get().record(segment.segment_id, SegmentStatus::Inactive);
         }
 
         info!(
@@ -114,6 +116,6 @@ impl Recovery {
         manager.cleanup_all();
 
         // Create the writer with a brand new segment.
-        WalWriter::new(&self.path, counter + 1, segment_size).await
+        WalWriter::new(&self.path, current_segment_id + 1, segment_size).await
     }
 }

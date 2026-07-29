@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn test_wal_basic() {
-    let client = TwoPcTestClient::new().await;
+    let client = TwoPcTestClient::new(1_000_000, None).await;
 
     for _ in 0..20 {
         client.execute().await;

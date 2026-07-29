@@ -14,7 +14,7 @@ use super::{super::Manager, Record, Records};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Segment {
-    pub(super) counter: u64,
+    pub(super) segment_id: u64,
     // Keeping the version around. Allows us to switch WAL format
     // versions later.
     #[allow(dead_code)]
@@ -90,7 +90,7 @@ impl Segment {
         }
 
         Ok(Self {
-            counter,
+            segment_id: counter,
             version,
             records,
         })

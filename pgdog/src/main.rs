@@ -161,7 +161,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                     Manager::get()
                         .enable_wal(
                             path,
-                            checkpoint_interval,
+                            Some(checkpoint_interval),
                             general.two_phase_commit_wal_segment_size as usize,
                         )
                         .await?;

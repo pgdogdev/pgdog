@@ -81,13 +81,14 @@ impl Manager {
     /// # Arguments
     ///
     /// - `wal_directory`: WAL directory.
-    /// - `checkpoint_interval`: How frequently to run the checkpointer.
+    /// - `checkpoint_interval`: How frequently to run the checkpointer. If `None`,
+    ///   the checkpointer is disabled.
     /// - `segment_size`: Maximum size of a WAL segment. Soft limit.
     ///
     pub async fn enable_wal(
         &self,
         wal_directory: &PathBuf,
-        checkpoint_interval: Duration,
+        checkpoint_interval: Option<Duration>,
         segment_size: usize,
     ) -> Result<(), Error> {
         let writer = Recovery::new(wal_directory)
@@ -96,7 +97,9 @@ impl Manager {
             .await?;
         self.wal.store(Some(Arc::new(writer)));
 
-        Checkpointer::spawn(wal_directory.clone(), self.clone(), checkpoint_interval);
+        if let Some(checkpoint_interval) = checkpoint_interval {
+            Checkpointer::spawn(wal_directory.clone(), self.clone(), checkpoint_interval);
+        }
 
         Ok(())
     }
@@ -167,7 +170,7 @@ impl Manager {
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
-        self.transaction_state_manual(transaction, identifier, phase);
+        self.set_transaction_state(transaction, identifier, phase);
 
         if let Some(wal) = self.wal.load_full() {
             wal.add(TwoPcRecordAdd {
@@ -186,7 +189,12 @@ impl Manager {
         })
     }
 
-    pub(super) fn transaction_state_manual(
+    /// Set the transaction state in memory.
+    ///
+    /// WAL is not updated. Used during recovery
+    /// and before writing the transaction to the WAL during
+    /// normal operations.
+    pub(super) fn set_transaction_state(
         &self,
         transaction: TwoPcTransaction,
         identifier: &Arc<User>,

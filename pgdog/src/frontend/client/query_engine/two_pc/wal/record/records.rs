@@ -14,11 +14,9 @@ impl Records {
     /// transaction manager.
     pub(crate) fn replay(&self, manager: &Manager) {
         match self {
-            Records::Add(add) => manager.transaction_state_manual(
-                add.transaction,
-                &add.info.identifier,
-                add.info.phase,
-            ),
+            Records::Add(add) => {
+                manager.set_transaction_state(add.transaction, &add.info.identifier, add.info.phase)
+            }
             Records::Remove(remove) => {
                 manager.remove(remove.transaction);
             }

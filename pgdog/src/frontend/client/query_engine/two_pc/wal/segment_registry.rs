@@ -26,6 +26,11 @@ pub(crate) struct SegmentRegistry {
 }
 
 impl SegmentRegistry {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.segments.len()
+    }
+
     pub(crate) fn record(&self, segment: SegmentId, status: SegmentStatus) {
         let updated_at = SystemTime::now();
         self.segments

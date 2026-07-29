@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use crate::backend::pool::Request;
 use crate::backend::{Cluster, databases::databases};
-use crate::config::{self, config};
+use crate::config;
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::statement::phase_control;
 use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcTransaction, wal::Segment};
@@ -14,6 +14,8 @@ use crate::net::DataRow;
 pub(super) struct TwoPcTestClient {
     manager: Manager,
     cluster: Cluster,
+    wal_segment_size: usize,
+    checkpoint_interval: Option<Duration>,
     #[allow(dead_code)]
     tmp: TempDir,
 }
@@ -64,7 +66,10 @@ impl TwoPcTestClient {
         self.manager.done(txn).await.unwrap();
     }
 
-    pub(super) async fn new() -> Self {
+    pub(super) async fn new(
+        wal_segment_size: usize,
+        checkpoint_interval: Option<Duration>,
+    ) -> Self {
         crate::logger();
         config::load_test_sharded();
 
@@ -73,13 +78,8 @@ impl TwoPcTestClient {
         manager
             .enable_wal(
                 &tmp.path().to_owned(),
-                Duration::from_millis(
-                    config()
-                        .config
-                        .general
-                        .two_phase_commit_wal_checkpoint_interval,
-                ),
-                1_000_000, // 1MB
+                checkpoint_interval,
+                wal_segment_size,
             )
             .await
             .unwrap();
@@ -90,6 +90,8 @@ impl TwoPcTestClient {
         Self {
             cluster,
             manager,
+            wal_segment_size,
+            checkpoint_interval,
             tmp,
         }
     }
@@ -99,6 +101,15 @@ impl TwoPcTestClient {
             .await
             .unwrap();
         segment
+    }
+
+    pub(super) fn pool_transactions(&self) -> usize {
+        self.cluster
+            .shards()
+            .iter()
+            .flat_map(|shard| shard.pool_iter())
+            .map(|pool| pool.state().stats.counts.xact_count)
+            .sum()
     }
 
     pub(super) async fn prepared_transactions(&self) -> usize {
@@ -129,13 +140,8 @@ impl TwoPcTestClient {
         manager
             .enable_wal(
                 &self.tmp.path().to_owned(),
-                Duration::from_millis(
-                    config()
-                        .config
-                        .general
-                        .two_phase_commit_wal_checkpoint_interval,
-                ),
-                1_000_000, // 1MB
+                self.checkpoint_interval,
+                self.wal_segment_size,
             )
             .await
             .unwrap();

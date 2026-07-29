@@ -1,58 +1,45 @@
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    },
-};
+use std::{path::PathBuf, sync::Arc};
 
 use crate::net::Error;
 use arc_swap::ArcSwap;
+use tokio::sync::Mutex;
 
 use super::*;
+
+type SegmentId = u64;
 
 /// WAL writer.
 #[derive(Debug, Clone)]
 pub(crate) struct WalWriter {
     /// Current segment.
-    ///
-    /// We use an ArcSwap and not a Mutex
-    /// to avoid blocking writers while we create
-    /// a new segment during the swap.
     segment: Arc<ArcSwap<LiveSegment>>,
     path: PathBuf,
-    inner: Arc<Inner>,
+    next_segment_id: Arc<Mutex<SegmentId>>,
     segment_size: usize,
-}
-
-#[derive(Debug, Default)]
-struct Inner {
-    number: AtomicU64,
-    written: AtomicUsize,
-    swapping: AtomicBool,
 }
 
 impl WalWriter {
     /// Write a record to the WAL.
     pub(crate) async fn add(&self, record: impl Into<Record>) -> Result<(), Error> {
-        let written = self.segment.load_full().add(record.into()).await;
-        let total = self.inner.written.fetch_add(written, Ordering::Relaxed) + written;
-
-        // This is atomic and only one
-        // client can perform the swap at a time.
-        //
-        // If a client started a swap, other clients
-        // will continue to write to the old segment.
-        //
-        // This is safe, the old segment will flush all records
-        // written to it on shutdown.
-        if total > self.segment_size {
-            let can_swap = self.inner.swapping.swap(true, Ordering::SeqCst);
-
-            if can_swap {
-                self.swap().await?;
+        let waiter = {
+            // Grab the WAL write lock.
+            let mut next_segment_id = self.next_segment_id.lock().await;
+            // Add record to current WAL segment.
+            let waiter = self.segment.load_full().add(record.into());
+            // Check if segment needs to be swapped
+            // and swap if so.
+            //
+            // Having the lock here is quick since most of the time,
+            // the segment won't need the swap.
+            if waiter.segment_size > self.segment_size {
+                let segment_id = *next_segment_id;
+                *next_segment_id += 1;
+                self.swap(segment_id).await?;
             }
-        }
+            waiter
+        };
+
+        waiter.wait_flush().await;
 
         Ok(())
     }
@@ -70,9 +57,8 @@ impl WalWriter {
     /// so it's possible to call this function again to create a new,
     /// valid segment.
     ///
-    pub(super) async fn swap(&self) -> Result<(), Error> {
-        let segment =
-            LiveSegment::new(&self.path, self.inner.number.fetch_add(1, Ordering::SeqCst)).await?;
+    pub(super) async fn swap(&self, number: u64) -> Result<(), Error> {
+        let segment = LiveSegment::new(&self.path, number).await?;
         let current = self.segment.swap(Arc::new(segment));
 
         current.shutdown();
@@ -82,21 +68,18 @@ impl WalWriter {
 
     pub(crate) async fn new(
         path: &PathBuf,
-        counter: u64,
+        next_segment_id: u64,
         segment_size: usize,
     ) -> Result<Self, Error> {
         // Create the first segment.
-        let segment = LiveSegment::new(path, counter).await?;
+        let segment = LiveSegment::new(path, next_segment_id).await?;
 
-        SegmentRegistry::get().record(counter, SegmentStatus::Active);
+        SegmentRegistry::get().record(next_segment_id, SegmentStatus::Active);
 
         Ok(Self {
             path: path.clone(),
             segment: Arc::new(ArcSwap::new(Arc::new(segment))),
-            inner: Arc::new(Inner {
-                number: AtomicU64::new(counter + 1),
-                ..Default::default()
-            }),
+            next_segment_id: Arc::new(Mutex::new(next_segment_id + 1)),
             segment_size,
         })
     }
