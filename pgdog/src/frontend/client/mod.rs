@@ -543,11 +543,13 @@ impl Client {
         }
 
         // If client sent multiple requests, split them up and execute individually.
-        let spliced = self.client_request.spliced()?;
-        let spliced = if spliced.is_empty() {
-            self.client_request.spliced_simple()
+        let extended = self.client_request.spliced()?;
+        let (spliced, is_simple_splice) = if extended.is_empty() {
+            let simple = self.client_request.spliced_simple();
+            let is_simple = !simple.is_empty();
+            (simple, is_simple)
         } else {
-            spliced
+            (extended, false)
         };
         if spliced.is_empty() {
             let mut context = QueryEngineContext::new(self);
@@ -556,10 +558,21 @@ impl Client {
         } else {
             let total = spliced.len();
             let mut reqs = spliced.into_iter().enumerate();
-            self.transaction.get_or_insert(TransactionType::Implicit);
+            // For extended protocol pipelining, mark the client as being in an implicit
+            // transaction so the backend connection is kept across statements in the pipeline.
+            // For simple query splicing, each statement routes independently — don't force
+            // Implicit here; the requests_left mechanism in cleanup_backend handles connection
+            // reuse without affecting shard routing.
+            if !is_simple_splice {
+                self.transaction.get_or_insert(TransactionType::Implicit);
+            }
             while let Some((num, mut req)) = reqs.next() {
                 debug!("processing spliced request {}/{}", num + 1, total);
-                let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
+                let mut context = if is_simple_splice {
+                    QueryEngineContext::new(self).spliced_simple_query(&mut req, reqs.len())
+                } else {
+                    QueryEngineContext::new(self).spliced(&mut req, reqs.len())
+                };
                 query_engine.handle(&mut context).await?;
                 self.transaction = context.transaction();
 

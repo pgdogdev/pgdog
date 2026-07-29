@@ -61,16 +61,22 @@ impl QueryEngine {
                         .await?
                 }
                 ProtocolMessage::Query(_) => {
-                    (if let Some(row) = data_row.as_ref() {
+                    let suppress_rfq =
+                        context.simple_query_splice && context.requests_left > 0;
+                    let cc = (if let Some(row) = data_row.as_ref() {
                         context.stream.send(&row_description).await?
                             + context.stream.send(row).await?
                     } else {
                         0
-                    }) + context.stream.send(&CommandComplete::new(command)).await?
-                        + context
+                    }) + context.stream.send(&CommandComplete::new(command)).await?;
+                    if suppress_rfq {
+                        cc
+                    } else {
+                        cc + context
                             .stream
                             .send(&ReadyForQuery::in_transaction(context.in_transaction()))
                             .await?
+                    }
                 }
                 // TODO(lev): Elixir closes the statement it just asked us to prepare.
                 // That's very memory-conscious of it, and we appreciate it.

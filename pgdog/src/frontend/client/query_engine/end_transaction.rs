@@ -24,7 +24,10 @@ impl QueryEngine {
                 vec![]
             };
             messages.push(cmd.message()?);
-            messages.push(ReadyForQuery::idle().message()?);
+            let suppress_rfq = context.simple_query_splice && context.requests_left > 0;
+            if !suppress_rfq {
+                messages.push(ReadyForQuery::idle().message()?);
+            }
 
             context.stream.send_many(&messages).await?
         };
