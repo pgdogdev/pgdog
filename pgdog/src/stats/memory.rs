@@ -132,10 +132,7 @@ mod tests {
         // due to tombstones but stays the same order of magnitude.
         assert!(map.capacity() * 2 >= capacity);
         let floor = map.capacity() * (std::mem::size_of::<(usize, usize)>() + 1);
-        assert!(
-            map.memory_usage() >= floor,
-            "spare capacity must be counted"
-        );
+        assert!(map.memory_usage() >= floor);
     }
 
     #[test]
