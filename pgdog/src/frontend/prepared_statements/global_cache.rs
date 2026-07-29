@@ -713,7 +713,6 @@ mod test {
         cache.close_unused(100);
         assert_eq!(cache.len(), 100);
 
-        // The sweep returns table memory to the allocator.
         assert!(
             cache.capacity() < spike_capacity / 8,
             "capacity {} must shrink well below spike {}",
@@ -759,7 +758,6 @@ mod test {
 
         cache.close_unused(20_000);
 
-        // Nothing was removed; the table must not shrink.
         assert_eq!(cache.len(), 10_000);
         assert!(cache.capacity() >= capacity / 2);
     }
