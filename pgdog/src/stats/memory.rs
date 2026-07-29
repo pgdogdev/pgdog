@@ -3,6 +3,13 @@ use lru::LruCache;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
+/// Approximate number of bytes attributable to a value, for observability.
+///
+/// Scalar impls report their inline size (so summing over a collection's
+/// elements works), container impls report allocated capacity plus the sum
+/// over live elements. As a result, the inline portion of live entries can
+/// be counted both in the container's capacity term and in the element sum:
+/// numbers are upper-bound approximations, not exact accounting.
 pub trait MemoryUsage {
     fn memory_usage(&self) -> usize;
 }
