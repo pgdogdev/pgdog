@@ -31,7 +31,7 @@ async fn checkpointer_recycles_wal_segments(wal_segment_size: usize) {
         handle.await.expect("checkpointer test client");
     }
 
-    let generated = timeout(Duration::from_secs(1), async {
+    timeout(Duration::from_secs(1), async {
         loop {
             let segments = SegmentRegistry::get().len();
             if segments > 1 {
@@ -42,8 +42,6 @@ async fn checkpointer_recycles_wal_segments(wal_segment_size: usize) {
     })
     .await
     .expect("clients should generate multiple WAL segments");
-
-    println!("generated {generated} WAL segments");
 
     timeout(Duration::from_secs(5), async {
         loop {

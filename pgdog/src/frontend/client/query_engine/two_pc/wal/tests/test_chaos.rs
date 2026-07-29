@@ -54,7 +54,6 @@ pub(super) async fn recovery_cleans_up_aborted_clients(
     let transactions = client
         .pool_transactions()
         .saturating_sub(transactions_before);
-    println!("clients executed {transactions} transactions");
     assert!(
         transactions > 0,
         "expected clients to execute transactions before cancellation"
@@ -67,9 +66,6 @@ pub(super) async fn recovery_cleans_up_aborted_clients(
     );
 
     let wal_segments_created = SegmentRegistry::get().len();
-    println!(
-        "created {wal_segments_created} WAL segments with a {wal_segment_size}-byte segment size"
-    );
     assert!(
         wal_segments_created > 0,
         "expected the chaos workload to create WAL segments"

@@ -121,10 +121,10 @@ impl Manager {
 
     /// Two-pc transaction finished.
     pub(crate) async fn done(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
-        if let Some(_) = self.remove(transaction) {
-            if let Some(wal) = self.wal.load_full() {
-                wal.add(TwoPcRecordRemove { transaction }).await?;
-            }
+        if self.remove(transaction).is_some()
+            && let Some(wal) = self.wal.load_full()
+        {
+            wal.add(TwoPcRecordRemove { transaction }).await?;
         }
 
         Ok(())

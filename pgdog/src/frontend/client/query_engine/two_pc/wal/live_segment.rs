@@ -153,7 +153,7 @@ impl LiveSegment {
     }
 
     async fn write_records(&self, file: &mut File) -> Result<(), Error> {
-        let records: Vec<_> = self.queue.lock().queue.drain(..).into_iter().collect();
+        let records: Vec<_> = self.queue.lock().queue.drain(..).collect();
 
         for record in &records {
             let bytes = record.record.to_bytes();

@@ -1,5 +1,8 @@
 use std::time::Duration;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::net::Error;
 use crate::tasks;
@@ -71,7 +74,7 @@ impl WalWriter {
 
     /// Create new WAL writer at segment position.
     pub(crate) async fn new(
-        wal_directory: &PathBuf,
+        wal_directory: &Path,
         next_segment_id: u64,
         segment_size: usize,
     ) -> Result<Self, Error> {
@@ -81,7 +84,7 @@ impl WalWriter {
         SegmentRegistry::get().record(next_segment_id, SegmentStatus::Active);
 
         let writer = Self {
-            wal_directory: wal_directory.clone(),
+            wal_directory: wal_directory.to_path_buf(),
             segment: Arc::new(ArcSwap::new(Arc::new(segment))),
             next_segment_id: Arc::new(Mutex::new(next_segment_id + 1)),
             segment_size,

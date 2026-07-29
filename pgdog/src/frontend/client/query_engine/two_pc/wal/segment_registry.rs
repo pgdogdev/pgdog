@@ -46,7 +46,7 @@ impl SegmentRegistry {
         self.segments
             .iter()
             .filter(|k| k.value().status == SegmentStatus::Inactive)
-            .map(|k| k.key().clone())
+            .map(|k| *k.key())
             .collect()
     }
 

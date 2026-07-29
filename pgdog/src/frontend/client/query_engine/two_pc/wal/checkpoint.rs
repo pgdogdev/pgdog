@@ -3,7 +3,10 @@
 use crate::net::Error;
 use crate::tasks;
 use std::time::Duration;
-use std::{io::ErrorKind, path::PathBuf};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio::fs::remove_file;
 use tokio::select;
 use tokio::time::{Instant, sleep};
@@ -29,12 +32,12 @@ impl Checkpointer {
     /// - `wal_directory`: WAL directory.
     ///
     pub(crate) fn new(
-        wal_directory: &PathBuf,
+        wal_directory: &Path,
         manager: Manager,
         checkpoint_interval: Duration,
     ) -> Self {
         Self {
-            wal_directory: wal_directory.clone(),
+            wal_directory: wal_directory.to_path_buf(),
             manager,
             checkpoint_interval,
             shutdown: CancellationToken::new(),
@@ -80,7 +83,7 @@ impl Checkpointer {
             let transactions = Self::read_tids(path).await?;
             let can_remove = transactions
                 .iter()
-                .all(|transaction| self.manager.transaction(&transaction).is_none());
+                .all(|transaction| self.manager.transaction(transaction).is_none());
 
             if can_remove {
                 debug!(
@@ -112,7 +115,7 @@ impl Checkpointer {
         self.shutdown.cancel();
     }
 
-    async fn read_tids(path: &PathBuf) -> Result<Vec<TwoPcTransaction>, Error> {
+    async fn read_tids(path: &Path) -> Result<Vec<TwoPcTransaction>, Error> {
         let segment = Segment::load(path).await?;
 
         let mut tids = vec![];

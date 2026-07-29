@@ -97,10 +97,9 @@ impl TwoPcTestClient {
     }
 
     pub(super) async fn get_segment(&self, number: u64) -> Segment {
-        let segment = Segment::load(&Segment::path(&self.tmp.path(), number))
+        Segment::load(&Segment::path(self.tmp.path(), number))
             .await
-            .unwrap();
-        segment
+            .unwrap()
     }
 
     pub(super) fn pool_transactions(&self) -> usize {

@@ -35,7 +35,7 @@ impl Segment {
     }
 
     /// Load segment from file.
-    pub(super) async fn load(path: &PathBuf) -> Result<Self, Error> {
+    pub(super) async fn load(path: &Path) -> Result<Self, Error> {
         use std::io::ErrorKind;
         debug!(r#"[2pc] opening segment "{}""#, path.display());
 
