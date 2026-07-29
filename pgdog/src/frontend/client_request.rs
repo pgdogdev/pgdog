@@ -7,11 +7,6 @@ use std::ops::{Deref, DerefMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query;
-#[cfg(feature = "new_parser")]
-use pg_raw_parse;
-
 use crate::{
     frontend::router::Ast,
     net::{
@@ -25,40 +20,26 @@ use super::{PreparedStatements, router::Route};
 
 pub use super::BufferedQuery;
 
-#[cfg(feature = "new_parser")]
-fn split_statements(query: &str) -> Vec<(usize, usize)> {
-    let Ok(parsed) = pg_raw_parse::parse(query) else {
-        return vec![];
-    };
-    let inner = parsed.into_inner();
-    if inner.len() <= 1 {
-        return vec![];
-    }
-    inner
-        .into_iter()
-        .map(|stmt| {
-            let loc = stmt.stmt_location.max(0) as usize;
-            let len = stmt.stmt_len as usize;
-            (loc, len)
-        })
-        .collect()
-}
-
-#[cfg(not(feature = "new_parser"))]
-fn split_statements(query: &str) -> Vec<(usize, usize)> {
+/// Split a multi-statement simple query string into individual statement slices.
+/// Returns an empty vec if parsing fails or the query contains only one statement.
+fn split_statements(query: &str) -> Vec<&str> {
     let Ok(parsed) = pg_query::parse(query) else {
         return vec![];
     };
-    let stmts = &parsed.protobuf.stmts;
+    let stmts = parsed.protobuf.stmts;
     if stmts.len() <= 1 {
         return vec![];
     }
     stmts
         .iter()
-        .map(|stmt| {
+        .filter_map(|stmt| {
             let loc = stmt.stmt_location.max(0) as usize;
-            let len = stmt.stmt_len as usize;
-            (loc, len)
+            let end = if stmt.stmt_len == 0 {
+                query.len()
+            } else {
+                loc + stmt.stmt_len as usize
+            };
+            query.get(loc..end).map(str::trim).filter(|s| !s.is_empty())
         })
         .collect()
 }
@@ -419,29 +400,17 @@ impl ClientRequest {
     /// the request is not a simple Query, contains only one statement, or parsing fails.
     /// In all those cases the caller falls through to the normal query engine path.
     pub fn spliced_simple(&self) -> Vec<Self> {
-        let Some(ProtocolMessage::Query(q)) = self.messages.iter().find(|m| m.code() == 'Q') else {
+        let Some(ProtocolMessage::Query(q)) = self.messages.iter().find(|m| m.code() == 'Q')
+        else {
             return vec![];
         };
-        let query_text = q.query();
-
-        split_statements(query_text)
+        split_statements(q.query())
             .into_iter()
-            .filter_map(|(offset, len)| {
-                let end = if len == 0 {
-                    query_text.len()
-                } else {
-                    offset + len
-                };
-                let text = query_text.get(offset..end)?.trim();
-                if text.is_empty() {
-                    return None;
-                }
-                Some(Self {
-                    messages: vec![ProtocolMessage::Query(Query::new(text))],
-                    route: None,
-                    ast: None,
-                    last_parse: None,
-                })
+            .map(|text| Self {
+                messages: vec![ProtocolMessage::Query(Query::new(text))],
+                route: None,
+                ast: None,
+                last_parse: None,
             })
             .collect()
     }
