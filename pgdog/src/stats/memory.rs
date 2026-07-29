@@ -54,12 +54,17 @@ impl<V: MemoryUsage> MemoryUsage for Vec<V> {
     }
 }
 
-impl<K: MemoryUsage, V: MemoryUsage> MemoryUsage for HashMap<K, V> {
+impl<K: MemoryUsage, V: MemoryUsage, S> MemoryUsage for HashMap<K, V, S> {
     #[inline(always)]
     fn memory_usage(&self) -> usize {
-        self.iter()
-            .map(|(k, v)| k.memory_usage() + v.memory_usage())
-            .sum::<usize>()
+        // The table allocates capacity() slots (plus one control byte each),
+        // not len(): spare capacity left behind by removed entries still
+        // occupies memory and has to be counted.
+        self.capacity() * (std::mem::size_of::<(K, V)>() + 1)
+            + self
+                .iter()
+                .map(|(k, v)| k.memory_usage() + v.memory_usage())
+                .sum::<usize>()
     }
 }
 
@@ -72,10 +77,12 @@ impl<K: MemoryUsage, V: MemoryUsage> MemoryUsage for BTreeMap<K, V> {
     }
 }
 
-impl<V: MemoryUsage> MemoryUsage for HashSet<V> {
+impl<V: MemoryUsage, S> MemoryUsage for HashSet<V, S> {
     #[inline(always)]
     fn memory_usage(&self) -> usize {
-        self.iter().map(|v| v.memory_usage()).sum::<usize>()
+        // Same as HashMap: count allocated slots, not just live entries.
+        self.capacity() * (std::mem::size_of::<V>() + 1)
+            + self.iter().map(|v| v.memory_usage()).sum::<usize>()
     }
 }
 
@@ -99,5 +106,42 @@ impl MemoryUsage for Bytes {
     #[inline(always)]
     fn memory_usage(&self) -> usize {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_map_counts_spare_capacity() {
+        let mut map: HashMap<usize, usize> = HashMap::new();
+        for i in 0..1000 {
+            map.insert(i, i);
+        }
+        let capacity = map.capacity();
+        for i in 0..1000 {
+            map.remove(&i);
+        }
+        assert!(map.is_empty());
+        // The allocation survives removals; capacity() may dip slightly
+        // due to tombstones but stays the same order of magnitude.
+        assert!(map.capacity() * 2 >= capacity);
+        assert!(
+            map.memory_usage() >= map.capacity() * (std::mem::size_of::<(usize, usize)>() + 1),
+            "spare capacity left by removed entries must be counted"
+        );
+    }
+
+    #[test]
+    fn hash_set_counts_spare_capacity() {
+        let mut set: HashSet<usize> = HashSet::new();
+        for i in 0..1000 {
+            set.insert(i);
+        }
+        let capacity = set.capacity();
+        set.clear();
+        assert_eq!(set.capacity(), capacity);
+        assert!(set.memory_usage() >= capacity * (std::mem::size_of::<usize>() + 1));
     }
 }
