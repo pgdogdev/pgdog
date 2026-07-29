@@ -94,7 +94,8 @@ impl QueryCache {
             }),
             Metric::new(QueryCacheMetric {
                 name: "prepared_statements_capacity".into(),
-                help: "Number of slots allocated by the prepared statements cache".into(),
+                help: "Number of slots allocated by the statements table of the prepared statements cache"
+                    .into(),
                 value: self.prepared_statements_capacity,
                 gauge: true,
             }),
