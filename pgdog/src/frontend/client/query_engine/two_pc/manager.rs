@@ -172,6 +172,11 @@ impl Manager {
         identifier: &Arc<User>,
         phase: TwoPcPhase,
     ) -> Result<TwoPcGuard, Error> {
+        assert_ne!(
+            phase,
+            TwoPcPhase::Rollback,
+            "rollback is derived during recovery and is never written to the WAL"
+        );
         self.set_transaction_state(transaction, identifier, phase);
 
         if let Some(wal) = self.wal.load_full() {
@@ -182,7 +187,7 @@ impl Manager {
                 })
                 .await?;
             } else {
-                wal.add(TwoPcRecordPhase::new(transaction, phase)).await?;
+                wal.add(TwoPcRecordPhase::new(transaction)).await?;
             }
         }
 

@@ -73,7 +73,7 @@ async fn test_live_segment_batches_fsyncs() {
     let interval = Duration::from_millis(10);
     let segment = LiveSegment::new(tmp.path(), 1, interval).await.unwrap();
     let waiter = segment.add(Record {
-        code: '1',
+        code: '2',
         data: Bytes::new(),
     });
 
@@ -84,4 +84,15 @@ async fn test_live_segment_batches_fsyncs() {
     waiter.wait_flush().await;
 
     segment.shutdown();
+}
+
+#[test]
+fn test_only_phase_two_has_a_phase_record() {
+    for code in ['1', '3'] {
+        let record = Record {
+            code,
+            data: Bytes::copy_from_slice(&42_u64.to_be_bytes()),
+        };
+        assert!(Records::try_from(record).is_err());
+    }
 }

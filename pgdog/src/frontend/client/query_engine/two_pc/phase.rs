@@ -17,26 +17,3 @@ impl Display for TwoPcPhase {
         }
     }
 }
-
-impl From<TwoPcPhase> for char {
-    fn from(value: TwoPcPhase) -> Self {
-        match value {
-            TwoPcPhase::Phase1 => '1',
-            TwoPcPhase::Phase2 => '2',
-            TwoPcPhase::Rollback => '3',
-        }
-    }
-}
-
-impl TryFrom<char> for TwoPcPhase {
-    type Error = ();
-
-    fn try_from(value: char) -> Result<Self, Self::Error> {
-        match value {
-            '1' => Ok(Self::Phase1),
-            '2' => Ok(Self::Phase2),
-            '3' => Ok(Self::Rollback),
-            _ => Err(()),
-        }
-    }
-}

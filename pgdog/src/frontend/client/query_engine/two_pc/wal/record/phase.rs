@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut};
 
-use super::super::super::{TwoPcPhase, TwoPcTransaction};
+use super::super::super::TwoPcTransaction;
 use super::Record;
 use crate::net::Payload;
 
@@ -15,12 +15,11 @@ use crate::net::Payload;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TwoPcRecordPhase {
     pub(crate) transaction: TwoPcTransaction,
-    pub(crate) phase: TwoPcPhase,
 }
 
 impl TwoPcRecordPhase {
-    pub(crate) fn new(transaction: TwoPcTransaction, phase: TwoPcPhase) -> Self {
-        Self { transaction, phase }
+    pub(crate) fn new(transaction: TwoPcTransaction) -> Self {
+        Self { transaction }
     }
 }
 
@@ -30,7 +29,7 @@ impl From<TwoPcRecordPhase> for Record {
         payload.put_u64(value.transaction.0 as u64);
 
         Self {
-            code: char::from(value.phase),
+            code: '2',
             data: payload.freeze(),
         }
     }
@@ -44,9 +43,11 @@ impl TryFrom<Record> for TwoPcRecordPhase {
             return Err(());
         }
 
-        let phase = TwoPcPhase::try_from(value.code)?;
+        if value.code != '2' {
+            return Err(());
+        }
         let transaction = TwoPcTransaction(value.data.get_u64() as usize);
 
-        Ok(Self { transaction, phase })
+        Ok(Self { transaction })
     }
 }
