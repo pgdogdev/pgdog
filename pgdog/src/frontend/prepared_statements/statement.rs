@@ -45,13 +45,7 @@ impl MemoryUsage for StatementType {
 impl MemoryUsage for Statement {
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.stmt.memory_usage()
-            + if let Some(row_description) = &self.row_description {
-                row_description.memory_usage()
-            } else {
-                0
-            }
-            + self.cache_key.memory_usage()
+        self.content_bytes() + self.cache_key.memory_usage()
     }
 }
 
@@ -90,6 +84,15 @@ impl Statement {
 
     pub(super) fn cache_key(&self) -> &CacheKey {
         &self.cache_key
+    }
+
+    pub(super) fn content_bytes(&self) -> usize {
+        self.stmt.memory_usage()
+            + self
+                .row_description
+                .as_ref()
+                .map(|row_description| row_description.memory_usage())
+                .unwrap_or_default()
     }
 
     pub(super) fn set_rewrite(&mut self, parse: &Parse) {
