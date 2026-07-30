@@ -11,9 +11,9 @@ use crate::{
     util::random_string,
 };
 
+use crate::util::safe_timeout;
 use pgdog_config::CopyFormat;
 use std::{fmt::Display, str::FromStr, time::Duration};
-use tokio::time::timeout;
 use tracing::{debug, info, trace, warn};
 
 pub use pgdog_stats::Lsn;
@@ -333,7 +333,7 @@ impl ReplicationSlot {
         max_wait: Duration,
     ) -> Result<Option<ReplicationData>, Error> {
         loop {
-            let message = match timeout(max_wait, self.server()?.read()).await {
+            let message = match safe_timeout(max_wait, self.server()?.read()).await {
                 Err(_err) => return Err(Error::ReplicationTimeout),
                 Ok(message) => message?,
             };

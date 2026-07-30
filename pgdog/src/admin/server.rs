@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use tokio::time::sleep;
 use tracing::debug;
 
 use crate::frontend::ClientRequest;
@@ -15,6 +14,7 @@ use crate::net::messages::{ErrorResponse, FromBytes, Protocol, Query, ReadyForQu
 use super::Error;
 use super::parser::Parser;
 use super::prelude::Message;
+use crate::util::safe_sleep;
 
 /// Admin backend.
 #[derive(Debug)]
@@ -71,7 +71,7 @@ impl AdminServer {
         match self.messages.pop_front() {
             Some(message) => Ok(message),
             _ => loop {
-                sleep(Duration::MAX).await;
+                safe_sleep(Duration::MAX).await;
             },
         }
     }

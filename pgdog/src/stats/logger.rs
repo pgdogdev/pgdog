@@ -1,10 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::{select, sync::Notify, time::sleep};
+use tokio::{select, sync::Notify};
 use tracing::info;
 
 use crate::frontend::router::parser::Cache;
 use crate::tasks;
+use crate::util::safe_sleep;
 
 #[derive(Debug, Clone)]
 pub struct Logger {
@@ -37,7 +38,7 @@ impl Logger {
             let shutdown = tasks::shutdown_signal();
             loop {
                 select! {
-                    _ = sleep(me.interval) => {
+                    _ = safe_sleep(me.interval) => {
                         let (stats, len) = Cache::stats();
 
                         info!(

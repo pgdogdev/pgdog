@@ -3,10 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use tokio::{
-    select,
-    time::{interval, sleep, timeout},
-};
+use tokio::select;
 use tracing::{debug, error, trace};
 
 use crate::{
@@ -18,6 +15,7 @@ use crate::{
 use super::*;
 use pgdog_postgres_types::Format;
 
+use crate::util::{safe_interval, safe_sleep, safe_timeout};
 use pgdog_stats::LsnStats as StatsLsnStats;
 pub use pgdog_stats::replication::ReplicaLag;
 
@@ -141,7 +139,7 @@ impl LsnMonitor {
     }
 
     async fn run_query(&self, conn: &mut Server, query: &str) -> Option<DataRow> {
-        match timeout(self.pool.config().lsn_check_timeout, conn.fetch_all(query)).await {
+        match safe_timeout(self.pool.config().lsn_check_timeout, conn.fetch_all(query)).await {
             Ok(Ok(rows)) => rows.into_iter().next(),
             Ok(Err(err)) => {
                 error!("lsn monitor query error: {} [{}]", err, self.pool.addr());
@@ -155,7 +153,7 @@ impl LsnMonitor {
     }
 
     async fn detect_aurora(&self, conn: &mut Server) -> Option<bool> {
-        match timeout(
+        match safe_timeout(
             self.pool.config().lsn_check_timeout,
             conn.fetch_all::<DataRow>(AURORA_DETECTION_QUERY),
         )
@@ -186,14 +184,14 @@ impl LsnMonitor {
 
     async fn spawn(&self) {
         select! {
-            _ = sleep(self.pool.config().lsn_check_delay) => {},
+            _ = safe_sleep(self.pool.config().lsn_check_delay) => {},
             _ = self.pool.comms().shutdown.cancelled() => { return; }
         }
 
         debug!("lsn monitor loop is running [{}]", self.pool.addr());
 
         let mut aurora_detected: Option<bool> = None;
-        let mut interval = interval(self.pool.config().lsn_check_interval);
+        let mut interval = safe_interval(self.pool.config().lsn_check_interval);
 
         loop {
             select! {
@@ -413,7 +411,7 @@ mod test {
         // so this first check flips to primary and fires one notification —
         // drain that stored permit before testing the steady state.
         assert_eq!(monitor.run_check(Some(false)).await, Ok(Some(false)));
-        let _ = timeout(
+        let _ = safe_timeout(
             Duration::from_millis(50),
             monitor.pool.inner().lsn_role_change.notified(),
         )

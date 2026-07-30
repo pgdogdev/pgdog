@@ -4,8 +4,9 @@ use crate::{config::config, tasks};
 
 use super::*;
 
+use crate::util::safe_interval;
 use pgdog_stats::ReplicaLag;
-use tokio::{select, task::JoinHandle, time::interval};
+use tokio::{select, task::JoinHandle};
 use tracing::debug;
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -36,7 +37,7 @@ impl Monitor {
     }
 
     async fn run(&self) {
-        let mut interval = interval(MAINTENANCE);
+        let mut interval = safe_interval(MAINTENANCE);
 
         debug!("replicas monitor running");
         let config = config();

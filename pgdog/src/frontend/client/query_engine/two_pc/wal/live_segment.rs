@@ -11,6 +11,7 @@ use super::{Record, Segment, SegmentRegistry, SegmentStatus};
 use crate::{
     net::{Error, ToBytes},
     tasks,
+    util::safe_interval,
 };
 use parking_lot::Mutex;
 use tokio::{
@@ -18,7 +19,7 @@ use tokio::{
     io::{AsyncWriteExt, BufWriter},
     select,
     sync::{Notify, oneshot},
-    time::{MissedTickBehavior, interval},
+    time::MissedTickBehavior,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -168,7 +169,7 @@ impl LiveSegment {
         let mut fsync = if self.fsync_interval.is_zero() {
             None
         } else {
-            let mut fsync = interval(self.fsync_interval);
+            let mut fsync = safe_interval(self.fsync_interval);
             fsync.set_missed_tick_behavior(MissedTickBehavior::Delay);
             fsync.tick().await; // The first tick completes immediately.
             Some(fsync)

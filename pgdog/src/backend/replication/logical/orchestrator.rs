@@ -9,15 +9,12 @@ use crate::{
 };
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction, RewriteMode};
 use std::{fmt::Display, sync::Arc, time::Duration};
-use tokio::{
-    select,
-    sync::Mutex,
-    time::{Instant, interval},
-};
+use tokio::{select, sync::Mutex, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::*;
+use crate::util::safe_interval;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Orchestrator {
@@ -296,7 +293,7 @@ impl ReplicationWaiter {
         );
 
         // Check once a second how far we got.
-        let mut check = interval(Duration::from_secs(1));
+        let mut check = safe_interval(Duration::from_secs(1));
 
         loop {
             select! {
@@ -379,8 +376,8 @@ impl ReplicationWaiter {
         );
 
         // Check more frequently.
-        let mut check = interval(Duration::from_millis(50));
-        let mut log = interval(Duration::from_secs(1));
+        let mut check = safe_interval(Duration::from_millis(50));
+        let mut log = safe_interval(Duration::from_secs(1));
         // Abort clock starts now.
         let start = Instant::now();
 
@@ -545,6 +542,7 @@ use ok_or_abort;
 mod tests {
     use super::*;
     use crate::backend::pool::Cluster;
+    use crate::util::{safe_sleep, safe_timeout};
     use pgdog_config::ConfigAndUsers;
     use std::assert_matches;
     use std::sync::Arc;
@@ -831,7 +829,6 @@ mod tests {
     #[tokio::test]
     async fn wait_for_replication_finishes_with_unrelated_writes() {
         use crate::backend::server::test::test_server;
-        use tokio::time::{sleep, timeout};
 
         crate::logger();
         maintenance_mode::stop(None);
@@ -906,11 +903,11 @@ mod tests {
 
         // Let one check_lag tick (1s) refresh the lag cache with the post-write
         // value before sampling the gate.
-        sleep(Duration::from_secs(1)).await;
+        safe_sleep(Duration::from_secs(1)).await;
 
         // 30s margin: keepalive cadence (wal_sender_timeout) is not bounded by
         // the 1s sleep, so give confirmed_flush_lsn room to advance.
-        let result = timeout(Duration::from_secs(20), waiter.wait_for_replication()).await;
+        let result = safe_timeout(Duration::from_secs(20), waiter.wait_for_replication()).await;
         let maintenance_on = maintenance_mode::is_on("");
 
         // Clean up before asserting so a failure can't leak slots or maintenance mode.

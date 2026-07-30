@@ -15,12 +15,12 @@ use parking_lot::Mutex;
 use tokio::{
     select,
     sync::{Notify, broadcast, mpsc},
-    time::sleep,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use super::{Stats, StatsSnapshot, channel_size};
+use crate::util::safe_sleep;
 use crate::{
     backend::{self, ConnectReason, DisconnectReason, Pool, pool::Error},
     config::config,
@@ -212,7 +212,7 @@ impl PubSubListener {
                             // Don't reconnect for another connect attempt delay
                             // to avoid connection storms during incidents.
                             select! {
-                                _ = sleep(Duration::from_millis(config().config.general.connect_attempt_delay)) => {}
+                                _ = safe_sleep(Duration::from_millis(config().config.general.connect_attempt_delay)) => {}
                                 _ = comms.shutdown.cancelled() => rx.close(),
                             }
                         }

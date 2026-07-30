@@ -12,11 +12,11 @@ use parking_lot::RwLock;
 use pgdog_postgres_types::ToDataRowColumn;
 use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, error, info, info_span, warn};
 
 use crate::tasks;
+use crate::util::safe_timeout;
 
 /// Represent the ID of the async task.
 #[derive(Copy, Clone, Debug, Display, FromStr, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -391,7 +391,7 @@ fn run_task<P: Task, T: Task>(
             _ = cancellation_token.cancelled() => {
                 ctx.transition(TaskStatus::Cancelling);
                 if ctx.task.cooperative.load(Ordering::Relaxed) {
-                    match timeout(T::cancel_timeout(), &mut handle).await {
+                    match safe_timeout(T::cancel_timeout(), &mut handle).await {
                         Ok(res) => res,
                         Err(_) => {
                             // The timeout fired: abort the task
@@ -584,6 +584,7 @@ impl AsyncTasksStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::safe_sleep;
     use parking_lot::Mutex;
     use std::convert::Infallible;
     use std::fmt::Debug;
@@ -591,7 +592,6 @@ mod tests {
     use tokio::sync::Notify;
     use tokio::task::yield_now;
     use tokio::test;
-    use tokio::time::sleep;
 
     type State = Arc<Mutex<&'static str>>;
 
@@ -767,7 +767,7 @@ mod tests {
             tokio::select! {
                 _ = self.notify.notified() => {}
                 _ = token.cancelled() => {
-                    sleep(self.wind_down).await;
+                    safe_sleep(self.wind_down).await;
                     *self.state.lock() = "cancelled";
                     return Ok(true);
                 }

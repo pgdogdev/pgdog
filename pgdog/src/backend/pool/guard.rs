@@ -3,7 +3,6 @@
 use std::ops::{Deref, DerefMut};
 
 use pgdog_config::pooling::ConnectionRecovery;
-use tokio::time::timeout;
 use tokio::{spawn, time::Instant};
 use tracing::{debug, error};
 
@@ -11,6 +10,7 @@ use crate::backend::{Error, Server};
 use crate::state::State;
 
 use super::{Pool, cleanup::Cleanup};
+use crate::util::safe_timeout;
 
 /// Connection guard.
 pub struct Guard {
@@ -95,7 +95,7 @@ impl Guard {
                 let addr = self.pool.addr().clone();
 
                 spawn(async move {
-                    match timeout(
+                    match safe_timeout(
                         rollback_timeout,
                         Self::cleanup_internal(&mut server, cleanup, conn_recovery),
                     )
@@ -240,8 +240,9 @@ mod test {
     use std::time::Duration;
 
     use pgdog_config::pooling::ConnectionRecovery;
-    use tokio::time::{Instant, sleep, timeout};
+    use tokio::time::Instant;
 
+    use crate::util::{safe_sleep, safe_timeout};
     use crate::{
         backend::{
             pool::{
@@ -365,7 +366,7 @@ mod test {
                 .unwrap();
         }
 
-        sleep(Duration::from_millis(500)).await;
+        safe_sleep(Duration::from_millis(500)).await;
 
         {
             let state = pool.lock();
@@ -435,7 +436,7 @@ mod test {
         let mut server = test_server().await;
         let select = (0..50_000_000).map(|_| 'b').collect::<String>();
         let select = Query::new(format!("SELECT '{}'", select));
-        let res = timeout(
+        let res = safe_timeout(
             Duration::from_millis(1),
             server.send(&vec![select.into()].into()),
         )
@@ -845,7 +846,7 @@ mod test {
         let pool = pool();
 
         {
-            let mut guard = timeout(Duration::from_secs(5), pool.get(&Request::default()))
+            let mut guard = safe_timeout(Duration::from_secs(5), pool.get(&Request::default()))
                 .await
                 .expect("timed out getting connection")
                 .unwrap();
@@ -854,7 +855,7 @@ mod test {
             let large_query = (0..50_000_000).map(|_| 'b').collect::<String>();
             let large_query = Query::new(format!("SELECT '{}'", large_query));
 
-            let res = timeout(
+            let res = safe_timeout(
                 Duration::from_millis(1),
                 guard.send(&vec![large_query.into()].into()),
             )
@@ -867,7 +868,7 @@ mod test {
             );
         }
 
-        sleep(Duration::from_millis(100)).await;
+        safe_sleep(Duration::from_millis(100)).await;
 
         let state = pool.state();
         assert_eq!(

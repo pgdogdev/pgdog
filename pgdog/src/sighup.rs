@@ -27,7 +27,7 @@ impl Sighup {
             use std::time::Duration;
             use tokio::time::sleep;
 
-            sleep(Duration::MAX).await;
+            safe_sleep(Duration::MAX).await;
         }
     }
 }

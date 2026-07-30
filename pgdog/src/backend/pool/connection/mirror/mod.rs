@@ -6,7 +6,7 @@ use pgdog_config::MirroringLevel;
 use rand::{Rng, rng};
 use tokio::select;
 use tokio::sync::mpsc::*;
-use tokio::time::{Instant, sleep};
+use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
@@ -19,6 +19,7 @@ use crate::net::{FrontendPid, Parameter, Parameters, Stream};
 use crate::tasks;
 
 use super::Error;
+use crate::util::safe_sleep;
 
 pub mod buffer_with_delay;
 pub mod handler;
@@ -154,7 +155,7 @@ impl Mirror {
 
         for req in &mut request.buffer {
             if req.delay > Duration::ZERO {
-                sleep(req.delay).await;
+                safe_sleep(req.delay).await;
             }
 
             let mut context = QueryEngineContext::new_mirror(self, &mut req.buffer);
@@ -268,14 +269,14 @@ mod test {
                 3,
                 "mirror buffer should have 3 requests"
             );
-            sleep(Duration::from_millis(50)).await;
+            safe_sleep(Duration::from_millis(50)).await;
             // Nothing happens until we flush.
             assert!(
                 conn.execute("DROP TABLE pgdog.test_mirror").await.is_err(),
                 "table pgdog.test_mirror shouldn't exist yet"
             );
             assert!(mirror.flush(), "mirror didn't flush");
-            sleep(Duration::from_millis(50)).await;
+            safe_sleep(Duration::from_millis(50)).await;
             assert!(
                 conn.execute("DROP TABLE pgdog.test_mirror").await.is_ok(),
                 "pgdog.test_mirror should exist"
@@ -310,7 +311,7 @@ mod test {
         assert!(mirror.flush());
 
         // Wait for async processing
-        sleep(Duration::from_millis(100)).await;
+        safe_sleep(Duration::from_millis(100)).await;
 
         // Verify stats were incremented
         let final_stats = {

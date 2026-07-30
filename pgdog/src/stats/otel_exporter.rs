@@ -5,11 +5,11 @@
 
 use std::time::Duration;
 
-use tokio::time::sleep;
 use tracing::{info, warn};
 
 use super::otel;
 use super::{Clients, ClientsLocked, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use crate::util::safe_sleep;
 use crate::{config::config, tasks};
 
 /// Maximum number of metrics per OTLP request to stay under endpoint payload limits.
@@ -36,7 +36,7 @@ pub async fn run() {
 
     loop {
         tokio::select! {
-            _ = sleep(interval) => {}
+            _ = safe_sleep(interval) => {}
             _ = shutdown.cancelled() => break,
         }
 

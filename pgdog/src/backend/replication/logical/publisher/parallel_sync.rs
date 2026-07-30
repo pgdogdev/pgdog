@@ -5,7 +5,7 @@
 //!
 use std::sync::Arc;
 
-use tokio::{sync::Semaphore, task::JoinHandle, time::sleep};
+use tokio::{sync::Semaphore, task::JoinHandle};
 use tracing::{info, warn};
 
 use super::super::Error;
@@ -18,6 +18,7 @@ use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::Protocol;
 use crate::tasks;
 use crate::util::escape_identifier;
+use crate::util::safe_sleep;
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio_util::sync::CancellationToken;
 
@@ -89,7 +90,7 @@ impl ParallelSync {
                     // Reset counters so the next attempt's progress is reported accurately.
                     tracker.reset();
 
-                    sleep(backoff).await;
+                    safe_sleep(backoff).await;
 
                     if self.dest.two_pc_enabled()
                         && let Some(txn) = err.two_pc_cleanup_transaction()

@@ -1,4 +1,4 @@
-use tokio::time::{Duration, Instant, timeout};
+use tokio::time::{Duration, Instant};
 use url::Url;
 
 use crate::{
@@ -7,6 +7,7 @@ use crate::{
 };
 
 use super::prelude::*;
+use crate::util::safe_timeout;
 
 #[derive(Debug, Clone)]
 pub struct Probe {
@@ -25,7 +26,7 @@ impl Command for Probe {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let mut conn = timeout(
+        let mut conn = safe_timeout(
             Duration::from_millis(config().config.general.connect_timeout),
             Server::connect(
                 &Address::try_from(self.url.clone()).map_err(|_| Error::InvalidAddress)?,
