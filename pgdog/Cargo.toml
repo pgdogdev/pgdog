@@ -86,6 +86,7 @@ hex = "0.4"
 x509-parser = "0.18"
 pg_raw_parse = { workspace = true, optional = true }
 itertools = "0.15.0"
+dyn-clone = "1.0.20"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

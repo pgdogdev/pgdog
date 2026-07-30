@@ -4,13 +4,10 @@
 //! traffic until boot-time maintenance has completed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use tokio::{select, time::sleep};
+use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
-use crate::backend::pool::ee::schema_changed_hook;
 use crate::tasks;
 
 use super::Cluster;
@@ -118,50 +115,6 @@ impl Cluster {
     /// Load database schema in the background, retrying
     /// until success or shutdown.
     fn launch_schema_sync(&self) {
-        if !self.load_schema() {
-            for shard in self.shards() {
-                shard.schema_not_needed();
-            }
-            return;
-        }
-
-        for shard in self.shards() {
-            let identifier = self.identifier();
-            let shard = shard.clone();
-            let shutdown = tasks::shutdown_signal();
-
-            tasks::spawn("shard schema sync", async move {
-                loop {
-                    let loader = shard.load_schema();
-                    let result = select! {
-                        _ = shutdown.cancelled() => break,
-                        result = loader => { result },
-                    };
-
-                    match result {
-                        Ok(true) => {
-                            schema_changed_hook(&shard.schema(), &identifier, &shard);
-                            return;
-                        }
-                        Ok(false) => return,
-                        Err(err) => {
-                            if shard.online() {
-                                error!(
-                                    "error loading schema for shard {}: {}",
-                                    shard.number(),
-                                    err
-                                );
-                                sleep(Duration::from_millis(100)).await;
-                            } else {
-                                // Cluster is shutting down: unblock any
-                                // wait_schema_loaded callers.
-                                shard.schema_not_needed();
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
-        }
+        self.schema_loader.launch_schema_sync(self)
     }
 }

@@ -23,11 +23,14 @@ use crate::{
     net::{Query, messages::FrontendPid},
 };
 
-use super::{
-    Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig,
-    cluster_launch::Readiness,
-};
+use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
+use launch::Readiness;
+
+pub(crate) mod launch;
+pub(crate) mod schema_loader;
+
+pub(crate) use schema_loader::SchemaLoader;
 
 #[derive(Clone, Debug, Default)]
 /// Database configuration.
@@ -40,7 +43,8 @@ pub struct PoolConfig {
 
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(Default))]
 pub struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
@@ -57,7 +61,7 @@ pub struct Cluster {
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
-    pub(super) readiness: Arc<Readiness>,
+    readiness: Arc<Readiness>,
     rewrite: Rewrite,
     prepared_statements: PreparedStatements,
     dry_run: bool,
@@ -79,6 +83,8 @@ pub struct Cluster {
     regex_parser: RegexParser,
     identity: Option<String>,
     tls_client_certificate_required: bool,
+    #[debug(skip)]
+    schema_loader: Box<dyn SchemaLoader>,
 }
 
 /// Sharding configuration from the cluster.
@@ -350,6 +356,7 @@ impl Cluster {
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
             tls_client_certificate_required,
+            schema_loader: Box::new(schema_loader::FromServer),
         }
     }
 
@@ -681,6 +688,7 @@ mod test {
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
     };
 
+    use crate::backend::pool::cluster::SchemaLoader;
     use crate::frontend::router::sharding::ShardedTable;
     use crate::{
         backend::{
@@ -996,11 +1004,6 @@ mod test {
         let config = ConfigAndUsers::default();
         let cluster = Cluster::new_test(&config);
 
-        // Pre-populate per-shard schemas so launch doesn't touch a real database.
-        for shard in &cluster.shards {
-            shard.schema_not_needed();
-        }
-
         assert!(!cluster.ready());
         cluster.launch();
         cluster.wait_ready().await;
@@ -1037,13 +1040,6 @@ mod test {
 
         assert!(cluster.load_schema());
 
-        // Pre-populate per-shard schemas so launch's spawned loaders become
-        // no-ops (Shard::load_schema returns Ok(false) when already initialized).
-        // This avoids touching a real database in the test.
-        for shard in &cluster.shards {
-            shard.schema_not_needed();
-        }
-
         cluster.launch();
         cluster.wait_ready().await;
 
@@ -1055,28 +1051,40 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_ready_waits_for_schema_notification() {
-        use tokio::time::{Duration, sleep, timeout};
+        use futures::poll;
+
+        #[derive(Clone)]
+        struct ManuallyLoad;
+
+        impl SchemaLoader for ManuallyLoad {
+            fn launch_schema_sync(&self, _: &Cluster) {}
+        }
 
         let config = ConfigAndUsers::default();
-        let cluster = Cluster::new_test(&config);
+        let cluster = Cluster {
+            schema_loader: Box::new(ManuallyLoad),
+            ..Cluster::new_test(&config)
+        };
 
         cluster.launch();
 
         // Schemas not loaded yet, readiness is pending.
         assert!(!cluster.ready());
 
-        // Simulate schema load finishing on each shard: the readiness
-        // monitor wakes up via the per-shard schema_waiter notification.
-        let shards: Vec<_> = cluster.shards.to_vec();
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(10)).await;
-            for shard in &shards {
-                shard.schema_not_needed();
-            }
-        });
+        let mut result = std::pin::pin!(cluster.wait_ready());
 
-        let result = timeout(Duration::from_millis(500), cluster.wait_ready()).await;
-        assert!(result.is_ok());
+        // Finish loading on all but one shard
+        for shard in &cluster.shards[1..] {
+            shard.schema_not_needed();
+        }
+
+        tokio::task::yield_now().await;
+        assert!(poll!(result.as_mut()).is_pending());
+
+        cluster.shards[0].schema_not_needed();
+
+        tokio::task::yield_now().await;
+        assert!(poll!(result.as_mut()).is_ready());
         assert!(cluster.ready());
     }
 
