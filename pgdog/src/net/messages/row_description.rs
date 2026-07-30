@@ -267,16 +267,22 @@ impl RowDescription {
         true
     }
 
-    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
+    /// Replaces the data types of each field using the given mapping.
+    /// Returns whether any changes actually occurred.
+    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) -> bool {
         if mapping.is_empty() {
-            return;
+            return false;
         }
 
+        let mut changed = false;
         for field in Arc::make_mut(&mut self.fields) {
             if let Some(&canonical) = mapping.get(&(field.type_oid as u32)) {
+                changed = true;
                 field.type_oid = canonical as i32;
             }
         }
+
+        changed
     }
 }
 

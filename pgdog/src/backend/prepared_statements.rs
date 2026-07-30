@@ -404,8 +404,9 @@ impl PreparedStatements {
     /// statement in the global cache.
     fn add_row_description(&self, name: &str, message: &mut Message) -> Result<(), Error> {
         let mut row_description = RowDescription::from_bytes(message.payload())?;
-        self.rewrite_row_description_data_types(&mut row_description);
-        message.replace_payload(row_description.to_bytes());
+        if self.rewrite_row_description_data_types(&mut row_description) {
+            message.replace_payload(row_description.to_bytes());
+        }
         self.global_cache
             .write()
             .insert_row_description(name, row_description);
@@ -480,8 +481,8 @@ impl PreparedStatements {
         parse.rewrite_data_types(&self.oid_mappings().canonical_to_shard)
     }
 
-    fn rewrite_row_description_data_types(&self, row_description: &mut RowDescription) {
-        row_description.rewrite_data_types(&self.oid_mappings().shard_to_canonical);
+    fn rewrite_row_description_data_types(&self, row_description: &mut RowDescription) -> bool {
+        row_description.rewrite_data_types(&self.oid_mappings().shard_to_canonical)
     }
 
     fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
