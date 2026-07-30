@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
+use pgdog_config::otel_temporality::OtelTemporalityPreference;
 use serde::Serialize;
 
 use crate::util::hostname;
@@ -90,7 +91,7 @@ pub struct Gauge {
 }
 
 // little serde trick to let us serialize directly as the integer representation
-#[derive(serde_repr::Serialize_repr)]
+#[derive(serde_repr::Serialize_repr, Clone, Copy)]
 #[repr(u8)]
 pub enum SumAggregationTemporality {
     Delta = 1,
@@ -227,6 +228,13 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
 
     let common_attrs = &*RESOURCE_ATTRIBUTES;
 
+    let aggregation_temporality = match config.config.otel.temporality_preference {
+        OtelTemporalityPreference::Cumulative => SumAggregationTemporality::Cumulative,
+        OtelTemporalityPreference::Delta | OtelTemporalityPreference::LowMemory => {
+            SumAggregationTemporality::Delta
+        }
+    };
+
     let otel_metrics: Vec<OtelMetric> = metrics
         .iter()
         .map(|metric| {
@@ -240,19 +248,31 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                     let cumulative = measurement_to_f64(&m.measurement);
 
                     let as_double = if is_counter {
-                        let key = CounterKey {
-                            metric: name.clone(),
-                            labels: m.labels.clone(),
-                        };
-                        let mut prev = PREV_COUNTERS.lock();
-                        let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
-                        prev.insert(key, cumulative);
+                        // todo: This is pretty nested, we should probably look
+                        // at refactoring how we calculate these values to flatten
+                        // the logic a bit, counters and sums should probably not
+                        // use the same data point code
 
-                        // Skip negative deltas (counter reset).
-                        if delta < 0.0 {
-                            return None;
+                        // NOTE: if aggregation_temporality changes state during program
+                        // execution, the data may be stale, but this should be impossible
+                        match aggregation_temporality {
+                            SumAggregationTemporality::Cumulative => cumulative,
+                            SumAggregationTemporality::Delta => {
+                                let key = CounterKey {
+                                    metric: name.clone(),
+                                    labels: m.labels.clone(),
+                                };
+                                let mut prev = PREV_COUNTERS.lock();
+                                let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
+                                prev.insert(key, cumulative);
+
+                                // Skip negative deltas (counter reset).
+                                if delta < 0.0 {
+                                    return None;
+                                }
+                                delta
+                            }
                         }
-                        delta
                     } else {
                         cumulative
                     };
@@ -288,7 +308,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                 (
                     None,
                     Some(Sum {
-                        aggregation_temporality: SumAggregationTemporality::Delta,
+                        aggregation_temporality,
                         is_monotonic: true,
                         data_points,
                     }),
