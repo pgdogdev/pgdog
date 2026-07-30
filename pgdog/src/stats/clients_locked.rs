@@ -1,4 +1,4 @@
-//! Clients metrics.
+//! Clients locked metrics.
 
 use crate::frontend::comms::comms;
 
@@ -28,7 +28,7 @@ impl OpenMetric for ClientsLocked {
     }
 
     fn help(&self) -> Option<String> {
-        Some("Total number of locked clients.".into())
+        Some("Number of currently locked (pinned) clients.".into())
     }
 }
 
@@ -50,7 +50,7 @@ mod test {
         assert_eq!(lines.next().unwrap(), "# TYPE clients_locked gauge");
         assert_eq!(
             lines.next().unwrap(),
-            "# HELP clients_locked Total number of locked clients."
+            "# HELP clients_locked Number of currently locked (pinned) clients."
         );
         assert_eq!(lines.next().unwrap(), "clients_locked 25");
     }
@@ -65,7 +65,7 @@ mod test {
         assert_eq!(lines[0], "# TYPE clients_locked gauge");
         assert_eq!(
             lines[1],
-            "# HELP clients_locked Total number of locked clients."
+            "# HELP clients_locked Number of currently locked (pinned) clients."
         );
         assert_eq!(lines.last().copied(), Some("clients_locked 0"));
     }
