@@ -21,7 +21,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, error};
 
 // WAL data format version.
 // Not used, but nice to have to avoid breaking compatibility.
@@ -189,9 +189,9 @@ impl LiveSegment {
                 _ = self.shutdown.cancelled() => { true }
             };
 
-            self.write_records(&mut file)
-                .await
-                .expect("this should panic and crash pgdog");
+            if let Err(err) = self.write_records(&mut file).await {
+                error!("[2pc] wal writer error: {err}");
+            }
 
             if exit {
                 break;
