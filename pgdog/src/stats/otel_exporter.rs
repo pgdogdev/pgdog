@@ -54,11 +54,13 @@ pub async fn run() {
         all.extend(listeners.iter());
         all.extend(query_cache.iter());
 
+        let now = otel::now_nanos();
+
         // Send batches in parallel to stay under the 512 KB payload limit.
         let futs: Vec<_> = all
             .chunks(BATCH_SIZE)
             .filter_map(|chunk| {
-                let request = otel::build_request(chunk);
+                let request = otel::build_request(chunk, &now);
                 let body = match serde_json::to_vec(&request) {
                     Ok(b) => b,
                     Err(err) => {
@@ -124,7 +126,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = otel::build_request(&[&metric]);
+        let request = otel::build_request(&[&metric], &otel::now_nanos());
         let body = serde_json::to_vec(&request).expect("serialize");
 
         // Verify the output is valid JSON by parsing it back.
