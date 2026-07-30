@@ -37,10 +37,12 @@ async fn test_reload() {
 #[tokio::test]
 #[serial]
 async fn test_reload_connection_count_stable() {
-    sleep(Duration::from_secs(1)).await;
     let admin = admin_tokio().await;
     let direct = connection_sqlx_direct().await;
 
+    // Perform a single reload to get a stable baseline
+    admin.simple_query("RELOAD").await.unwrap();
+    sleep(Duration::from_millis(250)).await;
     // Count PgDog connections on Postgres before reload.
     let before: i64 = direct
         .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
@@ -49,29 +51,17 @@ async fn test_reload_connection_count_stable() {
         .get(0);
 
     assert!(before > 0, "expected pgdog connections before reload");
-    eprintln!("connections before RELOAD: {before}");
 
     admin.simple_query("RELOAD").await.unwrap();
-    let mut after = before;
-    let mut settled = false;
-    for _ in 0..20 {
-        sleep(Duration::from_millis(250)).await;
-        after = direct
-            .fetch_one(
-                "SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'",
-            )
-            .await
-            .unwrap()
-            .get(0);
-        eprintln!("connections after RELOAD: {after}");
-        if after == before {
-            settled = true;
-            break;
-        }
-    }
+    sleep(Duration::from_millis(250)).await;
+    let after: i64 = direct
+        .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
+        .await
+        .unwrap()
+        .get(0);
 
-    assert!(
-        settled,
+    assert_eq!(
+        before, after,
         "connection count changed after RELOAD: before={before}, after={after}"
     );
 
