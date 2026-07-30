@@ -600,10 +600,6 @@ pub struct General {
 
     /// Directory where the two-phase commit write-ahead log is stored.
     ///
-    /// **Note:** This setting cannot be changed at runtime. PgDog acquires an exclusive `flock` on `<dir>/.lock` at startup. If the directory cannot be created or written to, or another PgDog process already holds the lock, the WAL is disabled and a warning is logged: 2PC will continue to function but will not be durable across restarts.
-    ///
-    /// _Default:_ `./pgdog_wal`
-    ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_dir>
     #[serde(default = "General::two_phase_commit_wal_dir")]
     pub two_phase_commit_wal_dir: Option<PathBuf>,
@@ -620,7 +616,7 @@ pub struct General {
     ///
     /// **Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.
     ///
-    /// _Default:_ `2`
+    /// _Default:_ `0`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>
     #[serde(default = "General::two_phase_commit_wal_fsync_interval")]
@@ -628,7 +624,7 @@ pub struct General {
 
     /// How often, in milliseconds, to write a checkpoint record to the two-phase commit WAL and garbage-collect old segments.
     ///
-    /// _Default:_ `60`
+    /// _Default:_ `15_000`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_checkpoint_interval>
     #[serde(default = "General::two_phase_commit_wal_checkpoint_interval")]
@@ -1073,7 +1069,7 @@ impl General {
     }
 
     fn two_phase_commit_wal_checkpoint_interval() -> u64 {
-        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 60)
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_CHECKPOINT_INTERVAL", 15_000)
     }
 
     fn idle_timeout() -> u64 {
