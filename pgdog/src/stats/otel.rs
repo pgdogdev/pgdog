@@ -89,11 +89,18 @@ pub struct Gauge {
     pub data_points: Vec<NumberDataPoint>,
 }
 
+// little serde trick to let us serialize directly as the integer representation
+#[derive(serde_repr::Serialize_repr)]
+#[repr(u8)]
+pub enum SumAggregationTemporality {
+    Delta = 1,
+    Cumulative = 2,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sum {
-    /// 1 = DELTA, 2 = CUMULATIVE
-    pub aggregation_temporality: u32,
+    pub aggregation_temporality: SumAggregationTemporality,
     pub is_monotonic: bool,
     pub data_points: Vec<NumberDataPoint>,
 }
@@ -281,7 +288,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                 (
                     None,
                     Some(Sum {
-                        aggregation_temporality: 1, // DELTA
+                        aggregation_temporality: SumAggregationTemporality::Delta,
                         is_monotonic: true,
                         data_points,
                     }),
