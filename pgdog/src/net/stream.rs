@@ -140,10 +140,7 @@ impl Stream {
         self.tls_identity.as_deref()
     }
 
-    /// The client presented a TLS certificate during the handshake.
-    ///
-    /// Unlike [`Stream::tls_identity`], this is true even when the certificate
-    /// carries no name we can derive an identity from.
+    /// The client presented a TLS certificate, even one we can't name.
     pub fn tls_client_certificate(&self) -> bool {
         self.tls_client_certificate
     }
@@ -393,5 +390,31 @@ mod tests {
         );
 
         client.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_plain_stream_has_no_client_certificate() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let stream = Stream::plain(server_stream, 4096);
+
+        // No TLS handshake happened, so there is nothing to have presented.
+        assert!(!stream.is_tls());
+        assert!(!stream.tls_client_certificate());
+        assert_eq!(stream.tls_identity(), None);
+
+        client.await.unwrap();
+    }
+
+    #[test]
+    fn test_dev_null_has_no_client_certificate() {
+        let stream = Stream::dev_null();
+
+        assert!(!stream.tls_client_certificate());
+        assert_eq!(stream.tls_identity(), None);
     }
 }

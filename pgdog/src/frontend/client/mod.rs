@@ -95,6 +95,20 @@ pub struct Client {
     query_size_limit: Option<usize>,
 }
 
+/// Reject a client that owed us a certificate and didn't send one.
+///
+/// Only meaningful when a client CA is configured, since otherwise no certificate
+/// is ever requested, and only over TLS, since plaintext is governed by
+/// `tls_client_required`.
+fn missing_required_client_certificate(
+    client_ca_configured: bool,
+    is_tls: bool,
+    required: bool,
+    presented: bool,
+) -> bool {
+    client_ca_configured && is_tls && required && !presented
+}
+
 impl Client {
     /// Create new frontend client from the a TCP socket.
     ///
@@ -239,8 +253,8 @@ impl Client {
         let key = BackendKeyData::new_frontend(protocol_version, id);
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
-        // Without a client CA no certificate is ever requested during the
-        // handshake, so requiring one could never be satisfied.
+        // Without a client CA, no certificate is ever requested, so requiring one
+        // could never be satisfied.
         let client_ca_configured = config.config.general.tls_client_ca_certificate.is_some();
 
         // Check if we need to ask the client for its password in plaintext
@@ -282,16 +296,14 @@ impl Client {
                         } else {
                             AuthResult::NoIdentity
                         }
-                    } else if client_ca_configured
-                        && stream.is_tls()
-                        && cluster.tls_client_certificate_required()
-                        && !stream.tls_client_certificate()
-                    {
-                        // The client negotiated TLS while a client CA is
-                        // configured, so it was asked for a certificate and
-                        // declined. Users that opt out with
-                        // `tls_client_certificate_required = false` fall
-                        // through to password authentication instead.
+                    } else if missing_required_client_certificate(
+                        client_ca_configured,
+                        stream.is_tls(),
+                        cluster.tls_client_certificate_required(),
+                        stream.tls_client_certificate(),
+                    ) {
+                        // Asked for a certificate and declined. Users that opt out
+                        // fall through to password authentication instead.
                         AuthResult::NoClientCertificate
                     } else {
                         // Resolve Vault static role
@@ -721,6 +733,32 @@ impl MemoryUsage for Client {
 
 #[cfg(test)]
 pub mod test;
+
+#[cfg(test)]
+mod client_certificate_tests {
+    use super::missing_required_client_certificate;
+
+    #[test]
+    fn rejects_only_when_a_certificate_was_owed_and_withheld() {
+        //    client CA, is_tls, required, presented
+        assert!(missing_required_client_certificate(true, true, true, false));
+
+        // Opted out with `tls_client_certificate_required = false`.
+        assert!(!missing_required_client_certificate(
+            true, true, false, false
+        ));
+        // Presented a certificate.
+        assert!(!missing_required_client_certificate(true, true, true, true));
+        // Plaintext: governed by `tls_client_required` instead.
+        assert!(!missing_required_client_certificate(
+            true, false, true, false
+        ));
+        // No client CA: a certificate is never requested, so none can be owed.
+        assert!(!missing_required_client_certificate(
+            false, true, true, false
+        ));
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum BufferEvent {

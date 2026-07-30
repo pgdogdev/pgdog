@@ -57,3 +57,19 @@ impl Display for AuthResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AuthResult;
+
+    #[test]
+    fn no_client_certificate_is_an_error_and_explains_itself() {
+        let result = AuthResult::NoClientCertificate;
+
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.to_string(),
+            "user requires a client certificate but none was provided"
+        );
+    }
+}

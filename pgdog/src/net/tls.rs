@@ -90,11 +90,8 @@ pub fn peer_identity(conn: &ServerConnection) -> Option<String> {
     identity_from_certs(conn.peer_certificates()?)
 }
 
-/// The peer presented a client certificate during the handshake.
-///
-/// Distinct from [`peer_identity`], which returns `None` both when no
-/// certificate was presented and when one was presented but carries no
-/// `dNSName` SAN or Subject CN to derive an identity from.
+/// The peer presented a client certificate. Unlike [`peer_identity`], this is
+/// true even when the certificate has no name to derive an identity from.
 pub fn peer_certificate_present(conn: &ServerConnection) -> bool {
     conn.peer_certificates()
         .is_some_and(|certs| !certs.is_empty())
@@ -217,15 +214,10 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
-/// Build a client certificate verifier that accepts anonymous clients.
-///
-/// A certificate presented by the client is still verified against the CA
-/// bundle, and an untrusted one still fails the handshake. Clients that present
-/// no certificate are allowed through so that the per-user
-/// `tls_client_certificate_required` setting can be applied during
-/// authentication, once the startup packet has told us which user is
-/// connecting. The TLS handshake completes before that packet arrives, so it is
-/// not a layer that can make a per-user decision.
+/// Build a client certificate verifier. Presented certificates are verified
+/// against the CA bundle; clients that present none are allowed through so the
+/// per-user `tls_client_certificate_required` check can run during auth, once
+/// the startup packet says who is connecting.
 fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifier>, Error> {
     let roots = load_ca_bundle(ca_path, "client CA")?;
 
@@ -661,13 +653,9 @@ mod tests {
         let verifier =
             super::build_client_cert_verifier(&client_ca).expect("verifier builds from CA bundle");
 
-        // A certificate is still requested, so clients that have one send it
-        // and it gets verified against the bundle.
+        // Still requested, so mTLS clients send one and it gets verified.
         assert!(verifier.offer_client_auth());
-        // Clients that present none still complete the handshake. The per-user
-        // `tls_client_certificate_required` check rejects them during
-        // authentication instead, once the startup packet says who is
-        // connecting.
+        // But its absence no longer fails the handshake.
         assert!(!verifier.client_auth_mandatory());
     }
 
