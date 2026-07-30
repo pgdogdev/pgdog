@@ -13,14 +13,14 @@ The WAL has 3 components:
 2. The checkpointer, which removes unused log segments
 3. Recovery, which reads the segments at PgDog startup and restores the 2pc manager state
 
-Clients are responsible for writing to the log. The log is append only, so multiple clients can write at the same time. The writer takes care of synchronizing
+Clients are requesting the WAL writer to write to the log and do not touch the file themselves. The log is append only, so multiple clients can request a write at the same time. The writer takes care of synchronizing
 writes (using a `Mutex<VecDeque>`) and can flush multiple records simultaneously.
 
 ## Recovery
 
 Recovery runs at PgDog startup and replays the log, restoring the in-memory state of the 2pc manager before a crash. This is very quick: we just read the segments and insert keys into a `HashMap`. Recovery only reads, and doesn't write anything to disk.
 
-It can naturally handle partially written segments and even corrupted ones.
+It can naturally handle partially written segments. We didn't add checksums. Corrupted segments are mostly skipped: we read as much as we can and stop at the first sign of trouble.
 
 ## Checkpointer
 

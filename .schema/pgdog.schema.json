@@ -121,7 +121,7 @@
         "two_phase_commit_auto": null,
         "two_phase_commit_wal_checkpoint_interval": 60,
         "two_phase_commit_wal_dir": null,
-        "two_phase_commit_wal_fsync_interval": 2,
+        "two_phase_commit_wal_fsync_interval": 0,
         "two_phase_commit_wal_segment_size": 16777216,
         "unique_id_function": "standard",
         "unique_id_min": 0,
@@ -1226,7 +1226,7 @@
           "description": "How long, in milliseconds, the two-phase commit WAL writer waits to coalesce concurrent appends into a single fsync.\n\n**Note:** Setting this to `0` disables waiting for additional appends; records already queued in the channel when the writer wakes are still batched into one fsync. Higher values trade per-transaction commit latency for fewer fsyncs under load.\n\n_Default:_ `2`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit_wal_fsync_interval>",
           "type": "integer",
           "format": "uint64",
-          "default": 2,
+          "default": 0,
           "minimum": 0
         },
         "two_phase_commit_wal_segment_size": {
