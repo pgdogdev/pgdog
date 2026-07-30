@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use super::otel;
-use super::{Clients, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use super::{Clients, ClientsLocked, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
 use crate::{config::config, tasks};
 
 /// Maximum number of metrics per OTLP request to stay under endpoint payload limits.
@@ -41,13 +41,14 @@ pub async fn run() {
         }
 
         let clients = Clients::load();
+        let clients_locked = ClientsLocked::load();
         let pools = Pools::load().into_metrics();
         let mirror = MirrorStatsMetrics::load();
         let listeners = Listeners::load();
         let query_cache = QueryCache::load().metrics();
         let two_pc = TwoPc::load();
 
-        let mut all: Vec<&super::Metric> = vec![&clients, &two_pc];
+        let mut all: Vec<&super::Metric> = vec![&clients, &clients_locked, &two_pc];
         all.extend(pools.iter());
         all.extend(mirror.iter());
         all.extend(listeners.iter());

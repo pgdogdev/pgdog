@@ -15,6 +15,7 @@ pub mod query_cache;
 pub mod two_pc;
 
 pub use clients::Clients;
+pub use clients_locked::ClientsLocked;
 pub use listeners::Listeners;
 pub use logger::Logger as StatsLogger;
 pub use mirror_stats::MirrorStatsMetrics;
