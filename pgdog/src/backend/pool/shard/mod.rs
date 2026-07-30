@@ -1,6 +1,7 @@
 //! A shard is a collection of replicas and an optional primary.
 
 use arc_swap::ArcSwap;
+use futures::try_join;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
@@ -136,11 +137,10 @@ impl Shard {
             return Ok(false);
         }
 
-        self.load_oids().await?;
         // This is syncrhonized by database/shard number, so this prevents
         // a thundering herd with 100s of users, for example, all fetching
         // the same schema.
-        let schema = self.schema_cache.get(self).await?;
+        let (_, schema) = try_join!(self.oids.load(self), self.schema_cache.get(self))?;
         self.schema.set(schema).expect("schema was not initialized");
 
         Ok(true)
@@ -161,11 +161,6 @@ impl Shard {
         );
 
         Ok(schema)
-    }
-
-    async fn load_oids(&self) -> Result<(), crate::backend::Error> {
-        self.oids.load(self).await?;
-        Ok(())
     }
 
     /// Set the schema to its default value.

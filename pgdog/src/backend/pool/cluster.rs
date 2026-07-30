@@ -87,10 +87,7 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
-<<<<<<< HEAD
-=======
     canonical_oids: Arc<CanonicalOids>,
->>>>>>> 303395b9 (WIP: Handle OID drift between shards)
 }
 
 /// Sharding configuration from the cluster.
@@ -364,10 +361,7 @@ impl Cluster {
             identity: identity.clone(),
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
-<<<<<<< HEAD
-=======
             canonical_oids,
->>>>>>> 303395b9 (WIP: Handle OID drift between shards)
         }
     }
 
