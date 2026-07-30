@@ -366,7 +366,7 @@ impl Manager {
             if phase == TwoPcPhase::Rollback {
                 "rolling back"
             } else {
-                "comitting"
+                "committing"
             },
             transaction
         );
