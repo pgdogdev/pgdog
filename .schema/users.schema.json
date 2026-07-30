@@ -291,6 +291,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "tls_client_certificate_required": {
+          "description": "Require this user to present a client TLS certificate. Defaults to `true`.\n\nOnly enforced when `tls_client_ca_certificate` is configured and the client\nconnected over TLS. Set to `false` to let password and mTLS users share a listener.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "two_phase_commit": {
           "description": "Overrides [`two_phase_commit`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#two_phase_commit) for this user.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit>",
           "type": [

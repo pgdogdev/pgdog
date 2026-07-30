@@ -95,6 +95,29 @@ pub struct Client {
     query_size_limit: Option<usize>,
 }
 
+/// Inputs to the per-user client certificate check.
+struct ClientCertificateCheck {
+    /// A client CA is configured, so certificates are requested at all.
+    client_ca_configured: bool,
+    /// The client connected over TLS.
+    is_tls: bool,
+    /// This user's `tls_client_certificate_required`.
+    required: bool,
+    /// The client presented a certificate during the handshake.
+    presented: bool,
+}
+
+impl ClientCertificateCheck {
+    /// The client owed us a certificate and didn't send one.
+    ///
+    /// Only meaningful when a client CA is configured, since otherwise no
+    /// certificate is ever requested, and only over TLS, since plaintext is
+    /// governed by `tls_client_required`.
+    fn rejected(&self) -> bool {
+        self.client_ca_configured && self.is_tls && self.required && !self.presented
+    }
+}
+
 impl Client {
     /// Create new frontend client from the a TCP socket.
     ///
@@ -239,6 +262,9 @@ impl Client {
         let key = BackendKeyData::new_frontend(protocol_version, id);
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
+        // Without a client CA, no certificate is ever requested, so requiring one
+        // could never be satisfied.
+        let client_ca_configured = config.config.general.tls_client_ca_certificate.is_some();
 
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.
@@ -279,6 +305,17 @@ impl Client {
                         } else {
                             AuthResult::NoIdentity
                         }
+                    } else if (ClientCertificateCheck {
+                        client_ca_configured,
+                        is_tls: stream.is_tls(),
+                        required: cluster.tls_client_certificate_required(),
+                        presented: stream.tls_client_certificate(),
+                    })
+                    .rejected()
+                    {
+                        // Asked for a certificate and declined. Users that opt out
+                        // fall through to password authentication instead.
+                        AuthResult::NoClientCertificate
                     } else {
                         // Resolve Vault static role
                         // entries to plaintext before the auth exchange
@@ -707,6 +744,59 @@ impl MemoryUsage for Client {
 
 #[cfg(test)]
 pub mod test;
+
+#[cfg(test)]
+mod client_certificate_tests {
+    use super::ClientCertificateCheck;
+
+    /// A user that owes a certificate over TLS and didn't send one.
+    fn rejected() -> ClientCertificateCheck {
+        ClientCertificateCheck {
+            client_ca_configured: true,
+            is_tls: true,
+            required: true,
+            presented: false,
+        }
+    }
+
+    #[test]
+    fn rejects_only_when_a_certificate_was_owed_and_withheld() {
+        assert!(rejected().rejected());
+
+        // Opted out with `tls_client_certificate_required = false`.
+        assert!(
+            !ClientCertificateCheck {
+                required: false,
+                ..rejected()
+            }
+            .rejected()
+        );
+        // Presented a certificate.
+        assert!(
+            !ClientCertificateCheck {
+                presented: true,
+                ..rejected()
+            }
+            .rejected()
+        );
+        // Plaintext: governed by `tls_client_required` instead.
+        assert!(
+            !ClientCertificateCheck {
+                is_tls: false,
+                ..rejected()
+            }
+            .rejected()
+        );
+        // No client CA: a certificate is never requested, so none can be owed.
+        assert!(
+            !ClientCertificateCheck {
+                client_ca_configured: false,
+                ..rejected()
+            }
+            .rejected()
+        );
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum BufferEvent {

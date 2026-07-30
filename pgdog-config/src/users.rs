@@ -264,6 +264,11 @@ impl Display for PasswordKind {
 pub struct User {
     /// User identity used for mTLS.
     pub identity: Option<String>,
+    /// Require this user to present a client TLS certificate. Defaults to `true`.
+    ///
+    /// Only enforced when `tls_client_ca_certificate` is configured and the client
+    /// connected over TLS. Set to `false` to let password and mTLS users share a listener.
+    pub tls_client_certificate_required: Option<bool>,
     /// Name of the user. Clients that connect to PgDog will need to use this username.
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#name>
@@ -716,6 +721,36 @@ server_auth = "azure_workload_identity"
         let users: Users = toml::from_str(source).unwrap();
         let user = users.users.first().unwrap();
         assert_eq!(user.server_auth, ServerAuth::AzureWorkloadIdentity);
+    }
+
+    #[test]
+    fn test_tls_client_certificate_required_unset() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        // Unset resolves to `true` when the cluster is built.
+        assert_eq!(user.tls_client_certificate_required, None);
+    }
+
+    #[test]
+    fn test_tls_client_certificate_required_opt_out() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+tls_client_certificate_required = false
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.tls_client_certificate_required, Some(false));
     }
 
     #[test]

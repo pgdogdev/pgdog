@@ -33,6 +33,7 @@ pub struct Stream {
     io_in_progress: bool,
     capacity: usize,
     tls_identity: Option<String>,
+    tls_client_certificate: bool,
 }
 
 impl AsyncRead for Stream {
@@ -102,6 +103,7 @@ impl Stream {
             io_in_progress: false,
             capacity,
             tls_identity: None,
+            tls_client_certificate: false,
         }
     }
 
@@ -110,12 +112,14 @@ impl Stream {
         stream: tokio_rustls::TlsStream<TcpStream>,
         capacity: usize,
         tls_identity: Option<String>,
+        tls_client_certificate: bool,
     ) -> Self {
         Self {
             inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
             tls_identity,
+            tls_client_certificate,
         }
     }
 
@@ -126,6 +130,7 @@ impl Stream {
             io_in_progress: false,
             capacity: 0,
             tls_identity: None,
+            tls_client_certificate: false,
         }
     }
 
@@ -133,6 +138,11 @@ impl Stream {
     /// from the client's TLS certificate, if any.
     pub fn tls_identity(&self) -> Option<&str> {
         self.tls_identity.as_deref()
+    }
+
+    /// The client presented a TLS certificate, even one we can't name.
+    pub fn tls_client_certificate(&self) -> bool {
+        self.tls_client_certificate
     }
 
     /// This is a TLS stream.
@@ -380,5 +390,31 @@ mod tests {
         );
 
         client.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_plain_stream_has_no_client_certificate() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let stream = Stream::plain(server_stream, 4096);
+
+        // No TLS handshake happened, so there is nothing to have presented.
+        assert!(!stream.is_tls());
+        assert!(!stream.tls_client_certificate());
+        assert_eq!(stream.tls_identity(), None);
+
+        client.await.unwrap();
+    }
+
+    #[test]
+    fn test_dev_null_has_no_client_certificate() {
+        let stream = Stream::dev_null();
+
+        assert!(!stream.tls_client_certificate());
+        assert_eq!(stream.tls_identity(), None);
     }
 }

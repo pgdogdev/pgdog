@@ -90,6 +90,13 @@ pub fn peer_identity(conn: &ServerConnection) -> Option<String> {
     identity_from_certs(conn.peer_certificates()?)
 }
 
+/// The peer presented a client certificate. Unlike [`peer_identity`], this is
+/// true even when the certificate has no name to derive an identity from.
+pub fn peer_certificate_present(conn: &ServerConnection) -> bool {
+    conn.peer_certificates()
+        .is_some_and(|certs| !certs.is_empty())
+}
+
 /// Extract a hostname identity from the first certificate in the chain.
 ///
 /// Prefers the first `dNSName` in the Subject Alternative Name extension and
@@ -207,10 +214,15 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
+/// Build a client certificate verifier. Presented certificates are verified
+/// against the CA bundle; clients that present none are allowed through so the
+/// per-user `tls_client_certificate_required` check can run during auth, once
+/// the startup packet says who is connecting.
 fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifier>, Error> {
     let roots = load_ca_bundle(ca_path, "client CA")?;
 
     WebPkiClientVerifier::builder(Arc::new(roots))
+        .allow_unauthenticated()
         .build()
         .map_err(|e| invalid_data(format!("failed to build client certificate verifier: {e}")))
 }
@@ -632,6 +644,19 @@ mod tests {
 
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[test]
+    fn client_cert_verifier_allows_anonymous_clients() {
+        let client_ca = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+
+        let verifier =
+            super::build_client_cert_verifier(&client_ca).expect("verifier builds from CA bundle");
+
+        // Still requested, so mTLS clients send one and it gets verified.
+        assert!(verifier.offer_client_auth());
+        // But its absence no longer fails the handshake.
+        assert!(!verifier.client_auth_mandatory());
     }
 
     #[tokio::test]

@@ -11,6 +11,8 @@ pub enum AuthResult {
     NoPasswordConfig,
     /// User identity (TLS cert) doesn't match configured identity.
     NoIdentity,
+    /// User requires a client TLS certificate but didn't provide one.
+    NoClientCertificate,
     /// Passthrough auth says user doesn't exist.
     NoPassthroughNoUser,
     /// Passthrough auth doesn't allow password changes.
@@ -40,6 +42,12 @@ impl Display for AuthResult {
             Self::NoPasswordMatch => write!(f, "wrong password"),
             Self::NoPasswordConfig => write!(f, "user has no passwords in config"),
             Self::NoIdentity => write!(f, "user identity does not match certificate"),
+            Self::NoClientCertificate => {
+                write!(
+                    f,
+                    "user requires a client certificate but none was provided"
+                )
+            }
             Self::NoPassthroughNoUser => write!(f, "no user in config (passthrough auth)"),
             Self::NoPassthroughPasswordChange => {
                 write!(f, "passthrough auth does not allow password change")
@@ -47,5 +55,21 @@ impl Display for AuthResult {
             Self::NoUserOrDatabase => write!(f, "no user or database in config"),
             Self::NoPasswordMessage => write!(f, "client did not send password message"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthResult;
+
+    #[test]
+    fn no_client_certificate_is_an_error_and_explains_itself() {
+        let result = AuthResult::NoClientCertificate;
+
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.to_string(),
+            "user requires a client certificate but none was provided"
+        );
     }
 }

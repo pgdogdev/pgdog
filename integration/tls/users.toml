@@ -11,3 +11,21 @@ database = "pgdog"
 identity = "pgdog2"
 server_user = "pgdog"
 server_password = "pgdog"
+
+# Password user that opts out of client certificates, sharing the listener
+# with the mTLS users above.
+[[users]]
+name = "tls_user_c"
+database = "pgdog"
+password = "pgdog"
+tls_client_certificate_required = false
+server_user = "pgdog"
+server_password = "pgdog"
+
+# Password user that does not opt out, so a certificate is still required.
+[[users]]
+name = "tls_user_d"
+database = "pgdog"
+password = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
