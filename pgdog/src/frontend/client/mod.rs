@@ -95,18 +95,27 @@ pub struct Client {
     query_size_limit: Option<usize>,
 }
 
-/// Reject a client that owed us a certificate and didn't send one.
-///
-/// Only meaningful when a client CA is configured, since otherwise no certificate
-/// is ever requested, and only over TLS, since plaintext is governed by
-/// `tls_client_required`.
-fn missing_required_client_certificate(
+/// Inputs to the per-user client certificate check.
+struct ClientCertificateCheck {
+    /// A client CA is configured, so certificates are requested at all.
     client_ca_configured: bool,
+    /// The client connected over TLS.
     is_tls: bool,
+    /// This user's `tls_client_certificate_required`.
     required: bool,
+    /// The client presented a certificate during the handshake.
     presented: bool,
-) -> bool {
-    client_ca_configured && is_tls && required && !presented
+}
+
+impl ClientCertificateCheck {
+    /// The client owed us a certificate and didn't send one.
+    ///
+    /// Only meaningful when a client CA is configured, since otherwise no
+    /// certificate is ever requested, and only over TLS, since plaintext is
+    /// governed by `tls_client_required`.
+    fn rejected(&self) -> bool {
+        self.client_ca_configured && self.is_tls && self.required && !self.presented
+    }
 }
 
 impl Client {
@@ -296,12 +305,14 @@ impl Client {
                         } else {
                             AuthResult::NoIdentity
                         }
-                    } else if missing_required_client_certificate(
+                    } else if (ClientCertificateCheck {
                         client_ca_configured,
-                        stream.is_tls(),
-                        cluster.tls_client_certificate_required(),
-                        stream.tls_client_certificate(),
-                    ) {
+                        is_tls: stream.is_tls(),
+                        required: cluster.tls_client_certificate_required(),
+                        presented: stream.tls_client_certificate(),
+                    })
+                    .rejected()
+                    {
                         // Asked for a certificate and declined. Users that opt out
                         // fall through to password authentication instead.
                         AuthResult::NoClientCertificate
@@ -736,27 +747,54 @@ pub mod test;
 
 #[cfg(test)]
 mod client_certificate_tests {
-    use super::missing_required_client_certificate;
+    use super::ClientCertificateCheck;
+
+    /// A user that owes a certificate over TLS and didn't send one.
+    fn rejected() -> ClientCertificateCheck {
+        ClientCertificateCheck {
+            client_ca_configured: true,
+            is_tls: true,
+            required: true,
+            presented: false,
+        }
+    }
 
     #[test]
     fn rejects_only_when_a_certificate_was_owed_and_withheld() {
-        //    client CA, is_tls, required, presented
-        assert!(missing_required_client_certificate(true, true, true, false));
+        assert!(rejected().rejected());
 
         // Opted out with `tls_client_certificate_required = false`.
-        assert!(!missing_required_client_certificate(
-            true, true, false, false
-        ));
+        assert!(
+            !ClientCertificateCheck {
+                required: false,
+                ..rejected()
+            }
+            .rejected()
+        );
         // Presented a certificate.
-        assert!(!missing_required_client_certificate(true, true, true, true));
+        assert!(
+            !ClientCertificateCheck {
+                presented: true,
+                ..rejected()
+            }
+            .rejected()
+        );
         // Plaintext: governed by `tls_client_required` instead.
-        assert!(!missing_required_client_certificate(
-            true, false, true, false
-        ));
+        assert!(
+            !ClientCertificateCheck {
+                is_tls: false,
+                ..rejected()
+            }
+            .rejected()
+        );
         // No client CA: a certificate is never requested, so none can be owed.
-        assert!(!missing_required_client_certificate(
-            false, true, true, false
-        ));
+        assert!(
+            !ClientCertificateCheck {
+                client_ca_configured: false,
+                ..rejected()
+            }
+            .rejected()
+        );
     }
 }
 
