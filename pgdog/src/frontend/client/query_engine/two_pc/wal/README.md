@@ -26,3 +26,13 @@ It can naturally handle partially written segments and even corrupted ones.
 
 It runs on a loop and removes segments that don't have any in-progress 2pc transactions. Pretty simple process, since 2pc transactions are short-lived and we are not expected to keep
 any other state about them once they are done.
+
+## Notable differences
+
+Our WAL segment size is a suggestion. We initiate the segment swap when a segment reaches it, but we let in-flight clients write to it until the swap is complete. This is by design to avoid a lock
+on the swap operation, which could take a second (creating a new file is slower than writing to an open file). Also, it makes the architecture pretty simple.
+
+Another thing is our WAL segments are guaranteed to always always contain complete records. No record will span multiple segments. This makes recovering them much easier. This of course also contributes to
+a variable segment size.
+
+Trade-offs I made gladly.

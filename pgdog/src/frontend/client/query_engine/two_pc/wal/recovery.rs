@@ -68,9 +68,9 @@ impl Recovery {
     /// # Arguments
     ///
     /// - `manager`: 2pc manager. Transactions will be replayed into it, restoring it to the state it was before
-    ///              PgDog crashed.
+    ///   PgDog crashed.
     /// - `segment_size`: The size of the segments in bytes. This will be used to create the next segment
-    ///                   once recovery is complete.
+    ///   once recovery is complete.
     ///
     pub(crate) async fn run(
         self,
