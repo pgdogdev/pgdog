@@ -3357,6 +3357,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "derive_more",
+ "dyn-clone",
  "fnv",
  "futures",
  "hex",
