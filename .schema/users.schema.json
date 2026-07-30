@@ -292,7 +292,7 @@
           "minimum": 0
         },
         "tls_client_certificate_required": {
-          "description": "Require this user to present a client TLS certificate.\n\nOnly enforced when [`tls_client_ca_certificate`](https://docs.pgdog.dev/configuration/pgdog.toml/general/)\nis configured and the client connected over TLS: without a client CA no\ncertificate is ever requested, and plaintext connections are governed by\n`tls_client_required` instead.\n\nDefaults to `true`, which preserves mandatory mTLS. Set to `false` to let\na user authenticate with a password over TLS without presenting a client\ncertificate, which allows password and mTLS users to share a listener.",
+          "description": "Require this user to present a client TLS certificate. Defaults to `true`.\n\nOnly enforced when `tls_client_ca_certificate` is configured and the client\nconnected over TLS. Set to `false` to let password and mTLS users share a listener.",
           "type": [
             "boolean",
             "null"
