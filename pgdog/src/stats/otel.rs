@@ -32,6 +32,11 @@ struct CounterKey {
 static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// First-seen timestamp per counter data point, used as `start_time_unix_nano`
+/// so cumulative counters carry a stable collection-start reference.
+static COUNTER_START_TIMES: Lazy<Mutex<HashMap<CounterKey, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 pub fn now_nanos() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -247,21 +252,28 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                 .filter_map(|m| {
                     let cumulative = measurement_to_f64(&m.measurement);
 
-                    let as_double = if is_counter {
+                    let (as_double, start_time_unix_nano) = if is_counter {
                         // todo: This is pretty nested, we should probably look
                         // at refactoring how we calculate these values to flatten
                         // the logic a bit, counters and sums should probably not
                         // use the same data point code
 
+                        let key = CounterKey {
+                            metric: name.clone(),
+                            labels: m.labels.clone(),
+                        };
+
+                        let start = COUNTER_START_TIMES
+                            .lock()
+                            .entry(key.clone())
+                            .or_insert_with(|| now.to_owned())
+                            .clone();
+
                         // NOTE: if aggregation_temporality changes state during program
-                        // execution, the data may be stale, but this should be impossible
-                        match aggregation_temporality {
+                        // execution, the data may be stale, but this is currently impossible
+                        let value = match aggregation_temporality {
                             SumAggregationTemporality::Cumulative => cumulative,
                             SumAggregationTemporality::Delta => {
-                                let key = CounterKey {
-                                    metric: name.clone(),
-                                    labels: m.labels.clone(),
-                                };
                                 let mut prev = PREV_COUNTERS.lock();
                                 let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
                                 prev.insert(key, cumulative);
@@ -272,9 +284,11 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                                 }
                                 delta
                             }
-                        }
+                        };
+
+                        (value, Some(start))
                     } else {
-                        cumulative
+                        (cumulative, None)
                     };
 
                     let mut attributes: Vec<KeyValue> = m
@@ -296,7 +310,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
                     }));
 
                     Some(NumberDataPoint {
-                        start_time_unix_nano: None,
+                        start_time_unix_nano,
                         time_unix_nano: now.to_owned(),
                         as_double,
                         attributes,
