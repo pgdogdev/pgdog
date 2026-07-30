@@ -995,7 +995,16 @@ fn references_pg_type(stmt: &nodes::SelectStmt) -> bool {
         Node::RangeVar(rv) if rv.relname() == Some("pg_attribute") => ControlFlow::Break(true),
         Node::TypeCast(tc)
             if let Some(tn) = tc.type_name()
-                && tn.names().iter().filter_map(|s| s.sval()).eq(["regtype"]) =>
+                && tn.names().iter().map(|s| s.sval()).eq([Some("regtype")]) =>
+        {
+            ControlFlow::Break(true)
+        }
+        Node::FuncCall(fc)
+            if fc
+                .funcname()
+                .iter()
+                .map(Node::as_str)
+                .eq([Some("to_regclass")]) =>
         {
             ControlFlow::Break(true)
         }

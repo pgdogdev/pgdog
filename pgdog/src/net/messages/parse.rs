@@ -250,24 +250,17 @@ mod test {
 
     #[test]
     fn test_parse_rewrite_oids() {
-        let mut parse = Parse::named("", "");
-        let mut data_types = BytesMut::new();
-        data_types.put_u16(3);
-        data_types.put_u32(10_001);
-        data_types.put_u32(10_011);
-        data_types.put_u32(10_091);
-        parse.data_types = data_types.freeze();
+        let mut parse = Parse::named("", "").with_data_types(&[10_001, 10_011, 10_091]);
 
         let mapping = [(10_001, 10_001), (10_011, 10_002), (10_091, 10_003)]
             .into_iter()
             .collect();
-        parse.rewrite_data_types(&mapping);
+        assert!(parse.rewrite_data_types(&mapping));
 
-        let mut expected = BytesMut::new();
-        expected.put_u16(3);
-        expected.put_u32(10_001);
-        expected.put_u32(10_002);
-        expected.put_u32(10_003);
-        assert_eq!(parse.data_types, expected.freeze());
+        let expected = Parse::named("", "").with_data_types(&[10_001, 10_002, 10_003]);
+        assert_eq!(parse, expected);
+
+        let mut parse_without_custom_types = Parse::named("", "").with_data_types(&[1]);
+        assert!(!parse_without_custom_types.rewrite_data_types(&mapping));
     }
 }

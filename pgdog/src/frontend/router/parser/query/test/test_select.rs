@@ -259,7 +259,7 @@ fn test_system_catalog_sharded() {
     );
 
     let command = test.execute(vec![
-        Query::new("SELECT * FROM pg_type WHERE typname = 'int4'").into(),
+        Query::new("SELECT * FROM pg_class WHERE relname = $1").into(),
     ]);
     assert_eq!(
         command.route().shard(),
@@ -267,6 +267,27 @@ fn test_system_catalog_sharded() {
         "system catalog query with WHERE clause should still go to all shards"
     );
     assert!(!command.route().is_omnisharded());
+
+    let command = test.execute(vec![Query::new("SELECT * FROM pg_type").into()]);
+    assert_eq!(
+        command.route().shard(),
+        &Shard::Direct(0),
+        "pg_type queries should go to shard 0",
+    );
+
+    let command = test.execute(vec![Query::new("SELECT $1::regclass").into()]);
+    assert_eq!(
+        command.route().shard(),
+        &Shard::Direct(0),
+        "regclass casts should go to shard 0",
+    );
+
+    let command = test.execute(vec![Query::new("SELECT to_regclass($1)").into()]);
+    assert_eq!(
+        command.route().shard(),
+        &Shard::Direct(0),
+        "to_regclass should go to shard 0",
+    );
 
     // Reset to default
     let mut updated = config().deref().clone();
