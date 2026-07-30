@@ -13,6 +13,7 @@ use crate::{
 };
 
 use futures::future::join_all;
+use tracing::warn;
 
 use super::*;
 
@@ -486,6 +487,44 @@ impl Binding {
                 servers.iter_mut().for_each(|s| s.mark_dirty(true))
             }
             _ => (),
+        }
+    }
+
+    /// Propagate the client's lock state to every held Guard so each pool's
+    /// `sv_locked` reflects the pin.
+    pub(super) fn set_locked(&mut self, locked: bool) {
+        match self {
+            Binding::Direct(server, ..) => server.set_locked(locked),
+            Binding::MultiShard(servers, _) => {
+                for server in servers {
+                    server.set_locked(locked);
+                }
+            }
+            _ => (),
+        }
+    }
+
+    /// Aggregate lock state across the held Guard(s). All shards in a
+    /// multi-shard binding are set/cleared together via [`Self::set_locked`],
+    /// so they should always agree; if they don't, warn and err on the side
+    /// of "locked" so we don't recycle a pinned connection.
+    pub(super) fn is_locked(&self) -> bool {
+        match self {
+            Binding::Direct(server, ..) => server.is_locked(),
+            Binding::MultiShard(servers, _) => {
+                let mut any = false;
+                let mut all = true;
+                for server in servers {
+                    let l = server.is_locked();
+                    any |= l;
+                    all &= l;
+                }
+                if any && !all {
+                    warn!("inconsistent lock state across multi-shard binding; assuming locked");
+                }
+                any
+            }
+            _ => false,
         }
     }
 

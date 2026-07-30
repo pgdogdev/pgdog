@@ -17,6 +17,10 @@ pub struct Guard {
     server: Option<Box<Server>>,
     pub(super) pool: Pool,
     pub(super) reset: bool,
+
+    /// Frontend has pinned this guard to its client
+    // NOTE: We cache this value seperately to prevent lock contention to read locked state
+    locked: bool,
 }
 
 impl std::fmt::Debug for Guard {
@@ -43,7 +47,23 @@ impl Guard {
             server: Some(server),
             pool,
             reset: false,
+            locked: false,
         }
+    }
+
+    /// Mark or unmark this checkout as pinned to its client. Propagates to
+    /// the pool so `sv_locked` reflects reality per pool.
+    pub(crate) fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+        if let Some(server) = self.server.as_deref() {
+            self.pool.set_locked(server.id(), locked);
+        }
+    }
+
+    /// Whether this guard is currently pinned to its client.
+    #[inline]
+    pub(crate) fn is_locked(&self) -> bool {
+        self.locked
     }
 
     /// Rollback any unfinished transactions and check the connection

@@ -6,7 +6,7 @@ use std::fmt::Display;
 
 use crate::backend::{ConnectReason, DisconnectReason};
 use crate::backend::{Server, stats::Counts as BackendCounts};
-use crate::net::messages::{BackendKeyData, FrontendPid};
+use crate::net::messages::{BackendKeyData, BackendPid, FrontendPid};
 
 use tokio::time::Instant;
 
@@ -113,6 +113,18 @@ impl Inner {
     #[inline]
     pub(super) fn checked_out(&self) -> usize {
         self.taken.len()
+    }
+
+    /// Number of checked-out connections currently pinned to their client.
+    #[inline]
+    pub(super) fn count_locked_connections(&self) -> usize {
+        self.taken.locked_count()
+    }
+
+    /// Mark a checked-out backend as pinned (or release the pin)
+    #[inline]
+    pub(super) fn set_locked(&mut self, backend: BackendPid, locked: bool) {
+        self.taken.set_locked(backend, locked);
     }
 
     /// Cancel key for the server currently assigned to this client.

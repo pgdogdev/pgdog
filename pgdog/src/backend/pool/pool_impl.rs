@@ -15,7 +15,7 @@ use tracing::{debug, error};
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::FrontendPid;
+use crate::net::messages::{BackendPid, FrontendPid};
 use crate::net::{Parameter, Parameters};
 
 use super::inner::CheckInResult;
@@ -392,6 +392,17 @@ impl Pool {
     #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
         self.inner.inner.lock()
+    }
+
+    /// Mark or unmark a checked-out backend as pinned to its client.
+    ///
+    /// Called by [`Guard::set_locked`] when the frontend takes or releases an
+    /// advisory lock / manual pin, so `sv_locked` reflects reality per-pool.
+    /// On checkin the `Taken` entry is removed entirely, so no explicit
+    /// cleanup is needed on drop.
+    #[inline]
+    pub(crate) fn set_locked(&self, backend: BackendPid, locked: bool) {
+        self.lock().set_locked(backend, locked);
     }
 
     /// Internal notifications.

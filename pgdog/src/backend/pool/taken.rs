@@ -11,6 +11,10 @@ use super::Error;
 struct Checkout {
     backend: BackendPid,
     key: BackendKeyData,
+    /// The client has pinned this checkout (e.g. holds an advisory lock),
+    /// so it must not be recycled back into transaction pooling until the
+    /// pin is released.
+    locked: bool,
 }
 
 /// Track the link between a frontend connection and the backend connection it
@@ -34,10 +38,21 @@ impl Taken {
     #[inline]
     pub(super) fn take(&mut self, frontend: FrontendPid, backend: BackendPid, key: BackendKeyData) {
         self.backend_to_frontend.insert(backend, frontend);
-        self.frontend_to_cancel
-            .insert(frontend, Checkout { backend, key });
+        self.frontend_to_cancel.insert(
+            frontend,
+            Checkout {
+                backend,
+                key,
+                locked: false,
+            },
+        );
     }
 
+    /// Clear the checkout tracking for a backend being returned to the pool.
+    ///
+    /// Returns [`Error::UntrackedConnCheckin`] if the backend was never
+    /// tracked — a double-checkin or a checkin for a backend that never went
+    /// through [`Self::take`].
     #[inline]
     pub(super) fn check_in(&mut self, backend: BackendPid) -> Result<(), Error> {
         let frontend = self
@@ -78,6 +93,27 @@ impl Taken {
     /// returned (matches prior behavior).
     pub(super) fn cancel_keys(&self) -> impl Iterator<Item = &BackendKeyData> {
         self.frontend_to_cancel.values().map(|c| &c.key)
+    }
+
+    /// Mark or unmark a checked-out backend as pinned to its client. Called by
+    /// the frontend when it takes/releases an advisory lock or manual pin.
+    #[inline]
+    pub(super) fn set_locked(&mut self, backend: BackendPid, locked: bool) {
+        if let Some(&frontend) = self.backend_to_frontend.get(&backend)
+            && let Some(entry) = self.frontend_to_cancel.get_mut(&frontend)
+            && entry.backend == backend
+        {
+            entry.locked = locked;
+        }
+    }
+
+    /// Count checked-out backends currently pinned to their client.
+    #[inline]
+    pub(super) fn locked_count(&self) -> usize {
+        self.frontend_to_cancel
+            .values()
+            .filter(|c| c.locked)
+            .count()
     }
 
     #[cfg(test)]
@@ -227,6 +263,70 @@ mod tests {
         );
         taken.check_in(backend_b).unwrap();
         assert!(taken.is_empty());
+    }
+
+    #[test]
+    fn set_locked_toggles_bit_and_counts() {
+        let mut taken = Taken::default();
+        let (fa, ba) = (FrontendPid::new(), BackendPid::for_test(10));
+        let (fb, bb) = (FrontendPid::new(), BackendPid::for_test(11));
+
+        taken.take(fa, ba, key(ba.pid()));
+        taken.take(fb, bb, key(bb.pid()));
+        assert_eq!(taken.locked_count(), 0);
+
+        taken.set_locked(ba, true);
+        assert_eq!(taken.locked_count(), 1);
+
+        taken.set_locked(bb, true);
+        assert_eq!(taken.locked_count(), 2);
+
+        taken.set_locked(ba, false);
+        assert_eq!(taken.locked_count(), 1);
+    }
+
+    #[test]
+    fn check_in_clears_locked_state() {
+        let mut taken = Taken::default();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(12);
+
+        taken.take(frontend, backend, key(backend.pid()));
+        taken.set_locked(backend, true);
+        assert_eq!(taken.locked_count(), 1);
+
+        taken.check_in(backend).unwrap();
+        assert_eq!(taken.locked_count(), 0);
+    }
+
+    #[test]
+    fn set_locked_unknown_backend_is_noop() {
+        let mut taken = Taken::default();
+        let unknown = BackendPid::for_test(13);
+
+        taken.set_locked(unknown, true);
+        assert_eq!(taken.locked_count(), 0);
+    }
+
+    /// After a retake race, a stale backend's `set_locked` call must NOT flip
+    /// the current live backend's bit (see `deferred_check_in_after_same_frontend_retake`).
+    #[test]
+    fn set_locked_after_retake_race_ignores_stale_backend() {
+        let mut taken = Taken::default();
+        let frontend = FrontendPid::new();
+        let backend_a = BackendPid::for_test(14);
+        let backend_b = BackendPid::for_test(15);
+
+        taken.take(frontend, backend_a, key(backend_a.pid()));
+        taken.take(frontend, backend_b, key(backend_b.pid()));
+
+        // Stale A tries to set locked. Must not affect B.
+        taken.set_locked(backend_a, true);
+        assert_eq!(taken.locked_count(), 0);
+
+        // Live B still works normally.
+        taken.set_locked(backend_b, true);
+        assert_eq!(taken.locked_count(), 1);
     }
 
     #[test]

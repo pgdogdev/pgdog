@@ -1100,8 +1100,8 @@ impl Server {
         self.stream.as_mut().unwrap()
     }
 
-    /// Server needs a cleanup because client changed a session variable
-    /// of parameter.
+    /// Server needs a cleanup because client changed a session variable,
+    /// parameter, or advisory lock state
     #[inline]
     pub fn dirty(&self) -> bool {
         self.dirty

@@ -254,6 +254,8 @@ pub struct State {
     pub out_of_sync: usize,
     /// Re-synced servers.
     pub re_synced: usize,
+    /// Locked
+    pub locked: usize,
     /// Statistics
     pub stats: Stats,
     /// Max wait.
