@@ -31,7 +31,7 @@ struct CounterKey {
 static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn now_nanos() -> String {
+pub fn now_nanos() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -203,8 +203,7 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
 }
 
 /// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects.
-pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
-    let now = now_nanos();
+pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequest {
     let config = crate::config::config();
     let namespace = config
         .config
@@ -271,7 +270,7 @@ pub fn build_request(metrics: &[&Metric]) -> ExportMetricsServiceRequest {
 
                     Some(NumberDataPoint {
                         start_time_unix_nano: None,
-                        time_unix_nano: now.clone(),
+                        time_unix_nano: now.to_owned(),
                         as_double,
                         attributes,
                     })
@@ -340,7 +339,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let json = serde_json::to_string_pretty(&request).expect("serialize");
 
         assert!(json.contains("\"gauge\""));
@@ -365,7 +364,7 @@ mod test {
             metric_type: Some("counter".into()),
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let json = serde_json::to_string(&request).expect("serialize");
 
         assert!(json.contains("\"sum\""));
@@ -396,7 +395,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let scope = &request.resource_metrics[0].scope_metrics[0].scope;
         assert_eq!(scope.name, "pgdog");
 
@@ -428,7 +427,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let scope = &request.resource_metrics[0].scope_metrics[0];
         let otel_metric = &scope.metrics[0];
 
@@ -458,7 +457,7 @@ mod test {
             metric_type: Some("counter".into()),
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let sum = &request.resource_metrics[0].scope_metrics[0].metrics[0]
             .sum
             .as_ref()
@@ -481,7 +480,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let gauge = &request.resource_metrics[0].scope_metrics[0].metrics[0]
             .gauge
             .as_ref()
@@ -505,7 +504,7 @@ mod test {
             metric_type: None,
         });
 
-        let request = build_request(&[&metric]);
+        let request = build_request(&[&metric], &now_nanos());
         let resource = &request.resource_metrics[0].resource;
 
         let svc = resource
