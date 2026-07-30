@@ -28,20 +28,27 @@ pub struct Statement {
 impl MemoryUsage for Statement {
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.parse.len()
-            + if let Some(ref row_description) = self.row_description {
-                row_description.memory_usage()
-            } else {
-                0
-            }
-            + self.cache_key.memory_usage()
-            + self.evict_on_close.memory_usage()
+        // Same content accounting the cache aggregates in content_bytes,
+        // so SHOW PREPARED STATEMENTS agrees with the metric.
+        self.content_bytes() + self.cache_key.memory_usage() + self.evict_on_close.memory_usage()
     }
 }
 
 impl Statement {
     pub fn query(&self) -> &str {
         self.parse.query()
+    }
+
+    /// Heap bytes owned by this statement; tracked incrementally
+    /// in the cache's `content_bytes`.
+    fn content_bytes(&self) -> usize {
+        self.parse.len()
+            + self.rewrite.as_ref().map(|p| p.len()).unwrap_or(0)
+            + self
+                .row_description
+                .as_ref()
+                .map(|r| r.memory_usage())
+                .unwrap_or(0)
     }
 
     fn cache_key(&self) -> CacheKey {
@@ -115,16 +122,20 @@ pub struct GlobalCache {
     unused: HashSet<usize>,
     counter: usize,
     versions: usize,
+    /// Heap bytes owned by cached statements, maintained on
+    /// insert/remove so memory reporting stays O(1).
+    content_bytes: usize,
 }
 
 impl MemoryUsage for GlobalCache {
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.statements.memory_usage()
-            + self.names.memory_usage()
-            + self.counter.memory_usage()
-            + self.versions.memory_usage()
-            + self.unused.memory_usage()
+        // O(1): tables report their allocation via capacity, entry
+        // contents are tracked incrementally as statements come and go.
+        self.statements.capacity() * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1)
+            + self.names.capacity() * (std::mem::size_of::<(String, Statement)>() + 1)
+            + self.unused.capacity() * (std::mem::size_of::<usize>() + 1)
+            + self.content_bytes
     }
 }
 
@@ -166,14 +177,14 @@ impl GlobalCache {
                 },
             );
 
-            self.names.insert(
-                name.clone(),
-                Statement {
-                    parse,
-                    cache_key,
-                    ..Default::default()
-                },
-            );
+            let key = name.clone();
+            let statement = Statement {
+                parse,
+                cache_key,
+                ..Default::default()
+            };
+            self.content_bytes += key.capacity() + statement.content_bytes();
+            self.names.insert(key, statement);
 
             (true, name)
         }
@@ -202,15 +213,15 @@ impl GlobalCache {
             },
         );
 
-        self.names.insert(
-            name.clone(),
-            Statement {
-                parse,
-                version: self.versions,
-                cache_key: key,
-                ..Default::default()
-            },
-        );
+        let name_key = name.clone();
+        let statement = Statement {
+            parse,
+            version: self.versions,
+            cache_key: key,
+            ..Default::default()
+        };
+        self.content_bytes += name_key.capacity() + statement.content_bytes();
+        self.names.insert(name_key, statement);
 
         name
     }
@@ -218,7 +229,9 @@ impl GlobalCache {
     /// Rewrite prepared statement in the global cache.
     pub fn rewrite(&mut self, parse: &Parse) {
         if let Some(stmt) = self.names.get_mut(parse.name()) {
+            let old = stmt.rewrite.as_ref().map(|p| p.len()).unwrap_or(0);
             stmt.rewrite = Some(parse.clone());
+            self.content_bytes = self.content_bytes.saturating_sub(old) + parse.len();
         }
     }
 
@@ -229,6 +242,7 @@ impl GlobalCache {
             && entry.row_description.is_none()
         {
             entry.row_description = Some(row_description.clone());
+            self.content_bytes += row_description.memory_usage();
         }
     }
 
@@ -242,6 +256,7 @@ impl GlobalCache {
         self.unused.shrink_to_fit();
         self.counter = 0;
         self.versions = 0;
+        self.content_bytes = 0;
     }
 
     /// Get the query string stored in the global cache
@@ -342,8 +357,7 @@ impl GlobalCache {
 
     /// Return table memory to the allocator after a spike of unique
     /// statements. Hysteresis (mostly-empty table, above a minimum size)
-    /// avoids rehashing on every sweep; shrinking to twice the current
-    /// len leaves headroom for new statements.
+    /// avoids rehashing on every sweep.
     fn maybe_shrink(&mut self) {
         const SHRINK_FACTOR: usize = 8;
         const MIN_CAPACITY: usize = 4096;
@@ -351,16 +365,19 @@ impl GlobalCache {
         if self.statements.capacity() > MIN_CAPACITY
             && self.statements.capacity() > self.statements.len() * SHRINK_FACTOR
         {
-            self.statements.shrink_to(self.statements.len() * 2);
-            self.names.shrink_to(self.names.len() * 2);
-            self.unused.shrink_to(self.unused.len() * 2);
+            self.statements.shrink_to_fit();
+            self.names.shrink_to_fit();
+            self.unused.shrink_to_fit();
         }
     }
 
     /// Remove statement from global cache.
     fn remove(&mut self, name: &str) {
-        if let Some(stmt) = self.names.remove(name) {
+        if let Some((key, stmt)) = self.names.remove_entry(name) {
             self.statements.remove(&stmt.cache_key());
+            self.content_bytes = self
+                .content_bytes
+                .saturating_sub(key.capacity() + stmt.content_bytes());
         }
     }
 
@@ -383,6 +400,16 @@ impl GlobalCache {
 
     pub fn statements(&self) -> &HashMap<CacheKey, CachedStmt> {
         &self.statements
+    }
+
+    /// Recompute content bytes from scratch; used by tests to verify
+    /// the incremental counter never drifts.
+    #[cfg(test)]
+    fn recomputed_content_bytes(&self) -> usize {
+        self.names
+            .iter()
+            .map(|(k, v)| k.capacity() + v.content_bytes())
+            .sum()
     }
 }
 
@@ -717,5 +744,43 @@ mod test {
 
         assert_eq!(cache.len(), 10_000);
         assert!(cache.capacity() >= capacity / 2);
+    }
+
+    #[test]
+    fn test_content_bytes_tracks_all_mutations() {
+        use crate::net::messages::Field;
+
+        let mut cache = GlobalCache::default();
+        for i in 0..500 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+            cache.insert(&parse); // duplicate must not grow the counter
+        }
+        for i in 0..50 {
+            let parse = Parse::named("v", format!("SELECT 'v{}'", i));
+            cache.insert_anyway(&parse);
+        }
+        let rewrite = Parse::named("__pgdog_1", "SELECT 1, 2, 3");
+        cache.rewrite(&rewrite);
+        cache.rewrite(&rewrite); // replacing a rewrite must not double-count
+        let rd = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
+        cache.insert_row_description("__pgdog_2", &rd);
+        cache.insert_row_description("__pgdog_2", &rd); // second call is a no-op
+        assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
+
+        for i in 1..=500 {
+            // inserted twice, so close twice
+            cache.close(&global_name(i));
+            cache.close(&global_name(i));
+        }
+        for i in 501..=550 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(10);
+        assert_eq!(cache.len(), 10);
+        assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
+
+        cache.close_unused(0);
+        assert_eq!(cache.content_bytes, 0);
     }
 }
