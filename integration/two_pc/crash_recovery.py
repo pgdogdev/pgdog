@@ -5,30 +5,32 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import BinaryIO
 
 import asyncpg
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG = SCRIPT_DIR / "pgdog.toml"
 USERS = SCRIPT_DIR / "users.toml"
-WAL_DIR = SCRIPT_DIR / "pgdog_wal"
 
 POSTGRES_HOST = "127.0.0.1"
 POSTGRES_PORT = 5432
 PGDOG_PORT = int(os.environ.get("PGDOG_PORT", "6432"))
 SHARDS = ("shard_0", "shard_1")
-CLIENTS = 100
-CRASH_ATTEMPTS = 5
-PREPARED_QUERY = (
-    "SELECT count(*) FROM pg_prepared_xacts "
-    "WHERE gid LIKE '__pgdog_2pc_%'"
+CLIENTS = int(os.environ.get("PGDOG_CRASH_RECOVERY_CLIENTS", "100"))
+ITERATIONS = int(os.environ.get("PGDOG_CRASH_RECOVERY_ITERATIONS", "10"))
+SEGMENT_SIZES = (
+    ("10kb", 10 * 1024),
+    ("50kb", 50 * 1024),
+    ("150kb", 150 * 1024),
+    ("1mb", 1024 * 1024),
+    ("16mb", 16 * 1024 * 1024),
 )
+PREPARED_QUERY = "SELECT count(*) FROM pg_prepared_xacts WHERE gid LIKE '__pgdog_2pc_%'"
 
 
 async def connect(database: str, port: int) -> asyncpg.Connection:
@@ -79,12 +81,6 @@ async def prepare_database() -> None:
         raise RuntimeError(f"test started with prepared transactions: {dangling}")
 
 
-def clear_wal() -> None:
-    WAL_DIR.mkdir(parents=True, exist_ok=True)
-    for segment in WAL_DIR.glob("*.2pc"):
-        segment.unlink()
-
-
 async def wait_for_pgdog(
     process: asyncio.subprocess.Process,
     timeout: float = 10.0,
@@ -110,9 +106,11 @@ async def wait_for_pgdog(
 async def start_pgdog(
     binary: Path,
     log: BinaryIO,
+    segment_size: int,
 ) -> asyncio.subprocess.Process:
     environment = os.environ.copy()
     environment.setdefault("NODE_ID", "pgdog-two-pc-1")
+    environment["PGDOG_TWO_PHASE_COMMIT_WAL_SEGMENT_SIZE"] = str(segment_size)
     process = await asyncio.create_subprocess_exec(
         str(binary),
         "--config",
@@ -240,6 +238,11 @@ async def wait_for_recovery(timeout: float = 15.0) -> None:
 
 
 async def run_test() -> None:
+    if CLIENTS <= 0:
+        raise ValueError("PGDOG_CRASH_RECOVERY_CLIENTS must be greater than zero")
+    if ITERATIONS <= 0:
+        raise ValueError("PGDOG_CRASH_RECOVERY_ITERATIONS must be greater than zero")
+
     binary_value = os.environ.get("PGDOG_BIN")
     if not binary_value:
         raise RuntimeError("PGDOG_BIN must point to the PgDog executable")
@@ -249,34 +252,51 @@ async def run_test() -> None:
         raise FileNotFoundError(f"PGDOG_BIN does not exist: {binary}")
 
     await prepare_database()
-    clear_wal()
 
     pgdog = None
+    recoveries_needed = 0
+    completed = 0
     log_path = SCRIPT_DIR / "crash_recovery.log"
     with log_path.open("wb") as log:
         try:
-            for attempt in range(1, CRASH_ATTEMPTS + 1):
-                pgdog = await start_pgdog(binary, log)
-                await crash_during_two_pc(pgdog)
-                pgdog = None
+            for size_name, segment_size in SEGMENT_SIZES:
+                print(f"testing {size_name} WAL segments for {ITERATIONS} iterations")
 
-                dangling = await shard_prepared_transactions()
-                print(f"crash attempt {attempt}: prepared transactions {dangling}")
-                if any(dangling.values()):
-                    break
-            else:
-                raise RuntimeError(
-                    "PgDog was killed during 2PC, but no prepared transaction remained"
-                )
+                for iteration in range(1, ITERATIONS + 1):
+                    pgdog = await start_pgdog(binary, log, segment_size)
+                    await crash_during_two_pc(pgdog)
+                    pgdog = None
 
-            pgdog = await start_pgdog(binary, log)
-            await wait_for_recovery()
-            print(
-                "recovery complete: no prepared transactions remain on "
-                + ", ".join(SHARDS)
-            )
+                    before_recovery = await shard_prepared_transactions()
+                    needed_recovery = any(before_recovery.values())
+                    recoveries_needed += int(needed_recovery)
+
+                    pgdog = await start_pgdog(binary, log, segment_size)
+                    await wait_for_recovery()
+
+                    after_recovery = await shard_prepared_transactions()
+                    if any(after_recovery.values()):
+                        raise RuntimeError(
+                            f"{size_name} iteration {iteration}: recovery left "
+                            f"prepared transactions on shards: {after_recovery}"
+                        )
+
+                    completed += 1
+                    print(
+                        f"{size_name} iteration {iteration}/{ITERATIONS}: "
+                        f"before={before_recovery}, after={after_recovery}, "
+                        f"cleanup_needed={needed_recovery}"
+                    )
+
+                    await stop_process(pgdog)
+                    pgdog = None
         finally:
             await stop_process(pgdog)
+
+    print(
+        f"completed {completed} crash/recovery iterations; "
+        f"cleanup was needed in {recoveries_needed}"
+    )
 
 
 def main() -> int:
