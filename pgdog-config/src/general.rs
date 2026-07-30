@@ -1069,7 +1069,7 @@ impl General {
     }
 
     fn two_phase_commit_wal_fsync_interval() -> u64 {
-        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL", 2)
+        Self::env_or_default("PGDOG_TWO_PHASE_COMMIT_WAL_FSYNC_INTERVAL", 0)
     }
 
     fn two_phase_commit_wal_checkpoint_interval() -> u64 {

@@ -141,7 +141,8 @@ impl Checkpointer {
         for record in segment.records {
             if let Ok(record) = Records::try_from(record) {
                 match record {
-                    Records::Add(record) => tids.push(record.transaction),
+                    Records::Identity(record) => tids.push(record.transaction),
+                    Records::Phase(record) => tids.push(record.transaction),
                     Records::Remove(record) => tids.push(record.transaction),
                 }
             }

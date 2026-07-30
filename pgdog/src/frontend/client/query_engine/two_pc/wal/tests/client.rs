@@ -80,6 +80,7 @@ impl TwoPcTestClient {
                 &tmp.path().to_owned(),
                 checkpoint_interval,
                 wal_segment_size,
+                Duration::ZERO,
             )
             .await
             .unwrap();
@@ -141,6 +142,7 @@ impl TwoPcTestClient {
                 &self.tmp.path().to_owned(),
                 self.checkpoint_interval,
                 self.wal_segment_size,
+                Duration::ZERO,
             )
             .await
             .unwrap();

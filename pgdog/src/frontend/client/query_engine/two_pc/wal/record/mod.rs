@@ -6,10 +6,12 @@ use bytes::{Buf, BufMut, Bytes};
 
 use crate::net::{Payload, ToBytes};
 
-pub(crate) mod add;
+pub(crate) mod identity;
+pub(crate) mod phase;
 pub(crate) mod records;
 pub(crate) mod remove;
-pub(crate) use add::*;
+pub(crate) use identity::*;
+pub(crate) use phase::*;
 pub(crate) use records::*;
 pub(crate) use remove::*;
 
@@ -37,6 +39,11 @@ impl Record {
     /// Size of this record in bytes.
     pub(crate) fn len(&self) -> usize {
         self.data.len() + 1 + 4
+    }
+
+    /// Not all records need to be synced.
+    pub(crate) fn needs_fsync(&self) -> bool {
+        self.code != 'r'
     }
 }
 

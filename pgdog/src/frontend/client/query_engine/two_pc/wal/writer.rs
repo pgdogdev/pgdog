@@ -38,6 +38,7 @@ pub(crate) struct WalWriter {
     signals: Arc<Signals>,
     segment_size: usize,
     checkpointer: Arc<ArcSwapOption<Checkpointer>>,
+    fsync_interval: Duration,
 }
 
 impl WalWriter {
@@ -80,7 +81,7 @@ impl WalWriter {
     /// The broken segment will be cleaned up by recovery.
     ///
     pub(super) async fn swap(&self, number: u64) -> Result<(), Error> {
-        let segment = LiveSegment::new(&self.wal_directory, number).await?;
+        let segment = LiveSegment::new(&self.wal_directory, number, self.fsync_interval).await?;
         let current = self.segment.swap(Arc::new(segment));
 
         SegmentRegistry::get().record(number, SegmentStatus::Active);
@@ -97,9 +98,10 @@ impl WalWriter {
         wal_directory: &Path,
         next_segment_id: u64,
         segment_size: usize,
+        fsync_interval: Duration,
     ) -> Result<Self, Error> {
         // Create the first segment.
-        let segment = LiveSegment::new(wal_directory, next_segment_id).await?;
+        let segment = LiveSegment::new(wal_directory, next_segment_id, fsync_interval).await?;
 
         SegmentRegistry::get().record(next_segment_id, SegmentStatus::Active);
 
@@ -110,6 +112,7 @@ impl WalWriter {
             segment_size,
             signals: Arc::new(Signals::default()),
             checkpointer: Arc::new(ArcSwapOption::empty()),
+            fsync_interval,
         };
 
         let background = writer.clone();

@@ -1,4 +1,6 @@
-use bytes::{BufMut, BytesMut};
+use std::time::Duration;
+
+use bytes::{BufMut, Bytes, BytesMut};
 use tempfile::TempDir;
 
 use super::super::super::Manager;
@@ -56,11 +58,30 @@ async fn test_recovery_skips_incomplete_segment_header() {
 
     let manager = Manager::init();
     manager
-        .enable_wal(&tmp.path().to_owned(), None, 50)
+        .enable_wal(&tmp.path().to_owned(), None, 50, Duration::ZERO)
         .await
         .unwrap();
 
     assert!(!incomplete.exists());
     assert!(Segment::path(tmp.path(), 43).exists());
     manager.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_live_segment_batches_fsyncs() {
+    let tmp = TempDir::new().unwrap();
+    let interval = Duration::from_millis(10);
+    let segment = LiveSegment::new(tmp.path(), 1, interval).await.unwrap();
+    let waiter = segment.add(Record {
+        code: '1',
+        data: Bytes::new(),
+    });
+
+    tokio::task::yield_now().await;
+    assert!(waiter.waiter.is_empty());
+
+    tokio::time::advance(interval).await;
+    waiter.wait_flush().await;
+
+    segment.shutdown();
 }

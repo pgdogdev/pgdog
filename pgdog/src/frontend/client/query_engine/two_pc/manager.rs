@@ -34,7 +34,7 @@ use crate::{
 
 use super::{
     Error, TwoPcGuard, TwoPcPhase, TwoPcStats, TwoPcTransaction,
-    wal::{Recovery, TwoPcRecordAdd, TwoPcRecordRemove, WalWriter},
+    wal::{Recovery, TwoPcRecordIdentity, TwoPcRecordPhase, TwoPcRecordRemove, WalWriter},
 };
 
 static MANAGER: Lazy<Manager> = Lazy::new(Manager::init);
@@ -90,10 +90,11 @@ impl Manager {
         wal_directory: &PathBuf,
         checkpoint_interval: Option<Duration>,
         segment_size: usize,
+        fsync_interval: Duration,
     ) -> Result<(), Error> {
         let writer = Recovery::new(wal_directory)
             .await?
-            .run(self, segment_size)
+            .run(self, segment_size, fsync_interval)
             .await?;
 
         if let Some(checkpoint_interval) = checkpoint_interval {
@@ -174,14 +175,15 @@ impl Manager {
         self.set_transaction_state(transaction, identifier, phase);
 
         if let Some(wal) = self.wal.load_full() {
-            wal.add(TwoPcRecordAdd {
-                transaction,
-                info: TransactionInfo {
-                    phase,
+            if phase == TwoPcPhase::Phase1 {
+                wal.add(TwoPcRecordIdentity {
+                    transaction,
                     identifier: identifier.clone(),
-                },
-            })
-            .await?;
+                })
+                .await?;
+            } else {
+                wal.add(TwoPcRecordPhase::new(transaction, phase)).await?;
+            }
         }
 
         Ok(TwoPcGuard {
@@ -212,6 +214,32 @@ impl Manager {
                 identifier: identifier.clone(),
                 phase,
             });
+    }
+
+    /// Restore a transaction identity from the WAL. An identity record
+    /// establishes Phase 1; later records only update the phase.
+    pub(super) fn set_transaction_identity(
+        &self,
+        transaction: TwoPcTransaction,
+        identifier: &Arc<User>,
+    ) {
+        self.inner.lock().transactions.insert(
+            transaction,
+            TransactionInfo {
+                identifier: identifier.clone(),
+                phase: TwoPcPhase::Phase1,
+            },
+        );
+    }
+
+    /// Apply a phase transition restored from the WAL.
+    pub(super) fn set_transaction_phase(&self, transaction: TwoPcTransaction, phase: TwoPcPhase) {
+        self.inner
+            .lock()
+            .transactions
+            .get_mut(&transaction)
+            .expect("2pc WAL phase record is missing its identity")
+            .phase = phase;
     }
 
     /// Enqueue all transactions into the cleanup manager.

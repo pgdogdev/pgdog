@@ -10,7 +10,8 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Records {
-    Add(TwoPcRecordAdd),
+    Identity(TwoPcRecordIdentity),
+    Phase(TwoPcRecordPhase),
     Remove(TwoPcRecordRemove),
 }
 
@@ -19,8 +20,11 @@ impl Records {
     /// transaction manager.
     pub(crate) fn replay(&self, manager: &Manager) {
         match self {
-            Records::Add(add) => {
-                manager.set_transaction_state(add.transaction, &add.info.identifier, add.info.phase)
+            Records::Identity(identity) => {
+                manager.set_transaction_identity(identity.transaction, &identity.identifier);
+            }
+            Records::Phase(phase) => {
+                manager.set_transaction_phase(phase.transaction, phase.phase);
             }
             Records::Remove(remove) => {
                 manager.remove(remove.transaction);
@@ -34,7 +38,8 @@ impl TryFrom<Record> for Records {
 
     fn try_from(value: Record) -> Result<Self, Self::Error> {
         match value.code {
-            '1' | '2' | '3' => Ok(Self::Add(TwoPcRecordAdd::try_from(value)?)),
+            'i' => Ok(Self::Identity(TwoPcRecordIdentity::try_from(value)?)),
+            '1' | '2' | '3' => Ok(Self::Phase(TwoPcRecordPhase::try_from(value)?)),
             'r' => Ok(Self::Remove(TwoPcRecordRemove::try_from(value)?)),
             _ => Err(()),
         }

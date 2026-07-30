@@ -2,6 +2,7 @@
 
 use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
 use crate::net::Error;
+use std::time::Duration;
 use std::{io::ErrorKind, path::PathBuf};
 use tokio::fs::{read_dir, remove_file};
 use tokio::time::Instant;
@@ -76,6 +77,7 @@ impl Recovery {
         self,
         manager: &Manager,
         segment_size: usize,
+        fsync_interval: Duration,
     ) -> Result<WalWriter, Error> {
         let mut current_segment_id = 0;
         let mut size = 0;
@@ -141,6 +143,12 @@ impl Recovery {
         manager.cleanup_all();
 
         // Create the writer with a brand new segment.
-        WalWriter::new(&self.wal_directory, current_segment_id + 1, segment_size).await
+        WalWriter::new(
+            &self.wal_directory,
+            current_segment_id + 1,
+            segment_size,
+            fsync_interval,
+        )
+        .await
     }
 }

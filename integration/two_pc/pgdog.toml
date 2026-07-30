@@ -2,6 +2,7 @@
 two_phase_commit = true
 two_phase_commit_wal_dir = "pgdog_wal"
 default_pool_size = 100
+two_phase_commit_wal_fsync_interval = 0
 
 [[databases]]
 name = "pgdog"

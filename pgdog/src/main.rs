@@ -158,11 +158,14 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 if let Some(ref path) = general.two_phase_commit_wal_dir {
                     let checkpoint_interval =
                         Duration::from_millis(general.two_phase_commit_wal_checkpoint_interval);
+                    let fsync_interval =
+                        Duration::from_millis(general.two_phase_commit_wal_fsync_interval);
                     Manager::get()
                         .enable_wal(
                             path,
                             Some(checkpoint_interval),
                             general.two_phase_commit_wal_segment_size as usize,
+                            fsync_interval,
                         )
                         .await?;
                 } else {
