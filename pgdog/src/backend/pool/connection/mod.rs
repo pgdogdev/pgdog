@@ -2,7 +2,7 @@
 
 use mirror::MirrorHandler;
 use pgdog_config::users::PasswordKind;
-use tokio::{select, time::sleep};
+use tokio::select;
 use tracing::debug;
 
 use crate::{

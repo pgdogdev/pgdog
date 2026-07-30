@@ -14,12 +14,12 @@ use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
 use tokio::sync::Notify;
-use tokio::time::timeout;
 use tokio::{select, spawn};
 
 use tracing::{error, info, warn};
 
 use super::{Client, Error, comms::comms};
+use crate::util::safe_timeout;
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -117,7 +117,7 @@ impl Listener {
 
         let comms = comms();
 
-        if timeout(shutdown_timeout, comms.tracker().wait())
+        if safe_timeout(shutdown_timeout, comms.tracker().wait())
             .await
             .is_err()
         {
@@ -139,7 +139,7 @@ impl Listener {
                 });
                 let cancel_all = futures::future::join_all(cancel_futures);
 
-                if timeout(termination_timeout, cancel_all).await.is_err() {
+                if safe_timeout(termination_timeout, cancel_all).await.is_err() {
                     error!(
                         "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s",
                         comms.clients().len(),

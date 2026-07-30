@@ -1,9 +1,10 @@
 use super::Cluster;
 use crate::backend::pool::ee::schema_changed_hook;
 use crate::tasks;
+use crate::util::safe_sleep;
 use dyn_clone::DynClone;
 use std::time::Duration;
-use tokio::{select, time::sleep};
+use tokio::select;
 use tracing::error;
 
 pub(crate) trait SchemaLoader: Send + Sync + DynClone {
@@ -50,7 +51,7 @@ impl SchemaLoader for FromServer {
                                     shard.number(),
                                     err
                                 );
-                                sleep(Duration::from_millis(100)).await;
+                                safe_sleep(Duration::from_millis(100)).await;
                             } else {
                                 // Cluster is shutting down: unblock any
                                 // wait_schema_loaded callers.

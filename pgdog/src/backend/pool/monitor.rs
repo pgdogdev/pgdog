@@ -53,8 +53,9 @@ use crate::backend::{ConnectReason, DisconnectReason, Server};
 use crate::config::ServerAuth;
 use crate::tasks;
 
+use crate::util::{safe_interval, safe_sleep, safe_timeout};
 use tokio::select;
-use tokio::time::{Instant, interval, sleep, timeout};
+use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static MAINTENANCE: Duration = Duration::from_millis(333);
@@ -108,7 +109,7 @@ impl Monitor {
         if !replication_mode && interval > Duration::ZERO {
             tasks::spawn("pool healthchecks", async move {
                 select! {
-                    _ = sleep(delay) => {}
+                    _ = safe_sleep(delay) => {}
                     _ = pool.comms().shutdown.cancelled() => return,
                 }
                 Self::healthchecks(pool).await
@@ -199,7 +200,7 @@ impl Monitor {
             let sleep_duration = TokenCache::global().refresh_in(&addr);
 
             select! {
-                _ = sleep(sleep_duration) => {
+                _ = safe_sleep(sleep_duration) => {
                     let result = match addr.server_auth {
                         ServerAuth::RdsIam => rds_iam::token(addr.clone()).await.map(
                             |(token, expires_at)| {
@@ -255,7 +256,7 @@ impl Monitor {
     ///
     /// Runs regularly and ensures the pool triggers health checks on idle connections.
     async fn healthchecks(pool: Pool) {
-        let mut tick = interval(pool.lock().config().idle_healthcheck_interval());
+        let mut tick = safe_interval(pool.lock().config().idle_healthcheck_interval());
         let comms = pool.comms();
 
         debug!("health checks running [{}]", pool.addr());
@@ -290,7 +291,7 @@ impl Monitor {
 
     /// Perform maintenance on the pool periodically.
     async fn maintenance(pool: Pool) {
-        let mut tick = interval(MAINTENANCE);
+        let mut tick = safe_interval(MAINTENANCE);
         let comms = pool.comms();
 
         debug!("maintenance started [{}]", pool.addr());
@@ -407,7 +408,7 @@ impl Monitor {
             return;
         }
 
-        let mut interval = interval(pool.config().stats_period);
+        let mut interval = safe_interval(pool.config().stats_period);
 
         loop {
             select! {
@@ -441,7 +442,7 @@ impl Monitor {
         let max_age_jitter = pool.config().max_age_jitter;
 
         for attempt in 0..connect_attempts {
-            match timeout(
+            match safe_timeout(
                 connect_timeout,
                 Server::connect(pool.addr(), options.clone(), reason),
             )
@@ -492,7 +493,7 @@ impl Monitor {
                 }
             }
 
-            sleep(connect_attempt_delay).await;
+            safe_sleep(connect_attempt_delay).await;
         }
 
         Err(error)

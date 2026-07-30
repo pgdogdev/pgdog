@@ -2,6 +2,7 @@
 
 use crate::net::Error;
 use crate::tasks;
+use crate::util::safe_sleep;
 use std::time::Duration;
 use std::{
     io::ErrorKind,
@@ -9,7 +10,7 @@ use std::{
 };
 use tokio::fs::remove_file;
 use tokio::select;
-use tokio::time::{Instant, sleep};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
@@ -70,7 +71,7 @@ impl Checkpointer {
                 }
 
                 select! {
-                    _ = sleep(checkpointer.checkpoint_interval) => {},
+                    _ = safe_sleep(checkpointer.checkpoint_interval) => {},
                     _ = checkpointer.shutdown.cancelled() => { break; },
                 }
             }

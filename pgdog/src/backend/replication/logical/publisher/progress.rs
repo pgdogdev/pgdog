@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::time::sleep;
 use tracing::info;
 
 use crate::backend::replication::publisher::{Lsn, PublicationTable};
 use crate::tasks;
+use crate::util::safe_sleep;
 
 #[derive(Debug)]
 struct Inner {
@@ -63,7 +63,7 @@ impl Progress {
             };
             loop {
                 select! {
-                    _ = sleep(Duration::from_secs(5)) => {
+                    _ = safe_sleep(Duration::from_secs(5)) => {
                         let written = notify.bytes_sharded.load(Ordering::Relaxed);
                         let lsn = notify.lsn.load(Ordering::Relaxed);
 

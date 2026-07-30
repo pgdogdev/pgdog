@@ -9,7 +9,7 @@ use std::{
 };
 
 use rand::seq::SliceRandom;
-use tokio::{sync::Notify, time::timeout};
+use tokio::sync::Notify;
 use tracing::warn;
 
 use crate::{config::config, net::messages::FrontendPid};
@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::{Error, Guard, Pool, PoolConfig, Request};
+use crate::util::safe_timeout;
 
 pub mod ban;
 pub mod monitor;
@@ -310,7 +311,7 @@ impl LoadBalancer {
     /// callers will block until their `checkout_timeout` fires.
     async fn wait_roles_detected(&self) -> Result<(), Error> {
         if !self.roles_detected() {
-            if timeout(self.checkout_timeout, self.role_detection.notified())
+            if safe_timeout(self.checkout_timeout, self.role_detection.notified())
                 .await
                 .is_err()
             {

@@ -5,8 +5,8 @@ use crate::{
 
 use super::*;
 
+use crate::util::safe_interval;
 use futures::stream::{FuturesUnordered, StreamExt};
-use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -49,7 +49,7 @@ impl ShardMonitor {
     async fn spawn(&self) {
         let maintenance = (self.shard.comms().lsn_check_interval / 2)
             .clamp(Duration::from_millis(333), Duration::MAX);
-        let mut maintenance = interval(maintenance);
+        let mut maintenance = safe_interval(maintenance);
 
         debug!(
             "shard {} monitor running [{}]",
@@ -164,9 +164,9 @@ mod test {
     use crate::backend::pool::{Address, Config, PoolConfig};
     use crate::backend::replication::publisher::Lsn;
     use crate::config::{ReadWriteSplit, Role};
+    use crate::util::safe_sleep;
     use pgdog_postgres_types::{Format, FromDataType, TimestampTz};
     use pgdog_stats::LsnStats as StatsLsnStats;
-    use tokio::time::sleep;
 
     use super::super::ShardConfig;
     use super::*;
@@ -328,7 +328,7 @@ mod test {
         // Wait for the monitor to re-detect roles.
         let mut promoted = false;
         for _ in 0..40 {
-            sleep(Duration::from_millis(50)).await;
+            safe_sleep(Duration::from_millis(50)).await;
             let roles = shard.pools_with_roles();
             if roles[0].0 == Role::Primary {
                 assert_eq!(roles[1].0, Role::Replica, "old primary demoted");

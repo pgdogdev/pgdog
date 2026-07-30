@@ -15,6 +15,7 @@ use crate::{
 use futures::future::join_all;
 
 use super::*;
+use crate::util::safe_sleep;
 
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
@@ -90,7 +91,7 @@ impl Binding {
 
             Binding::NotConnected => loop {
                 debug!("binding suspended");
-                sleep(Duration::MAX).await
+                safe_sleep(Duration::MAX).await
             },
 
             Binding::Admin(backend) => Ok(backend.read().await?),
@@ -98,7 +99,7 @@ impl Binding {
                 if shards.is_empty() {
                     loop {
                         debug!("multi-shard binding suspended");
-                        sleep(Duration::MAX).await;
+                        safe_sleep(Duration::MAX).await;
                     }
                 } else {
                     // Loop until we read a message from a shard
@@ -130,7 +131,7 @@ impl Binding {
                     loop {
                         state.reset();
                         debug!("multi-shard binding done");
-                        sleep(Duration::MAX).await;
+                        safe_sleep(Duration::MAX).await;
                     }
                 }
             }

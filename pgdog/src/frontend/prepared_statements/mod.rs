@@ -4,9 +4,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use tokio::time::sleep;
 use tracing::debug;
 
+use crate::util::safe_sleep;
 use crate::{
     config::{PreparedStatements as PreparedStatementsLevel, config},
     net::{Parse, ProtocolMessage},
@@ -176,7 +176,7 @@ pub fn start_maintenance() {
         let shutdown = crate::tasks::shutdown_signal();
         loop {
             tokio::select! {
-                _ = sleep(Duration::from_secs(1)) => {}
+                _ = safe_sleep(Duration::from_secs(1)) => {}
                 _ = shutdown.cancelled() => break,
             }
             run_maintenance();

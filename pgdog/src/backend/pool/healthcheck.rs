@@ -3,11 +3,11 @@
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tokio::time::timeout;
 use tracing::error;
 
 use super::{Error, Pool};
 use crate::backend::Server;
+use crate::util::safe_timeout;
 
 /// Perform a healtcheck on a connection.
 pub struct Healtcheck<'a> {
@@ -55,7 +55,7 @@ impl<'a> Healtcheck<'a> {
             return Ok(());
         }
 
-        match timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
+        match safe_timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
                 // Check if this is an administrator command termination

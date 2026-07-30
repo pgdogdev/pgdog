@@ -13,11 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{
-    select,
-    sync::Notify,
-    time::{Instant, interval, sleep},
-};
+use tokio::{select, sync::Notify, time::Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -30,6 +26,7 @@ use crate::{
         parser::{Shard, ShardWithPriority},
     },
     tasks,
+    util::{safe_interval, safe_sleep},
 };
 
 use super::{
@@ -153,7 +150,7 @@ impl Manager {
             }
             select! {
                 _ = self.notify.notify.notified() => {}
-                _ = sleep(remaining) => {}
+                _ = safe_sleep(remaining) => {}
             }
         }
     }
@@ -276,7 +273,7 @@ impl Manager {
     }
 
     async fn monitor(manager: Self) {
-        let mut interval = interval(MAINTENANCE);
+        let mut interval = safe_interval(MAINTENANCE);
         let notify = manager.notify.clone();
 
         debug!("[2pc] monitor started");

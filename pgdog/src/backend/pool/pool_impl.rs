@@ -9,7 +9,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 use tokio::sync::Notify;
-use tokio::time::{Instant, timeout};
+use tokio::time::Instant;
 use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
@@ -25,6 +25,7 @@ use super::{
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
+use crate::util::safe_timeout;
 
 static ID_COUNTER: Lazy<Arc<AtomicU64>> = Lazy::new(|| Arc::new(AtomicU64::new(0)));
 fn next_pool_id() -> u64 {
@@ -106,7 +107,7 @@ impl Pool {
     }
 
     pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
-        match timeout(self.config().checkout_timeout, self.get_internal(request)).await {
+        match safe_timeout(self.config().checkout_timeout, self.get_internal(request)).await {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
                 self.inner.health.toggle(false);

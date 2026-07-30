@@ -12,10 +12,11 @@ use std::time::SystemTime;
 
 use tokio::net::UdpSocket;
 use tokio::select;
-use tokio::time::{Duration, interval};
+use tokio::time::Duration;
 
 use super::{Error, Message, Payload};
 use crate::tasks;
+use crate::util::safe_interval;
 
 /// Service discovery listener.
 #[derive(Clone, Debug)]
@@ -78,7 +79,7 @@ impl Listener {
         socket.multicast_loop_v4()?; // Won't work on IPv6, but nice for debugging.
 
         let mut buf = vec![0u8; 1024];
-        let mut interval = interval(Duration::from_secs(1));
+        let mut interval = safe_interval(Duration::from_secs(1));
         let shutdown = tasks::shutdown_signal();
 
         loop {

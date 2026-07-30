@@ -5,10 +5,10 @@ use std::time::Duration;
 use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
 use pgdog_config::QueryParserEngine;
+use tokio::select;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep};
+use tokio::time::Instant;
 use tokio::try_join;
-use tokio::{select, time::interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -26,6 +26,7 @@ use crate::backend::{Cluster, pool::Request};
 use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 use crate::tasks;
+use crate::util::{safe_interval, safe_sleep};
 
 fn merge_table_lsns(
     tables: Vec<Table>,
@@ -231,7 +232,7 @@ impl Publisher {
                 .ok_or(Error::NoReplicationSlot(number))?;
             stream.set_current_lsn(slot.lsn().lsn);
 
-            let mut check_lag = interval(Duration::from_secs(1));
+            let mut check_lag = safe_interval(Duration::from_secs(1));
             let replication_lag = self.replication_lag.clone();
             let stop = stop.clone();
             let last_transaction = self.last_transaction.clone();
@@ -321,7 +322,7 @@ impl Publisher {
                                         "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
                                         delay.as_millis()
                                     );
-                                    sleep(delay).await;
+                                    safe_sleep(delay).await;
                                     if let Err(reconnect_err) =
                                         try_join!(slot.reconnect(), stream.reconnect())
                                     {

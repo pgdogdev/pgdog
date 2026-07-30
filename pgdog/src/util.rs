@@ -2,11 +2,13 @@
 
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
-use pgdog_config::MAX_DURATION;
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(feature = "new_parser")]
 use std::ops::ControlFlow;
-use std::{env, future::Future, num::ParseIntError, time::Duration};
+use std::panic::Location;
+use std::{env, future::Future, future::pending, num::ParseIntError, time::Duration};
+use tokio::time::Interval;
+use tracing::warn;
 
 use crate::net::Parameters; // 0.8
 
@@ -298,14 +300,20 @@ pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
 }
 
-/// Avoid calling [`tokio::time::timeout`] on [`Duration`] that lasts effectively forever.
+/// Longest deadline Tokio's timer wheel can address (`64^6` ms, a bit over
+/// two years). A longer timer eventually stops every other timer in the
+/// runtime from firing.
 ///
-/// The Tokio timers can run hot and, if we can, we should avoid that mutex.
-///
-/// We did switch to the experimental timer that uses thread-locals, so
-/// this shouldn't be a problem anymore, but I still would like to avoid
-/// calling into time runtime if we don't have to.
-///
+/// See <https://github.com/pgdogdev/pgdog/issues/1017> and
+/// <https://github.com/tokio-rs/tokio/pull/8334>.
+const MAX_TIMER_DURATION: Duration = Duration::from_millis(1 << 36);
+
+fn armable(duration: Option<Duration>) -> Option<Duration> {
+    duration.filter(|duration| *duration < MAX_TIMER_DURATION)
+}
+
+/// [`tokio::time::timeout`] that waits forever instead of arming a timer
+/// outside [`MAX_TIMER_DURATION`].
 pub(crate) async fn safe_timeout<F>(
     duration: Duration,
     future: F,
@@ -313,10 +321,58 @@ pub(crate) async fn safe_timeout<F>(
 where
     F: Future,
 {
-    if duration == Duration::MAX || duration == MAX_DURATION {
-        Ok(future.await)
-    } else {
-        tokio::time::timeout(duration, future).await
+    match armable(Some(duration)) {
+        Some(duration) => tokio::time::timeout(duration, future).await,
+        None => Ok(future.await),
+    }
+}
+
+/// [`tokio::time::sleep`] that waits forever instead of arming a timer
+/// outside [`MAX_TIMER_DURATION`].
+pub(crate) async fn safe_sleep(duration: Duration) {
+    match armable(Some(duration)) {
+        Some(duration) => tokio::time::sleep(duration).await,
+        None => pending().await,
+    }
+}
+
+/// [`tokio::time::interval`] that is disabled instead of arming a timer
+/// outside [`MAX_TIMER_DURATION`], or panicking on a zero period.
+#[track_caller]
+pub(crate) fn safe_interval(period: Duration) -> SafeInterval {
+    match armable(Some(period)).filter(|period| !period.is_zero()) {
+        Some(period) => SafeInterval(Some(tokio::time::interval(period))),
+        None => {
+            warn!(
+                "{} is not a usable tick interval, timer disabled [{}]",
+                human_duration(period),
+                Location::caller()
+            );
+            SafeInterval(None)
+        }
+    }
+}
+
+/// An [`Interval`] that may not be running at all.
+pub(crate) struct SafeInterval(Option<Interval>);
+
+impl SafeInterval {
+    /// Wait for the next tick, or forever when the interval is disabled.
+    ///
+    /// Cancel safe: both branches are.
+    pub(crate) async fn tick(&mut self) {
+        match self.0.as_mut() {
+            Some(interval) => {
+                interval.tick().await;
+            }
+            None => pending().await,
+        }
+    }
+
+    pub(crate) fn set_missed_tick_behavior(&mut self, behavior: tokio::time::MissedTickBehavior) {
+        if let Some(interval) = self.0.as_mut() {
+            interval.set_missed_tick_behavior(behavior);
+        }
     }
 }
 
@@ -349,15 +405,79 @@ mod test {
         assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
     }
 
+    #[test]
+    fn test_armable_boundary() {
+        assert_eq!(MAX_TIMER_DURATION.as_millis(), 1 << 36);
+
+        let just_under = MAX_TIMER_DURATION - Duration::from_millis(1);
+
+        assert_eq!(armable(None), None);
+        assert_eq!(armable(Some(Duration::ZERO)), Some(Duration::ZERO));
+        assert_eq!(armable(Some(just_under)), Some(just_under));
+        assert_eq!(armable(Some(MAX_TIMER_DURATION)), None);
+        assert_eq!(armable(Some(Duration::MAX)), None);
+    }
+
     #[tokio::test]
-    async fn test_safe_timeout_allows_duration_max() {
+    async fn test_safe_timeout_never_arms_forever() {
         assert_eq!(safe_timeout(Duration::MAX, async { 42 }).await.unwrap(), 42);
+        assert_eq!(
+            safe_timeout(MAX_TIMER_DURATION, async { 42 })
+                .await
+                .unwrap(),
+            42
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn test_safe_timeout_times_out() {
         let result = safe_timeout(Duration::from_millis(1), std::future::pending::<()>()).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_safe_sleep() {
+        safe_sleep(Duration::from_millis(10)).await;
+
+        for forever in [MAX_TIMER_DURATION, Duration::MAX] {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(60), safe_sleep(forever))
+                    .await
+                    .is_err(),
+                "{:?} must never wake up",
+                forever
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_safe_interval_ticks() {
+        let mut interval = safe_interval(Duration::from_millis(10));
+
+        // The first tick of a live interval resolves immediately.
+        interval.tick().await;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), interval.tick())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_safe_interval_disabled_never_ticks() {
+        // Zero panics `tokio::time::interval`; the rest would run the wheel hot.
+        for period in [Duration::ZERO, MAX_TIMER_DURATION, Duration::MAX] {
+            let mut interval = safe_interval(period);
+
+            assert!(
+                tokio::time::timeout(Duration::from_secs(60), interval.tick())
+                    .await
+                    .is_err(),
+                "{:?} must never tick",
+                period
+            );
+        }
     }
 
     #[test]
