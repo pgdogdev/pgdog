@@ -1,14 +1,19 @@
 //! Two-phase commit write-ahead log.
-//!
-//! See [`record`] for the on-disk record format.
+pub(crate) mod checkpoint;
+pub(crate) mod live_segment;
+pub(crate) mod record;
+pub(crate) mod recovery;
+pub(crate) mod segment;
+pub(crate) mod segment_registry;
+pub(crate) mod writer;
 
-mod error;
-mod record;
-mod recovery;
-mod segment;
-mod writer;
+pub(crate) use checkpoint::*;
+pub(crate) use live_segment::*;
+pub(crate) use record::*;
+pub(crate) use recovery::Recovery;
+pub(crate) use segment::*;
+pub(crate) use segment_registry::*;
+pub(crate) use writer::WalWriter;
 
-pub use error::Error;
-pub use record::{BeginPayload, Record, TxnPayload};
-pub use segment::Segment;
-pub use writer::Wal;
+#[cfg(test)]
+mod tests;

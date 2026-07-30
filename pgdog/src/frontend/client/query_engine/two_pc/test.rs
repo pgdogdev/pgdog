@@ -38,7 +38,9 @@ async fn test_cleanup_transaction_phase_one() {
     let info = Manager::get().transaction(&transaction).unwrap();
     assert_eq!(info.phase, TwoPcPhase::Phase1);
 
-    conn.two_pc(transaction, TwoPcPhase::Phase1).await.unwrap();
+    conn.two_pc(transaction, TwoPcPhase::Phase1, false)
+        .await
+        .unwrap();
 
     let two_pc = conn
         .execute("SELECT * FROM pg_prepared_xacts")
@@ -108,7 +110,9 @@ async fn test_cleanup_transaction_phase_two() {
     let info = Manager::get().transaction(&transaction).unwrap();
     assert_eq!(info.phase, TwoPcPhase::Phase1);
 
-    conn.two_pc(transaction, TwoPcPhase::Phase1).await.unwrap();
+    conn.two_pc(transaction, TwoPcPhase::Phase1, false)
+        .await
+        .unwrap();
 
     let txns = conn
         .execute("SELECT * FROM pg_prepared_xacts")

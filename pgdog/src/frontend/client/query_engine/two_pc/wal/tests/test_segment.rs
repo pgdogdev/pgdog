@@ -1,0 +1,98 @@
+use std::time::Duration;
+
+use bytes::{BufMut, Bytes, BytesMut};
+use tempfile::TempDir;
+
+use super::super::super::Manager;
+use super::super::*;
+use crate::net::Error;
+
+#[tokio::test]
+async fn test_load_complete_and_incomplete_records() {
+    let tmp = TempDir::new().unwrap();
+    let path = Segment::path(tmp.path(), 1);
+    let mut bytes = BytesMut::new();
+
+    bytes.put_u64(1);
+    bytes.put_u32(0);
+    bytes.put_u8(b'r');
+    bytes.put_i32(12);
+    bytes.put_u64(42);
+
+    // A partial trailing record is expected after a crash and should be ignored.
+    bytes.put_u8(b'r');
+    bytes.put_i32(12);
+    bytes.put_u32(43);
+
+    tokio::fs::write(&path, bytes).await.unwrap();
+
+    let segment = Segment::load(&path).await.unwrap();
+    assert_eq!(segment.segment_id, 1);
+    assert_eq!(segment.size(), 13);
+}
+
+#[tokio::test]
+async fn test_load_rejects_invalid_record_length() {
+    let tmp = TempDir::new().unwrap();
+    let path = Segment::path(tmp.path(), 1);
+    let mut bytes = BytesMut::new();
+
+    bytes.put_u64(1);
+    bytes.put_u32(0);
+    bytes.put_u8(b'r');
+    bytes.put_i32(3);
+
+    tokio::fs::write(&path, bytes).await.unwrap();
+
+    assert!(matches!(
+        Segment::load(&path).await,
+        Err(Error::MalformedMessageLength(3))
+    ));
+}
+
+#[tokio::test]
+async fn test_recovery_skips_incomplete_segment_header() {
+    let tmp = TempDir::new().unwrap();
+    let incomplete = Segment::path(tmp.path(), 42);
+    tokio::fs::write(&incomplete, [0; 4]).await.unwrap();
+
+    let manager = Manager::init();
+    manager
+        .enable_wal(&tmp.path().to_owned(), None, 50, Duration::ZERO)
+        .await
+        .unwrap();
+
+    assert!(!incomplete.exists());
+    assert!(Segment::path(tmp.path(), 43).exists());
+    manager.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_live_segment_batches_fsyncs() {
+    let tmp = TempDir::new().unwrap();
+    let interval = Duration::from_millis(10);
+    let segment = LiveSegment::new(tmp.path(), 1, interval).await.unwrap();
+    let waiter = segment.add(Record {
+        code: '2',
+        data: Bytes::new(),
+    });
+
+    tokio::task::yield_now().await;
+    assert!(waiter.waiter.is_empty());
+
+    tokio::time::advance(interval).await;
+    waiter.wait_flush().await;
+
+    segment.shutdown();
+}
+
+#[test]
+fn test_only_phase_two_has_a_phase_record() {
+    for code in ['1', '3'] {
+        let record = Record {
+            code,
+            data: Bytes::copy_from_slice(&42_u64.to_be_bytes()),
+        };
+        assert!(Records::try_from(record).is_err());
+    }
+}

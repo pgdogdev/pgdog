@@ -1,321 +1,154 @@
-//! Two-phase commit WAL recovery.
-//!
-//! Replays every record in every existing segment under the WAL directory
-//! to rebuild the set of in-flight 2PC transactions, then hands each one
-//! back to [`Manager`] via [`Manager::restore_transaction`] so the monitor
-//! task drives them to a terminal state via the existing
-//! `cleanup_phase` machinery.
-//!
-//! Returns a [`Recovered`] containing the writable [`Segment`] the writer
-//! task should continue appending to and the active-2PC snapshot the
-//! writer uses to serve checkpoints. If the directory had no segments, a
-//! fresh one is created at LSN 0.
+//! Handle recovering the state of the 2pc manager from WAL segments.
 
-use std::path::Path;
+use super::{super::Manager, EXTENSION, Segment, SegmentRegistry, SegmentStatus, WalWriter};
+use crate::net::Error;
+use std::time::Duration;
+use std::{io::ErrorKind, path::PathBuf};
+use tokio::fs::{read_dir, remove_file};
+use tokio::time::Instant;
+use tracing::{info, warn};
 
-use fnv::FnvHashMap as HashMap;
-
-use super::error::Error;
-use super::record::{CheckpointEntry, Record};
-use super::segment::{Segment, SegmentReader, list_segments};
-use crate::frontend::client::query_engine::two_pc::{Manager, TwoPcPhase, TwoPcTransaction};
-
-/// Working entry held only for the duration of [`recover_transactions`].
-/// Each surviving entry becomes a [`Manager::restore_transaction`] call.
-struct Entry {
-    user: String,
-    database: String,
-    decided: bool,
+/// 2pc state recovery.
+pub(crate) struct Recovery {
+    /// Where the WAL files live.
+    pub(crate) wal_directory: PathBuf,
+    /// WAL segments, sorted in ascending order by segment ID.
+    pub(super) files: Vec<(u64, PathBuf)>,
 }
 
-/// What [`recover_transactions`] hands back to the WAL setup path.
-pub(super) struct Recovered {
-    /// The writable segment the writer task should continue appending to.
-    pub segment: Segment,
-    /// Initial active-2PC snapshot derived from replay so the writer
-    /// can serve checkpoints without rebuilding it.
-    pub snapshot: HashMap<TwoPcTransaction, CheckpointEntry>,
-}
+impl Recovery {
+    /// Load all segments from the WAL directory in preparation
+    /// for recovery.
+    ///
+    /// # Arguments
+    ///
+    /// - `wal_directory`: Where the WAL segments live.
+    ///
+    pub(crate) async fn new(wal_directory: &PathBuf) -> Result<Self, Error> {
+        let mut dir = read_dir(wal_directory).await?;
+        let mut files = vec![];
 
-/// Scan every segment in `dir` in LSN order, hand each in-flight
-/// transaction to `manager`, and return a [`Recovered`] describing the
-/// writable segment plus the initial active-2PC snapshot.
-///
-/// Corrupt segments are renamed to `<lsn>.wal.broken` and skipped. If
-/// any corruption is detected the restore phase is skipped: partial
-/// restore could silently invert a committed transaction by losing a
-/// `Committing` record. The operator handles orphan prepared xacts via
-/// `SHOW TRANSACTIONS` / `pg_prepared_xacts`. Genuine IO errors
-/// propagate; the caller treats those as "WAL not usable."
-pub(super) async fn recover_transactions(
-    manager: &Manager,
-    dir: &Path,
-) -> Result<Recovered, Error> {
-    let segments = list_segments(dir).await?;
-    let mut working: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-    let mut corruption = false;
-    let mut next_lsn: u64 = 0;
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
 
-    let Some((last_path, prior_paths)) = segments.split_last() else {
-        return Ok(Recovered {
-            segment: Segment::create(dir, 0).await?,
-            snapshot: HashMap::default(),
-        });
-    };
+            let mut skip = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext != EXTENSION)
+                .unwrap_or(true);
 
-    for path in prior_paths {
-        let mut reader = match SegmentReader::open(path).await {
-            Ok(reader) => reader,
-            Err(err) if err.is_corruption() => {
-                quarantine(path, &err).await;
-                corruption = true;
-                continue;
+            let segment_id = path
+                .file_stem()
+                .and_then(|prefix| prefix.to_str())
+                .and_then(|prefix| prefix.parse::<u64>().ok());
+
+            if segment_id.is_none() {
+                skip = true;
             }
-            Err(err) => return Err(err),
-        };
-        let drained = drain(&mut reader, &mut working).await;
-        next_lsn = reader.next_lsn();
-        match drained {
-            Ok(()) => {}
-            Err(err) if err.is_corruption() => {
-                drop(reader);
-                quarantine(path, &err).await;
-                corruption = true;
+
+            if skip {
+                warn!(
+                    r#"[2pc] recovery ignoring unknown file "{}""#,
+                    path.display()
+                );
+            } else if let Some(segment_id) = segment_id {
+                files.push((segment_id, path));
             }
-            Err(err) => return Err(err),
         }
+
+        files.sort_by_key(|(segment_id, _)| *segment_id);
+
+        Ok(Self {
+            wal_directory: wal_directory.clone(),
+            files,
+        })
     }
 
-    let last_writable = match SegmentReader::open(last_path).await {
-        Ok(mut reader) => {
-            let drained = drain(&mut reader, &mut working).await;
-            next_lsn = reader.next_lsn();
-            match drained {
-                Ok(()) | Err(Error::TornTail { .. }) => Some(reader.into_writable().await?),
-                Err(err) if err.is_corruption() => {
-                    drop(reader);
-                    quarantine(last_path, &err).await;
-                    corruption = true;
-                    None
+    /// Run the recovery.
+    ///
+    /// # Arguments
+    ///
+    /// - `manager`: 2pc manager. Transactions will be replayed into it, restoring it to the state it was before
+    ///   PgDog crashed.
+    /// - `segment_size`: The size of the segments in bytes. This will be used to create the next segment
+    ///   once recovery is complete.
+    ///
+    pub(crate) async fn run(
+        self,
+        manager: &Manager,
+        segment_size: usize,
+        fsync_interval: Duration,
+    ) -> Result<WalWriter, Error> {
+        let mut current_segment_id = 0;
+        let mut size = 0;
+        let start = Instant::now();
+
+        info!("[2pc] recovery replaying {} WAL segments", self.files.len());
+
+        for (segment_file_id, file) in &self.files {
+            // The filename reserves this segment ID even when the contents are
+            // incomplete. A new writer must never reuse an existing ID.
+            current_segment_id = *segment_file_id;
+
+            let segment = match Segment::load(file).await {
+                Ok(segment) => segment,
+                Err(Error::Io(err)) if err.kind() == ErrorKind::UnexpectedEof => {
+                    warn!(
+                        r#"[2pc] recovery skipping WAL segment with incomplete header "{}""#,
+                        file.display()
+                    );
+                    match remove_file(file).await {
+                        Ok(()) => info!(
+                            r#"[2pc] recovery removed WAL segment with incomplete header "{}""#,
+                            file.display()
+                        ),
+                        Err(err) if err.kind() == ErrorKind::NotFound => {}
+                        Err(err) => warn!(
+                            r#"[2pc] recovery couldn't remove incomplete WAL segment "{}": {}"#,
+                            file.display(),
+                            err
+                        ),
+                    }
+                    continue;
                 }
                 Err(err) => return Err(err),
+            };
+
+            if *segment_file_id != segment.segment_id {
+                panic!("segment ID doesn't match file number");
             }
-        }
-        Err(err) if err.is_corruption() => {
-            quarantine(last_path, &err).await;
-            corruption = true;
-            None
-        }
-        Err(err) => return Err(err),
-    };
 
-    // Decided txns (Committing was logged) are safe to restore even if
-    // corruption was detected later: COMMIT PREPARED is idempotent and
-    // matches the decision we durably recorded. Undecided txns can only
-    // be restored when there was no corruption: otherwise their
-    // Committing might have been in a lost segment and rolling back
-    // would silently invert a committed transaction.
-    let mut snapshot: HashMap<TwoPcTransaction, CheckpointEntry> = HashMap::default();
-    for (txn, entry) in working {
-        let phase = match (entry.decided, corruption) {
-            (true, _) => TwoPcPhase::Phase2,
-            (false, false) => TwoPcPhase::Phase1,
-            (false, true) => continue,
-        };
-        snapshot.insert(
-            txn,
-            CheckpointEntry {
-                txn,
-                user: entry.user.clone(),
-                database: entry.database.clone(),
-                decided: entry.decided,
-            },
-        );
-        manager.restore_transaction(txn, entry.user, entry.database, phase);
-    }
-    if corruption {
-        tracing::warn!(
-            "[2pc] wal recovery detected corruption; undecided transactions \
-             must be reconciled via SHOW TRANSACTIONS / pg_prepared_xacts"
-        );
-    }
+            size += segment.size();
+            segment.replay(manager)?;
 
-    let segment = match last_writable {
-        Some(segment) => segment,
-        None => Segment::create(dir, next_lsn).await?,
-    };
-    Ok(Recovered { segment, snapshot })
-}
-
-/// Drain every record in `reader` into `working`. Errors propagate as
-/// usual; the caller decides what to do based on the error variant.
-async fn drain(
-    reader: &mut SegmentReader,
-    working: &mut HashMap<TwoPcTransaction, Entry>,
-) -> Result<(), Error> {
-    while let Some(record) = reader.next().await? {
-        apply(working, record);
-    }
-    Ok(())
-}
-
-/// Log corruption and rename the segment to `<original>.broken` so
-/// subsequent recoveries skip it. Best-effort: rename failures are
-/// logged.
-async fn quarantine(path: &Path, err: &Error) {
-    tracing::warn!("[2pc] corrupt wal segment {}: {}", path.display(), err);
-    let broken = path.with_extension("wal.broken");
-    if let Err(rename_err) = tokio::fs::rename(path, &broken).await {
-        tracing::warn!(
-            "[2pc] could not rename corrupt wal segment {} to {}: {}",
-            path.display(),
-            broken.display(),
-            rename_err
-        );
-    }
-}
-
-fn apply(working: &mut HashMap<TwoPcTransaction, Entry>, record: Record) {
-    match record {
-        Record::Begin(p) => {
-            working.insert(
-                p.txn,
-                Entry {
-                    user: p.user,
-                    database: p.database,
-                    decided: false,
-                },
+            info!(
+                r#"[2pc] recovery replayed "{}" ({:.3}MB)"#,
+                file.display(),
+                segment.size() as f64 / 1024.0 / 1024.0
             );
+
+            // Checkpointer will pick them up
+            // and delete them later.
+            SegmentRegistry::get().record(segment.segment_id, SegmentStatus::Inactive);
         }
-        Record::Committing(p) => {
-            if let Some(entry) = working.get_mut(&p.txn) {
-                entry.decided = true;
-            }
-        }
-        Record::End(p) => {
-            working.remove(&p.txn);
-        }
-        Record::Checkpoint(p) => {
-            working.clear();
-            for CheckpointEntry {
-                txn,
-                user,
-                database,
-                decided,
-                ..
-            } in p.active
-            {
-                working.insert(
-                    txn,
-                    Entry {
-                        user,
-                        database,
-                        decided,
-                    },
-                );
-            }
-        }
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::super::record::{BeginPayload, CheckpointPayload, TxnPayload};
-    use super::*;
-
-    fn txn(n: usize) -> TwoPcTransaction {
-        // Inner field is private; round-trip via Display/FromStr so tests
-        // can build deterministic ids.
-        format!("__pgdog_2pc_{}", n).parse().unwrap()
-    }
-
-    #[test]
-    fn begin_inserts_undecided() {
-        let mut w: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-        apply(
-            &mut w,
-            Record::Begin(BeginPayload {
-                txn: txn(1),
-                user: "alice".into(),
-                database: "shop".into(),
-            }),
+        info!(
+            "[2pc] recovery finished, replayed {:.3}MB in {:.3}s",
+            size as f64 / 1024.0 / 1024.0,
+            start.elapsed().as_secs_f32()
         );
-        let entry = w.get(&txn(1)).unwrap();
-        assert_eq!(entry.user, "alice");
-        assert_eq!(entry.database, "shop");
-        assert!(!entry.decided);
-    }
 
-    #[test]
-    fn committing_marks_decided() {
-        let mut w: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-        apply(
-            &mut w,
-            Record::Begin(BeginPayload {
-                txn: txn(1),
-                user: "u".into(),
-                database: "d".into(),
-            }),
-        );
-        apply(&mut w, Record::Committing(TxnPayload { txn: txn(1) }));
-        assert!(w.get(&txn(1)).unwrap().decided);
-    }
+        // Tell the manager to cleanup all transactions
+        // in its state.
+        manager.cleanup_all();
 
-    #[test]
-    fn committing_without_begin_is_ignored() {
-        let mut w: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-        apply(&mut w, Record::Committing(TxnPayload { txn: txn(1) }));
-        assert!(w.is_empty());
-    }
-
-    #[test]
-    fn end_removes() {
-        let mut w: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-        apply(
-            &mut w,
-            Record::Begin(BeginPayload {
-                txn: txn(1),
-                user: "u".into(),
-                database: "d".into(),
-            }),
-        );
-        apply(&mut w, Record::End(TxnPayload { txn: txn(1) }));
-        assert!(w.is_empty());
-    }
-
-    #[test]
-    fn checkpoint_replaces_state() {
-        let mut w: HashMap<TwoPcTransaction, Entry> = HashMap::default();
-        apply(
-            &mut w,
-            Record::Begin(BeginPayload {
-                txn: txn(1),
-                user: "u1".into(),
-                database: "d1".into(),
-            }),
-        );
-        apply(
-            &mut w,
-            Record::Begin(BeginPayload {
-                txn: txn(2),
-                user: "u2".into(),
-                database: "d2".into(),
-            }),
-        );
-        apply(
-            &mut w,
-            Record::Checkpoint(CheckpointPayload {
-                active: vec![CheckpointEntry {
-                    txn: txn(99),
-                    user: "u99".into(),
-                    database: "d99".into(),
-                    decided: true,
-                }],
-            }),
-        );
-        assert_eq!(w.len(), 1);
-        let entry = w.get(&txn(99)).unwrap();
-        assert_eq!(entry.user, "u99");
-        assert!(entry.decided);
+        // Create the writer with a brand new segment.
+        WalWriter::new(
+            &self.wal_directory,
+            current_segment_id + 1,
+            segment_size,
+            fsync_interval,
+        )
+        .await
     }
 }

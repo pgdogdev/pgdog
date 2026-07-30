@@ -1,5 +1,8 @@
 [general]
-two_phase_commit = false
+two_phase_commit = true
+two_phase_commit_wal_dir = "pgdog_wal"
+default_pool_size = 100
+two_phase_commit_wal_fsync_interval = 0
 
 [[databases]]
 name = "pgdog"
@@ -12,6 +15,10 @@ name = "pgdog"
 host = "127.0.0.1"
 shard = 1
 database_name = "shard_1"
+
+[[omnisharded_tables]]
+database = "pgdog"
+tables = ["omnisharded_two_pc"]
 
 [admin]
 password = "pgdog"

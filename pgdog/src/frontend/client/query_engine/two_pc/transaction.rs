@@ -5,7 +5,7 @@ use std::{fmt::Display, str::FromStr};
 use crate::util::{deployment_id, instance_id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
-pub struct TwoPcTransaction(usize);
+pub struct TwoPcTransaction(pub(crate) usize);
 
 static PREFIX: &str = "__pgdog_2pc_";
 

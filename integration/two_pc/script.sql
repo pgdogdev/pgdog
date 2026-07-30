@@ -1,15 +1,7 @@
-\set id (1021 * random(1, 10000000))
+\set id random(1, 9223372036854775807)
+\set value random(1, 9223372036854775807)
 
--- In a transaction.
 BEGIN;
-INSERT INTO sharded_2pc (id, value) VALUES (:id, 'some value') RETURNING *;
-SELECT * FROM sharded_2pc WHERE id = :id AND value = 'some value';
-UPDATE sharded_2pc SET value = 'another value' WHERE id = :id;
-DELETE FROM sharded_2pc WHERE id = :id AND value = 'another value';
-ROLLBACK;
-
--- Outside a transaction.
-INSERT INTO sharded_2pc (id, value) VALUES (:id, 'some value') RETURNING *;
-SELECT * FROM sharded_2pc WHERE id = :id AND value = 'some value';
-UPDATE sharded_2pc SET value = 'another value' WHERE id = :id;
-DELETE FROM sharded_2pc WHERE id = :id;
+INSERT INTO omnisharded_two_pc (id, value)
+VALUES (:id, format('pgbench-client-%s-value-%s', :client_id, :value));
+COMMIT;
