@@ -512,17 +512,12 @@ impl Binding {
         match self {
             Binding::Direct(server, ..) => server.is_locked(),
             Binding::MultiShard(servers, _) => {
-                let mut any = false;
-                let mut all = true;
-                for server in servers {
-                    let l = server.is_locked();
-                    any |= l;
-                    all &= l;
-                }
-                if any && !all {
-                    warn!("inconsistent lock state across multi-shard binding; assuming locked");
-                }
-                any
+                debug_assert!(
+                    servers.iter().all(|s| s.is_locked()) == servers.iter().any(|s| s.is_locked()),
+                    "Shards disagree on lock status {servers:?}"
+                );
+
+                servers.iter().any(|s| s.is_locked())
             }
             _ => false,
         }

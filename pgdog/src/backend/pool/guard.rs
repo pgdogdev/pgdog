@@ -19,7 +19,7 @@ pub struct Guard {
     pub(super) reset: bool,
 
     /// Frontend has pinned this guard to its client
-    // NOTE: We cache this value seperately to prevent lock contention to read locked state
+    // NOTE: We cache this value seperately to minimize pool lock contention
     locked: bool,
 }
 
@@ -54,6 +54,11 @@ impl Guard {
     /// Mark or unmark this checkout as pinned to its client. Propagates to
     /// the pool so `sv_locked` reflects reality per pool.
     pub(crate) fn set_locked(&mut self, locked: bool) {
+        if self.locked == locked {
+            // No-op, don't bother aquiring a lock
+            return;
+        }
+
         self.locked = locked;
         if let Some(server) = self.server.as_deref() {
             self.pool.set_locked(server.id(), locked);
