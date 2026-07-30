@@ -1071,7 +1071,7 @@ mod test {
         // Schemas not loaded yet, readiness is pending.
         assert!(!cluster.ready());
 
-        let mut result = std::pin::pin!(cluster.wait_ready());
+        let mut cluster_ready = std::pin::pin!(cluster.wait_ready());
 
         // Finish loading on all but one shard
         for shard in &cluster.shards[1..] {
@@ -1079,12 +1079,12 @@ mod test {
         }
 
         tokio::task::yield_now().await;
-        assert!(poll!(result.as_mut()).is_pending());
+        assert!(poll!(cluster_ready.as_mut()).is_pending());
 
         cluster.shards[0].schema_not_needed();
 
         tokio::task::yield_now().await;
-        assert!(poll!(result.as_mut()).is_ready());
+        assert!(poll!(cluster_ready.as_mut()).is_ready());
         assert!(cluster.ready());
     }
 
