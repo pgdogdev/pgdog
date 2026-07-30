@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::env;
-
+use crate::otel_temporality::OtelTemporalityPreference;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
 
 /// OpenTelemetry push exporter settings.
 ///
@@ -61,6 +61,16 @@ pub struct Otel {
     /// Env: `OTEL_METRIC_EXPORT_INTERVAL`
     #[serde(default = "Otel::push_interval")]
     pub push_interval: u64,
+
+    /// Describes how the exported metric points should be described.
+    ///
+    /// See https://opentelemetry.io/docs/specs/otel/metrics/data-model/#metric-points
+    ///
+    /// _Default:_ `Cumulative`
+    ///
+    /// Env: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
+    #[serde(default = "Otel::temporality_preference")]
+    pub temporality_preference: OtelTemporalityPreference,
 }
 
 impl Otel {
@@ -98,6 +108,14 @@ impl Otel {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10_000)
+    }
+
+    fn temporality_preference() -> OtelTemporalityPreference {
+        env::var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            // defaults to cumulative
+            .unwrap_or_default()
     }
 }
 
