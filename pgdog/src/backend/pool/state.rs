@@ -46,6 +46,7 @@ impl State {
                 errors: guard.errors,
                 out_of_sync: guard.out_of_sync,
                 re_synced: guard.re_synced,
+                locked: guard.count_locked_connections(),
                 stats: *guard.stats,
                 maxwait: guard
                     .waiting

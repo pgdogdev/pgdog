@@ -489,6 +489,39 @@ impl Binding {
         }
     }
 
+    /// Propagate the client's lock state to every held Guard so each pool's
+    /// `sv_locked` reflects the pin.
+    pub(super) fn set_locked(&mut self, locked: bool) {
+        match self {
+            Binding::Direct(server, ..) => server.set_locked(locked),
+            Binding::MultiShard(servers, _) => {
+                for server in servers {
+                    server.set_locked(locked);
+                }
+            }
+            _ => (),
+        }
+    }
+
+    /// Aggregate lock state across the held Guard(s). All shards in a
+    /// multi-shard binding are set/cleared together via [`Self::set_locked`],
+    /// so they should always agree; if they don't, warn and err on the side
+    /// of "locked" so we don't recycle a pinned connection.
+    pub(super) fn is_locked(&self) -> bool {
+        match self {
+            Binding::Direct(server, ..) => server.is_locked(),
+            Binding::MultiShard(servers, _) => {
+                debug_assert!(
+                    servers.iter().all(|s| s.is_locked()) == servers.iter().any(|s| s.is_locked()),
+                    "Shards disagree on lock status {servers:?}"
+                );
+
+                servers.iter().any(|s| s.is_locked())
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_multishard(&self) -> bool {
         match self {
             Binding::MultiShard(servers, _) => !servers.is_empty(),

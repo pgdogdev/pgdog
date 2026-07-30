@@ -52,7 +52,6 @@ pub struct Connection {
     binding: Binding,
     cluster: Option<Cluster>,
     mirrors: Vec<MirrorHandler>,
-    locked: bool,
     pub_sub: PubSubClient,
 }
 
@@ -69,7 +68,6 @@ impl Connection {
             user: user.to_owned(),
             database: database.to_owned(),
             mirrors: vec![],
-            locked: false,
             pub_sub: PubSubClient::new(),
         };
 
@@ -425,22 +423,22 @@ impl Connection {
 
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
-        self.binding.done() && !self.locked
+        self.binding.done() && !self.binding.is_locked()
     }
 
     /// Lock this connection to the client, preventing it's
     /// release back into the pool.
     pub(crate) fn lock(&mut self, lock: bool) {
-        self.locked = lock;
+        self.binding.set_locked(lock);
         if lock {
             self.binding.dirty();
         }
     }
 
-    /// Check if this connection is locked to a client.
+    /// Check if any held server connection is currently locked to a client.
     #[cfg(test)]
     pub(crate) fn locked(&self) -> bool {
-        self.locked
+        self.binding.is_locked()
     }
 
     /// Get connected servers addresses.

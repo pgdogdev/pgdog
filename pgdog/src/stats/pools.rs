@@ -48,6 +48,7 @@ impl Pools {
         let mut cl_waiting = vec![];
         let mut sv_active = vec![];
         let mut sv_idle = vec![];
+        let mut sv_locked = vec![];
         let mut maxwait = vec![];
         let mut errors = vec![];
         let mut out_of_sync = vec![];
@@ -120,6 +121,11 @@ impl Pools {
                     sv_idle.push(Measurement {
                         labels: labels.clone(),
                         measurement: state.idle.into(),
+                    });
+
+                    sv_locked.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: state.locked.into(),
                     });
 
                     maxwait.push(Measurement {
@@ -369,6 +375,16 @@ impl Pools {
             name: "sv_idle".into(),
             measurements: sv_idle,
             help: "Servers available for clients to use.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "sv_locked".into(),
+            measurements: sv_locked,
+            help: "Servers pinned to a client (advisory lock or manual pin), \
+                   ineligible for transaction pooling."
+                .into(),
             unit: None,
             metric_type: None,
         }));
