@@ -13,8 +13,13 @@ impl Listeners {
         let mut received = vec![];
         let mut dropped = vec![];
 
-        for (channel, stats) in stats {
-            let labels = vec![("channel".into(), channel)];
+        for (key, stats) in stats {
+            let labels = vec![
+                ("database".into(), key.pool.database),
+                ("user".into(), key.pool.user),
+                ("shard".into(), key.pool.shard.to_string()),
+                ("channel".into(), key.channel),
+            ];
 
             listeners.push(Measurement {
                 labels: labels.clone(),

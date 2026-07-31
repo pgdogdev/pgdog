@@ -22,6 +22,9 @@ impl Command for ShowListeners {
 
         let mut messages = vec![
             RowDescription::new(&[
+                Field::text("database"),
+                Field::text("user"),
+                Field::numeric("shard"),
                 Field::text("channel"),
                 Field::numeric("listeners"),
                 Field::numeric("received"),
@@ -30,10 +33,13 @@ impl Command for ShowListeners {
             .message()?,
         ];
 
-        for (channel, stats) in channels {
+        for (key, stats) in channels {
             let mut data_row = DataRow::new();
             data_row
-                .add(channel.as_str())
+                .add(key.pool.database.as_str())
+                .add(key.pool.user.as_str())
+                .add(key.pool.shard as i64)
+                .add(key.channel.as_str())
                 .add(stats.listeners as i64)
                 .add(stats.recv as i64)
                 .add(stats.dropped as i64);
@@ -67,6 +73,17 @@ mod tests {
             .map(|field| field.name.as_str())
             .collect();
 
-        assert_eq!(columns, ["channel", "listeners", "received", "dropped"]);
+        assert_eq!(
+            columns,
+            [
+                "database",
+                "user",
+                "shard",
+                "channel",
+                "listeners",
+                "received",
+                "dropped"
+            ]
+        );
     }
 }
