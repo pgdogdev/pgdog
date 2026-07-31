@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::util::hostname;
 
-use super::open_metric::{MeasurementType, Metric, OpenMetricType};
+use super::open_metric::{Measurement, MeasurementType, Metric, OpenMetricType};
 
 static RESOURCE_ATTRIBUTES: Lazy<Vec<KeyValue>> = Lazy::new(resource_attributes);
 
@@ -28,14 +28,36 @@ struct CounterKey {
     labels: Vec<(String, String)>,
 }
 
-/// Previous cumulative values for delta computation.
-static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+/// Per-data-point counter bookkeeping: previous cumulative values (for delta
+/// computation) and first-seen timestamps (used as `start_time_unix_nano` so
+/// cumulative counters carry a stable collection-start reference).
+#[derive(Default)]
+struct CounterState {
+    prev_values: Mutex<HashMap<CounterKey, f64>>,
+    start_times: Mutex<HashMap<CounterKey, String>>,
+}
 
-/// First-seen timestamp per counter data point, used as `start_time_unix_nano`
-/// so cumulative counters carry a stable collection-start reference.
-static COUNTER_START_TIMES: Lazy<Mutex<HashMap<CounterKey, String>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+impl CounterState {
+    fn start_time(&self, key: &CounterKey, now: &str) -> String {
+        self.start_times
+            .lock()
+            .entry(key.clone())
+            .or_insert_with(|| now.to_string())
+            .clone()
+    }
+
+    /// Delta since the previously recorded cumulative value. Updates the
+    /// stored value as a side effect. Returns `None` on a negative delta
+    /// (counter reset), which callers should treat as a skipped data point.
+    fn delta(&self, key: &CounterKey, cumulative: f64) -> Option<f64> {
+        let mut prev = self.prev_values.lock();
+        let delta = cumulative - prev.get(key).copied().unwrap_or(0.0);
+        prev.insert(key.clone(), cumulative);
+        (delta >= 0.0).then_some(delta)
+    }
+}
+
+static COUNTER_STATE: Lazy<CounterState> = Lazy::new(CounterState::default);
 
 pub fn now_nanos() -> String {
     SystemTime::now()
@@ -215,16 +237,101 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
     }
 }
 
-/// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects.
+/// Compute `(as_double, start_time_unix_nano)` for a single measurement.
+///
+/// Returns `None` to skip this data point (only possible for a Delta counter
+/// that just observed a reset — a negative delta).
+fn value_for_data_point(
+    state: &CounterState,
+    metric_name: &str,
+    measurement: &Measurement,
+    metric_type: OpenMetricType,
+    temporality: SumAggregationTemporality,
+    now: &str,
+) -> Option<(f64, Option<String>)> {
+    let cumulative = measurement_to_f64(&measurement.measurement);
+
+    match metric_type {
+        OpenMetricType::Gauge => Some((cumulative, None)),
+        OpenMetricType::Counter => {
+            let key = CounterKey {
+                metric: metric_name.into(),
+                labels: measurement.labels.clone(),
+            };
+            let start = state.start_time(&key, now);
+            let value = match temporality {
+                SumAggregationTemporality::Cumulative => cumulative,
+                SumAggregationTemporality::Delta => state.delta(&key, cumulative)?,
+            };
+            Some((value, Some(start)))
+        }
+    }
+}
+
+/// Wrap a collection of data points in the correct OTLP container based on
+/// the source metric type: `Gauge` for gauges, `Sum` (monotonic) for counters.
+fn wrap_data_points(
+    metric_type: OpenMetricType,
+    temporality: SumAggregationTemporality,
+    data_points: Vec<NumberDataPoint>,
+) -> (Option<Gauge>, Option<Sum>) {
+    match metric_type {
+        OpenMetricType::Gauge => (Some(Gauge { data_points }), None),
+        OpenMetricType::Counter => (
+            None,
+            Some(Sum {
+                aggregation_temporality: temporality,
+                is_monotonic: true,
+                data_points,
+            }),
+        ),
+    }
+}
+
+/// Merge the measurement's own labels with the process-wide resource
+/// attributes into the OTLP `attributes` field for a data point.
+fn build_attributes(labels: &[(String, String)], common_attrs: &[KeyValue]) -> Vec<KeyValue> {
+    let mut attributes: Vec<KeyValue> = labels
+        .iter()
+        .map(|(k, v)| KeyValue {
+            key: k.clone(),
+            value: AttributeValue {
+                string_value: v.clone(),
+            },
+        })
+        .collect();
+    attributes.extend(common_attrs.iter().cloned());
+    attributes
+}
+
+/// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects,
+/// reading namespace and temporality preference from the global config and
+/// using the process-wide counter bookkeeping. `now` is threaded in from the
+/// caller so every data point in a batch shares one timestamp.
 pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequest {
     let config = crate::config::config();
-    let namespace = config
-        .config
-        .otel
-        .namespace
-        .as_deref()
-        .unwrap_or("pgdog")
-        .trim_end_matches(['.', '_']);
+    let temporality = match config.config.otel.temporality_preference {
+        OtelTemporalityPreference::Cumulative => SumAggregationTemporality::Cumulative,
+        OtelTemporalityPreference::Delta | OtelTemporalityPreference::LowMemory => {
+            SumAggregationTemporality::Delta
+        }
+    };
+    let namespace = config.config.otel.namespace.as_deref();
+
+    build_request_with_state(&COUNTER_STATE, temporality, namespace, now, metrics)
+}
+
+/// Injectable core of [`build_request`]. Takes counter state, temporality,
+/// and namespace explicitly so tests can exercise the stateful counter logic
+/// without touching global config or the process-wide static.
+fn build_request_with_state(
+    state: &CounterState,
+    temporality: SumAggregationTemporality,
+    namespace: Option<&str>,
+    now: &str,
+    metrics: &[&Metric],
+) -> ExportMetricsServiceRequest {
+    let namespace = namespace.unwrap_or("pgdog").trim_end_matches(['.', '_']);
     let namespace = if namespace.is_empty() {
         "pgdog"
     } else {
@@ -233,103 +340,29 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
 
     let common_attrs = &*RESOURCE_ATTRIBUTES;
 
-    let aggregation_temporality = match config.config.otel.temporality_preference {
-        OtelTemporalityPreference::Cumulative => SumAggregationTemporality::Cumulative,
-        OtelTemporalityPreference::Delta | OtelTemporalityPreference::LowMemory => {
-            SumAggregationTemporality::Delta
-        }
-    };
-
     let otel_metrics: Vec<OtelMetric> = metrics
         .iter()
         .map(|metric| {
             let name = format!("{}.{}", namespace, metric.name());
-            let is_counter = matches!(metric.metric_type(), OpenMetricType::Counter);
+            let metric_type = metric.metric_type();
 
             let data_points: Vec<NumberDataPoint> = metric
                 .measurements()
                 .iter()
                 .filter_map(|m| {
-                    let cumulative = measurement_to_f64(&m.measurement);
-
-                    let (as_double, start_time_unix_nano) = if is_counter {
-                        // todo: This is pretty nested, we should probably look
-                        // at refactoring how we calculate these values to flatten
-                        // the logic a bit, counters and sums should probably not
-                        // use the same data point code
-
-                        let key = CounterKey {
-                            metric: name.clone(),
-                            labels: m.labels.clone(),
-                        };
-
-                        let start = COUNTER_START_TIMES
-                            .lock()
-                            .entry(key.clone())
-                            .or_insert_with(|| now.to_owned())
-                            .clone();
-
-                        // NOTE: if aggregation_temporality changes state during program
-                        // execution, the data may be stale, but this is currently impossible
-                        let value = match aggregation_temporality {
-                            SumAggregationTemporality::Cumulative => cumulative,
-                            SumAggregationTemporality::Delta => {
-                                let mut prev = PREV_COUNTERS.lock();
-                                let delta = cumulative - prev.get(&key).copied().unwrap_or(0.0);
-                                prev.insert(key, cumulative);
-
-                                // Skip negative deltas (counter reset).
-                                if delta < 0.0 {
-                                    return None;
-                                }
-                                delta
-                            }
-                        };
-
-                        (value, Some(start))
-                    } else {
-                        (cumulative, None)
-                    };
-
-                    let mut attributes: Vec<KeyValue> = m
-                        .labels
-                        .iter()
-                        .map(|(k, v)| KeyValue {
-                            key: k.clone(),
-                            value: AttributeValue {
-                                string_value: v.clone(),
-                            },
-                        })
-                        .collect();
-
-                    attributes.extend(common_attrs.iter().map(|a| KeyValue {
-                        key: a.key.clone(),
-                        value: AttributeValue {
-                            string_value: a.value.string_value.clone(),
-                        },
-                    }));
+                    let (as_double, start_time_unix_nano) =
+                        value_for_data_point(state, &name, m, metric_type, temporality, now)?;
 
                     Some(NumberDataPoint {
                         start_time_unix_nano,
                         time_unix_nano: now.to_owned(),
                         as_double,
-                        attributes,
+                        attributes: build_attributes(&m.labels, common_attrs),
                     })
                 })
                 .collect();
 
-            let (gauge, sum) = if is_counter {
-                (
-                    None,
-                    Some(Sum {
-                        aggregation_temporality,
-                        is_monotonic: true,
-                        data_points,
-                    }),
-                )
-            } else {
-                (Some(Gauge { data_points }), None)
-            };
+            let (gauge, sum) = wrap_data_points(metric_type, temporality, data_points);
 
             OtelMetric {
                 name,
@@ -393,6 +426,11 @@ mod test {
     #[test]
     fn counter_metric_produces_sum_json() {
         let _test_lock = TEST_LOCK.lock();
+
+        use crate::config::{self, ConfigAndUsers};
+        let mut cfg = ConfigAndUsers::default();
+        cfg.config.otel.temporality_preference = OtelTemporalityPreference::Delta;
+        config::set(cfg).expect("set config");
 
         let metric = Metric::new(PoolMetric {
             name: "total_query_count".into(),
@@ -609,5 +647,200 @@ mod test {
         assert_eq!(percent_decode("key%3Dname"), "key=name");
         assert_eq!(percent_decode("a%2Cb"), "a,b");
         assert_eq!(percent_decode("plain"), "plain");
+    }
+
+    fn counter(name: &str, labels: Vec<(String, String)>, value: i64) -> Metric {
+        Metric::new(PoolMetric {
+            name: name.into(),
+            measurements: vec![Measurement {
+                labels,
+                measurement: MeasurementType::Integer(value),
+            }],
+            help: "".into(),
+            unit: None,
+            metric_type: Some(OpenMetricType::Counter),
+        })
+    }
+
+    fn only_data_point(req: &ExportMetricsServiceRequest) -> &NumberDataPoint {
+        &req.resource_metrics[0].scope_metrics[0].metrics[0]
+            .sum
+            .as_ref()
+            .expect("sum")
+            .data_points[0]
+    }
+
+    #[test]
+    fn delta_subtracts_previous_cumulative_value() {
+        let state = CounterState::default();
+
+        let m1 = counter("total_queries", vec![], 10);
+        let r1 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m1],
+        );
+        assert_eq!(only_data_point(&r1).as_double, 10.0);
+
+        let m2 = counter("total_queries", vec![], 25);
+        let r2 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m2],
+        );
+        assert_eq!(only_data_point(&r2).as_double, 15.0);
+    }
+
+    #[test]
+    fn counter_reset_skips_data_point() {
+        let state = CounterState::default();
+
+        let m1 = counter("total_queries", vec![], 10);
+        let _ = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m1],
+        );
+
+        let m2 = counter("total_queries", vec![], 3);
+        let r2 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m2],
+        );
+
+        let sum = r2.resource_metrics[0].scope_metrics[0].metrics[0]
+            .sum
+            .as_ref()
+            .expect("sum");
+        assert!(
+            sum.data_points.is_empty(),
+            "reset counter should skip the data point, got {:?}",
+            sum.data_points
+                .iter()
+                .map(|d| d.as_double)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn counter_deltas_are_tracked_per_label_set() {
+        let state = CounterState::default();
+
+        let build = |alice_val: i64, bob_val: i64| {
+            Metric::new(PoolMetric {
+                name: "total_queries".into(),
+                measurements: vec![
+                    Measurement {
+                        labels: vec![("user".into(), "alice".into())],
+                        measurement: MeasurementType::Integer(alice_val),
+                    },
+                    Measurement {
+                        labels: vec![("user".into(), "bob".into())],
+                        measurement: MeasurementType::Integer(bob_val),
+                    },
+                ],
+                help: "".into(),
+                unit: None,
+                metric_type: Some(OpenMetricType::Counter),
+            })
+        };
+
+        let m1 = build(10, 100);
+        let _ = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m1],
+        );
+
+        // alice advances by 5, bob stays put.
+        let m2 = build(15, 100);
+        let r2 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Delta,
+            None,
+            &now_nanos(),
+            &[&m2],
+        );
+
+        let points = &r2.resource_metrics[0].scope_metrics[0].metrics[0]
+            .sum
+            .as_ref()
+            .expect("sum")
+            .data_points;
+
+        let find_user = |user: &str| {
+            points
+                .iter()
+                .find(|dp| {
+                    dp.attributes
+                        .iter()
+                        .any(|a| a.key == "user" && a.value.string_value == user)
+                })
+                .unwrap_or_else(|| panic!("data point for user={user}"))
+        };
+
+        assert_eq!(find_user("alice").as_double, 5.0);
+        assert_eq!(find_user("bob").as_double, 0.0);
+    }
+
+    #[test]
+    fn counter_start_time_unix_nano_is_pinned_to_first_observation() {
+        let state = CounterState::default();
+
+        let m1 = counter("total_queries", vec![], 1);
+        let r1 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Cumulative,
+            None,
+            &now_nanos(),
+            &[&m1],
+        );
+        let dp1 = only_data_point(&r1);
+        let first_start = dp1
+            .start_time_unix_nano
+            .clone()
+            .expect("start_time_unix_nano set on counter");
+        assert_eq!(
+            first_start, dp1.time_unix_nano,
+            "on first observation, start_time should equal time"
+        );
+
+        // Force `now_nanos()` to advance so we can distinguish "start reused"
+        // from "start == current now by coincidence".
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        let m2 = counter("total_queries", vec![], 2);
+        let r2 = build_request_with_state(
+            &state,
+            SumAggregationTemporality::Cumulative,
+            None,
+            &now_nanos(),
+            &[&m2],
+        );
+        let dp2 = only_data_point(&r2);
+        let second_start = dp2
+            .start_time_unix_nano
+            .clone()
+            .expect("start_time_unix_nano set on counter");
+
+        assert_eq!(
+            second_start, first_start,
+            "start_time_unix_nano must be pinned to the first observation"
+        );
+        assert_ne!(
+            dp2.time_unix_nano, second_start,
+            "time_unix_nano should advance while start_time_unix_nano stays put"
+        );
     }
 }
