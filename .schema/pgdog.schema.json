@@ -175,7 +175,8 @@
         "endpoint": null,
         "headers": {},
         "namespace": null,
-        "push_interval": 0
+        "push_interval": 0,
+        "temporality_preference": "Cumulative"
       }
     },
     "plugins": {
@@ -1598,9 +1599,34 @@
           "format": "uint64",
           "default": 10000,
           "minimum": 0
+        },
+        "temporality_preference": {
+          "description": "Describes how the exported metric points should be described.\n\nSee https://opentelemetry.io/docs/specs/otel/metrics/data-model/#metric-points\n\n_Default:_ `Cumulative`\n\nEnv: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`",
+          "$ref": "#/$defs/OtelTemporalityPreference",
+          "default": "Cumulative"
         }
       },
       "additionalProperties": false
+    },
+    "OtelTemporalityPreference": {
+      "description": "Aggregation temporality used when exporting OTLP metric points.",
+      "oneOf": [
+        {
+          "description": "Points report the value accumulated since the exporter started.",
+          "type": "string",
+          "const": "Cumulative"
+        },
+        {
+          "description": "Points report the change since the last export.",
+          "type": "string",
+          "const": "Delta"
+        },
+        {
+          "description": "Delta for sums, cumulative for histograms; minimizes exporter memory.",
+          "type": "string",
+          "const": "LowMemory"
+        }
+      ]
     },
     "PassthroughAuth": {
       "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
