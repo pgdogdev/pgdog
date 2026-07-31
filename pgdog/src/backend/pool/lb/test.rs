@@ -63,7 +63,7 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
 async fn test_include_primary_if_replica_banned_only_primary() {
     let mut primary = create_test_pool_config("127.0.0.1", 5432);
     primary.address.configured_role = Role::Primary;
-    let pool = Pool::new(&primary, Default::default());
+    let pool = Pool::new(&primary);
 
     let lb = LoadBalancer::new(
         &Some(pool),
@@ -204,7 +204,7 @@ async fn test_pools_with_roles_and_bans() {
 #[tokio::test]
 async fn test_primary_pool_banning() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -358,7 +358,7 @@ async fn test_monitor_automatic_ban_expiration() {
 #[tokio::test]
 async fn test_read_write_split_exclude_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [
@@ -398,7 +398,7 @@ async fn test_read_write_split_exclude_primary() {
 #[tokio::test]
 async fn test_read_write_split_include_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -448,10 +448,7 @@ async fn test_read_write_split_include_primary() {
 #[tokio::test]
 async fn test_prefer_primary_optin_read_honors_read_write_split() {
     async fn used_ids(split: ReadWriteSplit) -> (HashSet<u64>, u64) {
-        let primary_pool = Pool::new(
-            &create_test_pool_config("127.0.0.1", 5432),
-            Default::default(),
-        );
+        let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
         primary_pool.launch();
         let primary_id = primary_pool.id();
 
@@ -503,7 +500,7 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
 #[tokio::test]
 async fn test_read_write_split_exclude_primary_no_replicas() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [];
@@ -603,7 +600,7 @@ async fn test_read_write_split_include_primary_no_primary() {
 #[tokio::test]
 async fn test_read_write_split_with_banned_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -644,7 +641,7 @@ async fn test_read_write_split_with_banned_primary() {
 #[tokio::test]
 async fn test_read_write_split_with_banned_replicas() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -685,7 +682,7 @@ async fn test_read_write_split_with_banned_replicas() {
 #[tokio::test]
 async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -721,7 +718,7 @@ async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
 #[tokio::test]
 async fn test_read_write_split_exclude_primary_with_round_robin() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [
@@ -963,7 +960,7 @@ async fn test_monitor_health_state_race() {
 #[tokio::test]
 async fn test_include_primary_if_replica_banned_no_bans() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -1000,7 +997,7 @@ async fn test_include_primary_if_replica_banned_no_bans() {
 #[tokio::test]
 async fn test_include_primary_if_replica_banned_with_ban() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -1050,7 +1047,7 @@ async fn test_has_replicas_with_replicas() {
 #[tokio::test]
 async fn test_has_replicas_with_primary_and_replicas() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let replica_configs = [create_test_pool_config("localhost", 5432)];
@@ -1072,7 +1069,7 @@ async fn test_has_replicas_with_primary_and_replicas() {
 #[tokio::test]
 async fn test_has_replicas_primary_only() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
-    let primary_pool = Pool::new(&primary_config, Default::default());
+    let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
 
     let lb = LoadBalancer::new(
@@ -1269,7 +1266,7 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
     let mut existing_replica_config = create_test_pool_config("localhost", 5432);
     existing_replica_config.address.configured_role = Role::Auto;
 
-    let old_primary = Pool::new(&primary_config, Default::default());
+    let old_primary = Pool::new(&primary_config);
     let lb_old = LoadBalancer::new(
         &Some(old_primary),
         std::slice::from_ref(&existing_replica_config),
@@ -1286,7 +1283,7 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
     let mut added_replica_config = create_test_pool_config("localhost", 5433);
     added_replica_config.address.configured_role = Role::Auto;
 
-    let new_primary = Pool::new(&primary_config, Default::default());
+    let new_primary = Pool::new(&primary_config);
     let lb_new = LoadBalancer::new(
         &Some(new_primary),
         &[existing_replica_config, added_replica_config],

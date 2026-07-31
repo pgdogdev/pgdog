@@ -114,7 +114,7 @@ impl LoadBalancer {
             .iter()
             .map(|config| {
                 Target::new(
-                    Pool::new(config, Arc::clone(&oids)),
+                    Pool::with_oid_mapping(config, Arc::clone(&oids)),
                     config.address.configured_role,
                 )
             })

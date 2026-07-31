@@ -28,20 +28,17 @@ pub fn pool() -> Pool {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     pool.launch();
     pool
 }
@@ -56,20 +53,17 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     pool.launch();
     pool
 }
@@ -332,20 +326,17 @@ async fn test_server_force_close_discards_connection() {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     pool.launch();
 
     let mut conn = pool.get(&Request::default()).await.unwrap();
@@ -506,20 +497,17 @@ async fn test_idle_healthcheck_loop() {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     pool.launch();
 
     let initial_healthchecks = pool.state().stats.counts.healthchecks;
@@ -557,20 +545,17 @@ async fn test_idle_healthcheck_loop_disabled_with_zero_interval() {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 1,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 1,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     pool.launch();
 
     let initial_healthchecks = pool.state().stats.counts.healthchecks;
@@ -596,13 +581,10 @@ async fn test_checkout_timeout() {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
     pool.launch();
 
     // Hold the only connection
@@ -627,36 +609,30 @@ async fn test_move_conns_to() {
         },
     };
 
-    let source = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let source = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
     source.launch();
 
-    let destination = Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords: vec!["pgdog".into()],
-                ..Default::default()
-            },
-            config,
+    let destination = Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            ..Default::default()
         },
-        Default::default(),
-    );
+        config,
+    });
 
     let conn1 = source.get(&Request::default()).await.unwrap();
     let conn2 = source.get(&Request::default()).await.unwrap();
@@ -702,22 +678,16 @@ async fn test_move_conns_all_idle() {
         },
     };
 
-    let source = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
     source.launch();
 
-    let destination = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
 
     // Check out and return 3 connections so they become idle.
     let c1 = source.get(&Request::default()).await.unwrap();
@@ -755,22 +725,16 @@ async fn test_move_conns_all_checked_out() {
         },
     };
 
-    let source = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
     source.launch();
 
-    let destination = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
 
     let c1 = source.get(&Request::default()).await.unwrap();
     let c2 = source.get(&Request::default()).await.unwrap();
@@ -816,22 +780,16 @@ async fn test_move_conns_destination_serves_after_launch() {
         },
     };
 
-    let source = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let source = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
     source.launch();
 
-    let destination = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let destination = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
 
     // Create one idle connection.
     let c1 = source.get(&Request::default()).await.unwrap();
@@ -864,20 +822,17 @@ fn auth_pool(passwords: Vec<Password>) -> Pool {
         },
     };
 
-    Pool::new(
-        &PoolConfig {
-            address: Address {
-                host: "127.0.0.1".into(),
-                port: 5432,
-                database_name: "pgdog".into(),
-                user: "pgdog".into(),
-                passwords,
-                ..Default::default()
-            },
-            config,
+    Pool::new(&PoolConfig {
+        address: Address {
+            host: "127.0.0.1".into(),
+            port: 5432,
+            database_name: "pgdog".into(),
+            user: "pgdog".into(),
+            passwords,
+            ..Default::default()
         },
-        Default::default(),
-    )
+        config,
+    })
 }
 
 #[tokio::test]
@@ -1006,13 +961,10 @@ async fn test_lsn_monitor() {
         },
     };
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: Address::new_test(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config,
+    });
 
     let initial_stats = pool.lsn_stats();
     assert!(!initial_stats.valid());
@@ -1068,13 +1020,10 @@ async fn test_token_refresh_loop_primes_cache_on_cold_start() {
     let expiry = SystemTime::now() + Duration::from_millis(200);
     TokenCache::global().set(&addr, "initial-token".into(), expiry);
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: addr.clone(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
     pool.launch();
 
     // Cache must be populated immediately.
@@ -1110,13 +1059,10 @@ async fn test_token_refresh_loop_refreshes_before_expiry() {
     let expiry = SystemTime::now() + Duration::from_secs(3600);
     TokenCache::global().set(&addr, "long-lived-token".into(), expiry);
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: addr.clone(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
     pool.launch();
 
     sleep(Duration::from_millis(100)).await;
@@ -1158,13 +1104,10 @@ async fn test_token_refresh_loop_evicts_on_failed_refresh() {
     let expiry = SystemTime::now() + Duration::from_secs(10);
     TokenCache::global().set(&addr, "stale-token".into(), expiry);
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: addr.clone(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
     pool.launch();
 
     // Give the refresh loop time to fire and fail.
@@ -1203,13 +1146,10 @@ async fn test_token_refresh_loop_not_spawned_for_password_auth() {
     // Poison the cache to detect any unexpected writes.
     TokenCache::global().evict(&addr);
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: addr.clone(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
     pool.launch();
 
     sleep(Duration::from_millis(100)).await;
@@ -1246,13 +1186,10 @@ async fn test_token_refresh_loop_stops_on_shutdown() {
     let expiry = SystemTime::now() + Duration::from_secs(3600);
     TokenCache::global().set(&addr, "token".into(), expiry);
 
-    let pool = Pool::new(
-        &PoolConfig {
-            address: addr.clone(),
-            config,
-        },
-        Default::default(),
-    );
+    let pool = Pool::new(&PoolConfig {
+        address: addr.clone(),
+        config,
+    });
     pool.launch();
 
     sleep(Duration::from_millis(50)).await;

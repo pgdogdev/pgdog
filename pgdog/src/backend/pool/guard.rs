@@ -348,13 +348,10 @@ mod test {
             },
         };
 
-        let pool = Pool::new(
-            &PoolConfig {
-                address: Address::new_test(),
-                config,
-            },
-            Default::default(),
-        );
+        let pool = Pool::new(&PoolConfig {
+            address: Address::new_test(),
+            config,
+        });
         pool.launch();
 
         {

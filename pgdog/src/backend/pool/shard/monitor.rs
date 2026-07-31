@@ -249,23 +249,17 @@ mod test {
 
     #[test]
     fn test_update_replica_lag_assigns_primary_minus_replica_to_replica_pool() {
-        let primary = Pool::new(
-            &PoolConfig {
-                address: Address::new_test(),
-                config: Config::default(),
+        let primary = Pool::new(&PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        });
+        let replica = Pool::new(&PoolConfig {
+            address: Address {
+                configured_role: Role::Replica,
+                ..Address::new_test()
             },
-            Default::default(),
-        );
-        let replica = Pool::new(
-            &PoolConfig {
-                address: Address {
-                    configured_role: Role::Replica,
-                    ..Address::new_test()
-                },
-                config: Config::default(),
-            },
-            Default::default(),
-        );
+            config: Config::default(),
+        });
 
         set_pool_lsn_stats(&primary, false, 200, "2026-07-01 13:33:10.000000+00");
         set_pool_lsn_stats(&replica, true, 100, "2026-07-01 13:33:00.000000+00");

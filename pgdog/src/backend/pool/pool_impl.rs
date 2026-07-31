@@ -60,8 +60,13 @@ impl std::fmt::Debug for Pool {
 }
 
 impl Pool {
+    #[cfg(test)]
+    pub(crate) fn new(config: &PoolConfig) -> Self {
+        Self::with_oid_mapping(config, Default::default())
+    }
+
     /// Create new connection pool.
-    pub(crate) fn new(config: &PoolConfig, oids: Arc<Oids>) -> Self {
+    pub(crate) fn with_oid_mapping(config: &PoolConfig, oids: Arc<Oids>) -> Self {
         let id = next_pool_id();
         Self {
             inner: Arc::new(InnerSync {
@@ -87,7 +92,7 @@ impl Pool {
             config: Config::default(),
         };
 
-        Self::new(&config, Default::default())
+        Self::new(&config)
     }
 
     pub(crate) fn inner(&self) -> &InnerSync {

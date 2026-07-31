@@ -564,20 +564,17 @@ mod test {
             },
         };
 
-        let pool = Pool::new(
-            &PoolConfig {
-                address: Address {
-                    host: "127.0.0.1".into(),
-                    port: 1,
-                    database_name: "pgdog".into(),
-                    user: "pgdog".into(),
-                    passwords: vec!["pgdog".into()],
-                    ..Default::default()
-                },
-                config,
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 1,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
+                ..Default::default()
             },
-            Default::default(),
-        );
+            config,
+        });
         pool.launch();
 
         pool.inner().health.toggle(true);
@@ -601,20 +598,17 @@ mod test {
             },
         };
 
-        let pool = Pool::new(
-            &PoolConfig {
-                address: Address {
-                    host: "127.0.0.1".into(),
-                    port: 5432,
-                    database_name: "pgdog".into(),
-                    user: "pgdog".into(),
-                    passwords: vec!["pgdog".into()],
-                    ..Default::default()
-                },
-                config,
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: "pgdog".into(),
+                user: "pgdog".into(),
+                passwords: vec!["pgdog".into()],
+                ..Default::default()
             },
-            Default::default(),
-        );
+            config,
+        });
         pool.launch();
 
         let initial_total = pool.lock().total();

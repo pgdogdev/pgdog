@@ -354,7 +354,7 @@ impl ShardInner {
             schema_cache,
         } = shard;
         let oids = schema_cache.oids(&identifier.database, number);
-        let primary = primary.map(|config| Pool::new(config, Arc::clone(&oids)));
+        let primary = primary.map(|config| Pool::with_oid_mapping(config, Arc::clone(&oids)));
         let lb = LoadBalancer::new(&primary, replicas, lb_strategy, rw_split, Arc::clone(&oids));
         let comms = Arc::new(ShardComms {
             shutdown: CancellationToken::new(),
