@@ -53,13 +53,13 @@ impl From<Request> for ProtocolMessage {
 /// Pool a set of channels belongs to. `NOTIFY` is scoped to a database, so
 /// channels have to be scoped the same way.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PoolKey {
+pub(crate) struct PoolKey {
     /// Database name, as configured in pgdog.
-    pub database: String,
+    pub(crate) database: String,
     /// User, as configured in pgdog.
-    pub user: String,
+    pub(crate) user: String,
     /// Shard number.
-    pub shard: usize,
+    pub(crate) shard: usize,
 }
 
 impl PoolKey {
@@ -82,11 +82,11 @@ impl PoolKey {
 
 /// One channel on one pool.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ChannelKey {
+pub(crate) struct ChannelKey {
     /// Pool the channel belongs to.
-    pub pool: PoolKey,
+    pub(crate) pool: PoolKey,
     /// Channel name used by `LISTEN`/`NOTIFY`.
-    pub channel: String,
+    pub(crate) channel: String,
 }
 
 type Channels = Arc<Mutex<HashMap<PoolKey, HashMap<String, Channel>>>>;
@@ -94,7 +94,7 @@ type Channels = Arc<Mutex<HashMap<PoolKey, HashMap<String, Channel>>>>;
 static CHANNELS: Lazy<Channels> = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Get stats for all channels.
-pub fn stats() -> HashMap<ChannelKey, StatsSnapshot> {
+pub(crate) fn stats() -> HashMap<ChannelKey, StatsSnapshot> {
     CHANNELS
         .lock()
         .iter()
@@ -104,6 +104,18 @@ pub fn stats() -> HashMap<ChannelKey, StatsSnapshot> {
                 .map(|(channel, state)| (pool.channel(channel), state.stats.get()))
         })
         .collect()
+}
+
+/// Remove a channel from its pool's set, dropping the pool's entry once no
+/// channels remain, so pools that churn don't accumulate empty maps.
+fn remove_channel(channels: &Channels, pool_key: &PoolKey, channel: &str) {
+    let mut guard = channels.lock();
+    if let Some(pool_channels) = guard.get_mut(pool_key) {
+        pool_channels.remove(channel);
+        if pool_channels.is_empty() {
+            guard.remove(pool_key);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -392,9 +404,7 @@ impl PubSubListener {
                         }
 
                         if let Some(unsub) = unsub {
-                            if let Some(channels) = channels.lock().get_mut(pool_key) {
-                                channels.remove(&unsub);
-                            }
+                            remove_channel(&channels, pool_key, &unsub);
                             server.send(&vec![Request::Unsubscribe(unsub).into()].into()).await?;
                         }
                     }
@@ -654,6 +664,37 @@ mod test {
         assert_ne!(key, PoolKey::new(&test_user("alice", "other"), 2));
         assert_ne!(key, PoolKey::new(&test_user("bob", "shop"), 2));
         assert_ne!(key, PoolKey::new(&test_user("alice", "shop"), 3));
+    }
+
+    #[tokio::test]
+    async fn removing_the_last_channel_drops_the_pool_entry() {
+        let (pub_sub, mut rx) = test_pub_sub_listener();
+
+        let _listener = pub_sub.listen("events").await.expect("listen");
+        expect_subscribe(&mut rx, "events").await;
+
+        remove_channel(&pub_sub.channels, &pub_sub.pool_key, "events");
+        assert!(
+            pub_sub.channels.lock().is_empty(),
+            "empty pool entries must not accumulate"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_one_channel_keeps_the_pool_entry_for_the_rest() {
+        let (pub_sub, mut rx) = test_pub_sub_listener();
+
+        let _events = pub_sub.listen("events").await.expect("listen events");
+        let _jobs = pub_sub.listen("jobs").await.expect("listen jobs");
+        expect_subscribe(&mut rx, "events").await;
+        expect_subscribe(&mut rx, "jobs").await;
+
+        remove_channel(&pub_sub.channels, &pub_sub.pool_key, "events");
+
+        let guard = pub_sub.channels.lock();
+        let channels = guard.get(&pub_sub.pool_key).expect("pool entry remains");
+        assert!(channels.contains_key("jobs"));
+        assert!(!channels.contains_key("events"));
     }
 
     #[tokio::test]
