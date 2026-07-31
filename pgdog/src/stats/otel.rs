@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::util::hostname;
 
-use super::open_metric::{MeasurementType, Metric};
+use super::open_metric::{MeasurementType, Metric, OpenMetricType};
 
 static RESOURCE_ATTRIBUTES: Lazy<Vec<KeyValue>> = Lazy::new(resource_attributes);
 
@@ -244,7 +244,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
         .iter()
         .map(|metric| {
             let name = format!("{}.{}", namespace, metric.name());
-            let is_counter = metric.metric_type() == "counter";
+            let is_counter = matches!(metric.metric_type(), OpenMetricType::Counter);
 
             let data_points: Vec<NumberDataPoint> = metric
                 .measurements()
@@ -402,7 +402,7 @@ mod test {
             }],
             help: "Total queries".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         });
 
         let request = build_request(&[&metric], &now_nanos());
@@ -495,7 +495,7 @@ mod test {
             }],
             help: "Transaction time".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         });
 
         let request = build_request(&[&metric], &now_nanos());

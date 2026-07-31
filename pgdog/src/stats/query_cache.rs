@@ -105,11 +105,11 @@ impl OpenMetric for QueryCacheMetric {
         self.name.clone()
     }
 
-    fn metric_type(&self) -> String {
+    fn metric_type(&self) -> OpenMetricType {
         if self.gauge {
-            "gauge".into()
+            OpenMetricType::Gauge
         } else {
-            "counter".into()
+            OpenMetricType::Counter
         }
     }
 
@@ -209,12 +209,12 @@ mod tests {
             .iter()
             .find(|m| m.name() == "query_cache_fingerprints")
             .unwrap();
-        assert_eq!(fingerprints_metric.metric_type(), "counter");
+        assert_eq!(fingerprints_metric.metric_type(), OpenMetricType::Counter);
         let rendered = fingerprints_metric.to_string();
         assert!(rendered.contains("query_cache_fingerprints 8"));
 
         let memory_metric = metrics.last().unwrap();
-        assert_eq!(memory_metric.metric_type(), "gauge");
+        assert_eq!(memory_metric.metric_type(), OpenMetricType::Gauge);
         let rendered = memory_metric.to_string();
         assert!(rendered.contains("prepared_statements_memory_used 7"));
     }
