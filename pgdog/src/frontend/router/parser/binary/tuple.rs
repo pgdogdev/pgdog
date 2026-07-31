@@ -171,21 +171,39 @@ impl Tuple {
 
 impl ToBytes for Tuple {
     fn to_bytes(&self) -> Bytes {
-        let mut result = BytesMut::new();
         if self.end {
+            let mut result = BytesMut::with_capacity(std::mem::size_of::<i16>());
             result.put_i16(-1);
-        } else {
-            result.put_i16(self.row.len() as i16);
-            if let Some(oid) = self.oid {
-                result.put_i32(oid);
+            return result.freeze();
+        }
+
+        let capacity = std::mem::size_of::<i16>()
+            + if self.oid.is_some() {
+                std::mem::size_of::<i32>()
+            } else {
+                0
             }
-            for col in &self.row {
-                result.put_i32(col.encoded_len());
-                if let Data::Column(col) = col {
-                    result.extend(col);
-                }
+            + self.row.len() * std::mem::size_of::<i32>()
+            + self.row.iter().map(|col| col.len()).sum::<usize>();
+
+        let mut result = BytesMut::with_capacity(capacity);
+
+        result.put_i16(self.row.len() as i16);
+        if let Some(oid) = self.oid {
+            result.put_i32(oid);
+        }
+        for col in &self.row {
+            result.put_i32(col.encoded_len());
+            if let Data::Column(col) = col {
+                result.put_slice(col);
             }
         }
+
+        // Not a correctness check: `put_slice` grows the buffer if `capacity`
+        // is short, so the output stays valid either way. This catches the
+        // sizing drifting out of sync with what's written, which would
+        // silently reintroduce the reallocation the pre-sizing avoids.
+        debug_assert_eq!(result.len(), capacity);
 
         result.freeze()
     }
