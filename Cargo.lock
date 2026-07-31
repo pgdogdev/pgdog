@@ -5135,6 +5135,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "synthetic"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.6",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "system-configuration"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

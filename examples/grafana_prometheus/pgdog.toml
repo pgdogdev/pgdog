@@ -1,0 +1,35 @@
+#
+# PgDog configuration.
+#
+
+[general]
+host = "0.0.0.0"
+
+[otel]
+endpoint = "http://prometheus:9090/api/v1/otlp/v1/metrics"
+namespace = "pgdog_"
+push_interval = 5000
+
+[[databases]]
+name = "postgres"
+host = "db0"
+port = 5432
+shard = 0
+
+[[databases]]
+name = "postgres"
+host = "db1"
+port = 5432
+shard = 1
+
+[[databases]]
+name = "postgres"
+host = "db2"
+port = 5432
+shard = 2
+
+[[sharded_tables]]
+name = "kv"
+column = "id"
+data_type = "bigint"
+database = "postgres"
