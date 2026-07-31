@@ -140,6 +140,10 @@ impl QueryEngine {
             && command.route().is_write()
             && backend.connected() // FIXME(lev): I wish there was a way to say >0 and <n in one shot.
             && backend.connected_servers() < cluster.shards().len()
+            // Schema-based sharding intentionally routes an omnisharded table to the
+            // single shard selected by search_path; only accidental partial routing is unsafe.
+            // FIXME(lev): Encode the required execution scope in Route instead of inferring it here.
+            && !command.route().is_search_path_driven()
     }
 
     // Caller switched shards mid-transaction and the transaction is pinned

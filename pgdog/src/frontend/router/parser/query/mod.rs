@@ -894,9 +894,9 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
-        let omnisharded = parser.is_all_omnisharded();
-
-        let shard = parser.shard()?.unwrap_or(Shard::All);
+        let shard = parser.shard()?;
+        let omnisharded = !is_sharded && shard.is_none();
+        let shard = shard.unwrap_or(Shard::All);
 
         context.shards_calculator.push(if is_sharded {
             ShardWithPriority::new_table(shard.clone())

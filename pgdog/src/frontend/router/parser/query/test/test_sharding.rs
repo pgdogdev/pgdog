@@ -151,11 +151,62 @@ fn test_omni_flag_set_for_insert() {
 }
 
 #[test]
+fn test_omni_flag_set_for_unconfigured_update() {
+    let mut test = QueryParserTest::new();
+    let command = test.execute(vec![
+        Query::new("UPDATE not_sharded SET value = 'test'").into(),
+    ]);
+    assert!(command.route().is_omnisharded());
+}
+
+#[test]
+fn test_omni_flag_set_for_unconfigured_delete() {
+    let mut test = QueryParserTest::new();
+    let command = test.execute(vec![Query::new("DELETE FROM not_sharded").into()]);
+    assert!(command.route().is_omnisharded());
+}
+
+#[test]
+fn test_omni_flag_set_for_unconfigured_insert() {
+    let mut test = QueryParserTest::new();
+    let command = test.execute(vec![
+        Query::new("INSERT INTO not_sharded VALUES (1)").into(),
+    ]);
+    assert!(command.route().is_omnisharded());
+}
+
+#[test]
 fn test_omni_flag_not_set_for_regular_sharded() {
     let mut test = QueryParserTest::new();
     let q = "SELECT * FROM sharded WHERE id = 1";
     let command = test.execute(vec![Query::new(q).into()]);
     assert!(!command.route().is_omnisharded());
+}
+
+#[test]
+fn test_omni_flag_not_set_for_regular_sharded_dml() {
+    for query in [
+        "INSERT INTO sharded (id) VALUES (1)",
+        "UPDATE sharded SET value = 'test' WHERE id = 1",
+        "DELETE FROM sharded WHERE id = 1",
+    ] {
+        let mut test = QueryParserTest::new();
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(!command.route().is_omnisharded(), "query: {query}");
+    }
+}
+
+#[test]
+fn test_omni_flag_not_set_for_schema_sharded_dml() {
+    for query in [
+        "INSERT INTO shard_0.not_sharded VALUES (1)",
+        "UPDATE shard_0.not_sharded SET value = 'test'",
+        "DELETE FROM shard_0.not_sharded",
+    ] {
+        let mut test = QueryParserTest::new();
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(!command.route().is_omnisharded(), "query: {query}");
+    }
 }
 
 #[test]
