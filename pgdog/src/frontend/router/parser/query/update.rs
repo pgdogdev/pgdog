@@ -22,9 +22,8 @@ impl QueryParser {
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );
-        let omnisharded = parser.is_all_omnisharded();
-
         let shard = parser.shard()?;
+        let omnisharded = !is_sharded && shard.is_none();
         if let Some(shard) = shard {
             if let Some(recorder) = self.recorder_mut() {
                 recorder.record_entry(

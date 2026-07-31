@@ -1,4 +1,5 @@
 asgiref==3.8.1
+alembic==1.15.1
 asyncio==3.4.3
 asyncpg==0.30.0
 black==25.1.0
