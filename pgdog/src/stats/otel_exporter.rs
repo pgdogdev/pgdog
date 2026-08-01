@@ -4,7 +4,6 @@
 //! to the configured endpoint (e.g. Datadog's `/api/v2/otlp/v1/metrics`).
 
 use std::time::Duration;
-
 use tracing::{info, warn};
 
 use super::otel;

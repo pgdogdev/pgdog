@@ -1,8 +1,10 @@
-use crate::otel_temporality::OtelTemporalityPreference;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::otel_temporality::OtelTemporalityPreference;
 
 /// OpenTelemetry push exporter settings.
 ///
@@ -60,17 +62,19 @@ pub struct Otel {
     ///
     /// Env: `OTEL_METRIC_EXPORT_INTERVAL`
     #[serde(default = "Otel::push_interval")]
+    #[schemars(default = "Otel::schema_default_push_interval")]
     pub push_interval: u64,
 
     /// Describes how the exported metric points should be described.
     ///
     /// See https://opentelemetry.io/docs/specs/otel/metrics/data-model/#metric-points
     ///
-    /// _Default:_ `Cumulative`
+    /// _Default:_ `Cumulative`, or `Delta` when `datadog_api_key` is set.
     ///
     /// Env: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
     #[serde(default = "Otel::temporality_preference")]
-    pub temporality_preference: OtelTemporalityPreference,
+    #[schemars(default = "Otel::schema_default_temporality_preference")]
+    pub temporality_preference: Option<OtelTemporalityPreference>,
 }
 
 impl Otel {
@@ -110,12 +114,29 @@ impl Otel {
             .unwrap_or(10_000)
     }
 
-    fn temporality_preference() -> OtelTemporalityPreference {
+    fn temporality_preference() -> Option<OtelTemporalityPreference> {
         env::var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
             .ok()
             .and_then(|v| v.parse().ok())
-            // defaults to cumulative
-            .unwrap_or_default()
+    }
+
+    fn schema_default_push_interval() -> u64 {
+        10_000
+    }
+
+    fn schema_default_temporality_preference() -> Option<OtelTemporalityPreference> {
+        Some(OtelTemporalityPreference::Cumulative)
+    }
+
+    /// Schema-only default for the whole `Otel` object, used so the top-level
+    /// `default` block in the generated JSON schema matches the per-field
+    /// documented defaults instead of the raw derived `Default` (0 / null).
+    pub fn schema_default() -> Self {
+        Self {
+            push_interval: Self::schema_default_push_interval(),
+            temporality_preference: Self::schema_default_temporality_preference(),
+            ..Self::default()
+        }
     }
 }
 
@@ -151,6 +172,32 @@ mod test {
         assert!(otel.endpoint.is_none());
         assert!(otel.datadog_api_key.is_none());
         assert_eq!(otel.push_interval, 10_000);
+        assert!(otel.temporality_preference.is_none());
+    }
+
+    #[test]
+    fn endpoint_toml_wins_over_env() {
+        let _guard = set_env_var("OTEL_EXPORTER_OTLP_ENDPOINT", "https://env.example/v1");
+        let toml = r#"endpoint = "https://toml.example/v1""#;
+        let otel: Otel = toml::from_str(toml).expect("parse");
+        assert_eq!(otel.endpoint.as_deref(), Some("https://toml.example/v1"));
+    }
+
+    #[test]
+    fn push_interval_env_used_when_toml_absent() {
+        let _guard = set_env_var("OTEL_METRIC_EXPORT_INTERVAL", "7500");
+        let otel: Otel = toml::from_str("").expect("parse");
+        assert_eq!(otel.push_interval, 7500);
+    }
+
+    #[test]
+    fn temporality_preference_env_parsed() {
+        let _guard = set_env_var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "Delta");
+        let otel: Otel = toml::from_str("").expect("parse");
+        assert_eq!(
+            otel.temporality_preference,
+            Some(OtelTemporalityPreference::Delta)
+        );
     }
 
     #[test]
@@ -161,6 +208,7 @@ mod test {
             namespace = "pgdog_"
             datadog_api_key = "my-key"
             push_interval = 5000
+            temporality_preference = "Delta"
 
             [otel.headers]
             Authorization = "Bearer token"
@@ -174,6 +222,10 @@ mod test {
         assert_eq!(config.otel.namespace.as_deref(), Some("pgdog_"));
         assert_eq!(config.otel.datadog_api_key.as_deref(), Some("my-key"));
         assert_eq!(config.otel.push_interval, 5000);
+        assert_eq!(
+            config.otel.temporality_preference,
+            Some(OtelTemporalityPreference::Delta)
+        );
         assert_eq!(
             config.otel.headers.get("Authorization").unwrap(),
             "Bearer token"

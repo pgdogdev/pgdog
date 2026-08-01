@@ -175,7 +175,7 @@
         "endpoint": null,
         "headers": {},
         "namespace": null,
-        "push_interval": 0,
+        "push_interval": 10000,
         "temporality_preference": "Cumulative"
       }
     },
@@ -1601,8 +1601,15 @@
           "minimum": 0
         },
         "temporality_preference": {
-          "description": "Describes how the exported metric points should be described.\n\nSee https://opentelemetry.io/docs/specs/otel/metrics/data-model/#metric-points\n\n_Default:_ `Cumulative`\n\nEnv: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`",
-          "$ref": "#/$defs/OtelTemporalityPreference",
+          "description": "Describes how the exported metric points should be described.\n\nSee https://opentelemetry.io/docs/specs/otel/metrics/data-model/#metric-points\n\n_Default:_ `Cumulative`, or `Delta` when `datadog_api_key` is set.\n\nEnv: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OtelTemporalityPreference"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": "Cumulative"
         }
       },

@@ -6,6 +6,7 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
+use crate::otel_temporality::OtelTemporalityPreference;
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
@@ -104,6 +105,24 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
+        match (
+            &mut config.otel.temporality_preference,
+            &config.otel.datadog_api_key,
+        ) {
+            // Here if temporality_preference isn't present, we set it based on
+            // if datadog is present
+            (default_cumulative_temporality @ None, None) => {
+                *default_cumulative_temporality = Some(OtelTemporalityPreference::Cumulative)
+            }
+            // datadog is present so we set it to delta
+            (delta_temporality_because_of_datadog @ None, Some(_datadog_api)) => {
+                *delta_temporality_because_of_datadog = Some(OtelTemporalityPreference::Delta)
+            }
+            (Some(_), _) => {
+                // We don't have to set temporality
+            }
+        }
+
         let config_and_users = ConfigAndUsers {
             config,
             users,
@@ -120,6 +139,7 @@ impl ConfigAndUsers {
         self.config.check();
         self.users.check(&self.config);
         self.validate_server_auth()?;
+        self.warn_if_data_dog_cumulative();
         Ok(())
     }
 
@@ -147,6 +167,33 @@ impl ConfigAndUsers {
         }
 
         Ok(())
+    }
+
+    fn warn_if_data_dog_cumulative(&self) {
+        match (
+            &self.config.otel.datadog_api_key,
+            &self.config.otel.temporality_preference,
+        ) {
+            (Some(_datadog_present), Some(OtelTemporalityPreference::Cumulative))
+                if std::env::var("IGNORE_DATADOG_CUMULATIVE_WARNING")
+                    .ok()
+                    .as_deref()
+                    != Some("1") =>
+            {
+                warn!(
+                    "Sending Cumulative OTLP sums/histograms to Datadog is stateful and lossy: \
+                        all points on a timeseries must reach the same Agent/exporter (constraining \
+                        how you scale collectors), the first point of a new series may be dropped \
+                        (causing gaps on restart), and histogram min/max may be missing or \
+                        approximated. See \
+                        https://docs.datadoghq.com/opentelemetry/guide/otlp_delta_temporality/?tab=python#implications-of-using-cumulative-aggregation-temporality. \
+                        Set IGNORE_DATADOG_CUMULATIVE_WARNING=1 to silence."
+                );
+            }
+            _ => {
+                // valid
+            }
+        }
     }
 
     /// Prepared statements are enabled.
@@ -284,6 +331,7 @@ pub struct Config {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/otel/>
     #[serde(default)]
+    #[schemars(default = "Otel::schema_default")]
     pub otel: Otel,
 
     /// HashiCorp Vault settings, required for users configured with `server_auth = "vault"`.
