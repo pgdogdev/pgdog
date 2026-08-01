@@ -109,7 +109,7 @@ pub fn init() -> Result<(), Error> {
     Cache::configure(
         config.config.general.query_cache_limit,
         config.config.general.query_cache_memory_limit,
-        config.config.general.query_cache_ttl,
+        config.config.general.query_cache_idle_timeout,
     );
 
     // Start two-pc manager.
@@ -161,7 +161,7 @@ pub fn reload() -> Result<(), Error> {
     Cache::configure(
         new_config.config.general.query_cache_limit,
         new_config.config.general.query_cache_memory_limit,
-        new_config.config.general.query_cache_ttl,
+        new_config.config.general.query_cache_idle_timeout,
     );
 
     Ok(())

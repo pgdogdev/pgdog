@@ -64,7 +64,7 @@ pub(super) struct Inner {
     /// Sum of `Entry::size` across all cached entries.
     bytes: usize,
     /// Idle expiry: entries untouched for longer than this are swept (None = off).
-    ttl: Option<Duration>,
+    idle_timeout: Option<Duration>,
     /// Cache global stats.
     pub(super) stats: Stats,
 }
@@ -100,9 +100,9 @@ impl Inner {
         }
     }
 
-    /// Drop entries not accessed within the time-to-idle window.
+    /// Drop entries not accessed within the idle window.
     fn sweep(&mut self) {
-        let Some(ttl) = self.ttl else {
+        let Some(idle_timeout) = self.idle_timeout else {
             return;
         };
         let now = Instant::now();
@@ -112,7 +112,7 @@ impl Inner {
         let stale: Vec<Arc<str>> = self
             .queries
             .iter()
-            .filter(|(_, e)| now.duration_since(e.accessed) >= ttl)
+            .filter(|(_, e)| now.duration_since(e.accessed) >= idle_timeout)
             .map(|(k, _)| k.clone())
             .collect();
         for key in stale {
@@ -172,31 +172,31 @@ impl Cache {
                 count_limit: 0,
                 byte_limit: 0,
                 bytes: 0,
-                ttl: None,
+                idle_timeout: None,
                 stats: Stats::default(),
             })),
         }
     }
 
     /// Apply cache limits from configuration, evicting anything over the new
-    /// caps. A `count`, `bytes`, or `ttl_seconds` of 0 disables that limit.
-    pub fn configure(count: usize, bytes: usize, ttl_seconds: usize) {
+    /// caps. A `count`, `bytes`, or `idle_timeout_ms` of 0 disables that limit.
+    pub fn configure(count: usize, bytes: usize, idle_timeout_ms: usize) {
         let mut guard = CACHE.inner.lock();
         guard.count_limit = count;
         guard.byte_limit = bytes;
-        guard.ttl = if ttl_seconds == 0 {
+        guard.idle_timeout = if idle_timeout_ms == 0 {
             None
         } else {
-            Some(Duration::from_secs(ttl_seconds as u64))
+            Some(Duration::from_millis(idle_timeout_ms as u64))
         };
         guard.enforce();
         debug!(
-            "ast cache limits: count={} bytes={} ttl={}s",
-            count, bytes, ttl_seconds
+            "ast cache limits: count={} bytes={} idle_timeout={}ms",
+            count, bytes, idle_timeout_ms
         );
     }
 
-    /// Resize cache to a count capacity, keeping the memory and TTL limits.
+    /// Resize cache to a count capacity, keeping the memory and idle limits.
     pub fn resize(capacity: usize) {
         let mut guard = CACHE.inner.lock();
         guard.count_limit = capacity.max(1);
@@ -390,7 +390,7 @@ impl Cache {
     }
 
     /// Reset cache, removing all statements and setting stats to 0. The
-    /// configured count/memory/TTL limits are kept.
+    /// configured count/memory/idle limits are kept.
     pub fn reset() {
         let cache = Self::get();
         let mut guard = cache.inner.lock();
@@ -411,13 +411,13 @@ mod tests {
         Ast::new_record("SELECT 1", QueryParserEngine::PgQueryProtobuf).expect("parse")
     }
 
-    fn inner(count_limit: usize, byte_limit: usize, ttl: Option<Duration>) -> Inner {
+    fn inner(count_limit: usize, byte_limit: usize, idle_timeout: Option<Duration>) -> Inner {
         Inner {
             queries: LruCache::unbounded(),
             count_limit,
             byte_limit,
             bytes: 0,
-            ttl,
+            idle_timeout,
             stats: Stats::default(),
         }
     }
@@ -510,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn sweep_is_noop_when_ttl_disabled() {
+    fn sweep_is_noop_when_idle_timeout_disabled() {
         let mut c = inner(0, 0, None);
         for i in 0..3 {
             c.insert(format!("q{i}").into(), ast(), 5);
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn sweep_keeps_fresh_entries() {
-        // TTL far larger than the entries' age: nothing is idle yet.
+        // Idle window far larger than the entries' age: nothing is idle yet.
         let mut c = inner(0, 0, Some(Duration::from_secs(3600)));
         for i in 0..3 {
             c.insert(format!("q{i}").into(), ast(), 5);
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn sweep_drops_idle_entries_and_updates_bytes() {
-        // TTL of zero: every entry is at or past its idle window.
+        // Zero idle window: every entry is at or past it.
         let mut c = inner(0, 0, Some(Duration::ZERO));
         for i in 0..3 {
             c.insert(format!("q{i}").into(), ast(), 5);
