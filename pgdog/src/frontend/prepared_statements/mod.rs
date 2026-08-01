@@ -190,7 +190,7 @@ pub fn start_maintenance() {
 pub fn run_maintenance() {
     let capacity = config().config.general.prepared_statements_limit;
     PreparedStatements::global().write().close_unused(capacity);
-    // Drop AST cache entries idle beyond their time-to-idle (no-op when disabled).
+    // Drop AST cache entries idle beyond the idle timeout (no-op when disabled).
     Cache::sweep();
 }
 
