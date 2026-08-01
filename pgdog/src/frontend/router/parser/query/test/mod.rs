@@ -26,6 +26,7 @@ pub mod test_comments;
 pub mod test_ddl;
 pub mod test_delete;
 pub mod test_dml;
+pub mod test_execute;
 pub mod test_explain;
 pub mod test_functions;
 pub mod test_insert;

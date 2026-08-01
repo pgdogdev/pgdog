@@ -2,7 +2,7 @@ use super::{Error, ParameterHints};
 use crate::{
     backend::{Cluster, Schema},
     frontend::{
-        BufferedQuery, ClientRequest,
+        BufferedQuery, ClientRequest, PreparedStatements,
         client::{Sticky, TransactionType},
         router::Ast,
     },
@@ -37,6 +37,9 @@ pub struct RouterContext<'a> {
     pub schema: Schema,
     /// Original client request.
     pub client_request: &'a ClientRequest,
+    /// Client's prepared statements, used to route `EXECUTE`
+    /// based on the statement behind the name.
+    pub prepared_statements: Option<&'a mut PreparedStatements>,
 }
 
 impl<'a> RouterContext<'a> {
@@ -65,7 +68,17 @@ impl<'a> RouterContext<'a> {
             ast: buffer.ast.clone(),
             schema: cluster.schema(),
             client_request: buffer,
+            prepared_statements: None,
         })
+    }
+
+    /// Give the router access to the client's prepared statements.
+    pub fn with_prepared_statements(
+        mut self,
+        prepared_statements: &'a mut PreparedStatements,
+    ) -> Self {
+        self.prepared_statements = Some(prepared_statements);
+        self
     }
 
     pub fn in_transaction(&self) -> bool {
