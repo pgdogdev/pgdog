@@ -6,7 +6,7 @@ use pgdog_config::{
     LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
     RewriteMode, users::PasswordKind,
 };
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use crate::backend::schema::SchemaCache;
 use crate::frontend::router::sharding::ShardedTable;
@@ -56,6 +56,7 @@ pub struct Cluster {
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
+    write_functions: HashSet<WriteFunction>,
     schema_admin: bool,
     stats: Arc<Mutex<MirrorStats>>,
     cross_shard_disabled: bool,
@@ -98,6 +99,7 @@ pub struct ShardingSchema {
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
+    pub write_functions: HashSet<WriteFunction>,
     /// Query parser engine.
     pub query_parser_engine: QueryParserEngine,
     pub log_min_duration_parse: Option<Duration>,
@@ -107,6 +109,32 @@ pub struct ShardingSchema {
 impl ShardingSchema {
     pub fn tables(&self) -> &ShardedTables {
         &self.tables
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WriteFunction {
+    pub schema: String,
+    pub name: String,
+}
+
+impl WriteFunction {
+    /// Normalize one SQL identifier using PostgreSQL rules:
+    /// - unquoted: folded to lowercase
+    /// - quoted: preserve case and unescape doubled quotes
+    fn normalize_identifier(identifier: &str) -> String {
+        if identifier.len() >= 2 && identifier.starts_with('"') && identifier.ends_with('"') {
+            identifier[1..identifier.len() - 1].replace("\"\"", "\"")
+        } else {
+            identifier.to_ascii_lowercase()
+        }
+    }
+
+    fn from_config(schema: &str, name: &str) -> Self {
+        Self {
+            schema: Self::normalize_identifier(schema),
+            name: Self::normalize_identifier(name),
+        }
     }
 }
 
@@ -151,6 +179,7 @@ pub struct ClusterConfig<'a> {
     two_pc_auto: bool,
     sharded_schemas: ShardedSchemas,
     rewrite: &'a Rewrite,
+    write_functions: HashSet<WriteFunction>,
     prepared_statements: &'a PreparedStatements,
     dry_run: bool,
     expanded_explain: bool,
@@ -211,6 +240,12 @@ impl<'a> ClusterConfig<'a> {
             multi_tenant,
             rw_strategy: general.read_write_strategy,
             rw_split: general.read_write_split,
+            write_functions: config
+                .write_functions
+                .iter()
+                .filter(|entry| entry.database == user.database)
+                .map(|entry| WriteFunction::from_config(&entry.schema, &entry.name))
+                .collect(),
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
                 .cross_shard_disabled
@@ -264,6 +299,7 @@ impl Cluster {
             multi_tenant,
             rw_strategy,
             rw_split,
+            write_functions,
             schema_admin,
             cross_shard_disabled,
             two_pc,
@@ -327,6 +363,7 @@ impl Cluster {
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
+            write_functions,
             schema_admin,
             stats: Arc::new(Mutex::new(MirrorStats::default())),
             cross_shard_disabled,
@@ -567,6 +604,7 @@ impl Cluster {
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
+            write_functions: self.write_functions.clone(),
             query_parser_engine: self.query_parser_engine,
             log_min_duration_parse: self.log_min_duration_parse,
             log_query_sample_length: self.log_query_sample_length,
@@ -682,7 +720,7 @@ impl Cluster {
 
 #[cfg(test)]
 mod test {
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use pgdog_config::{
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
@@ -701,9 +739,19 @@ mod test {
         net::Query,
     };
 
-    use super::{Cluster, DatabaseUser};
+    use super::{Cluster, DatabaseUser, WriteFunction};
 
     impl Cluster {
+        fn test_write_functions(config: &ConfigAndUsers, database: &str) -> HashSet<WriteFunction> {
+            config
+                .config
+                .write_functions
+                .iter()
+                .filter(|entry| entry.database == database)
+                .map(|entry| WriteFunction::from_config(&entry.schema, &entry.name))
+                .collect()
+        }
+
         pub fn new_test(config: &ConfigAndUsers) -> Self {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
@@ -811,6 +859,7 @@ mod test {
                     config.config.general.query_parser,
                 ),
                 rewrite: config.config.rewrite.clone(),
+                write_functions: Self::test_write_functions(config, "pgdog"),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
@@ -883,6 +932,7 @@ mod test {
                     config.config.general.query_parser,
                 ),
                 rewrite: config.config.rewrite.clone(),
+                write_functions: Self::test_write_functions(config, "pgdog"),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
@@ -923,6 +973,21 @@ mod test {
         cluster.sharded_schemas = ShardedSchemas::default();
 
         assert!(cluster.load_schema());
+    }
+
+    #[test]
+    fn test_write_function_identifier_normalization() {
+        let wf = WriteFunction::from_config("PartMan", "Create_Partition");
+        assert_eq!(wf.schema, "partman");
+        assert_eq!(wf.name, "create_partition");
+
+        let wf = WriteFunction::from_config(r#""PartMan""#, r#""Create_Partition""#);
+        assert_eq!(wf.schema, "PartMan");
+        assert_eq!(wf.name, "Create_Partition");
+
+        let wf = WriteFunction::from_config(r#""my.schema""#, "my_fn");
+        assert_eq!(wf.schema, "my.schema");
+        assert_eq!(wf.name, "my_fn");
     }
 
     #[test]

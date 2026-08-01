@@ -11,7 +11,7 @@ use crate::util::random_string;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements, QueryParser,
     QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
-    ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
+    ShardedTableConfig, SystemCatalogsBehavior, WriteFunctions, system_catalogs,
 };
 
 use super::database::Database;
@@ -292,6 +292,10 @@ pub struct Config {
     /// Query parser levels per-database.
     #[serde(default)]
     pub query_parsers: Vec<QueryParser>,
+
+    /// Per-database functions treated as writes by the query parser.
+    #[serde(default)]
+    pub write_functions: Vec<WriteFunctions>,
 }
 
 impl Config {

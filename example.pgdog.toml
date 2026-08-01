@@ -283,6 +283,19 @@ cross_shard_disabled = false
 dns_ttl = 5_000
 
 #
+# Per-database function that should always route to the primary.
+#
+# Matching follows PostgreSQL identifier semantics:
+# - unquoted identifiers are folded to lowercase
+# - quoted identifiers preserve case
+#
+# [[write_functions]]
+# database = "pgdog"
+# schema = "partman"
+# name = "create_partition"
+#
+
+#
 # Admin database used for stats and system admin.
 #
 [admin]

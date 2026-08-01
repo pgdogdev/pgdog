@@ -42,8 +42,10 @@ impl QueryParser {
                 if let Some(f) =
                     Function::from_strings(f.funcname().into_iter().filter_map(Node::as_str))
                 {
-                    cross_shard = cross_shard || f.behavior().cross_shard;
-                    writes = writes || f.behavior().writes;
+                    let behavior =
+                        f.behavior_with_write_functions(&context.sharding_schema.write_functions);
+                    cross_shard = cross_shard || behavior.cross_shard;
+                    writes = writes || behavior.writes;
                 }
             }
             _ => (),
