@@ -1,4 +1,6 @@
 //! Cleanup queries for servers altered by client behavior.
+use std::borrow::Cow;
+
 use once_cell::sync::Lazy;
 
 use crate::net::{Close, Query};
@@ -26,18 +28,18 @@ static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 /// Queries used to clean up server connections after
 /// client modifications.
 pub struct Cleanup {
-    queries: &'static Vec<Query>,
+    queries: Cow<'static, [Query]>,
+    reset: bool,
     dirty: bool,
-    deallocate: bool,
     close: Vec<Close>,
 }
 
 impl Default for Cleanup {
     fn default() -> Self {
         Self {
-            queries: &*NONE,
+            queries: Cow::Borrowed(&NONE),
+            reset: false,
             dirty: false,
-            deallocate: false,
             close: vec![],
         }
     }
@@ -60,11 +62,20 @@ impl std::fmt::Display for Cleanup {
 impl Cleanup {
     /// New cleanup operation.
     pub fn new(guard: &Guard, server: &mut Server) -> Self {
+        // A client that prepared statements with SQL leaves them on the
+        // connection. They belong to its session, so drop them before another
+        // client gets the connection and collides with their names.
+        let deallocate = server.schema_changed() || server.sync_prepared();
+
         let mut clean = if guard.reset {
             Self::all()
         } else if server.dirty() {
-            Self::parameters()
-        } else if server.schema_changed() {
+            let mut clean = Self::parameters();
+            if deallocate {
+                clean.add(&PREPARED);
+            }
+            clean
+        } else if deallocate {
             Self::prepared_statements()
         } else {
             Self::none()
@@ -75,6 +86,11 @@ impl Cleanup {
         clean
     }
 
+    /// Append more queries to run during the same cleanup.
+    fn add(&mut self, queries: &'static [Query]) {
+        self.queries.to_mut().extend_from_slice(queries);
+    }
+
     /// Number of queries to run for cleanup.
     pub fn len(&self) -> usize {
         self.queries.len()
@@ -83,8 +99,7 @@ impl Cleanup {
     /// Cleanup prepared statements.
     pub fn prepared_statements() -> Self {
         Self {
-            queries: &*PREPARED,
-            deallocate: true,
+            queries: Cow::Borrowed(&PREPARED),
             ..Default::default()
         }
     }
@@ -92,7 +107,7 @@ impl Cleanup {
     /// Cleanup parameters.
     pub fn parameters() -> Self {
         Self {
-            queries: &*DIRTY,
+            queries: Cow::Borrowed(&DIRTY),
             dirty: true,
             ..Default::default()
         }
@@ -102,8 +117,7 @@ impl Cleanup {
     pub fn all() -> Self {
         Self {
             dirty: true,
-            deallocate: true,
-            queries: &*ALL,
+            queries: Cow::Borrowed(&ALL),
             close: vec![],
         }
     }
@@ -120,7 +134,7 @@ impl Cleanup {
 
     /// Get queries to execute on the server to perform cleanup.
     pub fn queries(&self) -> &[Query] {
-        self.queries
+        &self.queries
     }
 
     /// Prepared statemens to close.
@@ -130,9 +144,5 @@ impl Cleanup {
 
     pub fn is_reset_params(&self) -> bool {
         self.dirty
-    }
-
-    pub fn is_deallocate(&self) -> bool {
-        self.deallocate
     }
 }
