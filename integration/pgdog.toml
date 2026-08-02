@@ -56,6 +56,17 @@ role = "replica"
 read_only = true
 
 # ------------------------------------------------------------------------------
+# ----- Database :: pgdog_leak -------------------------------------------------
+# One server connection only, so tests for session state leaking between
+# clients are deterministic.
+
+[[databases]]
+name = "pgdog_leak"
+host = "127.0.0.1"
+database_name = "pgdog"
+pool_size = 1
+
+# ------------------------------------------------------------------------------
 # ----- Database :: pgdog_sharded ----------------------------------------------
 
 [[databases]]
