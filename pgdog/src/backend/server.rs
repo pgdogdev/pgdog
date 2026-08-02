@@ -672,9 +672,9 @@ impl Server {
                 let cmd = CommandComplete::from_bytes(message.to_bytes())?;
                 match cmd.command() {
                     "PREPARE" | "DEALLOCATE" => self.sync_prepared = true,
-                    "DEALLOCATE ALL" => self.prepared_statements.clear(),
+                    "DEALLOCATE ALL" => self.clear_prepared_statements(),
                     "DISCARD ALL" => {
-                        self.prepared_statements.clear();
+                        self.clear_prepared_statements();
                         self.client_params.clear();
                     }
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
@@ -1046,25 +1046,6 @@ impl Server {
         self.synchronize().await
     }
 
-    /// Synchronize prepared statements from Postgres.
-    pub(super) async fn sync_prepared_statements(&mut self) -> Result<(), Error> {
-        let names = self
-            .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
-            .await?;
-
-        for name in names {
-            self.prepared_statements.prepared(&name);
-        }
-
-        debug!("prepared statements synchronized [{}]", self.addr());
-
-        let count = self.prepared_statements.len();
-        self.stats.set_prepared_statements(count);
-        self.sync_prepared = false;
-
-        Ok(())
-    }
-
     /// Close any prepared statements that exceed cache capacity.
     ///
     /// N.B.: Caller is responsible for actually sending these to the server
@@ -1123,7 +1104,14 @@ impl Server {
     /// Reset error state caused by schema change.
     pub(crate) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
+        self.clear_prepared_statements();
+    }
+
+    /// Drop the prepared statements cache, and the stat that counts them.
+    #[inline]
+    fn clear_prepared_statements(&mut self) {
         self.prepared_statements.clear();
+        self.stats.clear_prepared_statements();
     }
 
     pub(crate) fn reset_params(&mut self) {
@@ -1236,6 +1224,7 @@ impl Server {
     /// Server has been cleaned.
     pub(super) fn cleaned(&mut self) {
         self.dirty = false;
+        self.sync_prepared = false;
         self.stats.cleaned();
     }
 
@@ -2275,7 +2264,7 @@ pub(crate) mod test {
             assert_eq!(msg.code(), c);
         }
         assert!(server.sync_prepared());
-        server.sync_prepared_statements().await.unwrap();
+        server.prepared_statements.prepared("__pgdog_1");
         assert!(server.prepared_statements.contains("__pgdog_1"));
 
         let describe = Describe::new_statement("__pgdog_1");
@@ -2880,6 +2869,34 @@ pub(crate) mod test {
     }
 
     #[tokio::test]
+    async fn test_reset_schema_changed_clears_cache() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![
+                    Query::new("PREPARE schema_stmt AS SELECT 1").into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+        for c in ['C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(msg.code(), c);
+        }
+        server.prepared_statements.prepared("schema_stmt");
+        assert_ne!(server.prepared_statements.len(), 0);
+
+        // A schema change invalidates everything we cached for this connection.
+        server.reset_schema_changed();
+
+        assert_eq!(server.prepared_statements.len(), 0);
+        assert_eq!(server.stats().total().prepared_statements, 0);
+    }
+
+    #[tokio::test]
     async fn test_discard_all_clears_cache() {
         let mut server = test_server().await;
 
@@ -3103,11 +3120,11 @@ pub(crate) mod test {
             "sync_prepared flag should be set after PREPARE command"
         );
 
-        server.sync_prepared_statements().await.unwrap();
+        server.cleaned();
 
         assert!(
             !server.sync_prepared(),
-            "sync_prepared flag should be cleared after sync_prepared_statements()"
+            "sync_prepared flag should be cleared once the connection is cleaned"
         );
 
         server.execute("SELECT 1").await.unwrap();
@@ -4044,10 +4061,12 @@ pub(crate) mod test {
                 "cache should be cleared after RFQ in extended_anonymous mode"
             );
             // Verify Postgres has no named prepared statements stored.
-            server.sync_prepared_statements().await.unwrap();
-            assert_eq!(
-                server.prepared_statements.len(),
-                0,
+            let named: Vec<String> = server
+                .fetch_all("SELECT name FROM pg_prepared_statements")
+                .await
+                .unwrap();
+            assert!(
+                named.is_empty(),
                 "Postgres should have no prepared statements in extended_anonymous mode"
             );
         }
@@ -4085,8 +4104,11 @@ pub(crate) mod test {
         assert!(server.done());
         assert_eq!(server.prepared_statements.len(), 0);
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(server.prepared_statements.len(), 0);
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(named.is_empty());
     }
 
     #[tokio::test]
@@ -4136,10 +4158,12 @@ pub(crate) mod test {
             assert!(server.done());
         }
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(
-            server.prepared_statements.len(),
-            0,
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(
+            named.is_empty(),
             "Postgres should have no prepared statements after repeated anonymous usage"
         );
     }
@@ -4173,8 +4197,11 @@ pub(crate) mod test {
 
         assert!(server.done());
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(server.prepared_statements.len(), 0);
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(named.is_empty());
     }
 
     #[tokio::test]
@@ -4207,8 +4234,11 @@ pub(crate) mod test {
         // Server should still be usable.
         verify_server_usable(&mut server).await;
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(server.prepared_statements.len(), 0);
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(named.is_empty());
     }
 
     #[tokio::test]
@@ -4258,8 +4288,11 @@ pub(crate) mod test {
 
         assert!(server.done());
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(server.prepared_statements.len(), 0);
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(named.is_empty());
     }
 
     #[tokio::test]
@@ -4308,10 +4341,12 @@ pub(crate) mod test {
             assert!(server.prepared_statements.ensure_capacity().is_empty());
         }
         // Verify Postgres has no named prepared statements stored.
-        server.sync_prepared_statements().await.unwrap();
-        assert_eq!(
-            server.prepared_statements.len(),
-            0,
+        let named: Vec<String> = server
+            .fetch_all("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap();
+        assert!(
+            named.is_empty(),
             "Postgres should have no prepared statements despite many named parses"
         );
     }
