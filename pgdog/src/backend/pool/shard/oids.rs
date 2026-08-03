@@ -119,7 +119,7 @@ async fn load_oids(server: &mut Server) -> Result<impl Iterator<Item = (String, 
     // OIDs < 10,000 are reserved for PG's internal use and are assumed to be stable
     Ok(server
         .fetch_all::<DataRow>(
-            "SELECT DISTINCT ON (typname) typname, pg_type.oid FROM pg_type WHERE pg_type.oid >= 10000",
+            "SELECT nspname || '.' || typname, pg_type.oid FROM pg_type INNER JOIN pg_namespace ON typnamespace = pg_namespace.oid WHERE pg_type.oid >= 10000",
         )
         .await?
         .into_iter()
