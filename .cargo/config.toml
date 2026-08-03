@@ -32,3 +32,12 @@ rustflags = [
 #  thread 'main' (12096) has overflowed its stack
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:2097152"]
+
+# Test-harness threads: libtest/nextest run #[tokio::test] bodies on
+# threads they spawn themselves, which never read pgdog.toml, so the
+# [memory] stack_size setting cannot reach them (it sizes the runtime's
+# worker threads; its debug default was raised for the same reason).
+# Deep parse-tree recursion in debug builds overflows the 2 MiB
+# default; release frames are a fraction of this.
+[env]
+RUST_MIN_STACK = "4194304"

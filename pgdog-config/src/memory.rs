@@ -25,7 +25,7 @@ pub struct Memory {
 
     /// Stack size for Tokio tasks in bytes. Increase this if you encounter stack overflow errors with complex queries.
     ///
-    /// _Default:_ `2097152`
+    /// _Default:_ `2097152` (`8388608` in debug builds, whose unoptimized futures are several times larger)
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size>
     #[serde(default = "default_stack_size")]
@@ -50,7 +50,13 @@ fn default_message_buffer() -> usize {
     default_net_buffer()
 }
 
-// Default: 2MiB.
+// Default: 2MiB. Debug builds get 8MiB: their unoptimized query-path
+// futures are several times larger than release and overflow the
+// release-tuned default.
 fn default_stack_size() -> usize {
-    2 * 1024 * 1024
+    if cfg!(debug_assertions) {
+        8 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    }
 }
