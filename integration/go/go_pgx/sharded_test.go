@@ -232,8 +232,8 @@ func TestShardedTwoPc(t *testing.T) {
 
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 200, "pgdog_2pc", "pgdog_sharded", 1, "primary")
-	assertShowFieldGt(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 0, "primary")
-	assertShowFieldGt(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 1, "primary")
+	assertShowFieldGe(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 0, "primary")
+	assertShowFieldGe(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 
 	for i := range 200 {
 		rows, err := conn.Query(

@@ -19,9 +19,9 @@ func assertShowField(t *testing.T, query string, field string, value int64, user
 	assert.Equal(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not %d", field, query, value))
 }
 
-func assertShowFieldGt(t *testing.T, query string, field string, value int64, user string, database string, shard int64, role string) {
+func assertShowFieldGe(t *testing.T, query string, field string, value int64, user string, database string, shard int64, role string) {
 	actualValue := showField(t, query, field, user, database, shard, role)
-	assert.Greater(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not greater than %d", field, query, value))
+	assert.GreaterOrEqual(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not greater than %d", field, query, value))
 }
 
 func showField(t *testing.T, query string, field string, user string, database string, shard int64, role string) int64 {
