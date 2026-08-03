@@ -1,0 +1,44 @@
+[general]
+host = "127.0.0.1"
+port = 6499
+cutover_save_config = false
+
+[admin]
+password = "pgdog"
+
+#
+# Serving cluster: 2 shards, gaining a third.
+#
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+database_name = "pgdog1"
+shard = 0
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+database_name = "pgdog2"
+shard = 1
+
+#
+# The new shard, declared in its final shape but excluded from the
+# serving topology until ADD SHARD activates it.
+#
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 2
+provisioning = true
+
+[[sharded_tables]]
+database = "pgdog"
+column = "org_id"
+data_type = "varchar"
+lookup_query = "SELECT shard_id::text FROM orgs WHERE id = $1"
+lookup_result = "shard"
+
+[[omnisharded_tables]]
+database = "pgdog"
+tables = ["orgs"]
