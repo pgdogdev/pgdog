@@ -31,24 +31,18 @@ impl SchemaLoader for FromServer {
             let canonical_oids = Arc::clone(&cluster.canonical_oids);
             let shard = shard.clone();
             tasks::spawn("load canonical oids", async move {
-                // FIXME: This shutdown signal/retry if error logic seems like
-                // it might be worth abstracting
-                let shutdown = tasks::shutdown_signal();
-
                 loop {
-                    let loader = async {
-                        canonical_oids
-                            .load(&mut *shard.primary_or_replica(&Default::default()).await?)
-                            .await
-                    };
-                    let result = select! {
-                        _ = shutdown.cancelled() => break,
-                        result = loader => { result },
-                    };
+                    let result = tasks::shutdown_signal()
+                        .run_until_cancelled(async {
+                            canonical_oids
+                                .load(&mut *shard.primary_or_replica(&Default::default()).await?)
+                                .await
+                        })
+                        .await;
 
                     match result {
-                        Ok(_) => break,
-                        Err(err) => {
+                        Some(Ok(_)) | None => break,
+                        Some(Err(err)) => {
                             if shard.online() {
                                 error!("error loading canonical type information: {err}");
                                 safe_sleep(Duration::from_millis(100)).await;
