@@ -6,6 +6,7 @@ pub use slot::*;
 pub mod copy;
 pub mod parallel_sync;
 pub mod progress;
+pub mod publication;
 pub mod publisher_impl;
 pub mod queries;
 pub mod table;

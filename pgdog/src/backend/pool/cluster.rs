@@ -421,6 +421,20 @@ impl Cluster {
         Ok(())
     }
 
+    /// A view of this cluster containing only the given shard, sharing
+    /// its live pools (shards hold `Arc`s; nothing is relaunched).
+    /// Used to scope replication sources to a single shard.
+    pub(crate) fn shard_view(&self, shard: usize) -> Result<Self, Error> {
+        let mut view = self.clone();
+        let kept = view
+            .shards
+            .get(shard)
+            .cloned()
+            .ok_or(Error::NoShard(shard))?;
+        view.shards = vec![kept];
+        Ok(view)
+    }
+
     /// Get all shards.
     pub fn shards(&self) -> &[Shard] {
         &self.shards
@@ -1191,5 +1205,32 @@ mod test {
 
         cluster.query_parser = QueryParserLevel::Off;
         assert!(!cluster.use_query_parser(&req));
+    }
+}
+
+#[cfg(test)]
+mod shard_view_test {
+    use super::*;
+    use pgdog_config::ConfigAndUsers;
+
+    #[test]
+    fn test_shard_view_shares_pools() {
+        let cluster = Cluster::new_test(&ConfigAndUsers::default());
+        assert_eq!(cluster.shards().len(), 2);
+
+        let view = cluster.shard_view(1).unwrap();
+        assert_eq!(view.shards().len(), 1);
+
+        // The view's shard is the same object as the original's shard 1:
+        // its pools are shared, nothing was relaunched.
+        let original = cluster.shards()[1].pools();
+        let viewed = view.shards()[0].pools();
+        assert_eq!(original.len(), viewed.len());
+        for (a, b) in original.iter().zip(viewed.iter()) {
+            assert_eq!(a.addr(), b.addr(), "pools must be shared, not rebuilt");
+        }
+
+        // Out of range errors.
+        assert!(matches!(cluster.shard_view(2), Err(Error::NoShard(2))));
     }
 }

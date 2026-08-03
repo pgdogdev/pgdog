@@ -1,3 +1,4 @@
+pub mod add_shard;
 pub mod copy_statement;
 pub mod ee;
 pub mod error;

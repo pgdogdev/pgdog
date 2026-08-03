@@ -10,6 +10,7 @@ pub mod maintenance_mode;
 pub mod pool;
 pub mod prepared_statements;
 pub mod protocol;
+pub mod provisioning;
 pub mod pub_sub;
 pub mod reload_notify;
 pub mod replication;

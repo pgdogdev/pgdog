@@ -21,6 +21,15 @@ pub enum Error {
     #[error("unexpected message: {0}")]
     UnexpectedMessage(char),
 
+    #[error("no schema_admin user configured for database \"{0}\"")]
+    NoSchemaAdmin(String),
+
+    #[error("no provisioning = true entry found for {0}")]
+    NoProvisioningShard(String),
+
+    #[error("duplicate provisioning = true entries for {0}")]
+    MultipleProvisioningShards(String),
+
     #[error("unexpected transaction status: {0}")]
     UnexpectedTransactionStatus(char),
 
