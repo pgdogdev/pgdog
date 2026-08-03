@@ -543,4 +543,61 @@ mod tests {
         assert_eq!(c.queries.len(), 0);
         assert_eq!(c.bytes, 0);
     }
+
+    #[test]
+    fn configure_and_resize_apply_limits_to_global_cache() {
+        // The cache is a process-wide singleton, so save the live limits and
+        // put them back at the end; assertions on entry counts are `<=` since
+        // other tests may share the cache.
+        let (count, bytes, idle) = {
+            let guard = CACHE.inner.lock();
+            (guard.count_limit, guard.byte_limit, guard.idle_timeout)
+        };
+        let keys: Vec<Arc<str>> = (0..5).map(|i| format!("__configure_q{i}").into()).collect();
+
+        Cache::configure(3, 500, 30_000);
+        {
+            let mut guard = CACHE.inner.lock();
+            assert_eq!(guard.count_limit, 3);
+            assert_eq!(guard.byte_limit, 500);
+            assert_eq!(guard.idle_timeout, Some(Duration::from_millis(30_000)));
+            for key in &keys {
+                guard.insert(key.clone(), ast(), 10);
+            }
+            assert!(guard.queries.len() <= 3, "configure() caps are enforced");
+        }
+
+        Cache::resize(1);
+        {
+            let guard = CACHE.inner.lock();
+            assert_eq!(guard.count_limit, 1);
+            assert!(
+                guard.queries.len() <= 1,
+                "resize() evicts down to the new capacity"
+            );
+        }
+
+        // Zero means "unlimited" in configure(), but resize() keeps at least
+        // one entry.
+        Cache::resize(0);
+        assert_eq!(CACHE.inner.lock().count_limit, 1);
+
+        Cache::configure(
+            count,
+            bytes,
+            idle.map(|d| d.as_millis() as usize).unwrap_or(0),
+        );
+        {
+            let mut guard = CACHE.inner.lock();
+            assert_eq!(
+                guard.idle_timeout, idle,
+                "restored, including the None branch"
+            );
+            for key in &keys {
+                if let Some(entry) = guard.queries.pop(key.as_ref()) {
+                    guard.bytes = guard.bytes.saturating_sub(entry.size);
+                }
+            }
+        }
+    }
 }
