@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Metrics are pushed to Prometheus by PgDog via OTLP
+# (see --web.enable-otlp-receiver on the prometheus service).
+scrape_configs: []
