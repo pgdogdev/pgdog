@@ -294,8 +294,12 @@ impl PreparedStatements {
             }
 
             'T' => {
+                let maybe_row_description = self.parse_and_rewrite_row_description(message)?;
                 if let Some(describe) = self.describes.pop_front() {
-                    self.add_row_description(&describe, message)?;
+                    let row_description = maybe_row_description
+                        .map(Ok)
+                        .unwrap_or_else(|| RowDescription::from_bytes(message.payload()))?;
+                    self.add_row_description(&describe, row_description);
                 };
             }
 
@@ -402,15 +406,10 @@ impl PreparedStatements {
 
     /// Handle a Describe message, storing the RowDescription for the
     /// statement in the global cache.
-    fn add_row_description(&self, name: &str, message: &mut Message) -> Result<(), Error> {
-        let mut row_description = RowDescription::from_bytes(message.payload())?;
-        if self.rewrite_row_description_data_types(&mut row_description) {
-            message.replace_payload(row_description.to_bytes());
-        }
+    fn add_row_description(&self, name: &str, row_description: RowDescription) {
         self.global_cache
             .write()
             .insert_row_description(name, row_description);
-        Ok(())
     }
 
     /// Remove statement from local cache.
@@ -481,8 +480,26 @@ impl PreparedStatements {
         parse.rewrite_data_types(&self.oid_mappings().canonical_to_shard)
     }
 
-    fn rewrite_row_description_data_types(&self, row_description: &mut RowDescription) -> bool {
-        row_description.rewrite_data_types(&self.oid_mappings().shard_to_canonical)
+    /// Rewrite the given RowDescription Message to have the canonical set of
+    /// OIDs. Returns the parsed RowDescription if parsing occurred
+    fn parse_and_rewrite_row_description(
+        &self,
+        message: &mut Message,
+    ) -> Result<Option<RowDescription>, Error> {
+        // RowDescription is emitted during cluster startup, so we can't
+        // require OIDs to be loaded.
+        let empty_mapping = Default::default();
+        let mappings = &self.oids.get().unwrap_or(&empty_mapping).shard_to_canonical;
+
+        if !mappings.is_empty() {
+            let mut row_description = RowDescription::from_bytes(message.payload())?;
+            if row_description.rewrite_data_types(mappings) {
+                message.replace_payload(row_description.to_bytes());
+            }
+            Ok(Some(row_description))
+        } else {
+            Ok(None)
+        }
     }
 
     fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
