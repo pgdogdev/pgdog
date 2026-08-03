@@ -1,9 +1,0 @@
-[package]
-name = "synthetic"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-tokio-postgres = "0.7"
-rand = "0.8"

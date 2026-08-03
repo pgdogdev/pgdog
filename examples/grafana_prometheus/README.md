@@ -30,7 +30,3 @@ docker compose up
 
 - Prometheus — http://127.0.0.1:9090
 - Grafana — http://127.0.0.1:3000 (admin / admin), _PgDog_ folder
-
-## Synthetic
-
-We have included a synthetic workload for you to experiment with. It emulates a highly concurrent, lock heavy, read and write workload. This is also a useful reference for how to containerize and link a workload to pgdog as seen in [docker-compose.yml](./docker-compose.yml) and [the synthetic dockerfile](./synthetic/Dockerfile).

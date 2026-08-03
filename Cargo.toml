@@ -3,7 +3,6 @@ resolver = "2"
 exclude = ["fuzz"]
 members = [
   "examples/demo",
-  "examples/grafana_prometheus/synthetic",
   "integration/rust",
   "pgdog",
   "pgdog-config",

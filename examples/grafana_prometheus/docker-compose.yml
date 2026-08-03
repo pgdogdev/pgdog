@@ -39,17 +39,6 @@ services:
     ports:
       - 6432:6432
 
-  synthetic:
-    build: ./synthetic
-    depends_on:
-      - pgdog
-    environment:
-      PG_URL: postgres://postgres:postgres@pgdog:6432/postgres
-      CONCURRENCY: "10"
-      LOCK_RATE: "0.05"
-      TX_RATE: "0.05"
-      KEY_SPACE: "10000"
-
 volumes:
   shard_0:
   shard_1:
