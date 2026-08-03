@@ -133,6 +133,7 @@ impl Parse {
                 let oid_bytes = &mut bytes.get_mut()[(pos - 4)..pos];
                 oid_bytes.copy_from_slice(&shard_oid.to_be_bytes());
                 rewritten = true;
+                self.original = None;
             }
         }
         self.data_types = bytes.into_inner().freeze();
@@ -262,5 +263,14 @@ mod test {
 
         let mut parse_without_custom_types = Parse::named("", "").with_data_types(&[1]);
         assert!(!parse_without_custom_types.rewrite_data_types(&mapping));
+    }
+
+    #[test]
+    fn test_rewriting_oids_clears_original_bytes() {
+        let mut parse = Parse::named("", "").with_data_types(&[10_001]);
+        parse.original = Some(Bytes::new());
+        let mapping = [(10_001, 10_002)].into_iter().collect();
+        assert!(parse.rewrite_data_types(&mapping));
+        assert!(!parse.to_bytes().is_empty());
     }
 }
