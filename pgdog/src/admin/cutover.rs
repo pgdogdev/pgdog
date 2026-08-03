@@ -1,11 +1,10 @@
-use crate::api::async_task::AsyncTaskId;
-use crate::api::replication::ReplicationTask;
+use crate::api::cutover_registry::CutoverTarget;
 use crate::backend::replication::logical::Error as ReplicationError;
 
 use super::prelude::*;
 
 pub struct Cutover {
-    task_id: Option<AsyncTaskId>,
+    target: CutoverTarget,
 }
 
 #[async_trait]
@@ -17,21 +16,19 @@ impl Command for Cutover {
     fn parse(sql: &str) -> Result<Self, Error> {
         let parts: Vec<&str> = sql.split_whitespace().collect();
 
-        match parts[..] {
-            ["cutover"] => Ok(Cutover { task_id: None }),
-            ["cutover", id] => {
-                let task_id = id.parse().map_err(|_| Error::Syntax)?;
-                Ok(Cutover {
-                    task_id: Some(task_id),
-                })
-            }
-            _ => Err(Error::Syntax),
-        }
+        let target = match parts[..] {
+            ["cutover"] => CutoverTarget::First,
+            ["cutover", id] => CutoverTarget::Id(id.parse().map_err(|_| Error::Syntax)?),
+            _ => return Err(Error::Syntax),
+        };
+
+        Ok(Cutover { target })
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        // With an id, cut over that task; without, the first running one.
-        if !ReplicationTask::trigger_cutover(self.task_id) {
+        // Cut over the targeted task: by id, by database and shard, or
+        // the first parked one.
+        if !crate::api::cutover_registry::trigger_cutover(self.target.clone()) {
             return Err(ReplicationError::NotReplication.into());
         }
 

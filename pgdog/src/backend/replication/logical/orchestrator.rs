@@ -283,6 +283,11 @@ impl ReplicationWaiter {
         self.waiter.stop();
     }
 
+    /// The source database's name, e.g. for cutover registration.
+    pub(crate) fn source_database(&self) -> String {
+        self.orchestrator.source.identifier().database.clone()
+    }
+
     /// Wait for replication to catch up.
     async fn wait_for_replication(&mut self) -> Result<(), Error> {
         let traffic_stop = self.config.config.general.cutover_traffic_stop_threshold;
