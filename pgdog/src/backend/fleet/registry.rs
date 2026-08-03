@@ -40,7 +40,6 @@ pub(crate) fn node_id() -> i64 {
 }
 
 /// A live instance registered in `pgdog.instances`.
-#[allow(dead_code)] // Consumed by the fleet coordination protocol.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Instance {
     pub(crate) node_id: i64,
@@ -136,7 +135,6 @@ pub(crate) async fn register(cluster: &Cluster, shard: usize) -> Result<(), Erro
 
 /// Live instances registered on one shard of `cluster`. An empty list
 /// also covers `pgdog.instances` not being installed.
-#[allow(dead_code)] // Consumed by the fleet coordination protocol.
 pub(crate) async fn live_instances(
     cluster: &Cluster,
     shard: usize,
