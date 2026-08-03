@@ -1,19 +1,12 @@
 use thiserror::Error;
-use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+pub(crate) enum SchemaSyncError {
     #[error("{0}")]
     Backend(#[from] crate::backend::Error),
 
     #[error("{0}")]
-    Replication(#[from] crate::backend::replication::Error),
-
-    #[error("{0}")]
     Pool(#[from] crate::backend::pool::Error),
-
-    #[error("{0}")]
-    LogicalReplication(#[from] Box<crate::backend::replication::logical::Error>),
 
     #[error("pg_dump command failed: {0}")]
     Io(#[from] std::io::Error),
@@ -39,12 +32,6 @@ pub(crate) enum Error {
     #[error("publication \"{0}\" has no tables")]
     PublicationNoTables(String),
 
-    #[error("tokio task join error")]
-    JoinError(#[from] JoinError),
-}
-
-impl From<crate::backend::replication::logical::Error> for Error {
-    fn from(value: crate::backend::replication::logical::Error) -> Self {
-        Self::LogicalReplication(Box::new(value))
-    }
+    #[error("schema sync aborted")]
+    Aborted,
 }

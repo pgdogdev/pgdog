@@ -7,6 +7,7 @@
 use std::sync::LazyLock;
 
 use crate::backend::replication::logical::Error;
+use crate::backend::schema::sync::SchemaSyncError;
 use task::{TaskError, TaskStorage, TaskWaiter};
 
 pub(crate) mod copy_data;
@@ -40,5 +41,6 @@ pub(crate) fn run_task<T: Task + 'static>(task: T) -> TaskWaiter<T::Output, T::E
 #[derive(Debug, Display, Error, From)]
 pub(crate) enum MigrationError {
     Replication(Error),
+    SchemaSync(SchemaSyncError),
     Task(TaskError<Error>),
 }

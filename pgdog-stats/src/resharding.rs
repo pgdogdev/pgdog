@@ -105,5 +105,4 @@ pub enum SyncState {
     PreData,
     PostData,
     Cutover,
-    PostCutover,
 }

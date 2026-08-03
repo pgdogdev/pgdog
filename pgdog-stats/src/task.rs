@@ -1,13 +1,15 @@
 //! Task identity, status and definition reports.
 
 use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
 
 use derive_more::{Display, From, FromStr};
 use pgdog_postgres_types::ToDataRowColumn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Lsn, StatementKind, SyncState, User};
+use crate::{Lsn, SyncState};
 
 /// Identity of a task in the registry. Ids are unique per registry.
 #[derive(
@@ -41,9 +43,7 @@ impl ToDataRowColumn for TaskId {
 }
 
 /// The umbrella type for the well-known and generic types of statuses
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Display, From, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Display, From, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskStatus {
     /// generic variants for any task
@@ -52,6 +52,7 @@ pub enum TaskStatus {
     Reshard(ReshardStatus),
     CopyData(CopyDataStatus),
     SchemaSync(SchemaSyncStatus),
+    SchemaShard(SchemaShardStatus),
     TableCopy(TableCopyStatus),
     Replication(ReplicationStatus),
     ReplicationSlot(ReplicationSlotStatus),
@@ -124,7 +125,7 @@ pub enum TaskDefinitionKind {
     Replication(ReplicationDefinition),
     TableCopy(TableCopyDefinition),
     ReplicationSlot(ReplicationSlotDefinition),
-    SchemaStatement(SchemaStatementDefinition),
+    SchemaShard(SchemaShardDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
     #[display("-")]
@@ -142,7 +143,7 @@ impl TaskDefinitionKind {
             Self::Replication(_) => "replication",
             Self::TableCopy(_) => "table_copy",
             Self::ReplicationSlot(_) => "replication_slot",
-            Self::SchemaStatement(_) => "schema_statement",
+            Self::SchemaShard(_) => "schema_shard",
             Self::Other => "other",
         }
     }
@@ -251,26 +252,107 @@ pub enum CopyDataStatus {
     Other,
 }
 
-/// Stages of a schema sync, reported as the task's status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+/// One statement of a schema sync phase.
+#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[display("{sql}")]
+pub struct SchemaSyncStatement {
+    pub sql: String,
+    /// The statement tolerates an "already exists" error from Postgres.
+    pub skip_if_exists: bool,
+}
+
+impl SchemaSyncStatement {
+    pub fn new(sql: impl Into<String>) -> Self {
+        Self {
+            sql: sql.into(),
+            skip_if_exists: false,
+        }
+    }
+
+    pub fn set_skip_if_exists(mut self) -> Self {
+        self.skip_if_exists = true;
+        self
+    }
+}
+
+/// Status of a schema sync. The phase it applies lives on
+/// [`SchemaSyncDefinition`]. The plan is reported once, by the parent task.
+/// Each shard subtask reports a cursor into it as a [`SchemaShardStatus`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SchemaSyncStatus {
     /// Dumping the schema from the source.
+    #[default]
     #[display("loading schema")]
     LoadingSchema,
-    /// Restoring tables on the destination (pre-data).
-    #[display("syncing tables")]
-    SyncingTables,
-    /// Creating indexes and constraints on the destination (post-data).
-    #[display("creating indexes")]
-    CreatingIndexes,
-    /// Restoring cutover-time schema on the destination.
-    #[display("syncing cutover schema")]
-    Cutover,
-    /// A stage this build does not know.
+    /// The dump is loaded and the phase's statements are known.
+    #[display("applying {} statements", statements.len())]
+    ApplyingStatements {
+        #[serde(default)]
+        statements: Arc<Vec<SchemaSyncStatement>>,
+    },
+    /// A status this build does not know.
     #[display("-")]
     #[serde(other)]
     Other,
+}
+
+/// A statement one shard could not apply. `index` points into the plan the
+/// parent task reported, and `message` is the error Postgres returned. The
+/// display is one-based, to match the statement counter in the logs.
+#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[display("statement {}: {message}", index + 1)]
+pub struct SchemaStatementFailure {
+    pub index: u64,
+    pub message: String,
+}
+
+/// How far one destination shard got through the phase's statements. `applied`
+/// counts the statements this shard ran, and `failures` records the ones it
+/// could not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct SchemaShardStatus {
+    pub shard: u64,
+    pub total: u64,
+    pub applied: u64,
+    pub skipped: u64,
+    pub failures: Vec<SchemaStatementFailure>,
+}
+
+impl SchemaShardStatus {
+    pub fn new(shard: u64, total: u64) -> Self {
+        Self {
+            shard,
+            total,
+            ..Default::default()
+        }
+    }
+
+    pub fn done(&self) -> u64 {
+        self.applied + self.skipped + self.failures.len() as u64
+    }
+}
+
+impl fmt::Display for SchemaShardStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "shard {}: {}/{} statements",
+            self.shard,
+            self.done(),
+            self.total
+        )?;
+
+        if self.skipped > 0 {
+            write!(f, ", {} skipped", self.skipped)?;
+        }
+        if !self.failures.is_empty() {
+            write!(f, ", {} failed", self.failures.len())?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Stages of logical replication, reported as the task's status.
@@ -337,17 +419,13 @@ pub struct TableCopyStatus {
     pub bytes_per_sec: u64,
 }
 
-/// The DDL statement one schema-statement subtask runs, and where.
+/// The destination shard one schema-sync subtask restores into.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{statement_kind} on shard {shard} ({sync_state})")]
-pub struct SchemaStatementDefinition {
-    pub sql: String,
+#[display("shard {shard} of {databases} ({sync_state})")]
+pub struct SchemaShardDefinition {
     pub shard: u64,
-    pub user: User,
-    pub statement_kind: StatementKind,
+    pub databases: Databases,
     pub sync_state: SyncState,
-    pub table_schema: Option<String>,
-    pub table_name: Option<String>,
 }
 
 #[cfg(test)]
@@ -408,17 +486,13 @@ mod test {
                 copy_data: false,
             }
             .into(),
-            SchemaStatementDefinition {
-                sql: "CREATE INDEX ...".into(),
+            SchemaShardDefinition {
                 shard: 1,
-                user: User {
-                    user: "pgdog".into(),
-                    database: "prod".into(),
+                databases: Databases {
+                    source: "old".into(),
+                    destination: "new".into(),
                 },
-                statement_kind: StatementKind::Index,
                 sync_state: SyncState::PostData,
-                table_schema: Some("public".into()),
-                table_name: Some("users".into()),
             }
             .into(),
         ]
@@ -444,7 +518,7 @@ mod test {
                 | TaskDefinitionKind::Replication(_)
                 | TaskDefinitionKind::TableCopy(_)
                 | TaskDefinitionKind::ReplicationSlot(_)
-                | TaskDefinitionKind::SchemaStatement(_)
+                | TaskDefinitionKind::SchemaShard(_)
                 | TaskDefinitionKind::Other => (),
             }
         }
@@ -488,10 +562,6 @@ mod test {
             (
                 SyncState::Cutover,
                 "schema_sync(cutover) prod -> prod_sharded",
-            ),
-            (
-                SyncState::PostCutover,
-                "schema_sync(post_cutover) prod -> prod_sharded",
             ),
         ] {
             assert_eq!(
@@ -569,7 +639,21 @@ mod test {
             TaskStatus::RatioProgress(RatioProgress { done: 3, total: 12 }),
             TaskStatus::Reshard(ReshardStatus::SyncingData),
             TaskStatus::CopyData(CopyDataStatus::CopyingTables),
-            TaskStatus::SchemaSync(SchemaSyncStatus::CreatingIndexes),
+            TaskStatus::SchemaSync(SchemaSyncStatus::ApplyingStatements {
+                statements: Arc::new(vec![
+                    SchemaSyncStatement::new("CREATE INDEX ...").set_skip_if_exists(),
+                ]),
+            }),
+            TaskStatus::SchemaShard(SchemaShardStatus {
+                shard: 1,
+                total: 4,
+                applied: 2,
+                skipped: 1,
+                failures: vec![SchemaStatementFailure {
+                    index: 3,
+                    message: "relation \"users\" does not exist".into(),
+                }],
+            }),
             TaskStatus::TableCopy(TableCopyStatus {
                 rows: 10,
                 bytes: 2048,
@@ -598,6 +682,7 @@ mod test {
                 | TaskStatus::Reshard(_)
                 | TaskStatus::CopyData(_)
                 | TaskStatus::SchemaSync(_)
+                | TaskStatus::SchemaShard(_)
                 | TaskStatus::TableCopy(_)
                 | TaskStatus::Replication(_)
                 | TaskStatus::ReplicationSlot(_)
@@ -665,9 +750,13 @@ mod test {
             TaskStatus::CopyData(CopyDataStatus::Other)
         );
         assert_eq!(
-            serde_json::from_str::<TaskStatus>(r#"{"kind":"schema_sync","status":"new_stage"}"#)
+            serde_json::from_str::<TaskStatus>(r#"{"kind":"schema_sync","status":"new_status"}"#)
                 .unwrap(),
             TaskStatus::SchemaSync(SchemaSyncStatus::Other)
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskStatus>(r#"{"kind":"schema_shard","total":471}"#).unwrap(),
+            TaskStatus::SchemaShard(SchemaShardStatus::new(0, 471))
         );
         assert_eq!(
             serde_json::from_str::<TaskStatus>(r#"{"kind":"replication","status":"new_stage"}"#)

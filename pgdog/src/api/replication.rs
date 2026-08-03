@@ -17,6 +17,7 @@ use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::Task;
+use crate::api::schema_sync::SchemaSyncTask;
 use crate::api::task::{TaskContext, TaskId};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::ReplicationWaiter;
@@ -46,6 +47,7 @@ pub(crate) struct ReplicationTask {
     /// backs a rollback; it only affects reported status, not control flow.
     #[builder(default)]
     pub(crate) direction: Direction,
+    pub(crate) schema_sync: SchemaSyncTask,
 }
 
 /// Cutover tokens of the replication tasks currently awaiting an operator
@@ -125,7 +127,7 @@ impl Task for ReplicationTask {
 impl ReplicationTask {
     /// Perform the actual cutover for running replication.
     async fn perform_cutover(
-        &mut self,
+        mut self,
         ctx: &TaskContext<Self>,
         token: &CancellationToken,
     ) -> Result<(), Error> {
@@ -133,7 +135,7 @@ impl ReplicationTask {
             Direction::Forward => ReplicationStatus::CuttingOver,
             Direction::Reverse => ReplicationStatus::RollingBack,
         });
-        self.waiter.cutover(token).await
+        self.waiter.cutover(token, ctx, self.schema_sync).await
     }
 
     /// Trigger a cutover on a running replication task.

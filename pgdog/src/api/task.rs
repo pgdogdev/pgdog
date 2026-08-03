@@ -129,6 +129,11 @@ impl TaskProgress {
             Self::Finished | Self::Cancelled | Self::Error(_) | Self::Panic(_)
         )
     }
+
+    /// Whether the task failed.
+    fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_) | Self::Panic(_))
+    }
 }
 
 /// Tasks of one nesting level
@@ -214,7 +219,7 @@ impl TaskEntry {
 
     /// Transition the task to the specified progress state.
     /// No-op if the task is already in terminal state.
-    fn transition(&self, progress: TaskProgress) {
+    fn transition(&self, mut progress: TaskProgress) {
         let _enter = self.tracing_span.enter();
 
         let mut state = self.state.write();
@@ -222,7 +227,19 @@ impl TaskEntry {
             return;
         }
 
+        let panicked = matches!(progress, TaskProgress::Panic(_));
+        if progress.is_terminal() && !panicked && self.cancellation_token.is_cancelled() {
+            info!(
+                "The task is cancelled, ignore the current progress: {progress} and set it Cancelled"
+            );
+            progress = TaskProgress::Cancelled;
+        }
+
         info!("state transition to: {progress}");
+
+        if progress.is_error() {
+            error!("task failed: {progress}");
+        }
 
         state.progress = progress;
         state.updated_at = SystemTime::now();
@@ -234,7 +251,7 @@ impl TaskEntry {
         TaskState {
             definition: self.definition.clone(),
             progress: state.progress.clone(),
-            status: state.status,
+            status: state.status.clone(),
             started_at: self.started_at,
             updated_at: state.updated_at,
         }
@@ -407,17 +424,11 @@ impl<T: Task> TaskContext<T> {
 
             match task.run(ctx.clone()).instrument(span).await {
                 Ok(output) => {
-                    let progress = if ctx.task.cancellation_token.is_cancelled() {
-                        TaskProgress::Cancelled
-                    } else {
-                        TaskProgress::Finished
-                    };
-                    ctx.transition(progress);
+                    ctx.transition(TaskProgress::Finished);
 
                     Ok(output)
                 }
                 Err(err) => {
-                    error!("task failed: {err}");
                     ctx.transition(TaskProgress::Error(err.to_string()));
 
                     Err(err)
@@ -504,16 +515,10 @@ impl TaskStorage {
 
             match res {
                 Ok(Ok(res)) => {
-                    let status = if cancellation_token.is_cancelled() {
-                        TaskProgress::Cancelled
-                    } else {
-                        TaskProgress::Finished
-                    };
-                    ctx.transition(status);
+                    ctx.transition(TaskProgress::Finished);
                     let _ = sender.send(Ok(res));
                 }
                 Ok(Err(err)) => {
-                    error!("task failed: {err}");
                     ctx.transition(TaskProgress::Error(err.to_string()));
                     let _ = sender.send(Err(TaskError::Failed(err)));
                 }
@@ -846,6 +851,50 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FailsOnCancel;
+
+    impl Task for FailsOnCancel {
+        type Status = TaskStatus;
+        type Output = ();
+        type Error = std::io::Error;
+
+        fn definition(&self) -> impl Into<TaskDefinition> {
+            "fails_on_cancel"
+        }
+
+        fn cancel_timeout() -> Duration {
+            Duration::from_secs(30)
+        }
+
+        async fn run(self, ctx: TaskContext<Self>) -> Result<(), std::io::Error> {
+            ctx.cancellation_token().cancelled().await;
+            Err(std::io::Error::other("aborted"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanicsOnCancel;
+
+    impl Task for PanicsOnCancel {
+        type Status = TaskStatus;
+        type Output = ();
+        type Error = std::io::Error;
+
+        fn definition(&self) -> impl Into<TaskDefinition> {
+            "panics_on_cancel"
+        }
+
+        fn cancel_timeout() -> Duration {
+            Duration::from_secs(30)
+        }
+
+        async fn run(self, ctx: TaskContext<Self>) -> Result<(), std::io::Error> {
+            ctx.cancellation_token().cancelled().await;
+            panic!("panicking during wind down");
+        }
+    }
+
     /// Subtask that spawns a grandchild gate and waits for it.
     #[derive(Debug)]
     struct Sub {
@@ -1074,6 +1123,40 @@ mod tests {
 
         let entry = storage.task(task_id).unwrap();
         assert!(matches!(entry.state().progress, TaskProgress::Cancelled));
+    }
+
+    #[test(start_paused = true)]
+    async fn test_error_after_cancel_reports_cancelled() {
+        let storage = TaskStorage::default();
+
+        let task = storage.run(FailsOnCancel);
+        let task_id = task.id();
+
+        settle().await;
+        storage.cancel_task(task_id);
+
+        let res = task.await;
+        assert!(matches!(res, Err(TaskError::Failed(_))));
+
+        let entry = storage.task(task_id).unwrap();
+        assert_eq!(entry.state().progress, TaskProgress::Cancelled);
+    }
+
+    #[test(start_paused = true)]
+    async fn test_panic_after_cancel_reports_panic() {
+        let storage = TaskStorage::default();
+
+        let task = storage.run(PanicsOnCancel);
+        let task_id = task.id();
+
+        settle().await;
+        storage.cancel_task(task_id);
+
+        let res = task.await;
+        assert!(matches!(res, Err(TaskError::Panicked(_))));
+
+        let entry = storage.task(task_id).unwrap();
+        assert!(matches!(entry.state().progress, TaskProgress::Panic(_)));
     }
 
     #[test(start_paused = true)]

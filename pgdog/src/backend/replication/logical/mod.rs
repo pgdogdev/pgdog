@@ -3,6 +3,7 @@ pub(crate) mod ee;
 pub(crate) mod error;
 pub(crate) mod orchestrator;
 pub(crate) mod publisher;
+pub(crate) mod schema_sync;
 pub(crate) mod status;
 pub(crate) mod subscriber;
 
@@ -13,10 +14,4 @@ use ee::*;
 use orchestrator::*;
 pub(crate) use publisher::publisher_impl::{Publisher, Waiter};
 
-use crate::{
-    backend::{
-        databases::{databases, reload_from_existing},
-        schema::sync::SyncState,
-    },
-    config::config,
-};
+use crate::{backend::databases::databases, config::config};

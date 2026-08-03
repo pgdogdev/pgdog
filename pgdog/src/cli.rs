@@ -13,6 +13,7 @@ use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::router::cli::RouterCli;
+use pgdog_stats::Databases;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
@@ -285,11 +286,13 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
             SchemaSyncPhase::Pre
         };
 
-        let orchestrator = Orchestrator::new(&from_database, &to_database, &publication, None)?;
-
         run_to_completion(
             SchemaSyncTask::builder()
-                .orchestrator(orchestrator)
+                .databases(Databases {
+                    source: from_database,
+                    destination: to_database,
+                })
+                .publication(publication)
                 .phase(phase)
                 .ignore_errors(ignore_errors)
                 .dry_run(dry_run)

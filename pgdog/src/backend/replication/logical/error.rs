@@ -140,10 +140,7 @@ pub(crate) enum Error {
     IncorrectCommand,
 
     #[error("schema: {0}")]
-    SchemaSync(Box<crate::backend::schema::sync::error::Error>),
-
-    #[error("schema isn't loaded")]
-    NoSchema,
+    SchemaSync(Box<crate::backend::schema::sync::error::SchemaSyncError>),
 
     #[error("tokio: {0}")]
     JoinError(#[from] tokio::task::JoinError),
@@ -206,8 +203,8 @@ impl From<ErrorResponse> for Error {
     }
 }
 
-impl From<crate::backend::schema::sync::error::Error> for Error {
-    fn from(value: crate::backend::schema::sync::error::Error) -> Self {
+impl From<crate::backend::schema::sync::SchemaSyncError> for Error {
+    fn from(value: crate::backend::schema::sync::SchemaSyncError) -> Self {
         Self::SchemaSync(Box::new(value))
     }
 }

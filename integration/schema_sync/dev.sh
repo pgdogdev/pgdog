@@ -4,17 +4,10 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 PGDOG_BIN_PATH="${PGDOG_BIN:-${SCRIPT_DIR}/../../target/debug/pgdog}"
 pushd ${SCRIPT_DIR}
 
-dropdb pgdog1 || true
-dropdb pgdog2 || true
-createdb pgdog1
-createdb pgdog2
+SOURCE_SHARD=pgdog1_shard_0
+DESTINATION_SHARDS=(pgdog2_shard_0 pgdog2_shard_1 pgdog2_shard_2)
 
-export PGPASSWORD=pgdog
-export PGUSER=pgdog
-export PGHOST=127.0.0.1
-export PGPORT=5432
-psql -f ${SCRIPT_DIR}/ecommerce_schema.sql pgdog1
-psql -c 'CREATE PUBLICATION pgdog FOR ALL TABLES' pgdog1 || true
+bash ${SCRIPT_DIR}/prepare.sh
 
 ${PGDOG_BIN_PATH} \
     schema-sync \
@@ -36,23 +29,16 @@ ${PGDOG_BIN_PATH} \
     --publication pgdog \
     --cutover
 
-pg_dump \
-    --schema-only \
-    --exclude-schema pgdog \
-    --no-publications pgdog1 > source.sql
+dump_schema() {
+    pg_dump \
+        --schema-only \
+        --exclude-schema pgdog \
+        --no-publications "$1" > "$2"
 
-pg_dump \
-    --schema-only \
-    --exclude-schema pgdog \
-    --no-publications pgdog2 > destination.sql
+    sed -i.bak '/^\\restrict.*$/d' "$2"
+    sed -i.bak '/^\\unrestrict.*$/d' "$2"
+}
 
-for f in source.sql destination.sql; do
-    sed -i.bak '/^\\restrict.*$/d' $f
-    sed -i.bak '/^\\unrestrict.*$/d' $f
-done
-
-# Expected integer -> bigint conversions (normalized to just column_name and type)
-# Format: column_name integer -> column_name bigint
 EXPECTED_CONVERSIONS=$(cat <<EOF
 audit_id integer
 audit_id bigint
@@ -79,38 +65,41 @@ ticket_id bigint
 EOF
 )
 
-diff source.sql destination.sql > diff.txt || true
-
-# Extract integer -> bigint conversions from the diff
-# 1. Get removed (< integer) and added (> bigint) column lines
-# 2. Only keep columns that appear as integer in source AND bigint in destination
-REMOVED_INT=$(grep '^<' diff.txt | \
-    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+integer\b.*/\1/' | \
-    grep -E '^[a-z_]+$' | sort -u)
-
-ADDED_BIGINT=$(grep '^>' diff.txt | \
-    sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+bigint\b.*/\1/' | \
-    grep -E '^[a-z_]+$' | sort -u)
-
-# Columns that changed from integer to bigint
-CONVERTED=$(comm -12 <(echo "$REMOVED_INT") <(echo "$ADDED_BIGINT"))
-
-# Build the expected format: column_name integer \n column_name bigint
-ACTUAL_CONVERSIONS=$(echo "$CONVERTED" | while read col; do
-    echo "$col integer"
-    echo "$col bigint"
-done | sort -u)
-
 EXPECTED_SORTED=$(echo "$EXPECTED_CONVERSIONS" | sort -u)
 
-if [ "$ACTUAL_CONVERSIONS" != "$EXPECTED_SORTED" ]; then
-    echo "Schema diff does not match expected integer -> bigint conversions"
-    echo "=== Expected ==="
-    echo "$EXPECTED_SORTED"
-    echo "=== Actual ==="
-    echo "$ACTUAL_CONVERSIONS"
-    exit 1
-fi
+dump_schema "${SOURCE_SHARD}" source.sql
 
-rm source.sql destination.sql diff.txt
+for shard in "${DESTINATION_SHARDS[@]}"; do
+    dump_schema "${shard}" destination.sql
+
+    diff source.sql destination.sql > diff.txt || true
+
+    REMOVED_INT=$(grep '^<' diff.txt | \
+        sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+integer\b.*/\1/' | \
+        grep -E '^[a-z_]+$' | sort -u)
+
+    ADDED_BIGINT=$(grep '^>' diff.txt | \
+        sed -E 's/.*[[:space:]]([a-z_]+)[[:space:]]+bigint\b.*/\1/' | \
+        grep -E '^[a-z_]+$' | sort -u)
+
+    CONVERTED=$(comm -12 <(echo "$REMOVED_INT") <(echo "$ADDED_BIGINT"))
+
+    ACTUAL_CONVERSIONS=$(echo "$CONVERTED" | while read col; do
+        echo "$col integer"
+        echo "$col bigint"
+    done | sort -u)
+
+    if [ "$ACTUAL_CONVERSIONS" != "$EXPECTED_SORTED" ]; then
+        echo "Schema diff on ${shard} does not match expected integer -> bigint conversions"
+        echo "=== Expected ==="
+        echo "$EXPECTED_SORTED"
+        echo "=== Actual ==="
+        echo "$ACTUAL_CONVERSIONS"
+        exit 1
+    fi
+
+    echo "${SOURCE_SHARD} -> ${shard}: schema matches"
+done
+
+rm -f source.sql destination.sql diff.txt source.sql.bak destination.sql.bak
 popd
