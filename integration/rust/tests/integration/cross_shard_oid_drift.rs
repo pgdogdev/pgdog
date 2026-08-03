@@ -13,6 +13,7 @@ struct Composite {
 #[tokio::test]
 async fn test_oid_drift() {
     let conn = connections_sqlx().await.pop().unwrap();
+    let admin = admin_sqlx().await;
 
     // Intentionally cause the OID of the type to differ between shards
     conn.execute("/* pgdog_shard: 0 */ CREATE SEQUENCE foo; DROP SEQUENCE foo;")
@@ -32,7 +33,10 @@ async fn test_oid_drift() {
     )
     .await
     .unwrap();
-    admin_sqlx().await.execute("RELOAD").await.unwrap();
+    admin
+        .execute("SET canonicalize_type_information TO true")
+        .await
+        .unwrap();
 
     let composite = Composite {
         a: String::from("a"),
@@ -68,4 +72,6 @@ async fn test_oid_drift() {
 
     let simple_data: Vec<Composite> = simple_rows.into_iter().map(|row| row.get(0)).collect();
     assert_eq!(simple_data, vec![composite; 20]);
+
+    admin.execute("RELOAD").await.unwrap();
 }

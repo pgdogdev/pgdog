@@ -167,6 +167,11 @@ impl Shard {
     /// We don't need it for this shard.
     pub(super) fn schema_not_needed(&self) {
         let _ = self.schema.set(Schema::default());
+        self.skip_loading_oids()
+    }
+
+    /// Skip loading this shard's type information
+    pub(super) fn skip_loading_oids(&self) {
         self.oids.skip_load();
     }
 

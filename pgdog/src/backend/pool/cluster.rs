@@ -87,7 +87,7 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
-    canonical_oids: Arc<CanonicalOids>,
+    canonical_oids: Option<Arc<CanonicalOids>>,
 }
 
 /// Sharding configuration from the cluster.
@@ -177,6 +177,7 @@ pub struct ClusterConfig<'a> {
     identity: &'a Option<String>,
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
+    canonicalize_oids: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -248,6 +249,7 @@ impl<'a> ClusterConfig<'a> {
             identity: &user.identity,
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
+            canonicalize_oids: general.canonicalize_type_information,
         }
     }
 }
@@ -296,13 +298,14 @@ impl Cluster {
             identity,
             tls_client_certificate_required,
             schema_cache,
+            canonicalize_oids,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
             user: user.to_owned(),
             database: name.to_owned(),
         });
-        let canonical_oids = schema_cache.canonical_oids(name);
+        let canonical_oids = canonicalize_oids.then(|| schema_cache.canonical_oids(name));
 
         Self {
             identifier: identifier.clone(),
@@ -682,6 +685,10 @@ impl Cluster {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn is_canonicalizing_oids(&self) -> bool {
+        self.canonical_oids.is_some()
     }
 }
 

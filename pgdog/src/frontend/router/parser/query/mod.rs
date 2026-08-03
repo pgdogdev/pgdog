@@ -333,7 +333,7 @@ impl QueryParser {
             }
 
             Node::SelectStmt(stmt) => {
-                if references_pg_type(stmt) {
+                if context.is_canonicalizing_oids() && references_pg_type(stmt) {
                     // Shard 0 is considered the canonical source for now
                     return Ok(Command::Query(Route::read(
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),

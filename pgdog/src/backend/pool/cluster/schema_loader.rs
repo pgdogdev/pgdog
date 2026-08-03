@@ -27,8 +27,10 @@ impl SchemaLoader for FromServer {
         }
 
         // For now we treat shard 0 as the canonical OID source
-        if let Some(shard) = cluster.shards().first() {
-            let canonical_oids = Arc::clone(&cluster.canonical_oids);
+        if let Some(shard) = cluster.shards().first()
+            && let Some(canonical_oids) = dbg!(&cluster.canonical_oids)
+        {
+            let canonical_oids = Arc::clone(canonical_oids);
             let shard = shard.clone();
             tasks::spawn("load canonical oids", async move {
                 loop {
@@ -54,6 +56,10 @@ impl SchemaLoader for FromServer {
                     }
                 }
             });
+        } else {
+            for shard in cluster.shards() {
+                shard.skip_loading_oids()
+            }
         }
 
         for shard in cluster.shards() {
