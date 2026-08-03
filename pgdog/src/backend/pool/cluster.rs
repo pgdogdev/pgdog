@@ -3,8 +3,8 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    General, LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel,
-    Rewrite, RewriteMode, users::PasswordKind,
+    LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
+    RewriteMode, users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -45,7 +45,6 @@ pub struct PoolConfig {
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
 #[derive(Clone, Debug)]
-#[cfg_attr(test, derive(Default))]
 pub struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
@@ -87,6 +86,58 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
+}
+
+/// Bare test clusters carry the same defaults the config would apply,
+/// so settings like the lookup timeout come from `pgdog-config` in
+/// tests too, not from a zeroed field.
+#[cfg(test)]
+impl Default for Cluster {
+    fn default() -> Self {
+        use pgdog_config::General;
+
+        Self {
+            identifier: Default::default(),
+            shards: Default::default(),
+            passwords: Default::default(),
+            pooler_mode: Default::default(),
+            sharded_tables: Default::default(),
+            sharded_schemas: Default::default(),
+            replication_sharding: Default::default(),
+            multi_tenant: Default::default(),
+            rw_strategy: Default::default(),
+            rw_split: Default::default(),
+            schema_admin: Default::default(),
+            stats: Default::default(),
+            cross_shard_disabled: Default::default(),
+            two_phase_commit: Default::default(),
+            two_phase_commit_auto: Default::default(),
+            readiness: Default::default(),
+            rewrite: Default::default(),
+            prepared_statements: Default::default(),
+            dry_run: Default::default(),
+            expanded_explain: Default::default(),
+            pub_sub_channel_size: Default::default(),
+            query_parser: Default::default(),
+            connection_recovery: Default::default(),
+            client_connection_recovery: Default::default(),
+            query_parser_engine: Default::default(),
+            log_min_duration_parse: Default::default(),
+            log_query_sample_length: Default::default(),
+            reload_schema_on_ddl: Default::default(),
+            load_schema: Default::default(),
+            resharding_parallel_copies: Default::default(),
+            resharding_copy_retry_max_attempts: Default::default(),
+            resharding_copy_retry_min_delay: Default::default(),
+            resharding_replication_retry_max_attempts: Default::default(),
+            resharding_replication_retry_min_delay: Default::default(),
+            sharding_lookup_timeout: Duration::from_millis(General::sharding_lookup_timeout()),
+            regex_parser: Default::default(),
+            identity: Default::default(),
+            tls_client_certificate_required: Default::default(),
+            schema_loader: Default::default(),
+        }
+    }
 }
 
 /// Sharding configuration from the cluster.
@@ -647,14 +698,9 @@ impl Cluster {
     }
 
     /// How long a sharding key lookup query can run before the
-    /// statement waiting on it fails. Zero (a bare test cluster
-    /// built without config) falls back to the config default.
+    /// statement waiting on it fails.
     pub fn sharding_lookup_timeout(&self) -> Duration {
-        if self.sharding_lookup_timeout.is_zero() {
-            Duration::from_millis(General::sharding_lookup_timeout())
-        } else {
-            self.sharding_lookup_timeout
-        }
+        self.sharding_lookup_timeout
     }
 
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
