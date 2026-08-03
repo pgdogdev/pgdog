@@ -51,7 +51,7 @@ impl SchemaLoader for FromServer {
                         Err(err) => {
                             if shard.online() {
                                 error!("error loading canonical type information: {err}");
-                                sleep(Duration::from_millis(100)).await;
+                                safe_sleep(Duration::from_millis(100)).await;
                             } else {
                                 // Cluster is shutting down
                                 break;
