@@ -18,6 +18,10 @@ impl Command for Cutover {
 
         let target = match parts[..] {
             ["cutover"] => CutoverTarget::First,
+            ["cutover", "shard", database, shard] => CutoverTarget::Shard {
+                database: database.to_string(),
+                shard: shard.parse().map_err(|_| Error::Syntax)?,
+            },
             ["cutover", id] => CutoverTarget::Id(id.parse().map_err(|_| Error::Syntax)?),
             _ => return Err(Error::Syntax),
         };

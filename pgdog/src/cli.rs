@@ -7,6 +7,7 @@ use tokio::{select, signal::ctrl_c};
 use tracing::{info, warn};
 
 use crate::api::Task;
+use crate::api::add_shard::AddShardTask;
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
@@ -107,6 +108,28 @@ pub enum Commands {
         /// Don't perform pre-data schema sync.
         #[arg(long)]
         skip_schema_sync: bool,
+    },
+
+    /// Add a shard to a database: provision the named shard, declared
+    /// with provisioning = true in the config, and activate it.
+    AddShard {
+        /// Database gaining a shard.
+        #[arg(long)]
+        database: String,
+
+        /// The shard to add: one of the database's provisioning
+        /// entries, and the next shard number.
+        #[arg(long)]
+        shard: usize,
+
+        /// Publication to use; created automatically when omitted.
+        #[arg(long)]
+        publication: Option<String>,
+
+        /// Cut over automatically once caught up instead of waiting
+        /// for an operator CUTOVER.
+        #[arg(long, default_value = "false")]
+        auto_cutover: bool,
     },
 
     /// Copy schema from source to destination cluster.
@@ -312,6 +335,28 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)
+                .build(),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+pub async fn add_shard(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+    if let Commands::AddShard {
+        database,
+        shard,
+        publication,
+        auto_cutover,
+    } = commands
+    {
+        run_to_completion(
+            AddShardTask::builder()
+                .database(database)
+                .shard(shard)
+                .maybe_publication(publication)
+                .auto_cutover(auto_cutover)
                 .build(),
         )
         .await?;

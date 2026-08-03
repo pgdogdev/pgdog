@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use crate::backend::replication::logical::Error;
 use async_task::{AsyncTaskWaiter, AsyncTasksStorage, TaskError};
 
+pub mod add_shard;
 pub mod async_task;
 pub mod copy_data;
 pub mod cutover_registry;

@@ -34,7 +34,6 @@ pub(crate) enum CutoverTarget {
     Id(AsyncTaskId),
     /// `CUTOVER SHARD <database> <shard>`: the ADD SHARD task working
     /// on that shard.
-    #[allow(dead_code)] // Constructed by the ADD SHARD admin command.
     Shard { database: String, shard: usize },
 }
 

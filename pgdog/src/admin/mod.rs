@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use crate::net::messages::Message;
 
+pub mod add_shard;
 pub mod ban;
 pub mod copy_data;
 pub mod cutover;
@@ -52,6 +53,7 @@ pub mod show_version;
 pub mod shutdown;
 pub mod stop_task;
 
+pub use add_shard::*;
 pub use ban::*;
 pub use copy_data::*;
 pub use cutover::*;
