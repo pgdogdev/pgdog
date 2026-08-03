@@ -4,6 +4,9 @@
 #
 # Most settings have reasonable defaults.
 #
+# Time settings accept a number, in the unit documented for the setting, or a
+# duration string built from "ms", "s", "m", "h" and "d", e.g. "5s", "1h5m15s".
+#
 
 # General settings.
 #

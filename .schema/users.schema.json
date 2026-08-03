@@ -98,6 +98,21 @@
         }
       ]
     },
+    "TimeValue": {
+      "description": "Time value: a number, in the unit documented on the field, or a duration\nstring built from `ms`, `s`, `m`, `h` and `d` components, e.g. `\"1h5m15s\"`.",
+      "anyOf": [
+        {
+          "description": "Number of milliseconds, or seconds for fields documented in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        {
+          "description": "Duration string, e.g. `\"250ms\"`, `\"5s\"`, `\"1h5m15s\"`.",
+          "type": "string"
+        }
+      ]
+    },
     "User": {
       "description": "User allowed to connect to pgDog.\nA user entry in `users.toml`, controlling which users are allowed to connect to PgDog.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/>",
       "type": "object",
@@ -136,21 +151,27 @@
         },
         "idle_timeout": {
           "description": "Overrides [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout) for this user. Server connections that have been idle for this long, without affecting [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size), will be closed.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#idle_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "lock_timeout": {
           "description": "Lock timeout.\n\nSets the `lock_timeout` on all server connections at connection creation.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\nRecommended for replication destination connections to prevent cross-shard deadlocks\nfrom hanging indefinitely.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime,\ne.g., by running `SET lock_timeout TO 0`;\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "min_pool_size": {
           "description": "Overrides [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size) for this user. Opens at least this many connections on pooler startup and keeps them open despite [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout).\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#min_pool_size>",
@@ -245,21 +266,27 @@
         },
         "server_lifetime": {
           "description": "Server connections older than this (in milliseconds) will be closed when returned to the pool.",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "server_lifetime_jitter": {
           "description": "Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).\nOverrides the database-level and general-level `server_lifetime_jitter` setting for this user.",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "server_password": {
           "description": "Which password to connect with when creating backend connections from PgDog to PostgreSQL. By default, the password configured in `password` is used. This setting allows you to override this configuration and use a different password, decoupling server passwords from user passwords given to clients.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#server_password>",
@@ -284,12 +311,15 @@
         },
         "statement_timeout": {
           "description": "Statement timeout.\n\nSets the `statement_timeout` on all server connections at connection creation. This allows you to set a reasonable default for each user without modifying `postgresql.conf` or using `ALTER USER`.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout>",
-          "type": [
-            "integer",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeValue"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "format": "uint64",
-          "minimum": 0
+          "default": null
         },
         "tls_client_certificate_required": {
           "description": "Require this user to present a client TLS certificate. Defaults to `true`.\n\nOnly enforced when `tls_client_ca_certificate` is configured and the client\nconnected over TLS. Set to `false` to let password and mTLS users share a listener.",

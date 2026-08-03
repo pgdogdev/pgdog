@@ -3,6 +3,7 @@ pub mod auth;
 pub mod core;
 pub mod data_types;
 pub mod database;
+pub mod duration;
 pub mod error;
 pub mod general;
 pub mod memory;

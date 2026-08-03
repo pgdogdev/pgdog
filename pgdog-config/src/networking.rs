@@ -62,10 +62,14 @@ pub struct Tcp {
     /// _Default:_ system default (2 hours)
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#time>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     time: Option<u64>,
     /// Time between successive keep-alive probes. Milliseconds.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#interval>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     interval: Option<u64>,
     /// How many consecutive failed keep-alive probes before the connection is terminated.
     ///
@@ -76,6 +80,8 @@ pub struct Tcp {
     /// **Note:** Linux only.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/network/#user_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     user_timeout: Option<u64>,
     /// TCP congestion control algorithm (e.g. `"reno"`, `"cubic"`).
     ///

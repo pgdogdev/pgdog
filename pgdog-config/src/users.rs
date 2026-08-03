@@ -343,6 +343,8 @@ pub struct User {
     /// **Note:** Nothing is preventing the user from manually changing this setting at runtime, e.g., by running `SET statement_timeout TO 0`;
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#statement_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub statement_timeout: Option<u64>,
     /// Lock timeout.
     ///
@@ -356,6 +358,8 @@ pub struct User {
     /// e.g., by running `SET lock_timeout TO 0`;
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub lock_timeout: Option<u64>,
     /// Sets the `replication=database` parameter on user connections to Postgres. Allows this user to use replication commands.
     ///
@@ -369,6 +373,8 @@ pub struct User {
     /// Overrides [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout) for this user. Server connections that have been idle for this long, without affecting [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size), will be closed.
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#idle_timeout>
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub idle_timeout: Option<u64>,
     /// Sets `default_transaction_read_only` to `on` for all connections.
     pub read_only: Option<bool>,
@@ -386,9 +392,13 @@ pub struct User {
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#two_phase_commit_auto>
     pub two_phase_commit_auto: Option<bool>,
     /// Server connections older than this (in milliseconds) will be closed when returned to the pool.
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub server_lifetime: Option<u64>,
     /// Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).
     /// Overrides the database-level and general-level `server_lifetime_jitter` setting for this user.
+    #[serde(default, deserialize_with = "crate::duration::millis_optional")]
+    #[schemars(with = "Option<crate::duration::TimeValue>")]
     pub server_lifetime_jitter: Option<u64>,
 }
 
