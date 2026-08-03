@@ -33,6 +33,18 @@ EXECUTE FUNCTION pgdog.config_trigger();
 
 GRANT SELECT ON TABLE pgdog.config TO PUBLIC;
 
+-- Live pgdog instances sharing this database. Each instance
+-- heartbeats its row; a stale heartbeat means a dead instance.
+CREATE TABLE IF NOT EXISTS pgdog.instances (
+    node_id BIGINT PRIMARY KEY,
+    hostname TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT SELECT ON TABLE pgdog.instances TO PUBLIC;
+
 -- Table to use with "satisfies_hash_partition".
 -- We just need the type to match; everything else
 -- is passed as an argument to the function.

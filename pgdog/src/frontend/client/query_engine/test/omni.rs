@@ -297,3 +297,98 @@ async fn test_omni_insert_returning_only_from_one_shard() {
         .await;
     client.read_until('Z').await.unwrap();
 }
+
+/// Omnisharded writes park at the omni-write barrier and resume when
+/// it lifts; sharded-table writes and omni reads are unaffected.
+#[tokio::test]
+async fn test_omni_write_barrier_parks_writes() {
+    use crate::backend::fleet::barrier as omni_write_barrier;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(
+            "CREATE TABLE IF NOT EXISTS sharded_omni (id BIGINT PRIMARY KEY, value TEXT)",
+        ))
+        .await;
+    client.read_until('Z').await.unwrap();
+    client
+        .send_simple(Query::new("DELETE FROM sharded_omni"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    // The database name for the sharded test cluster.
+    let database = "pgdog";
+    omni_write_barrier::start(database);
+
+    // Sharded-table traffic flows while the barrier is armed.
+    client
+        .send_simple(Query::new(
+            "CREATE TABLE IF NOT EXISTS sharded (id BIGINT PRIMARY KEY, value TEXT)",
+        ))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    // Omni reads flow too.
+    client
+        .send_simple(Query::new("SELECT * FROM sharded_omni"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    // An omni write parks: processing doesn't complete while armed.
+    // Run it on its own task so the parked future isn't cancelled.
+    client
+        .send(Query::new(
+            "INSERT INTO sharded_omni (id, value) VALUES (1, 'a')",
+        ))
+        .await;
+    let handle = tokio::spawn(async move {
+        client.try_process().await.unwrap();
+        client.read_until('Z').await.unwrap();
+        client
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !handle.is_finished(),
+        "omni write should park at the barrier"
+    );
+
+    // Release: the parked write completes.
+    omni_write_barrier::stop(database);
+    let mut client = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("omni write should resume after release")
+        .unwrap();
+
+    // The row landed on both shards.
+    for shard in 0..2 {
+        client
+            .send_simple(Query::new(
+                format!(
+                    "/* pgdog_shard: {} */ SELECT count(*) FROM sharded_omni",
+                    shard
+                )
+                .as_str(),
+            ))
+            .await;
+        let messages = client.read_until('Z').await.unwrap();
+        let row = messages
+            .iter()
+            .find(|m| m.code() == 'D')
+            .expect("count query should return a row");
+        let row = crate::net::messages::DataRow::try_from(row.clone()).unwrap();
+        assert_eq!(
+            row.get_text(0).unwrap(),
+            "1",
+            "the parked omni write should have landed on shard {}",
+            shard
+        );
+    }
+
+    client
+        .send_simple(Query::new("DROP TABLE IF EXISTS sharded_omni"))
+        .await;
+    client.read_until('Z').await.unwrap();
+}

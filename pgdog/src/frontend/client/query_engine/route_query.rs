@@ -172,6 +172,27 @@ impl QueryEngine {
                             .await?;
                         return Ok(false);
                     }
+
+                    // Omnisharded writes pause while the cluster's topology
+                    // changes underneath them (ADD SHARD cutover): the write
+                    // must reach every shard, including the one being
+                    // swapped in. Parks here, before any server is checked
+                    // out. In-transaction writes are exempt: they already
+                    // hold server connections, and parking them would
+                    // deadlock against the drain; the cutover timeout
+                    // covers them.
+                    let waiter = (!context.in_transaction() && {
+                        let route = self.router.command().route();
+                        route.is_omnisharded() && route.is_write()
+                    })
+                    .then(|| crate::backend::fleet::barrier::waiter(cluster.name()))
+                    .flatten();
+                    if let Some(waiter) = waiter {
+                        let state = self.get_state();
+                        self.set_state(State::Waiting);
+                        waiter.await;
+                        self.set_state(state);
+                    }
                 }
             }
             Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {

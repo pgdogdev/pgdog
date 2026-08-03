@@ -5,6 +5,7 @@ pub mod connect_reason;
 pub mod databases;
 pub mod disconnect_reason;
 pub mod error;
+pub mod fleet;
 pub mod maintenance_mode;
 pub mod pool;
 pub mod prepared_statements;
