@@ -1004,7 +1004,7 @@ fn references_pg_type(stmt: &nodes::SelectStmt) -> bool {
                 .funcname()
                 .iter()
                 .map(Node::as_str)
-                .eq([Some("to_regclass")]) =>
+                .eq([Some("to_regtype")]) =>
         {
             ControlFlow::Break(true)
         }

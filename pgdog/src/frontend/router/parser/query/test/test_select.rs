@@ -277,18 +277,18 @@ fn test_system_catalog_sharded() {
             "pg_type queries should go to shard 0",
         );
 
-        let command = test.execute(vec![Query::new("SELECT $1::regclass").into()]);
+        let command = test.execute(vec![Query::new("SELECT $1::regtype").into()]);
         assert_eq!(
             command.route().shard(),
             &Shard::Direct(0),
-            "regclass casts should go to shard 0",
+            "regtype casts should go to shard 0",
         );
 
-        let command = test.execute(vec![Query::new("SELECT to_regclass($1)").into()]);
+        let command = test.execute(vec![Query::new("SELECT to_regtype($1)").into()]);
         assert_eq!(
             command.route().shard(),
             &Shard::Direct(0),
-            "to_regclass should go to shard 0",
+            "to_regtype should go to shard 0",
         );
     }
 
