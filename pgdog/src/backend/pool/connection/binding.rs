@@ -340,6 +340,7 @@ impl Binding {
         &mut self,
         query: impl Into<Query> + Clone,
     ) -> Result<Vec<Message>, Error> {
+        let query: Query = query.into();
         let mut result = vec![];
         match self {
             Binding::Direct(server, ..) => {

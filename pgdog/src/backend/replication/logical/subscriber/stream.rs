@@ -237,7 +237,7 @@ impl StreamSubscriber {
     }
 
     // Dispatch a pre-built bind to the matching shard(s).
-    async fn send(&mut self, val: &Shard, bind: &Bind) -> Result<(), Error> {
+    async fn send(&mut self, val: &Shard, bind: Bind) -> Result<(), Error> {
         // Fail-fast: the replicated transaction spans every shard, so an error
         // latched on any connection means whole transaction is aborted.
         for conn in &self.connections {
@@ -246,24 +246,35 @@ impl StreamSubscriber {
             }
         }
 
-        // Locals avoid borrowing self inside the iter_mut closure.
         let partition = self.partition;
         let n_conns = self.connections.len();
-        let targets: Vec<usize> = (0..n_conns)
-            .filter(|shard| match val {
+        let is_direct = val.is_direct();
+
+        // Runs per replicated change: the common single-target case
+        // hands the `Bind` over without cloning it, and multi-target
+        // writes clone once per extra target.
+        let mut pending: Option<usize> = None;
+        for shard in 0..n_conns {
+            let target = match val {
                 // With a single destination shard the router collapses Shard::All
                 // to Direct(0), bypassing the partition ownership check.  Apply
                 // partition.owns() for all variants when there is only one connection
                 // so that omni-table writes are still partitioned across subscribers.
-                Shard::Direct(direct) if n_conns > 1 => *shard == *direct,
-                Shard::Multi(multi) if n_conns > 1 => multi.contains(shard),
-                _ => partition.owns(*shard),
-            })
-            .collect();
-
-        let is_direct = val.is_direct();
-        for &idx in &targets {
-            self.connections[idx].execute(bind, is_direct).await?;
+                Shard::Direct(direct) if n_conns > 1 => shard == *direct,
+                Shard::Multi(multi) if n_conns > 1 => multi.contains(&shard),
+                _ => partition.owns(shard),
+            };
+            if !target {
+                continue;
+            }
+            if let Some(previous) = pending.replace(shard) {
+                self.connections[previous]
+                    .execute(bind.clone(), is_direct)
+                    .await?;
+            }
+        }
+        if let Some(last) = pending {
+            self.connections[last].execute(bind, is_direct).await?;
         }
 
         Ok(())
@@ -284,8 +295,11 @@ impl StreamSubscriber {
             } else {
                 statements.insert.parse()
             };
-            let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, parse)?;
-            self.send(ctx.shard(), ctx.bind()).await?;
+            let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, parse).await?;
+            {
+                let (shard, bind) = ctx.into_parts();
+                self.send(&shard, bind).await?;
+            }
         }
 
         self.mark_table_changed(insert.oid);
@@ -376,8 +390,11 @@ impl StreamSubscriber {
             .update
             .parse()
             .clone();
-        let ctx = StreamContext::new(&self.cluster, new, &parse)?;
-        self.send(ctx.shard(), ctx.bind()).await?;
+        let ctx = StreamContext::new(&self.cluster, new, &parse).await?;
+        {
+            let (shard, bind) = ctx.into_parts();
+            self.send(&shard, bind).await?;
+        }
         self.mark_table_changed(oid);
         Ok(())
     }
@@ -400,8 +417,11 @@ impl StreamSubscriber {
         let shape_stmt = self
             .ensure_update_shape_for(oid, &table, &present, false)
             .await?;
-        let ctx = StreamContext::new(&self.cluster, &partial_new, shape_stmt.parse())?;
-        self.send(ctx.shard(), ctx.bind()).await?;
+        let ctx = StreamContext::new(&self.cluster, &partial_new, shape_stmt.parse()).await?;
+        {
+            let (shard, bind) = ctx.into_parts();
+            self.send(&shard, bind).await?;
+        }
         self.mark_table_changed(oid);
         Ok(())
     }
@@ -452,8 +472,9 @@ impl StreamSubscriber {
 
     /// Route a tuple to its shard without constructing a `Bind`.
     /// Used when the bind merges multiple tuples (FULL identity UPDATE/DELETE).
-    fn shard_for(&self, tuple: &TupleData, parse: &Parse) -> Result<Shard, Error> {
-        Ok(StreamContext::new(&self.cluster, tuple, parse)?
+    async fn shard_for(&self, tuple: &TupleData, parse: &Parse) -> Result<Shard, Error> {
+        Ok(StreamContext::new(&self.cluster, tuple, parse)
+            .await?
             .shard()
             .clone())
     }
@@ -529,16 +550,16 @@ impl StreamSubscriber {
         // update.new carry the same value as the corresponding column in old_full.
         // Routing from a raw 'u' column yields empty bytes → wrong shard.
         let complete_new = update.new.fill_toasted_from(old_full)?;
-        let new_shard = self.shard_for(&complete_new, &update_parse)?;
-        let old_shard = self.shard_for(old_full, &update_parse)?;
+        let new_shard = self.shard_for(&complete_new, &update_parse).await?;
+        let old_shard = self.shard_for(old_full, &update_parse).await?;
 
         if new_shard != old_shard {
             // Shard key changed: DELETE on old shard, INSERT on new shard.
             let delete_bind = old_full.to_bind(delete_parse.name());
-            self.send(&old_shard, &delete_bind).await?;
+            self.send(&old_shard, delete_bind).await?;
 
             let insert_bind = complete_new.to_bind(insert_parse.name());
-            self.send(&new_shard, &insert_bind).await?;
+            self.send(&new_shard, insert_bind).await?;
             self.mark_table_changed(oid);
             return Ok(());
         }
@@ -564,7 +585,7 @@ impl StreamSubscriber {
         // Slow path: WHERE $1..$n (where_tuple=old_full), SET $n+1..$n+k (set_tuple=partial_new).
         let bind =
             XLogUpdate::full_identity_bind_tuple(&where_tuple, &set_tuple).to_bind(parse.name());
-        self.send(&new_shard, &bind).await?;
+        self.send(&new_shard, bind).await?;
         self.mark_table_changed(oid);
         Ok(())
     }
@@ -607,10 +628,10 @@ impl StreamSubscriber {
             key
         };
 
-        let shard = self.shard_for(&tuple, &delete_parse)?;
+        let shard = self.shard_for(&tuple, &delete_parse).await?;
         let bind = tuple.to_bind(delete_parse.name());
 
-        self.send(&shard, &bind).await?;
+        self.send(&shard, bind).await?;
 
         self.mark_table_changed(oid);
         Ok(())

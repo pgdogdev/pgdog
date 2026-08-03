@@ -6,6 +6,7 @@ use super::{
     Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
     rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
+use crate::frontend::router::sharding::PendingLookup;
 
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -124,6 +125,10 @@ pub struct Route {
     /// This query is only touching omnisharded tables
     /// and requires special checks to be executed.
     omnisharded: bool,
+    /// Sharding key lookups that missed the cache while routing.
+    /// The query engine resolves them and routes the query again;
+    /// the query doesn't execute while any are unresolved.
+    pending_lookups: Vec<PendingLookup>,
 }
 
 impl Display for Route {
@@ -184,6 +189,15 @@ impl Route {
     /// to a primary.
     pub fn is_write(&self) -> bool {
         !self.is_read()
+    }
+
+    /// Sharding key lookups that missed the cache while routing.
+    pub fn pending_lookups(&self) -> &[PendingLookup] {
+        &self.pending_lookups
+    }
+
+    pub(crate) fn set_pending_lookups(&mut self, pending_lookups: Vec<PendingLookup>) {
+        self.pending_lookups = pending_lookups;
     }
 
     /// Get shard if any.

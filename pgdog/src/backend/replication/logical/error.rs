@@ -77,6 +77,8 @@ pub enum Error {
 
     #[error("router: {0}")]
     Router(#[from] crate::frontend::router::Error),
+    #[error("sharding key lookup failed: {0}")]
+    Lookup(String),
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),

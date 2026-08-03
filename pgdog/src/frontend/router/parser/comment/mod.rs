@@ -6,9 +6,9 @@ mod tests;
 
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
+use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::Error;
-use super::Shard;
 use strip::{leading_block_comment, trailing_block_comment};
 
 #[derive(Default, Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct QueryAndComment<'a> {
     #[cfg(test)]
     pub comment: String,
     pub role: Option<Role>,
-    pub shard: Option<Shard>,
+    pub shard: Option<ShardOrLookup>,
 }
 
 /// Extract SQL C-style block comments from both the beginning and the end

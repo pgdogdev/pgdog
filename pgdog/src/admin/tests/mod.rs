@@ -1,6 +1,6 @@
 use crate::admin::Command;
 use crate::backend::databases::{Databases, databases, from_config, replace_databases};
-use crate::backend::pool::mirror_stats::Counts;
+use crate::backend::pool::cluster_metrics::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};
 
@@ -330,7 +330,7 @@ async fn show_mirrors_reports_counts() {
     {
         let cluster_stats = cluster.stats();
         let mut stats = cluster_stats.lock();
-        stats.counts = Counts {
+        stats.mirror = Counts {
             total_count: 5,
             mirrored_count: 4,
             dropped_count: 1,

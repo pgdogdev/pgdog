@@ -3,12 +3,13 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
-    RewriteMode, users::PasswordKind,
+    General, LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel,
+    Rewrite, RewriteMode, users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
 
 use crate::backend::schema::SchemaCache;
+use crate::backend::server::ServerRequest;
 use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
@@ -19,11 +20,11 @@ use crate::{
     config::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
-    frontend::{ClientRequest, RegexParser},
-    net::{Query, messages::FrontendPid},
+    frontend::{ClientRequest, RegexParser, router::round_robin},
+    net::{Query, bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
+use super::{Address, ClusterMetrics, Config, Error, Guard, Request, Shard, ShardConfig};
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
 
@@ -57,7 +58,7 @@ pub struct Cluster {
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
     schema_admin: bool,
-    stats: Arc<Mutex<MirrorStats>>,
+    stats: Arc<Mutex<ClusterMetrics>>,
     cross_shard_disabled: bool,
     two_phase_commit: bool,
     two_phase_commit_auto: bool,
@@ -80,6 +81,7 @@ pub struct Cluster {
     resharding_copy_retry_min_delay: Duration,
     resharding_replication_retry_max_attempts: usize,
     resharding_replication_retry_min_delay: Duration,
+    sharding_lookup_timeout: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
     tls_client_certificate_required: bool,
@@ -169,6 +171,7 @@ pub struct ClusterConfig<'a> {
     resharding_copy_retry_min_delay: u64,
     resharding_replication_retry_max_attempts: usize,
     resharding_replication_retry_min_delay: u64,
+    sharding_lookup_timeout: u64,
     regex_parser_limit: usize,
     pub_sub_enabled: bool,
     identity: &'a Option<String>,
@@ -236,6 +239,7 @@ impl<'a> ClusterConfig<'a> {
             load_schema: general.load_schema,
             resharding_parallel_copies: general.resharding_parallel_copies,
             resharding_copy_retry_max_attempts: general.resharding_copy_retry_max_attempts,
+            sharding_lookup_timeout: general.sharding_lookup_timeout,
             resharding_copy_retry_min_delay: general.resharding_copy_retry_min_delay,
             resharding_replication_retry_max_attempts: general
                 .resharding_replication_retry_max_attempts,
@@ -288,6 +292,7 @@ impl Cluster {
             resharding_copy_retry_min_delay,
             resharding_replication_retry_max_attempts,
             resharding_replication_retry_min_delay,
+            sharding_lookup_timeout,
             regex_parser_limit,
             pub_sub_enabled,
             identity,
@@ -299,6 +304,11 @@ impl Cluster {
             user: user.to_owned(),
             database: name.to_owned(),
         });
+
+        let stats = Arc::new(Mutex::new(ClusterMetrics {
+            lookup: sharded_tables.lookup_cache().stats().clone(),
+            ..Default::default()
+        }));
 
         Self {
             identifier: identifier.clone(),
@@ -328,7 +338,7 @@ impl Cluster {
             rw_strategy,
             rw_split,
             schema_admin,
-            stats: Arc::new(Mutex::new(MirrorStats::default())),
+            stats,
             cross_shard_disabled,
             two_phase_commit: two_pc && shards.len() > 1,
             two_phase_commit_auto: two_pc_auto && shards.len() > 1,
@@ -353,6 +363,7 @@ impl Cluster {
             resharding_replication_retry_min_delay: Duration::from_millis(
                 resharding_replication_retry_min_delay,
             ),
+            sharding_lookup_timeout: Duration::from_millis(sharding_lookup_timeout),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
             tls_client_certificate_required,
@@ -520,7 +531,7 @@ impl Cluster {
         self.schema_admin = owner;
     }
 
-    pub fn stats(&self) -> Arc<Mutex<MirrorStats>> {
+    pub fn stats(&self) -> Arc<Mutex<ClusterMetrics>> {
         self.stats.clone()
     }
 
@@ -635,6 +646,17 @@ impl Cluster {
         self.resharding_copy_retry_max_attempts
     }
 
+    /// How long a sharding key lookup query can run before the
+    /// statement waiting on it fails. Zero (a bare test cluster
+    /// built without config) falls back to the config default.
+    pub fn sharding_lookup_timeout(&self) -> Duration {
+        if self.sharding_lookup_timeout.is_zero() {
+            Duration::from_millis(General::sharding_lookup_timeout())
+        } else {
+            self.sharding_lookup_timeout
+        }
+    }
+
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
     pub fn resharding_copy_retry_min_delay(&self) -> &Duration {
         &self.resharding_copy_retry_min_delay
@@ -671,6 +693,7 @@ impl Cluster {
         &self,
         query: impl Into<Query> + Clone,
     ) -> Result<(), crate::backend::Error> {
+        let query: Query = query.into();
         for shard in 0..self.shards.len() {
             let mut server = self.primary(shard, &Request::default()).await?;
             server.execute(query.clone()).await?;
@@ -678,12 +701,33 @@ impl Cluster {
 
         Ok(())
     }
+
+    /// Run a parameterized query on one shard, picked round-robin, and
+    /// return all rows. The answer is only authoritative if every shard
+    /// has the same data, e.g. an omnisharded table.
+    pub async fn fetch_all_round_robin<T: From<DataRow>>(
+        &self,
+        query: &str,
+        params: &[BindParameter],
+    ) -> Result<Vec<T>, crate::backend::Error> {
+        let shard = self
+            .shards
+            .get(round_robin::next() % self.shards.len().max(1))
+            .ok_or(crate::backend::pool::Error::NoDatabases)?;
+        let mut server = shard.primary_or_replica(&Request::default()).await?;
+
+        server
+            .fetch_all(ServerRequest::parameterized(query, params))
+            .await
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
 
+    use super::ClusterMetrics;
     use pgdog_config::{
         ConfigAndUsers, OmnishardedTable, PoolerMode, QueryParserLevel, ShardedSchema,
     };
@@ -734,58 +778,65 @@ mod test {
                 })
                 .collect::<Vec<_>>();
 
+            let sharded_tables = ShardedTables::new(
+                vec![
+                    ShardedTable {
+                        database: "pgdog".into(),
+                        name: Some("sharded".into()),
+                        column: "id".into(),
+                        primary: true,
+                        centroids: vec![],
+                        data_type: DataType::Bigint,
+                        centroid_probes: 1,
+                        hasher: Hasher::Postgres,
+                        ..Default::default()
+                    },
+                    ShardedTable {
+                        database: "pgdog".into(),
+                        name: Some("posts".into()),
+                        column: "id".into(),
+                        primary: true,
+                        centroids: vec![],
+                        data_type: DataType::Bigint,
+                        centroid_probes: 1,
+                        hasher: Hasher::Postgres,
+                        ..Default::default()
+                    },
+                    // Duplicate-row table for FULL identity ctid-targeting tests.
+                    // No primary key on destination — allows identical rows.
+                    ShardedTable {
+                        database: "pgdog".into(),
+                        name: Some("full_dup_rows".into()),
+                        column: "id".into(),
+                        primary: true,
+                        centroids: vec![],
+                        data_type: DataType::Bigint,
+                        centroid_probes: 1,
+                        hasher: Hasher::Postgres,
+                        ..Default::default()
+                    },
+                ],
+                vec![
+                    OmnishardedTable {
+                        name: "sharded_omni".into(),
+                        sticky_routing: false,
+                    },
+                    OmnishardedTable {
+                        name: "sharded_omni_sticky".into(),
+                        sticky_routing: true,
+                    },
+                ],
+                config.config.general.omnisharded_sticky,
+                config.config.general.system_catalogs,
+            );
+            let stats = Arc::new(Mutex::new(ClusterMetrics {
+                lookup: sharded_tables.lookup_cache().stats().clone(),
+                ..Default::default()
+            }));
+
             Cluster {
-                sharded_tables: ShardedTables::new(
-                    vec![
-                        ShardedTable {
-                            database: "pgdog".into(),
-                            name: Some("sharded".into()),
-                            column: "id".into(),
-                            primary: true,
-                            centroids: vec![],
-                            data_type: DataType::Bigint,
-                            centroid_probes: 1,
-                            hasher: Hasher::Postgres,
-                            ..Default::default()
-                        },
-                        ShardedTable {
-                            database: "pgdog".into(),
-                            name: Some("posts".into()),
-                            column: "id".into(),
-                            primary: true,
-                            centroids: vec![],
-                            data_type: DataType::Bigint,
-                            centroid_probes: 1,
-                            hasher: Hasher::Postgres,
-                            ..Default::default()
-                        },
-                        // Duplicate-row table for FULL identity ctid-targeting tests.
-                        // No primary key on destination — allows identical rows.
-                        ShardedTable {
-                            database: "pgdog".into(),
-                            name: Some("full_dup_rows".into()),
-                            column: "id".into(),
-                            primary: true,
-                            centroids: vec![],
-                            data_type: DataType::Bigint,
-                            centroid_probes: 1,
-                            hasher: Hasher::Postgres,
-                            ..Default::default()
-                        },
-                    ],
-                    vec![
-                        OmnishardedTable {
-                            name: "sharded_omni".into(),
-                            sticky_routing: false,
-                        },
-                        OmnishardedTable {
-                            name: "sharded_omni_sticky".into(),
-                            sticky_routing: true,
-                        },
-                    ],
-                    config.config.general.omnisharded_sticky,
-                    config.config.general.system_catalogs,
-                ),
+                sharded_tables,
+                stats,
                 sharded_schemas: ShardedSchemas::new(vec![
                     ShardedSchema {
                         database: "pgdog".into(),
@@ -812,6 +863,9 @@ mod test {
                 ),
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
+                sharding_lookup_timeout: Duration::from_millis(
+                    config.config.general.sharding_lookup_timeout,
+                ),
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
             }
@@ -884,6 +938,9 @@ mod test {
                 ),
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
+                sharding_lookup_timeout: Duration::from_millis(
+                    config.config.general.sharding_lookup_timeout,
+                ),
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
                 ..Default::default()
             }
@@ -909,6 +966,15 @@ mod test {
 
         pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
+        }
+
+        pub(crate) fn set_sharded_tables(&mut self, sharded_tables: ShardedTables) {
+            self.stats.lock().lookup = sharded_tables.lookup_cache().stats().clone();
+            self.sharded_tables = sharded_tables;
+        }
+
+        pub(crate) fn set_sharded_schemas(&mut self, sharded_schemas: ShardedSchemas) {
+            self.sharded_schemas = sharded_schemas;
         }
 
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {

@@ -1,4 +1,5 @@
-//! Mirror stats.
+//! Cluster-global metrics: one instance per cluster, shared by
+//! everything that records against it.
 
 use std::{
     iter::Sum,
@@ -67,9 +68,16 @@ impl Sum for Counts {
     }
 }
 
-#[derive(Debug, Clone, Default, Copy)]
-pub struct MirrorStats {
-    pub counts: Counts,
+use crate::frontend::router::sharding::LookupStats;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Default)]
+pub struct ClusterMetrics {
+    /// Mirrored request counts.
+    pub mirror: Counts,
+    /// Sharding key lookup counters, shared with the cluster's
+    /// lookup cache, which records them.
+    pub lookup: Arc<LookupStats>,
 }
 
 #[cfg(test)]
@@ -78,9 +86,9 @@ mod tests {
 
     #[test]
     fn test_queue_length_default_is_zero() {
-        let stats = MirrorStats::default();
+        let stats = ClusterMetrics::default();
         assert_eq!(
-            stats.counts.queue_length, 0,
+            stats.mirror.queue_length, 0,
             "queue_length should be 0 by default"
         );
     }

@@ -3,7 +3,7 @@ use regex::Regex;
 
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
-use crate::frontend::router::sharding::ContextBuilder;
+use crate::frontend::router::sharding::{ShardOrLookup, lookup::shard_for_bare_key};
 
 use super::super::Error;
 use super::super::Shard;
@@ -26,7 +26,7 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
 pub(super) fn shard_role_from_comment(
     comment: &str,
     schema: &ShardingSchema,
-) -> Result<(Option<Shard>, Option<Role>), Error> {
+) -> Result<(Option<ShardOrLookup>, Option<Role>), Error> {
     let mut role = None;
 
     if let Some(cap) = ROLE.captures(comment)
@@ -42,25 +42,22 @@ pub(super) fn shard_role_from_comment(
         && let Some(sharding_key) = get_matched_value(&cap)
     {
         if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-            return Ok((Some(schema.shard().into()), role));
+            return Ok((Some(ShardOrLookup::Shard(schema.shard().into())), role));
         }
-        let ctx = ContextBuilder::infer_from_from_and_config(sharding_key, schema)?
-            .shards(schema.shards)
-            .build()?;
-        return Ok((Some(ctx.apply()?), role));
+        return Ok((Some(shard_for_bare_key(sharding_key, schema, None)?), role));
     }
     if let Some(cap) = SHARD.captures(comment)
         && let Some(shard) = cap.get(1)
     {
         return Ok((
-            Some(
+            Some(ShardOrLookup::Shard(
                 shard
                     .as_str()
                     .parse::<usize>()
                     .ok()
                     .map(Shard::Direct)
                     .unwrap_or(Shard::All),
-            ),
+            )),
             role,
         ));
     }

@@ -37,6 +37,7 @@ static BUFFER_SIZE: usize = 3;
 #[derive(Debug)]
 pub struct CopySubscriber {
     copy: CopyParser,
+    /// Destination cluster.
     cluster: Cluster,
     buffer: Vec<CopyData>,
     connections: Vec<ParallelConnection>,
@@ -51,14 +52,21 @@ impl CopySubscriber {
     /// 2. Which column is used for sharding.
     ///
     #[cfg(feature = "new_parser")]
-    pub fn new(copy_stmt: &CopyStatement, cluster: &Cluster) -> Result<Self, Error> {
+    pub fn new(
+        copy_stmt: &CopyStatement,
+        source: &Cluster,
+        cluster: &Cluster,
+    ) -> Result<Self, Error> {
         let ast = pg_raw_parse::parse(&copy_stmt.copy_in()).map_err(ParseError::from)?;
         let stmt = ast.stmts().next().ok_or(ParseError::EmptyQuery)?;
-        let copy = if let Node::CopyStmt(stmt) = stmt {
+        let mut copy = if let Node::CopyStmt(stmt) = stmt {
             CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {
             return Err(Error::MissingData);
         };
+        // The destination's copy of the lookup table may still be
+        // syncing; the source has the complete mapping.
+        copy.set_lookup_cluster(source);
 
         Ok(Self {
             copy,
@@ -74,6 +82,7 @@ impl CopySubscriber {
         not(feature = "new_parser") => {
             pub fn new(
                 copy_stmt: &CopyStatement,
+                source: &Cluster,
                 cluster: &Cluster,
                 query_parser_engine: QueryParserEngine,
             ) -> Result<Self, Error> {
@@ -94,11 +103,14 @@ impl CopySubscriber {
                     .node
                     .as_ref()
                     .ok_or(Error::MissingData)?;
-                let copy = if let NodeEnum::CopyStmt(stmt) = stmt {
+                let mut copy = if let NodeEnum::CopyStmt(stmt) = stmt {
                     CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
                 } else {
                     return Err(Error::MissingData);
                 };
+                // The destination's copy of the lookup table may still be
+                // syncing; the source has the complete mapping.
+                copy.set_lookup_cluster(source);
 
                 Ok(Self {
                     copy,
@@ -352,7 +364,7 @@ impl CopySubscriber {
     }
 
     async fn flush(&mut self) -> Result<(usize, usize), Error> {
-        let result = self.copy.shard(&self.buffer)?;
+        let result = self.copy.shard(&self.buffer).await?;
         self.buffer.clear();
 
         let rows = result.len();
@@ -431,6 +443,7 @@ mod test {
 
         let mut subscriber = CopySubscriber::new(
             &copy,
+            &cluster,
             &cluster,
             #[cfg(not(feature = "new_parser"))]
             config().config.general.query_parser_engine,

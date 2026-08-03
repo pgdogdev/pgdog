@@ -5,12 +5,15 @@ use pg_query::{NodeEnum, protobuf::CopyStmt};
 #[cfg(feature = "new_parser")]
 use pg_raw_parse::nodes;
 
+use pgdog_config::LookupResult;
+use std::sync::Arc;
+
 use crate::{
     backend::{Cluster, ShardingSchema},
     frontend::router::{
         CopyRow,
         parser::Shard,
-        sharding::{ContextBuilder, ShardedTable, Tables},
+        sharding::{ContextBuilder, ShardedTable, Tables, Value as ShardingValue, lookup},
     },
     net::messages::{CopyData, ToBytes},
 };
@@ -76,6 +79,10 @@ pub struct CopyParser {
     schema_shard: Option<Shard>,
     /// String representing NULL values in text/CSV format.
     null_string: String,
+    /// Cluster answering sharding key lookups. The serving cluster,
+    /// except during resharding data sync, where the source cluster
+    /// has the complete mapping while the destination is still syncing.
+    lookup_cluster: Option<Cluster>,
 }
 
 impl Default for CopyParser {
@@ -91,6 +98,7 @@ impl Default for CopyParser {
             sharded_column: 0,
             schema_shard: None,
             null_string: "\\N".to_owned(),
+            lookup_cluster: None,
         }
     }
 }
@@ -180,6 +188,7 @@ impl CopyParser {
             )))
         };
         parser.sharding_schema = cluster.sharding_schema();
+        parser.lookup_cluster = Some(cluster.clone());
         parser.null_string = null_string;
 
         Ok(parser)
@@ -281,6 +290,7 @@ impl CopyParser {
                     )))
                 };
                 parser.sharding_schema = cluster.sharding_schema();
+                parser.lookup_cluster = Some(cluster.clone());
                 parser.null_string = null_string;
 
                 Ok(parser)
@@ -294,9 +304,59 @@ impl CopyParser {
         self.delimiter.unwrap_or('\t')
     }
 
+    /// Hash a sharding key and pick a shard.
+    fn shard_for_key(
+        table: &ShardedTable,
+        schema: &ShardingSchema,
+        key: &str,
+    ) -> Result<Shard, Error> {
+        Ok(ContextBuilder::new(table)
+            .data(key)
+            .shards(schema.shards)
+            .build()?
+            .apply()?)
+    }
+
+    /// Shard a translated lookup result. Shard-mode lookups never
+    /// hash: the translation is the shard number.
+    fn shard_for_translated(
+        table: &ShardedTable,
+        schema: &ShardingSchema,
+        translated: &str,
+    ) -> Result<Shard, Error> {
+        match table.lookup_result {
+            LookupResult::Shard => Ok(lookup::parse_shard_index(translated, schema.shards)?),
+            LookupResult::Value => Self::shard_for_key(table, schema, translated),
+        }
+    }
+
+    /// Set the cluster answering sharding key lookups, e.g. the source
+    /// cluster during resharding data sync.
+    pub fn set_lookup_cluster(&mut self, cluster: &Cluster) {
+        self.lookup_cluster = Some(cluster.clone());
+    }
+
+    /// Translate a sharding key through the table's lookup: from the
+    /// cache, or by running the lookup query. Runs per COPY row: the
+    /// cache-hit path allocates nothing.
+    async fn translate_key(
+        cluster: &Cluster,
+        schema: &ShardingSchema,
+        table: &ShardedTable,
+        key: &str,
+    ) -> Result<Arc<str>, Error> {
+        if table.lookup_query.is_none() {
+            return Err(Error::NoShardingColumn);
+        }
+
+        lookup::resolve_for_table(cluster, schema.tables.lookup_cache(), table, key)
+            .await
+            .map_err(|err| Error::Lookup(err.message))
+    }
+
     /// Split CopyData (F) messages into multiple CopyData (F) messages
     /// with shard numbers.
-    pub fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
+    pub async fn shard(&mut self, data: &[CopyData]) -> Result<Vec<CopyRow>, Error> {
         let mut rows = vec![];
 
         for row in data {
@@ -334,13 +394,23 @@ impl CopyParser {
 
                             if key == self.null_string {
                                 Shard::All
+                            } else if table.lookup_query.is_some() {
+                                let translated = Self::translate_key(
+                                    self.lookup_cluster
+                                        .as_ref()
+                                        .ok_or(Error::NoShardingColumn)?,
+                                    &self.sharding_schema,
+                                    table,
+                                    key,
+                                )
+                                .await?;
+                                Self::shard_for_translated(
+                                    table,
+                                    &self.sharding_schema,
+                                    translated.as_ref(),
+                                )?
                             } else {
-                                let ctx = ContextBuilder::new(table)
-                                    .data(key)
-                                    .shards(self.sharding_schema.shards)
-                                    .build()?;
-
-                                ctx.apply()?
+                                Self::shard_for_key(table, &self.sharding_schema, key)?
                             }
                         } else if let Some(schema_shard) = self.schema_shard.clone() {
                             schema_shard
@@ -378,12 +448,33 @@ impl CopyParser {
                                 .get(self.sharded_column)
                                 .ok_or(Error::NoShardingColumn)?;
                             if let Data::Column(key) = key {
-                                let ctx = ContextBuilder::new(table)
-                                    .data(&key[..])
-                                    .shards(self.sharding_schema.shards)
-                                    .build()?;
+                                if table.lookup_query.is_some() {
+                                    // Binary values are decoded to their text
+                                    // form to translate through the lookup.
+                                    let value = ShardingValue::new(&key[..], table.data_type);
+                                    let text = value.to_text()?.ok_or(Error::LookupBinaryCopy)?;
+                                    let translated = Self::translate_key(
+                                        self.lookup_cluster
+                                            .as_ref()
+                                            .ok_or(Error::NoShardingColumn)?,
+                                        &self.sharding_schema,
+                                        table,
+                                        &text,
+                                    )
+                                    .await?;
+                                    Self::shard_for_translated(
+                                        table,
+                                        &self.sharding_schema,
+                                        translated.as_ref(),
+                                    )?
+                                } else {
+                                    let ctx = ContextBuilder::new(table)
+                                        .data(&key[..])
+                                        .shards(self.sharding_schema.shards)
+                                        .build()?;
 
-                                ctx.apply()?
+                                    ctx.apply()?
+                                }
                             } else {
                                 Shard::All
                             }
@@ -410,9 +501,10 @@ mod test {
     use pg_raw_parse::{Node, Owned, make};
 
     use super::*;
+    use crate::frontend::router::sharding::lookup::LookupTable;
 
-    #[test]
-    fn test_copy_text() {
+    #[tokio::test]
+    async fn test_copy_text() {
         let copy = parse("COPY sharded (id, value) FROM STDIN");
         let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
 
@@ -421,13 +513,75 @@ mod test {
 
         let one = CopyData::new("5\thello world\n".as_bytes());
         let two = CopyData::new("10\thowdy mate\n".as_bytes());
-        let sharded = copy.shard(&[one, two]).unwrap();
+        let sharded = copy.shard(&[one, two]).await.unwrap();
         assert_eq!(sharded[0].message().data(), b"5\thello world\n");
         assert_eq!(sharded[1].message().data(), b"10\thowdy mate\n");
     }
 
-    #[test]
-    fn test_copy_csv() {
+    #[tokio::test]
+    async fn test_copy_lookup_translates_keys() {
+        use crate::backend::ShardedTables;
+        use crate::frontend::router::sharding::shard_value;
+        use pgdog_config::{DataType, SystemCatalogsBehavior};
+
+        let stmt = parse("COPY sharded_lookup (tenant_id, value) FROM STDIN CSV");
+        let mut copy = CopyParser::new(&stmt, &Cluster::new_test(&config())).unwrap();
+
+        let query = "SELECT COALESCE(parent, id) FROM tenants WHERE id = $1";
+        let table = ShardedTable {
+            column: "tenant_id".into(),
+            name: Some("sharded_lookup".into()),
+            data_type: DataType::Varchar,
+            lookup_query: Some(query.into()),
+            ..Default::default()
+        };
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![table.clone()],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+        copy.sharded_table = Some(table);
+        copy.sharded_column = 0;
+        copy.sharding_schema = schema.clone();
+
+        let key = LookupTable {
+            schema: None,
+            name: Some("sharded_lookup".into()),
+            column: "tenant_id".into(),
+        };
+        let cache = schema.tables.lookup_cache();
+        cache.insert(key.clone(), "t_a".into(), "root_a".into());
+        cache.insert(key, "t_b".into(), "root_b".into());
+
+        let data = CopyData::new("t_a,hello\nt_b,world\n".as_bytes());
+        let rows = copy.shard(&[data]).await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].message().data(), b"\"t_a\",\"hello\"\n");
+        assert_eq!(
+            rows[0].shard(),
+            &shard_value("root_a", &DataType::Varchar, 3, &vec![], 0)
+        );
+        assert_eq!(rows[1].message().data(), b"\"t_b\",\"world\"\n");
+        assert_eq!(
+            rows[1].shard(),
+            &shard_value("root_b", &DataType::Varchar, 3, &vec![], 0)
+        );
+
+        // A value that's not cached resolves against the lookup
+        // cluster; the default cluster has no shards, so it errors
+        // instead of routing by the untranslated value.
+        let data = CopyData::new("t_cold,nope\n".as_bytes());
+        assert!(copy.shard(&[data]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_copy_csv() {
         let copy = parse("COPY sharded (id, value) FROM STDIN CSV HEADER");
         let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
         assert!(copy.is_from);
@@ -438,7 +592,7 @@ mod test {
         let header = CopyData::new("id,value\n".as_bytes());
         let one = CopyData::new("5,hello world\n".as_bytes());
         let two = CopyData::new("10,howdy mate\n".as_bytes());
-        let sharded = copy.shard(&[header, one, two]).unwrap();
+        let sharded = copy.shard(&[header, one, two]).await.unwrap();
 
         assert_eq!(sharded[0].message().data(), b"\"id\",\"value\"\n");
         assert_eq!(sharded[1].message().data(), b"\"5\",\"hello world\"\n");
@@ -448,22 +602,22 @@ mod test {
         let partial_two = CopyData::new("\n1,2".as_bytes());
         let partial_three = CopyData::new("\n".as_bytes());
 
-        let sharded = copy.shard(&[partial_one]).unwrap();
+        let sharded = copy.shard(&[partial_one]).await.unwrap();
         assert!(sharded.is_empty());
-        let sharded = copy.shard(&[partial_two]).unwrap();
+        let sharded = copy.shard(&[partial_two]).await.unwrap();
         assert_eq!(sharded[0].message().data(), b"\"11\",\"howdy partner\"\n");
-        let sharded = copy.shard(&[partial_three]).unwrap();
+        let sharded = copy.shard(&[partial_three]).await.unwrap();
         assert_eq!(sharded[0].message().data(), b"\"1\",\"2\"\n");
     }
 
-    #[test]
-    fn test_copy_csv_stream() {
+    #[tokio::test]
+    async fn test_copy_csv_stream() {
         let copy_data = CopyData::new(b"id,value\n1,test\n6,test6\n");
 
         let copy = parse("COPY sharded (id, value) FROM STDIN CSV HEADER");
         let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
 
-        let rows = copy.shard(&[copy_data]).unwrap();
+        let rows = copy.shard(&[copy_data]).await.unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].message(), CopyData::new(b"\"id\",\"value\"\n"));
         assert_eq!(rows[0].shard(), &Shard::All);
@@ -473,8 +627,8 @@ mod test {
         assert_eq!(rows[2].shard(), &Shard::Direct(1));
     }
 
-    #[test]
-    fn test_copy_csv_custom_null() {
+    #[tokio::test]
+    async fn test_copy_csv_custom_null() {
         let copy = parse("COPY sharded (id, value) FROM STDIN CSV NULL 'NULL'");
         let mut copy = CopyParser::new(&copy, &Cluster::default()).unwrap();
 
@@ -482,7 +636,7 @@ mod test {
         assert!(!copy.headers);
 
         let data = CopyData::new("5,hello\n10,NULL\n15,world\n".as_bytes());
-        let sharded = copy.shard(&[data]).unwrap();
+        let sharded = copy.shard(&[data]).await.unwrap();
 
         assert_eq!(sharded.len(), 3);
         assert_eq!(sharded[0].message().data(), b"\"5\",\"hello\"\n");
@@ -490,8 +644,8 @@ mod test {
         assert_eq!(sharded[2].message().data(), b"\"15\",\"world\"\n");
     }
 
-    #[test]
-    fn test_copy_text_pg_dump_end_marker() {
+    #[tokio::test]
+    async fn test_copy_text_pg_dump_end_marker() {
         // pg_dump generates text format COPY with `\.` as end-of-copy marker.
         // This marker should be sent to all shards without extracting a sharding key.
         let copy = parse("COPY sharded (id, value) FROM STDIN");
@@ -501,7 +655,7 @@ mod test {
         let two = CopyData::new("6\tBob\n".as_bytes());
         let end_marker = CopyData::new("\\.\n".as_bytes());
 
-        let sharded = copy.shard(&[one, two, end_marker]).unwrap();
+        let sharded = copy.shard(&[one, two, end_marker]).await.unwrap();
         assert_eq!(sharded.len(), 3);
         assert_eq!(sharded[0].message().data(), b"1\tAlice\n");
         assert_eq!(sharded[0].shard(), &Shard::Direct(0));
@@ -511,8 +665,8 @@ mod test {
         assert_eq!(sharded[2].shard(), &Shard::All);
     }
 
-    #[test]
-    fn test_copy_text_null_sharding_key() {
+    #[tokio::test]
+    async fn test_copy_text_null_sharding_key() {
         // pg_dump text format uses `\N` to represent NULL values.
         // When the sharding key is NULL, route to all shards.
         // When a non-sharding column is NULL, route normally based on the key.
@@ -524,7 +678,7 @@ mod test {
         let three = CopyData::new("11\tCharlie\n".as_bytes());
         let four = CopyData::new("6\t\\N\n".as_bytes());
 
-        let sharded = copy.shard(&[one, two, three, four]).unwrap();
+        let sharded = copy.shard(&[one, two, three, four]).await.unwrap();
         assert_eq!(sharded.len(), 4);
         assert_eq!(sharded[0].message().data(), b"1\tAlice\n");
         assert_eq!(sharded[0].shard(), &Shard::Direct(0));
@@ -536,15 +690,15 @@ mod test {
         assert_eq!(sharded[3].shard(), &Shard::Direct(1));
     }
 
-    #[test]
-    fn test_copy_text_composite_type_sharded() {
+    #[tokio::test]
+    async fn test_copy_text_composite_type_sharded() {
         // Test the same composite type but with sharding enabled (using the sharded table from config)
         let copy = parse("COPY sharded (id, value) FROM STDIN");
         let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
 
         // Row where the value contains a composite type with commas and quotes
         let row = CopyData::new(b"1\t(,Annapolis,Maryland,\"United States\",)\n");
-        let sharded = copy.shard(&[row]).unwrap();
+        let sharded = copy.shard(&[row]).await.unwrap();
 
         assert_eq!(sharded.len(), 1);
 
@@ -556,8 +710,8 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_copy_explicit_text_format() {
+    #[tokio::test]
+    async fn test_copy_explicit_text_format() {
         // Test with explicit FORMAT text (like during resharding)
         let sql = r#"COPY "public"."entity_values" ("id", "value_location") FROM STDIN WITH (FORMAT text)"#;
         let copy_stmt = parse(sql);
@@ -572,7 +726,7 @@ mod test {
 
         // Row with composite type
         let row = CopyData::new(b"1\t(,Annapolis,Maryland,\"United States\",)\n");
-        let sharded = copy.shard(&[row]).unwrap();
+        let sharded = copy.shard(&[row]).await.unwrap();
 
         assert_eq!(sharded.len(), 1);
         assert_eq!(
@@ -582,8 +736,8 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_copy_binary() {
+    #[tokio::test]
+    async fn test_copy_binary() {
         let copy = parse("COPY sharded (id, value) FROM STDIN (FORMAT 'binary')");
         let mut copy = CopyParser::new(&copy, &Cluster::new_test(&config())).unwrap();
         assert!(copy.is_from);
@@ -603,7 +757,7 @@ mod test {
         data.extend(b"yes");
         data.extend((-1_i16).to_be_bytes());
         let header = CopyData::new(data.as_slice());
-        let sharded = copy.shard(&[header]).unwrap();
+        let sharded = copy.shard(&[header]).await.unwrap();
         assert_eq!(sharded.len(), 3);
         assert_eq!(sharded[0].message().data(), &data[..19]); // Header is 19 bytes long.
         assert_eq!(sharded[0].shard(), &Shard::All);
@@ -613,8 +767,80 @@ mod test {
         assert_eq!(sharded[2].shard(), &Shard::All)
     }
 
+    #[tokio::test]
+    async fn test_copy_binary_lookup_translates_keys() {
+        use crate::backend::ShardedTables;
+        use crate::frontend::router::sharding::shard_value;
+        use pgdog_config::{DataType, SystemCatalogsBehavior};
+
+        let stmt = parse("COPY sharded_lookup (customer_id, value) FROM STDIN (FORMAT 'binary')");
+        let mut copy = CopyParser::new(&stmt, &Cluster::new_test(&config())).unwrap();
+
+        let query = "SELECT COALESCE(parent, id) FROM customers WHERE id = $1";
+        let table = ShardedTable {
+            column: "customer_id".into(),
+            name: Some("sharded_lookup".into()),
+            data_type: DataType::Bigint,
+            lookup_query: Some(query.into()),
+            ..Default::default()
+        };
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![table.clone()],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+        copy.sharded_table = Some(table);
+        copy.sharded_column = 0;
+        copy.sharding_schema = schema.clone();
+
+        let key = LookupTable {
+            schema: None,
+            name: Some("sharded_lookup".into()),
+            column: "customer_id".into(),
+        };
+        schema
+            .tables
+            .lookup_cache()
+            .insert(key, "42".into(), "1000".into());
+
+        // Binary COPY header, one tuple keyed by bigint 42, terminator.
+        let mut data = b"PGCOPY".to_vec();
+        data.push(b'\n');
+        data.push(255);
+        data.push(b'\r');
+        data.push(b'\n');
+        data.push(b'\0');
+        data.extend(0_i32.to_be_bytes());
+        data.extend(0_i32.to_be_bytes());
+        data.extend(2_i16.to_be_bytes());
+        data.extend(8_i32.to_be_bytes());
+        data.extend(42_i64.to_be_bytes());
+        data.extend(3_i32.to_be_bytes());
+        data.extend(b"yes");
+        data.extend((-1_i16).to_be_bytes());
+
+        let rows = copy.shard(&[CopyData::new(data.as_slice())]).await.unwrap();
+
+        // Header, the tuple sharded by its decoded and translated key,
+        // and the terminator, in order.
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].shard(), &Shard::All);
+        assert_eq!(rows[1].message().data().len(), 2 + 4 + 8 + 4 + 3);
+        assert_eq!(
+            rows[1].shard(),
+            &shard_value("1000", &DataType::Bigint, 3, &vec![], 0)
+        );
+        assert_eq!(rows[2].message().data(), (-1_i16).to_be_bytes());
+        assert_eq!(rows[2].shard(), &Shard::All);
+    }
+
     #[cfg(feature = "new_parser")]
-    fn parse(sql: &str) -> Owned<nodes::CopyStmt> {
+    pub(super) fn parse(sql: &str) -> Owned<nodes::CopyStmt> {
         let stmt = pg_raw_parse::parse(sql).unwrap();
         match stmt.stmts().next() {
             Some(Node::CopyStmt(copy)) => make::owned(|mem| mem.make_unique(copy)),
@@ -624,7 +850,7 @@ mod test {
 
     cfg_select! {
         not(feature = "new_parser") => {
-            fn parse(sql: &str) -> Box<CopyStmt> {
+            pub(super) fn parse(sql: &str) -> Box<CopyStmt> {
                 let stmt = pg_query::parse(sql).unwrap();
                 let stmt = stmt.protobuf.stmts.first().unwrap();
                 match stmt.stmt.clone().unwrap().node.unwrap() {
@@ -634,5 +860,133 @@ mod test {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod lookup_result_shard_test {
+    use super::*;
+    use crate::backend::ShardedTables;
+    use crate::config::config;
+    use crate::frontend::router::sharding::lookup::LookupTable;
+    use pgdog_config::{DataType, LookupResult, SystemCatalogsBehavior};
+
+    use super::test::parse;
+
+    fn shard_mode_copy(query: &str) -> (CopyParser, crate::backend::ShardingSchema) {
+        let stmt = parse(query);
+        let mut copy = CopyParser::new(&stmt, &Cluster::new_test(&config())).unwrap();
+
+        let table = ShardedTable {
+            column: "tenant_id".into(),
+            name: Some("sharded_lookup".into()),
+            data_type: DataType::Varchar,
+            lookup_query: Some("SELECT shard_id FROM tenants WHERE id = $1".into()),
+            lookup_result: LookupResult::Shard,
+            ..Default::default()
+        };
+        let schema = ShardingSchema {
+            shards: 3,
+            tables: ShardedTables::new(
+                vec![table.clone()],
+                vec![],
+                false,
+                SystemCatalogsBehavior::default(),
+            ),
+            ..Default::default()
+        };
+        copy.sharded_table = Some(table);
+        copy.sharded_column = 0;
+        copy.sharding_schema = schema.clone();
+        (copy, schema)
+    }
+
+    fn warm(schema: &crate::backend::ShardingSchema, value: &str, shard: &str) {
+        schema.tables.lookup_cache().insert(
+            LookupTable {
+                schema: None,
+                name: Some("sharded_lookup".into()),
+                column: "tenant_id".into(),
+            },
+            value.into(),
+            shard.into(),
+        );
+    }
+
+    /// Shard-mode COPY rows route by the returned shard number.
+    #[tokio::test]
+    async fn test_copy_lookup_result_shard() {
+        let (mut copy, schema) =
+            shard_mode_copy("COPY sharded_lookup (tenant_id, value) FROM STDIN CSV");
+        warm(&schema, "t_a", "2");
+        warm(&schema, "t_b", "0");
+
+        let rows = copy
+            .shard(&[CopyData::new("t_a,hello\nt_b,world\n".as_bytes())])
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].shard(), &Shard::Direct(2));
+        assert_eq!(rows[1].shard(), &Shard::Direct(0));
+    }
+
+    /// Out-of-range and non-numeric shard numbers fail the COPY.
+    #[tokio::test]
+    async fn test_copy_lookup_result_shard_invalid() {
+        let (mut copy, schema) =
+            shard_mode_copy("COPY sharded_lookup (tenant_id, value) FROM STDIN CSV");
+        warm(&schema, "t_a", "7");
+        let result = copy.shard(&[CopyData::new("t_a,hello\n".as_bytes())]).await;
+        assert!(result.is_err());
+
+        let (mut copy, schema) =
+            shard_mode_copy("COPY sharded_lookup (tenant_id, value) FROM STDIN CSV");
+        warm(&schema, "t_a", "not-a-shard");
+        let result = copy.shard(&[CopyData::new("t_a,hello\n".as_bytes())]).await;
+        assert!(result.is_err());
+    }
+
+    /// Binary COPY decodes the key, translates, and routes by the
+    /// returned shard number.
+    #[tokio::test]
+    async fn test_copy_binary_lookup_result_shard() {
+        let (mut copy, schema) = shard_mode_copy(
+            "COPY sharded_lookup (customer_id, value) FROM STDIN (FORMAT 'binary')",
+        );
+        // Bigint key for the binary decode path.
+        if let Some(table) = copy.sharded_table.as_mut() {
+            table.data_type = DataType::Bigint;
+            table.column = "customer_id".into();
+        }
+        schema.tables.lookup_cache().insert(
+            LookupTable {
+                schema: None,
+                name: Some("sharded_lookup".into()),
+                column: "customer_id".into(),
+            },
+            "42".into(),
+            "1".into(),
+        );
+
+        let mut data = b"PGCOPY".to_vec();
+        data.push(b'\n');
+        data.push(255);
+        data.push(b'\r');
+        data.push(b'\n');
+        data.push(b'\0');
+        data.extend(0_i32.to_be_bytes());
+        data.extend(0_i32.to_be_bytes());
+        data.extend(2_i16.to_be_bytes());
+        data.extend(8_i32.to_be_bytes());
+        data.extend(42_i64.to_be_bytes());
+        data.extend(3_i32.to_be_bytes());
+        data.extend(b"yes");
+        data.extend((-1_i16).to_be_bytes());
+
+        let rows = copy.shard(&[CopyData::new(data.as_slice())]).await.unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].shard(), &Shard::All);
+        assert_eq!(rows[1].shard(), &Shard::Direct(1));
+        assert_eq!(rows[2].shard(), &Shard::All);
     }
 }

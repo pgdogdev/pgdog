@@ -439,6 +439,7 @@ impl Table {
     pub async fn data_sync(
         &mut self,
         source: &Address,
+        source_cluster: &Cluster,
         dest: &Cluster,
         cancel: &CancellationToken,
         tracker: &TableCopy,
@@ -459,6 +460,7 @@ impl Table {
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
         let mut copy_sub = CopySubscriber::new(
             copy.statement(),
+            source_cluster,
             dest,
             #[cfg(not(feature = "new_parser"))]
             self.query_parser_engine,

@@ -22,6 +22,7 @@ pub use general::{General, LogFormat};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use overrides::Overrides;
+use pgdog_config::LookupResult;
 use pgdog_config::ShardedTableConfig;
 pub use pgdog_config::auth::{AuthType, PassthroughAuth};
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -65,6 +66,7 @@ pub fn load(config: &Path, users: &Path) -> Result<ConfigAndUsers, Error> {
 
 pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.check()?;
+    validate_lookup_queries(&config)?;
     for table in config.config.sharded_tables.iter_mut() {
         // TODO: synchronous io operations inside that could be parallelized.
         // And also moved outside the configuration to the place of
@@ -72,6 +74,124 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     }
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
+}
+
+/// Validate sharding key lookup queries with the SQL parser:
+/// the query must be syntactically valid, a single statement, and
+/// reference exactly one parameter, `$1`. `lookup_result = "shard"`
+/// requires a lookup query and never hashes, so every hash-related
+/// setting on such a table is a contradiction and fails loudly.
+fn validate_lookup_queries(config: &ConfigAndUsers) -> Result<(), Error> {
+    for table in &config.config.sharded_tables {
+        let error = |message: String| {
+            Error::ParseError(format!(
+                "sharded table \"{}\", column \"{}\": {}",
+                table.name.as_deref().unwrap_or("*"),
+                table.column,
+                message,
+            ))
+        };
+
+        if table.lookup_result == LookupResult::Shard {
+            if table.lookup_query.is_none() {
+                return Err(error(
+                    "\"lookup_result = 'shard'\" requires a \"lookup_query\"".into(),
+                ));
+            }
+            if table.mapping.is_some() {
+                return Err(error(
+                    "\"lookup_result = 'shard'\" never hashes and can't be combined with \"mapping\""
+                        .into(),
+                ));
+            }
+            if !table.centroids.is_empty() || table.centroids_path.is_some() {
+                return Err(error(
+                    "\"lookup_result = 'shard'\" never hashes and can't be combined with centroids"
+                        .into(),
+                ));
+            }
+            if table.hasher != Hasher::default() {
+                return Err(error(
+                    "\"lookup_result = 'shard'\" never hashes and can't be combined with \"hasher\""
+                        .into(),
+                ));
+            }
+        }
+
+        let Some(query) = &table.lookup_query else {
+            continue;
+        };
+
+        validate_lookup_query(query).map_err(error)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "new_parser")]
+fn validate_lookup_query(query: &str) -> Result<(), String> {
+    use itertools::Itertools;
+    use pg_raw_parse::{
+        Node,
+        walk::{Recurse, walk_manual},
+    };
+    use std::ops::ControlFlow;
+
+    let ast = pg_raw_parse::parse(query)
+        .map_err(|err| format!("\"lookup_query\" is invalid: {}", err))?;
+    let stmt = ast
+        .stmts()
+        .exactly_one()
+        .map_err(|_| "\"lookup_query\" must be a single statement".to_string())?;
+
+    let mut saw_param = false;
+    let other_param = walk_manual(stmt, |node| match node {
+        Node::ParamRef(param) if param.number != 1 => ControlFlow::Break(()),
+        Node::ParamRef(_) => {
+            saw_param = true;
+            Recurse::yes()
+        }
+        _ => Recurse::yes(),
+    })
+    .is_some();
+
+    if other_param || !saw_param {
+        return Err("\"lookup_query\" must reference exactly one parameter, \"$1\"".into());
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "new_parser"))]
+fn validate_lookup_query(query: &str) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    let ast =
+        pg_query::parse(query).map_err(|err| format!("\"lookup_query\" is invalid: {}", err))?;
+
+    if ast.protobuf.stmts.len() != 1 {
+        return Err("\"lookup_query\" must be a single statement".into());
+    }
+
+    // Best effort: `nodes()` covers the node types a lookup query
+    // realistically uses, but isn't guaranteed to visit every subtree.
+    // A parameter it misses fails loudly at runtime instead, when the
+    // lookup query runs with a single bound value.
+    let params = ast
+        .protobuf
+        .nodes()
+        .into_iter()
+        .filter_map(|(node, ..)| match node {
+            pg_query::NodeRef::ParamRef(param) => Some(param.number),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+
+    if params != HashSet::from([1]) {
+        return Err("\"lookup_query\" must reference exactly one parameter, \"$1\"".into());
+    }
+
+    Ok(())
 }
 
 /// Load configuration from a list of database URLs.
@@ -323,4 +443,139 @@ fn load_test_sharded_n(num_shards: usize) {
 
     set(config).unwrap();
     init().unwrap();
+}
+
+#[cfg(test)]
+mod lookup_query_tests {
+    use super::*;
+
+    fn config_with_query(query: &str) -> ConfigAndUsers {
+        let source = format!(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_query = "{}"
+"#,
+            query
+        );
+
+        ConfigAndUsers {
+            config: toml::from_str(&source).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_lookup_query_valid() {
+        let config =
+            config_with_query("SELECT COALESCE(parent_tenant_id, id) FROM tenants WHERE id = $1");
+        validate_lookup_queries(&config).unwrap();
+    }
+
+    fn config_from(source: &str) -> ConfigAndUsers {
+        ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_lookup_result_shard_requires_query() {
+        let config = config_from(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_result = "shard"
+"#,
+        );
+        assert!(validate_lookup_queries(&config).is_err());
+    }
+
+    #[test]
+    fn test_lookup_result_shard_never_hashes_config() {
+        // Valid: query + shard mode, no hash-related settings.
+        let config = config_from(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+lookup_result = "shard"
+"#,
+        );
+        validate_lookup_queries(&config).unwrap();
+
+        // Mapping contradicts shard mode.
+        let config = config_from(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+lookup_result = "shard"
+
+[[sharded_tables.mapping]]
+values = [1]
+shard = 0
+"#,
+        );
+        assert!(validate_lookup_queries(&config).is_err());
+
+        // Centroids contradict shard mode.
+        let config = config_from(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+lookup_result = "shard"
+centroids = [[1.0, 2.0]]
+"#,
+        );
+        assert!(validate_lookup_queries(&config).is_err());
+
+        // A non-default hasher contradicts shard mode.
+        let config = config_from(
+            r#"
+[[sharded_tables]]
+database = "prod"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+lookup_result = "shard"
+hasher = "sha1"
+"#,
+        );
+        assert!(validate_lookup_queries(&config).is_err());
+    }
+
+    #[test]
+    fn test_lookup_query_requires_valid_sql() {
+        let config = config_with_query("SELEC oops");
+        let err = validate_lookup_queries(&config).unwrap_err();
+        assert!(err.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn test_lookup_query_requires_single_statement() {
+        let config = config_with_query("SELECT 1; SELECT 2");
+        let err = validate_lookup_queries(&config).unwrap_err();
+        assert!(err.to_string().contains("single statement"));
+    }
+
+    #[test]
+    fn test_lookup_query_requires_placeholder() {
+        let config = config_with_query("SELECT parent FROM tenants");
+        let err = validate_lookup_queries(&config).unwrap_err();
+        assert!(err.to_string().contains("$1"));
+
+        let config = config_with_query("SELECT parent FROM tenants WHERE id = $1 AND x = $2");
+        let err = validate_lookup_queries(&config).unwrap_err();
+        assert!(err.to_string().contains("$1"));
+
+        let config = config_with_query("SELECT parent FROM tenants WHERE x = $2");
+        let err = validate_lookup_queries(&config).unwrap_err();
+        assert!(err.to_string().contains("$1"));
+    }
 }

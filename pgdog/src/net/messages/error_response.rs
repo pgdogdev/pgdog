@@ -110,11 +110,36 @@ impl ErrorResponse {
         }
     }
 
+    pub fn omni_write_with_directive() -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "cannot write to an omnisharded table with a shard directive".into(),
+            detail: Some(
+                "the write must reach every shard, but a pgdog_shard or pgdog_sharding_key \
+                 comment, or SET pgdog.shard or pgdog.sharding_key, routes it to one"
+                    .into(),
+            ),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
     pub fn direct_shard_mismatch() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
             message: "cannot switch shards in a direct-to-shard transaction".into(),
+            routine: Some("client::QueryEngine::route_query".into()),
+            ..Default::default()
+        }
+    }
+
+    pub fn sharding_key_lookup(reason: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: format!("sharding key lookup failed: {}", reason),
             routine: Some("client::QueryEngine::route_query".into()),
             ..Default::default()
         }

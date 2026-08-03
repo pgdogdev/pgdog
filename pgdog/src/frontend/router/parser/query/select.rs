@@ -80,18 +80,20 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables) = {
+        let (shard, is_sharded, tables, pending_lookups) = {
             let mut statement_parser = StatementParser::from_select(
                 stmt.into(),
                 context.router_context.bind,
                 &context.sharding_schema,
                 self.recorder_mut(),
             );
+            statement_parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
             let shard = statement_parser.shard()?;
+            let pending_lookups = statement_parser.take_pending_lookups();
 
             if shard.is_some() {
-                (shard, true, vec![])
+                (shard, true, vec![], pending_lookups)
             } else {
                 (
                     None,
@@ -101,9 +103,12 @@ impl QueryParser {
                         context.router_context.parameter_hints.search_path,
                     ),
                     statement_parser.extract_tables(),
+                    pending_lookups,
                 )
             }
         };
+
+        context.pending_lookups.extend(pending_lookups);
 
         if let Some(shard) = shard {
             shards.insert(shard);
@@ -306,18 +311,21 @@ impl QueryParser {
 
                 let mut shards = HashSet::new();
 
-                let (shard, is_sharded, tables) = {
+                let (shard, is_sharded, tables, pending_lookups) = {
                     let mut statement_parser = StatementParser::from_select(
                         stmt_old,
                         context.router_context.bind,
                         &context.sharding_schema,
                         self.recorder_mut(),
                     );
+                    statement_parser
+                        .set_resolved_lookups(&context.router_context.resolved_lookups);
 
                     let shard = statement_parser.shard()?;
+                    let pending_lookups = statement_parser.take_pending_lookups();
 
                     if shard.is_some() {
-                        (shard, true, vec![])
+                        (shard, true, vec![], pending_lookups)
                     } else {
                         (
                             None,
@@ -327,9 +335,12 @@ impl QueryParser {
                                 context.router_context.parameter_hints.search_path,
                             ),
                             statement_parser.extract_tables(),
+                            pending_lookups,
                         )
                     }
                 };
+
+                context.pending_lookups.extend(pending_lookups);
 
                 if let Some(shard) = shard {
                     shards.insert(shard);

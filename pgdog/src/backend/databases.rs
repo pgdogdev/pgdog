@@ -516,6 +516,8 @@ fn resolve_sharded_table(
         centroid_probes: config.centroid_probes,
         hasher: config.hasher.clone(),
         mapping: mapping.flatten(),
+        lookup_query: config.lookup_query.clone(),
+        lookup_result: config.lookup_result,
     }
 }
 

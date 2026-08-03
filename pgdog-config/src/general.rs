@@ -714,6 +714,22 @@ pub struct General {
     #[serde(default)]
     pub resharding_copy_format: CopyFormat,
 
+    /// Maximum size, in bytes, of the sharding key lookup cache holding
+    /// `lookup_query` results, per cluster. The least recently used
+    /// translations are evicted when the cache is full; evicted values
+    /// are looked up again on their next use.
+    ///
+    /// _Default:_ `67108864` (64MB)
+    #[serde(default = "General::sharding_lookup_cache_size")]
+    pub sharding_lookup_cache_size: usize,
+
+    /// How long a sharding key lookup query (`lookup_query`) can run, in
+    /// milliseconds, before the statement waiting on it fails.
+    ///
+    /// _Default:_ `5000` (5 seconds)
+    #[serde(default = "General::sharding_lookup_timeout")]
+    pub sharding_lookup_timeout: u64,
+
     /// How many parallel copies to launch, irrespective of the number of available replicas.
     #[serde(default = "General::resharding_parallel_copies")]
     pub resharding_parallel_copies: usize,
@@ -907,6 +923,8 @@ impl Default for General {
             system_catalogs: Self::default_system_catalogs(),
             omnisharded_sticky: bool::default(),
             resharding_copy_format: CopyFormat::default(),
+            sharding_lookup_cache_size: Self::sharding_lookup_cache_size(),
+            sharding_lookup_timeout: Self::sharding_lookup_timeout(),
             resharding_parallel_copies: Self::resharding_parallel_copies(),
             resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
             resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
@@ -1309,6 +1327,17 @@ impl General {
         Self::env_or_default("PGDOG_BROADCAST_PORT", Self::port() + 1)
     }
 
+    fn sharding_lookup_cache_size() -> usize {
+        64 * 1024 * 1024
+    }
+
+    /// Default for [`Self::sharding_lookup_timeout`]. Public so the
+    /// value has a single source of truth: `Cluster` falls back to it
+    /// when built without config (tests).
+    pub fn sharding_lookup_timeout() -> u64 {
+        5_000
+    }
+
     fn healthcheck_timeout() -> u64 {
         Self::env_or_default(
             "PGDOG_HEALTHCHECK_TIMEOUT",
@@ -1451,6 +1480,24 @@ impl General {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn test_sharding_lookup_cache_size() {
+        let general = General::default();
+        assert_eq!(general.sharding_lookup_cache_size, 64 * 1024 * 1024);
+
+        let general: General = toml::from_str("sharding_lookup_cache_size = 1048576").unwrap();
+        assert_eq!(general.sharding_lookup_cache_size, 1048576);
+    }
+
+    #[test]
+    fn test_sharding_lookup_timeout() {
+        let general = General::default();
+        assert_eq!(general.sharding_lookup_timeout, 5_000);
+
+        let general: General = toml::from_str("sharding_lookup_timeout = 1000").unwrap();
+        assert_eq!(general.sharding_lookup_timeout, 1_000);
+    }
 
     #[test]
     fn test_frontend_query_size_limit_block() {

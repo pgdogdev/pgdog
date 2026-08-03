@@ -21,6 +21,15 @@ pub enum Error {
     #[error("no sharding column in CSV")]
     NoShardingColumn,
 
+    #[error("cannot translate a binary sharding key of this data type through a lookup")]
+    LookupBinaryCopy,
+
+    #[error("sharding key lookup failed: {0}")]
+    Lookup(String),
+
+    #[error("cannot write to an omnisharded table with a shard directive")]
+    OmniWriteWithDirective,
+
     #[error("{0}")]
     Net(#[from] crate::net::Error),
 

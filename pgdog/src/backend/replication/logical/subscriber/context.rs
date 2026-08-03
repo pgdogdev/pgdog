@@ -6,7 +6,10 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
         client::Sticky,
-        router::parser::{AstContext, Cache, Shard},
+        router::{
+            parser::{AstContext, Cache, Shard},
+            sharding::lookup,
+        },
     },
     net::{Bind, Parameters, Parse, replication::TupleData},
 };
@@ -24,9 +27,9 @@ impl StreamContext {
     ///
     /// Runs the router to resolve the destination shard. Returns an error if
     /// routing fails (e.g. unparseable query, wrong command type).
-    pub fn new(cluster: &Cluster, tuple: &TupleData, stmt: &Parse) -> Result<Self, Error> {
+    pub async fn new(cluster: &Cluster, tuple: &TupleData, stmt: &Parse) -> Result<Self, Error> {
         let bind = tuple.to_bind(stmt.name());
-        let shard = Self::resolve_shard(cluster, &bind, stmt)?;
+        let shard = Self::resolve_shard(cluster, &bind, stmt).await?;
         Ok(Self { bind, shard })
     }
 
@@ -35,7 +38,7 @@ impl StreamContext {
     /// Takes the already-built `bind` so the router sees the real parameter values
     /// (required for sharding-key extraction). Separated from `new` so the routing
     /// logic can be read, tested, and changed independently of bind construction.
-    fn resolve_shard(cluster: &Cluster, bind: &Bind, stmt: &Parse) -> Result<Shard, Error> {
+    async fn resolve_shard(cluster: &Cluster, bind: &Bind, stmt: &Parse) -> Result<Shard, Error> {
         lazy_static! {
             static ref PARAMS: Parameters = Parameters::default();
         }
@@ -53,9 +56,30 @@ impl StreamContext {
 
         let router_context = RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?;
         let mut router = Router::new();
-        let route = router.query(router_context)?;
+        router.query(router_context)?;
 
-        if let Command::Query(route) = route {
+        // Sharding key lookups that missed the cache: resolve them and
+        // route once more, with the translations handed to the second
+        // pass through the router context, so it can't miss. A lookup
+        // that can't be resolved fails the statement, so replicated
+        // rows are never placed by their untranslated value.
+        let pending = router.command().route().pending_lookups().to_vec();
+        if !pending.is_empty() {
+            let resolved = lookup::resolve(cluster, pending)
+                .await
+                .map_err(|err| Error::Lookup(err.message.clone()))?;
+            let router_context =
+                RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?
+                    .with_resolved_lookups(resolved);
+            router.query(router_context)?;
+
+            // Defensive: can't happen unless routing stops being deterministic.
+            if !router.command().route().pending_lookups().is_empty() {
+                return Err(Error::Lookup("lookups did not resolve routing".into()));
+            }
+        }
+
+        if let Command::Query(route) = router.command() {
             Ok(route.shard().clone())
         } else {
             Err(Error::IncorrectCommand)
@@ -65,6 +89,12 @@ impl StreamContext {
     /// The `Bind` message to send to the destination.
     pub fn bind(&self) -> &Bind {
         &self.bind
+    }
+
+    /// Consume the context into the routed shard and the `Bind`, so
+    /// the send path owns the message without cloning it.
+    pub fn into_parts(self) -> (Shard, Bind) {
+        (self.shard, self.bind)
     }
 
     /// The shard(s) the statement should be routed to.
@@ -121,8 +151,8 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_stream_context() {
+    #[tokio::test]
+    async fn test_stream_context() {
         let cluster = Cluster::new_test(&config());
         let tuple = TupleData {
             columns: vec![Column {
@@ -133,12 +163,12 @@ mod test {
         };
         let parse = Parse::new_anonymous("INSERT INTO sharded (customer_id) VALUES ($1)");
 
-        let shard = StreamContext::new(&cluster, &tuple, &parse).unwrap();
+        let shard = StreamContext::new(&cluster, &tuple, &parse).await.unwrap();
         assert!(matches!(shard.shard(), Shard::Direct(_)));
     }
 
-    #[test]
-    fn test_stream_context_binary_shard_key() {
+    #[tokio::test]
+    async fn test_stream_context_binary_shard_key() {
         // Binary-format shard key must flow through to_bind() and reach the router
         // with Format::Binary preserved so sharding hashes the binary bigint correctly.
         let cluster = Cluster::new_test(&config());
@@ -152,7 +182,7 @@ mod test {
         };
         let parse = Parse::new_anonymous("INSERT INTO sharded (id) VALUES ($1)");
 
-        let ctx = StreamContext::new(&cluster, &tuple, &parse).unwrap();
+        let ctx = StreamContext::new(&cluster, &tuple, &parse).await.unwrap();
         assert_eq!(ctx.bind().parameter_format(0).unwrap(), Format::Binary);
         assert_eq!(
             ctx.bind().parameter(0).unwrap().unwrap().data(),

@@ -2,6 +2,7 @@
 pub mod clients;
 pub mod clients_locked;
 pub mod http_server;
+pub mod lookup;
 pub mod mirror_stats;
 pub mod open_metric;
 pub mod otel;
@@ -18,6 +19,7 @@ pub use clients::Clients;
 pub use clients_locked::ClientsLocked;
 pub use listeners::Listeners;
 pub use logger::Logger as StatsLogger;
+pub use lookup::LookupMetrics;
 pub use mirror_stats::MirrorStatsMetrics;
 pub use pools::{PoolMetric, Pools};
 pub use query_cache::QueryCache;

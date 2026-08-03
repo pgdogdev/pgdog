@@ -24,9 +24,10 @@ use crate::{
     net::{
         Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
-            Authentication, BackendKeyData, BackendPid, ErrorResponse, FromBytes, FrontendPid,
-            Message, ParameterStatus, Password, Protocol, Query, ReadyForQuery, Startup, Terminate,
-            ToBytes, hello::SslReply,
+            Authentication, BackendKeyData, BackendPid, Bind, ErrorResponse, Execute, Format,
+            FromBytes, FrontendPid, Message, ParameterStatus, Password, Protocol, Query,
+            ReadyForQuery, Startup, Terminate, ToBytes, bind::Parameter as BindParameter,
+            hello::SslReply, parse::Parse,
         },
     },
     stats::memory::MemoryUsage,
@@ -41,6 +42,87 @@ use crate::{
     },
 };
 use crate::{net::tweak, state::State};
+
+/// A request executed on a server connection: simple-protocol queries,
+/// or an extended-protocol message batch ending in a Sync.
+#[derive(Debug, Clone)]
+pub struct ServerRequest {
+    /// Protocol messages to send.
+    messages: Vec<ProtocolMessage>,
+    /// Number of ReadyForQuery (B) messages that complete the request.
+    expected: usize,
+}
+
+impl ServerRequest {
+    /// Anonymous extended-protocol query with text-format parameters.
+    /// Parameters are bound by the server, so values don't need to be
+    /// escaped.
+    pub fn parameterized(query: &str, params: &[BindParameter]) -> Self {
+        Self {
+            messages: vec![
+                Parse::new_anonymous(query).into(),
+                Bind::new_params_codes("", params, &[Format::Text]).into(),
+                Execute::new().into(),
+                ProtocolMessage::from(Sync::new()),
+            ],
+            expected: 1,
+        }
+    }
+}
+
+impl From<&str> for ServerRequest {
+    fn from(query: &str) -> Self {
+        Query::new(query).into()
+    }
+}
+
+impl From<String> for ServerRequest {
+    fn from(query: String) -> Self {
+        Query::new(query).into()
+    }
+}
+
+impl From<&String> for ServerRequest {
+    fn from(query: &String) -> Self {
+        Query::new(query).into()
+    }
+}
+
+impl From<Query> for ServerRequest {
+    fn from(query: Query) -> Self {
+        Self {
+            messages: vec![ProtocolMessage::Query(query)],
+            expected: 1,
+        }
+    }
+}
+
+impl From<Vec<Query>> for ServerRequest {
+    fn from(queries: Vec<Query>) -> Self {
+        Self {
+            expected: queries.len(),
+            messages: queries.into_iter().map(ProtocolMessage::Query).collect(),
+        }
+    }
+}
+
+impl From<&[Query]> for ServerRequest {
+    fn from(queries: &[Query]) -> Self {
+        queries.to_vec().into()
+    }
+}
+
+impl<const N: usize> From<&[Query; N]> for ServerRequest {
+    fn from(queries: &[Query; N]) -> Self {
+        queries.as_slice().into()
+    }
+}
+
+impl From<&Vec<Query>> for ServerRequest {
+    fn from(queries: &Vec<Query>) -> Self {
+        queries.clone().into()
+    }
+}
 
 /// PostgreSQL server connection.
 #[derive(Debug)]
@@ -766,31 +848,32 @@ impl Server {
     }
 
     /// Execute a batch of queries and return all results.
-    pub async fn execute_batch(&mut self, queries: &[Query]) -> Result<Vec<Message>, Error> {
+    pub async fn execute_batch(
+        &mut self,
+        request: impl Into<ServerRequest>,
+    ) -> Result<Vec<Message>, Error> {
+        let request = request.into();
         let mut err = None;
         if !self.in_sync() {
             return Err(Error::NotInSync);
         }
 
-        // Empty queries will throw the server out of sync.
-        if queries.is_empty() {
+        // Empty requests will throw the server out of sync.
+        if request.messages.is_empty() {
             return Ok(vec![]);
         }
 
         #[cfg(debug_assertions)]
-        for query in queries {
-            debug!("{} [{}]", query.query(), self.addr());
+        for message in &request.messages {
+            if let ProtocolMessage::Query(query) = message {
+                debug!("{} [{}]", query.query(), self.addr());
+            }
         }
 
         let mut messages = vec![];
-        let queries = queries
-            .iter()
-            .map(Clone::clone)
-            .map(ProtocolMessage::Query)
-            .collect::<Vec<ProtocolMessage>>();
-        let expected = queries.len();
+        let expected = request.expected;
 
-        self.send(&queries.into()).await?;
+        self.send(&request.messages.into()).await?;
 
         let mut zs = 0;
         while zs < expected {
@@ -813,17 +896,19 @@ impl Server {
     }
 
     /// Execute a query on the server and return the result.
-    pub async fn execute(&mut self, query: impl Into<Query>) -> Result<Vec<Message>, Error> {
-        let query = query.into();
-        self.execute_batch(&[query]).await
+    pub async fn execute(
+        &mut self,
+        request: impl Into<ServerRequest>,
+    ) -> Result<Vec<Message>, Error> {
+        self.execute_batch(request).await
     }
 
     /// Execute query and raise an error if one is returned by PostgreSQL.
     pub async fn execute_checked(
         &mut self,
-        query: impl Into<Query>,
+        request: impl Into<ServerRequest>,
     ) -> Result<Vec<Message>, Error> {
-        let messages = self.execute(query).await?;
+        let messages = self.execute(request).await?;
         let notices = messages.iter().filter(|m| m.code() == 'N');
 
         for notice in notices {
@@ -843,9 +928,9 @@ impl Server {
     /// Execute a query and return all rows.
     pub async fn fetch_all<T: From<DataRow>>(
         &mut self,
-        query: impl Into<Query>,
+        request: impl Into<ServerRequest>,
     ) -> Result<Vec<T>, Error> {
-        let messages = self.execute_checked(query).await?;
+        let messages = self.execute_checked(request).await?;
         Ok(messages
             .into_iter()
             .filter(|message| message.code() == 'D')
@@ -853,6 +938,18 @@ impl Server {
             .map(DataRow::from_bytes)
             .map(|maybe_row| maybe_row.map(T::from))
             .collect::<Result<Vec<T>, _>>()?)
+    }
+
+    /// Execute a query with text-format parameters using the extended
+    /// protocol and return all rows. Parameters are bound by the server,
+    /// so values don't need to be escaped.
+    pub async fn fetch_all_params<T: From<DataRow>>(
+        &mut self,
+        query: &str,
+        params: &[BindParameter],
+    ) -> Result<Vec<T>, Error> {
+        self.fetch_all(ServerRequest::parameterized(query, params))
+            .await
     }
 
     /// Perform a healthcheck on this connection using the provided query.
@@ -1519,6 +1616,52 @@ pub mod test {
         }
 
         assert!(server.done());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_all_params() {
+        use crate::net::bind::Parameter;
+        let mut server = test_server().await;
+
+        let rows = server
+            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(b"hello")])
+            .await
+            .unwrap();
+        assert_eq!(rows, vec!["hello".to_string()]);
+        assert!(server.done());
+
+        // Values are bound by the server, not spliced into the query.
+        let injection = "'; DROP TABLE users; --";
+        let rows = server
+            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(injection.as_bytes())])
+            .await
+            .unwrap();
+        assert_eq!(rows, vec![injection.to_string()]);
+        assert!(server.done());
+
+        // No rows.
+        let rows = server
+            .fetch_all_params::<String>(
+                "SELECT relname::text FROM pg_class WHERE relname = $1",
+                &[Parameter::new(b"no_such_table_fetch_all_params")],
+            )
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
+        assert!(server.done());
+
+        // Errors are returned and the connection stays usable.
+        let err = server
+            .fetch_all_params::<String>("SELECT no_such_column", &[])
+            .await;
+        assert!(err.is_err());
+        assert!(server.done());
+
+        let rows = server
+            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(b"still works")])
+            .await
+            .unwrap();
+        assert_eq!(rows, vec!["still works".to_string()]);
     }
 
     #[tokio::test]

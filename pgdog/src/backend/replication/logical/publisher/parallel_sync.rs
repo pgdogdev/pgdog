@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 struct ParallelSync {
     table: Table,
     addr: Address,
+    source: Cluster,
     dest: Cluster,
     permit: Arc<Semaphore>,
     cancel: CancellationToken,
@@ -64,7 +65,7 @@ impl ParallelSync {
         loop {
             match self
                 .table
-                .data_sync(&self.addr, &self.dest, &self.cancel, tracker)
+                .data_sync(&self.addr, &self.source, &self.dest, &self.cancel, tracker)
                 .await
             {
                 Ok(_) => return Ok(self.table),
@@ -164,12 +165,18 @@ pub struct ParallelSyncManager {
     permit: Arc<Semaphore>,
     tables: Vec<Table>,
     replicas: Vec<Pool>,
+    source: Cluster,
     dest: Cluster,
 }
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(tables: Vec<Table>, replicas: Vec<Pool>, dest: Cluster) -> Result<Self, Error> {
+    pub fn new(
+        tables: Vec<Table>,
+        replicas: Vec<Pool>,
+        source: Cluster,
+        dest: Cluster,
+    ) -> Result<Self, Error> {
         if replicas.is_empty() {
             return Err(Error::NoReplicas);
         }
@@ -185,6 +192,7 @@ impl ParallelSyncManager {
             )),
             tables,
             replicas,
+            source,
             dest,
         })
     }
@@ -218,6 +226,7 @@ impl ParallelSyncManager {
                 ParallelSync {
                     table,
                     addr: replica.addr().clone(),
+                    source: self.source.clone(),
                     dest: self.dest.clone(),
                     permit: self.permit.clone(),
                     cancel: cancel.clone(),

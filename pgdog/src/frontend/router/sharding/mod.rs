@@ -18,6 +18,7 @@ pub mod distance_simd_rust;
 pub mod error;
 pub mod ffi;
 pub mod hasher;
+pub mod lookup;
 pub mod mapping;
 pub mod operator;
 pub mod schema;
@@ -31,6 +32,9 @@ pub use context::*;
 pub use context_builder::*;
 pub use error::Error;
 pub use hasher::Hasher;
+pub use lookup::{
+    LookupCache, LookupStats, LookupTable, PendingLookup, ResolvedLookups, ShardOrLookup,
+};
 pub use mapping::Mapping;
 pub use operator::*;
 pub use schema::SchemaSharder;
