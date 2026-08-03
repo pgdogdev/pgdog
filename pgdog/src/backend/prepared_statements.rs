@@ -12,7 +12,7 @@ use crate::{
 use parking_lot::RwLock;
 use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
-use super::{Error, OidMappings, Oids};
+use super::{Error, Oids};
 use super::{
     protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
@@ -477,7 +477,10 @@ impl PreparedStatements {
     }
 
     fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
-        parse.rewrite_data_types(&self.oid_mappings().canonical_to_shard)
+        let Some(mappings) = self.oids.get() else {
+            return false;
+        };
+        parse.rewrite_data_types(&mappings.canonical_to_shard)
     }
 
     /// Rewrite the given RowDescription Message to have the canonical set of
@@ -503,21 +506,18 @@ impl PreparedStatements {
     }
 
     fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
-        let mappings = &self.oid_mappings().shard_to_canonical;
+        let Some(mappings) = self.oids.get() else {
+            return Ok(());
+        };
+        let mappings = &mappings.shard_to_canonical;
         if mappings.is_empty() {
             return Ok(());
         }
 
         let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
-        parameter_description.rewrite_data_types(&self.oid_mappings().shard_to_canonical);
+        parameter_description.rewrite_data_types(mappings);
         message.replace_payload(parameter_description.to_bytes());
         Ok(())
-    }
-
-    fn oid_mappings(&self) -> &OidMappings {
-        self.oids
-            .get()
-            .expect("cluster startup always loads OID information or sets an empty mapping")
     }
 }
 

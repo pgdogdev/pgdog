@@ -22,7 +22,7 @@ pub use connect_reason::ConnectReason;
 pub use disconnect_reason::DisconnectReason;
 pub use error::Error;
 pub(crate) use pool::{
-    CanonicalOids, Cluster, ClusterShardConfig, OidMappings, Oids, Pool, Shard, ShardingSchema,
+    CanonicalOids, Cluster, ClusterShardConfig, Oids, Pool, Shard, ShardingSchema,
 };
 pub use prepared_statements::PreparedStatements;
 pub use protocol::*;

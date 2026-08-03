@@ -250,14 +250,12 @@ fn x_update(u: XLogUpdate) -> CopyData {
 
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    cluster.force_dummy_schema();
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
     StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
 fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    cluster.force_dummy_schema();
     StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
 
@@ -266,13 +264,11 @@ fn make_subscriber_with_tables_two_databases(
     partition: OmniOwnership,
 ) -> StreamSubscriber {
     let cluster = Cluster::new_test_two_databases(&config());
-    cluster.force_dummy_schema();
     StreamSubscriber::new(&cluster, &tables, partition)
 }
 
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
     StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
 }
@@ -614,7 +610,6 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], OmniOwnership::test());
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
@@ -1551,7 +1546,6 @@ fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
 #[tokio::test]
 async fn full_identity_nothing_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_replica_identity_nothing_table()],
@@ -1590,7 +1584,6 @@ async fn full_identity_nothing_rejected() {
 #[tokio::test]
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_omni_table()],
@@ -1634,7 +1627,6 @@ async fn full_identity_omni_no_unique_index_rejected() {
 #[tokio::test]
 async fn full_identity_insert_sharded() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1665,7 +1657,6 @@ async fn full_identity_insert_sharded() {
 #[tokio::test]
 async fn full_identity_update_fast_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1725,7 +1716,6 @@ async fn full_identity_update_fast_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1790,7 +1780,6 @@ async fn full_identity_update_slow_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path_realistic_old_tuple() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1852,7 +1841,6 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
 #[tokio::test]
 async fn full_identity_update_all_toasted_is_noop() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1899,7 +1887,6 @@ async fn full_identity_update_all_toasted_is_noop() {
 #[tokio::test]
 async fn full_identity_delete() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_sharded_table()],
@@ -1942,7 +1929,6 @@ async fn full_identity_delete() {
 #[tokio::test]
 async fn full_identity_insert_omni_dedup() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_omni_dedup_table()],
@@ -2006,7 +1992,6 @@ async fn full_identity_insert_omni_dedup() {
 #[tokio::test]
 async fn full_identity_update_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
@@ -2077,7 +2062,6 @@ async fn full_identity_update_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_delete_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
@@ -2149,7 +2133,6 @@ async fn full_identity_delete_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_update_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],
@@ -2215,7 +2198,6 @@ async fn full_identity_update_matches_null_column() {
 #[tokio::test]
 async fn full_identity_delete_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    cluster.force_dummy_schema();
     let mut sub = StreamSubscriber::new(
         &cluster,
         &[make_full_identity_dup_rows_table()],

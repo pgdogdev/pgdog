@@ -27,7 +27,7 @@ mod oids;
 pub mod role_detector;
 
 use monitor::*;
-pub(crate) use oids::{CanonicalOids, OidMappings, Oids};
+pub(crate) use oids::{CanonicalOids, Oids};
 use role_detector::*;
 
 #[cfg_attr(test, derive(Default))]

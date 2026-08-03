@@ -912,12 +912,6 @@ mod test {
             cluster
         }
 
-        pub(crate) fn force_dummy_schema(&self) {
-            for shard in &self.shards {
-                shard.schema_not_needed();
-            }
-        }
-
         pub(crate) fn set_read_write_strategy(&mut self, rw_strategy: ReadWriteStrategy) {
             self.rw_strategy = rw_strategy;
         }
