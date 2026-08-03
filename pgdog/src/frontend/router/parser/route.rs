@@ -375,13 +375,6 @@ impl Route {
     pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
     }
-
-    pub(crate) fn is_canonical_schema(&self) -> bool {
-        self.shard_with_priority()
-            .source()
-            .override_reason()
-            .is_some_and(|reason| reason.is_canonical_schema_info())
-    }
 }
 
 /// Shard source.
@@ -408,13 +401,6 @@ impl ShardSource {
     pub fn is_round_robin(&self) -> bool {
         matches!(self, Self::RoundRobin(_))
     }
-
-    pub(crate) fn override_reason(&self) -> Option<&OverrideReason> {
-        match self {
-            Self::Override(reason) => Some(reason),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -435,12 +421,6 @@ pub enum OverrideReason {
     RewriteUpdate,
     CrossShardFunction,
     CanonicalSchemaInfo,
-}
-
-impl OverrideReason {
-    pub(crate) fn is_canonical_schema_info(&self) -> bool {
-        matches!(self, OverrideReason::CanonicalSchemaInfo)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
