@@ -1,5 +1,5 @@
 use pgdog_config::PoolerMode;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::backend::Cluster;
 use crate::util::safe_timeout;
@@ -116,9 +116,15 @@ impl QueryEngine {
                     }
 
                     if Self::is_shard_switch(command, &self.backend) {
-                        self.error_response(context, ErrorResponse::direct_shard_mismatch())
-                            .await?;
-                        return Ok(false);
+                        if command.route().is_canonical_schema() {
+                            warn!(
+                                "type information queried in direct-to-shard transaction, cannot route to canonical source"
+                            );
+                        } else {
+                            self.error_response(context, ErrorResponse::direct_shard_mismatch())
+                                .await?;
+                            return Ok(false);
+                        }
                     }
                 }
             }
