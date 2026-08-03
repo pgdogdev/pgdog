@@ -19,9 +19,9 @@ func assertShowField(t *testing.T, query string, field string, value int64, user
 	assert.Equal(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not %d", field, query, value))
 }
 
-func assertShowFieldOneOf(t *testing.T, query string, field string, values []int64, user string, database string, shard int64, role string) {
+func assertShowFieldGt(t *testing.T, query string, field string, value int64, user string, database string, shard int64, role string) {
 	actualValue := showField(t, query, field, user, database, shard, role)
-	assert.Contains(t, values, actualValue, fmt.Sprintf("\"%s\" in %s is not one of %v", field, query, values))
+	assert.Greater(t, value, actualValue, fmt.Sprintf("\"%s\" in %s is not greater than %d", field, query, value))
 }
 
 func showField(t *testing.T, query string, field string, user string, database string, shard int64, role string) int64 {
