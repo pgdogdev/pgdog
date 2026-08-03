@@ -483,6 +483,11 @@
           "maximum": 65535,
           "minimum": 0
         },
+        "provisioning": {
+          "description": "This entry is a shard being provisioned by `ADD SHARD`: declared in\nits final shape (`name`, `shard`, `host`) but excluded from the\nserving topology until the cutover activates it. Remove the flag\nfrom the config once the shard is active.",
+          "type": "boolean",
+          "default": false
+        },
         "read_only": {
           "description": "Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#read_only>",
           "type": [
