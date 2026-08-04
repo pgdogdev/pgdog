@@ -4,6 +4,11 @@ database = "pgdog"
 password = "pgdog"
 
 [[users]]
+name = "pgdog"
+database = "pgdog_leak"
+password = "pgdog"
+
+[[users]]
 name = "pgdog_migrator"
 database = "pgdog"
 password = "pgdog"
