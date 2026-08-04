@@ -60,9 +60,8 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            // The server is ours right now, so its session changes with the
-            // client's. Record it, or we won't know to undo it for whoever
-            // gets this connection next.
+            // The server is ours, so its session changes with the client's:
+            // record it or we won't know what to undo for the next client.
             self.backend.record_params(params, context.in_transaction());
             self.execute(context).await?;
         } else {

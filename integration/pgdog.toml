@@ -55,8 +55,7 @@ read_only = true
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog_leak -------------------------------------------------
-# Exactly one server connection, kept around: tests for session state leaking
-# between clients need the next client to get the same connection back.
+# One server connection, never reaped: the next client has to get the same one.
 
 [[databases]]
 name = "pgdog_leak"
