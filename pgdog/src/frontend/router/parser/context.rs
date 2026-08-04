@@ -114,6 +114,7 @@ impl<'a> QueryParserContext<'a> {
         self.router_context.cluster.pooler_mode() == crate::config::PoolerMode::Session
     }
 
+    #[cfg(feature = "new_parser")]
     pub(super) fn is_canonicalizing_oids(&self) -> bool {
         self.router_context.cluster.is_canonicalizing_oids()
     }

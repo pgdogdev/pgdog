@@ -247,9 +247,9 @@ fn test_system_catalog_sharded() {
 
     let mut updated = config().deref().clone();
     updated.config.general.system_catalogs = SystemCatalogsBehavior::Sharded;
-    config::set(updated).unwrap();
+    updated.config.general.canonicalize_type_information = true;
 
-    let mut test = QueryParserTest::new_with_config(&config());
+    let mut test = QueryParserTest::new_with_config(&updated);
 
     let command = test.execute(vec![Query::new("SELECT * FROM pg_class").into()]);
     assert_eq!(
@@ -291,11 +291,6 @@ fn test_system_catalog_sharded() {
             "to_regtype should go to shard 0",
         );
     }
-
-    // Reset to default
-    let mut updated = config().deref().clone();
-    updated.config.general.system_catalogs = SystemCatalogsBehavior::default();
-    config::set(updated).unwrap();
 }
 
 #[test]

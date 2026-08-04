@@ -31,6 +31,7 @@
         "ban_timeout": 300000,
         "broadcast_address": null,
         "broadcast_port": 6433,
+        "canonicalize_type_information": false,
         "checkout_timeout": 5000,
         "client_connection_recovery": "drop",
         "client_idle_in_transaction_timeout": 9223372036854775807,
@@ -633,6 +634,11 @@
           "default": 6433,
           "maximum": 65535,
           "minimum": 0
+        },
+        "canonicalize_type_information": {
+          "description": "Controls whether PgDog maps each shard's type information to a canonical source.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#canonicalize_type_information>",
+          "type": "boolean",
+          "default": false
         },
         "checkout_timeout": {
           "description": "Maximum amount of time a client is allowed to wait for a connection from the pool.\n\n_Default:_ `5000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#checkout_timeout>",

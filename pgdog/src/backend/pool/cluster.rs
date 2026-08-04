@@ -687,6 +687,7 @@ impl Cluster {
         Ok(())
     }
 
+    #[cfg(feature = "new_parser")]
     pub(crate) fn is_canonicalizing_oids(&self) -> bool {
         self.canonical_oids.is_some()
     }
@@ -825,6 +826,11 @@ mod test {
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
+                canonical_oids: config
+                    .config
+                    .general
+                    .canonicalize_type_information
+                    .then(|| Default::default()),
                 ..Default::default()
             }
         }
