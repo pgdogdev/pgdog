@@ -16,8 +16,8 @@ def connect():
         host="127.0.0.1",
         port=6432,
     )
-    # Without autocommit every statement runs in a transaction that is rolled
-    # back on close, which would undo the very state we're testing for.
+    # Otherwise psycopg wraps each statement in a transaction and rolls it
+    # back on close, undoing the state we're testing for.
     conn.autocommit = True
     return conn
 
