@@ -5,12 +5,7 @@ pub enum Error {
     #[error("unique_id generation failed: {0}")]
     UniqueId(#[from] crate::unique_id::Error),
 
-    #[error("pg_query: {0}")]
-    #[cfg(not(feature = "new_parser"))]
-    PgQuery(#[from] pg_query::Error),
-
     #[error("parser: {0}")]
-    #[cfg(feature = "new_parser")]
     Parser(#[from] pg_raw_parse::Error),
 
     #[error("cache: {0}")]

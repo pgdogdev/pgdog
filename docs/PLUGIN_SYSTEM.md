@@ -64,13 +64,12 @@ Client sends query
 	↓
 PostgreSQL Frontend Parser
 	├─ Tokenize and parse query
-	└─ Generate pg_query AST
+	└─ Generate AST
 	   ↓
 Query Router: QueryParser::parse()
 	├─ Create RouterContext (shards, replicas, etc.)
 	├─ Generate PdRouterContext for plugins
 	│  └─ context.plugin_context(ast, bind_params)
-	│     ├─ Extract AST from pg_query ParseResult
 	│     ├─ Pack bind parameters into PdParameters
 	│     └─ Include cluster metadata (shards, replicas, transaction state)
 	│
@@ -141,7 +140,7 @@ See the [plugins/pgdog-example-plugin/](../plugins/pgdog-example-plugin/) for a 
 ## Safety & Compatibility
 
 - **Rust version:** Plugins must be built with the exact same Rust compiler version as PgDog. Mismatches are skipped at load time.
-- **pg_query version:** Plugins must use the same `pg_query` version as PgDog. Use the re-exports from `pgdog-plugin`.
+- **pg_raw_parse version:** Plugins must use the same `pg_raw_parse` version as PgDog. (The compiler will automatically enforce this)
 - **FFI safety:** All FFI types are `#[repr(C)]` and memory is managed to avoid UB. See [pgdog-plugin/src/bindings.rs](../pgdog-plugin/src/bindings.rs) and [pgdog-plugin/src/parameters.rs](../pgdog-plugin/src/parameters.rs).
 
 ## FFI & ABI Notes
@@ -155,7 +154,7 @@ See the [plugins/pgdog-example-plugin/](../plugins/pgdog-example-plugin/) for a 
 
 - **Opaque pointers hide implementation details:** Pointer fields (e.g., `void*`) obscure the true layout and ownership, so important rules are only in documentation, not enforced by the type system.
 - **Fragile container reinterpretation:** Using `Vec::from_raw_parts` and similar tricks relies on *identical* Rust versions, crate versions, and feature flags. Any mismatch can cause undefined behavior or memory corruption.
-- **Transitive dependency coupling:** Types like the `pg_query` AST or `bytes::Bytes` add hidden constraints on plugin dependencies, making upgrades and changes risky.
+- **Transitive dependency coupling:** Types like the `pg_raw_parse` AST or `bytes::Bytes` add hidden constraints on plugin dependencies, making upgrades and changes risky.
 - **Hard to evolve:** Internal representation changes (e.g., switching `Bytes` → `Vec<u8>`, changing struct layouts) are breaking and require all plugins to be rebuilt in lockstep.
 - **Debugging cost:** ABI or UB problems are subtle, often nondeterministic, and hard to diagnose or reproduce.
 - **No ABI versioning:** There is no formal ABI version negotiation; any change in the host or plugin can silently break compatibility.
@@ -255,7 +254,7 @@ The following areas lack test coverage:
 
 #### Plugin Loading & Lifecycle
 - ❌ Rust compiler version mismatch scenarios
-- ❌ pg_query version verification (currently not implemented)
+- ❌ `pg_raw_parse` version verification (currently not implemented)
 - ❌ Plugin symbol resolution failures
 - ❌ Plugin with missing required functions
 - ❌ Plugin init/fini execution order

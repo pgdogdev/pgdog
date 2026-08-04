@@ -776,7 +776,6 @@ impl Cluster {
             .await
     }
 
-    #[cfg(feature = "new_parser")]
     pub(crate) fn is_canonicalizing_oids(&self) -> bool {
         self.canonical_oids.is_some()
     }

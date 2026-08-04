@@ -104,10 +104,6 @@ pub enum Error {
     #[error("missing data")]
     MissingData,
 
-    #[error("pg_query: {0}")]
-    #[cfg(not(feature = "new_parser"))]
-    PgQuery(#[from] pg_query::Error),
-
     #[error("copy error")]
     Copy,
 

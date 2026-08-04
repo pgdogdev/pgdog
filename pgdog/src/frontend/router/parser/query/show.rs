@@ -3,7 +3,6 @@ use crate::frontend::router::{parser::Shard, round_robin};
 
 impl QueryParser {
     /// Handle SHOW command.
-    #[cfg(feature = "new_parser")]
     pub(super) fn show(
         &mut self,
         stmt: &nodes::VariableShowStmt,
@@ -26,35 +25,6 @@ impl QueryParser {
                 Ok(Command::Query(route))
             }
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn show(
-                &mut self,
-                stmt: &VariableShowStmt,
-                context: &mut QueryParserContext,
-            ) -> Result<Command, Error> {
-                match stmt.name.as_str() {
-                    "pgdog.shards" => Ok(Command::InternalField {
-                        name: "shards".into(),
-                        value: context.shards.to_string(),
-                    }),
-                    "pgdog.unique_id" => Ok(Command::UniqueId),
-                    _ => {
-                        context
-                            .shards_calculator
-                            .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
-                                round_robin::next() % context.shards,
-                            )));
-                        let route = Route::write(context.shards_calculator.shard().clone())
-                            .with_read(context.read_only);
-                        Ok(Command::Query(route))
-                    }
-                }
-            }
-        }
-        _ => {}
     }
 }
 

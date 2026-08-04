@@ -51,14 +51,6 @@ pub struct Context<'a> {
     pub in_transaction: bool,
     /// PgDog strongly believes this statement should go to a primary.
     pub write_override: bool,
-    /// pg_query generated Abstract Syntax Tree of the statement.
-    // Note: This is not at all FFI safe, and is UB across an FFI boundary.
-    // We are relying on an implemenation detail of the compiler that could
-    // change at any time to make this work. There is no safe way to pass
-    // this type, but this won't be an issue with the new parser
-    #[cfg(not(feature = "new_parser"))]
-    pub query: &'a pg_query::protobuf::ParseResult,
-    #[cfg(feature = "new_parser")]
     /// The parsed Abstract Syntax Tree of the statement(s).
     pub query: &'a pg_raw_parse::StmtList,
     /// Bound parameters.
@@ -201,22 +193,12 @@ impl Context<'_> {
 impl Context<'_> {
     #[doc(hidden)]
     pub fn doc_test() -> Self {
-        #[cfg(not(feature = "new_parser"))]
-        use pg_query::protobuf::ParseResult;
-        #[cfg(not(feature = "new_parser"))]
-        static EMPTY_PARSE_RESULT: ParseResult = ParseResult {
-            version: 0,
-            stmts: Vec::new(),
-        };
         Context {
             shards: 1,
             has_replicas: true,
             has_primary: true,
             in_transaction: false,
             write_override: false,
-            #[cfg(not(feature = "new_parser"))]
-            query: &EMPTY_PARSE_RESULT,
-            #[cfg(feature = "new_parser")]
             query: pg_raw_parse::list::empty_list(),
             params: Parameters::default(),
         }

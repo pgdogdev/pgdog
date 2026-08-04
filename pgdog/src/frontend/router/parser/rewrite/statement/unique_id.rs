@@ -1,9 +1,4 @@
 use super::StatementRewrite;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::protobuf::{AConst, ParamRef, String as PgString, TypeCast, TypeName, a_const::Val};
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{Node, NodeEnum};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, make};
 
 impl StatementRewrite<'_> {
@@ -11,7 +6,6 @@ impl StatementRewrite<'_> {
     ///
     /// Returns `Ok(Some(replacement_node))` if the node is a unique_id call,
     /// `Ok(None)` otherwise. Increments `next_param` when in extended mode.
-    #[cfg(feature = "new_parser")]
     pub(super) fn rewrite_unique_id<'mem>(
         node: Node<'_>,
         mem: make::MemoryToken<'mem>,
@@ -46,95 +40,7 @@ impl StatementRewrite<'_> {
         ))
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn rewrite_unique_id(
-                node: &Node,
-                extended: bool,
-                next_param: &mut i32,
-            ) -> Result<Option<Node>, super::Error> {
-                if !Self::is_unique_id(node) {
-                    return Ok(None);
-                }
-
-                let replacement = if extended {
-                    let param_num = *next_param;
-                    *next_param += 1;
-                    Self::param_bigint(param_num)
-                } else {
-                    let unique_id = crate::unique_id::UniqueId::generator()?.next_id();
-                    Self::literal_bigint(unique_id)
-                };
-
-                Ok(Some(replacement))
-            }
-
-        }
-        _ => {}
-    }
-
-    /// Create a parameter reference cast to bigint: $N::bigint
-    #[cfg(not(feature = "new_parser"))]
-    fn param_bigint(number: i32) -> Node {
-        let param_ref = Node {
-            node: Some(NodeEnum::ParamRef(ParamRef {
-                number,
-                ..Default::default()
-            })),
-        };
-
-        Node {
-            node: Some(NodeEnum::TypeCast(Box::new(TypeCast {
-                arg: Some(Box::new(param_ref)),
-                type_name: Some(Self::bigint_type()),
-                ..Default::default()
-            }))),
-        }
-    }
-
-    /// Create a literal value cast to bigint: <value>::bigint
-    #[cfg(not(feature = "new_parser"))]
-    fn literal_bigint(value: i64) -> Node {
-        let literal = Node {
-            node: Some(NodeEnum::AConst(AConst {
-                val: Some(Val::Sval(PgString {
-                    sval: value.to_string(),
-                })),
-                ..Default::default()
-            })),
-        };
-
-        Node {
-            node: Some(NodeEnum::TypeCast(Box::new(TypeCast {
-                arg: Some(Box::new(literal)),
-                type_name: Some(Self::bigint_type()),
-                ..Default::default()
-            }))),
-        }
-    }
-
-    /// Create a TypeName for bigint (int8).
-    #[cfg(not(feature = "new_parser"))]
-    fn bigint_type() -> TypeName {
-        TypeName {
-            names: vec![
-                Node {
-                    node: Some(NodeEnum::String(PgString {
-                        sval: "pg_catalog".to_string(),
-                    })),
-                },
-                Node {
-                    node: Some(NodeEnum::String(PgString {
-                        sval: "int8".to_string(),
-                    })),
-                },
-            ],
-            ..Default::default()
-        }
-    }
-
     /// Check if a node is a function call to pgdog.unique_id().
-    #[cfg(feature = "new_parser")]
     fn is_unique_id(node: Node<'_>) -> bool {
         let Node::FuncCall(func) = node else {
             return false;
@@ -144,34 +50,6 @@ impl StatementRewrite<'_> {
             .iter()
             .filter_map(Node::as_str)
             .eq(["pgdog", "unique_id"])
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn is_unique_id(node: &Node) -> bool {
-                let Some(NodeEnum::FuncCall(func)) = &node.node else {
-                    return false;
-                };
-
-                // Must have exactly 2 parts: schema "pgdog" and function "unique_id"
-                if func.funcname.len() != 2 {
-                    return false;
-                }
-
-                let schema = func.funcname.first().and_then(|n| match &n.node {
-                    Some(NodeEnum::String(s)) => Some(s.sval.as_str()),
-                    _ => None,
-                });
-
-                let name = func.funcname.get(1).and_then(|n| match &n.node {
-                    Some(NodeEnum::String(s)) => Some(s.sval.as_str()),
-                    _ => None,
-                });
-
-                matches!((schema, name), (Some("pgdog"), Some("unique_id")))
-            }
-        }
-        _ => {}
     }
 }
 
@@ -186,7 +64,6 @@ mod tests {
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::router::parser::rewrite::statement::RewritePlan;
     use crate::test_utils::set_env_var;
-    #[cfg(feature = "new_parser")]
     use pg_raw_parse::{Owned, nodes};
 
     fn default_schema() -> ShardingSchema {
@@ -204,7 +81,6 @@ mod tests {
         Schema::default()
     }
 
-    #[cfg(feature = "new_parser")]
     fn parse_first_target(sql: &str) -> Owned<nodes::ResTarget> {
         let ast = pg_raw_parse::parse(sql).unwrap();
         match ast.stmts().next().unwrap() {
@@ -215,69 +91,34 @@ mod tests {
         }
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn parse_first_target(sql: &str) -> Node {
-                let ast = pg_query::parse(sql).unwrap();
-                let stmt = ast.protobuf.stmts.first().unwrap().stmt.as_ref().unwrap();
-                match &stmt.node {
-                    Some(NodeEnum::SelectStmt(select)) => {
-                        let res_target = select.target_list.first().unwrap();
-                        match &res_target.node {
-                            Some(NodeEnum::ResTarget(res)) => *res.val.as_ref().unwrap().clone(),
-                            _ => panic!("expected ResTarget"),
-                        }
-                    }
-                    _ => panic!("expected SelectStmt"),
-                }
-            }
-        }
-        _ => {}
-    }
-
     #[test]
     fn test_is_unique_id_qualified() {
         let node = parse_first_target("SELECT pgdog.unique_id()");
-        #[cfg(feature = "new_parser")]
         assert!(StatementRewrite::is_unique_id(node.val()));
-        #[cfg(not(feature = "new_parser"))]
-        assert!(StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_unqualified() {
         let node = parse_first_target("SELECT unique_id()");
-        #[cfg(feature = "new_parser")]
         assert!(!StatementRewrite::is_unique_id(node.val()));
-        #[cfg(not(feature = "new_parser"))]
-        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_wrong_schema() {
         let node = parse_first_target("SELECT other.unique_id()");
-        #[cfg(feature = "new_parser")]
         assert!(!StatementRewrite::is_unique_id(node.val()));
-        #[cfg(not(feature = "new_parser"))]
-        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_wrong_function() {
         let node = parse_first_target("SELECT pgdog.other_func()");
-        #[cfg(feature = "new_parser")]
         assert!(!StatementRewrite::is_unique_id(node.val()));
-        #[cfg(not(feature = "new_parser"))]
-        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_not_function() {
         let node = parse_first_target("SELECT 1");
-        #[cfg(feature = "new_parser")]
         assert!(!StatementRewrite::is_unique_id(node.val()));
-        #[cfg(not(feature = "new_parser"))]
-        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
@@ -312,12 +153,6 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let (sql, plan) = run_test("SELECT pgdog.unique_id()", false);
 
-        // Value should be a bigint literal cast
-        #[cfg(not(feature = "new_parser"))]
-        assert!(
-            sql.contains("::bigint"),
-            "Expected ::bigint cast, got: {sql}"
-        );
         assert!(
             !sql.contains("pgdog.unique_id"),
             "Function should be replaced: {sql}"
@@ -440,7 +275,6 @@ mod tests {
         assert_eq!(plan.unique_ids, 1);
     }
 
-    #[cfg(feature = "new_parser")]
     fn run_test(sql: &str, extended: bool) -> (String, RewritePlan) {
         let stmt = pg_raw_parse::parse(sql).unwrap();
         let mut ps = PreparedStatements::default();
@@ -464,31 +298,5 @@ mod tests {
         });
         let sql = pg_raw_parse::deparse_stmts(&*ast).unwrap();
         (sql, plan)
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn run_test(sql: &str, extended: bool) -> (String, RewritePlan) {
-                let mut ast = pg_query::parse(sql).unwrap().protobuf;
-                let mut ps = PreparedStatements::default();
-                let schema = default_schema();
-                let db_schema = default_db_schema();
-                let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-                    stmt: &mut ast,
-                    extended,
-                    prepared: false,
-                    prepared_statements: &mut ps,
-                    schema: &schema,
-                    db_schema: &db_schema,
-                    user: "",
-                    search_path: None,
-                });
-                let plan = rewrite
-                    .maybe_rewrite()
-                    .unwrap();
-                (ast.deparse().unwrap(), plan)
-            }
-        }
-        _ => {}
     }
 }

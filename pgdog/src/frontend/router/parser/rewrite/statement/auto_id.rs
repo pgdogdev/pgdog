@@ -1,13 +1,7 @@
 //! Auto-inject pgdog.unique_id() for missing BIGINT primary keys in INSERT statements.
 
 use indexmap::IndexSet;
-#[cfg(feature = "new_parser")]
 use itertools::*;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::protobuf::{FuncCall, ResTarget, String as PgString};
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{Node as PgNode, NodeEnum};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, NodeMut, make, nodes};
 use pgdog_config::RewriteMode;
 
@@ -25,7 +19,6 @@ impl StatementRewrite<'_> {
     ///
     /// This runs before unique_id replacement so injected function calls
     /// will be processed by the unique_id rewriter.
-    #[cfg(feature = "new_parser")]
     pub(super) fn inject_auto_id<'a>(
         &mut self,
         mut node: nodes::InsertStmtMut<'a, '_>,
@@ -100,127 +93,19 @@ impl StatementRewrite<'_> {
         Ok(())
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn inject_auto_id(
-                &mut self,
-                plan: &mut RewritePlan,
-            ) -> Result<(), Error> {
-                let mode = self.schema.rewrite.primary_key;
-
-                if mode == RewriteMode::Ignore || self.schema.shards == 1 {
-                    return Ok(());
-                }
-
-                let Some((table, is_sharded)) = self.get_insert_table() else {
-                    return Ok(());
-                };
-
-                let Some(relation) = self.db_schema.table(table, self.user, self.search_path) else {
-                    return Ok(());
-                };
-
-                // Get the columns specified in the INSERT (preserving order)
-                let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered();
-
-                // Find BIGINT primary key columns
-                let bigint_pk_columns: Vec<&str> = relation
-                    .columns()
-                    .values()
-                    .filter(|col| col.is_primary_key && is_bigint_type(&col.data_type))
-                    .map(|col| col.column_name.as_str())
-                    .collect();
-
-                if bigint_pk_columns.is_empty() {
-                    return Ok(());
-                }
-
-                // Find positions of present PK columns (for DEFAULT replacement)
-                let present_pk_positions: Vec<usize> = bigint_pk_columns
-                    .iter()
-                    .filter_map(|pk_col| insert_columns.get_index_of(pk_col))
-                    .collect();
-
-                // Find which PK columns are missing
-                let missing_columns: Vec<&str> = bigint_pk_columns
-                    .iter()
-                    .filter(|pk_col| !insert_columns.contains(*pk_col))
-                    .copied()
-                    .collect();
-
-                let rewrite =
-                    mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
-
-                // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
-                if rewrite {
-                    let replaced = self.replace_set_to_default_at_positions(&present_pk_positions);
-                    if replaced > 0 {
-                        plan.auto_id_injected += replaced as u16;
-                        self.rewritten = true;
-                    }
-                }
-
-                if missing_columns.is_empty() {
-                    return Ok(());
-                }
-
-                if mode == RewriteMode::Error {
-                    return Err(Error::MissingPrimaryKey);
-                }
-
-                if rewrite {
-                    for column in missing_columns {
-                        self.inject_column_with_unique_id(column)?;
-                        plan.auto_id_injected += 1;
-                    }
-                    self.rewritten = true;
-                }
-
-                Ok(())
-            }
-        }
-        _ => {}
-    }
-
     /// Get the table from an INSERT statement.
-    #[cfg(feature = "new_parser")]
     fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
         let relation = insert.relation().expect("INSERT always has table");
-        let is_sharded = StatementParser::from_insert(insert.into(), None, self.schema, None)
-            .is_sharded(self.db_schema, self.user, self.search_path);
+        let is_sharded = StatementParser::new(insert.into(), None, self.schema, None).is_sharded(
+            self.db_schema,
+            self.user,
+            self.search_path,
+        );
 
         (Table::from(relation), is_sharded)
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn get_insert_table(
-                &self,
-            ) -> Option<(Table<'_>, bool)> {
-                let stmt = self.stmt.stmts.first()?;
-                let pg_node = stmt.stmt.as_ref()?;
-
-                if let NodeEnum::InsertStmt(insert) = pg_node.node.as_ref()? {
-                    let relation = insert.relation.as_ref()?;
-                    let is_sharded = StatementParser::from_insert(
-                        insert,
-                        None,
-                        self.schema,
-                        None,
-                    )
-                    .is_sharded(self.db_schema, self.user, self.search_path);
-
-                    return Some((Table::from(relation), is_sharded));
-                }
-
-                None
-            }
-        }
-        _ => {}
-    }
-
     /// Get the column names specified in the INSERT statement, preserving order.
-    #[cfg(feature = "new_parser")]
     fn get_insert_column_names_ordered<'a>(
         &self,
         insert: &'a nodes::InsertStmt,
@@ -235,38 +120,7 @@ impl StatementRewrite<'_> {
             .collect()
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn get_insert_column_names_ordered(&self) -> IndexSet<&str> {
-                let Some(stmt) = self.stmt.stmts.first() else {
-                    return IndexSet::new();
-                };
-                let Some(node) = stmt.stmt.as_ref() else {
-                    return IndexSet::new();
-                };
-                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_ref() else {
-                    return IndexSet::new();
-                };
-
-                insert
-                    .cols
-                    .iter()
-                    .filter_map(|col| {
-                        if let Some(NodeEnum::ResTarget(res)) = &col.node
-                            && !res.name.is_empty()
-                        {
-                            return Some(res.name.as_str());
-                        }
-                        None
-                    })
-                    .collect()
-            }
-        }
-        _ => {}
-    }
-
     /// Replace SetToDefault nodes at the specified column positions with pgdog.unique_id().
-    #[cfg(feature = "new_parser")]
     fn replace_set_to_default_at_positions<'a, 'b>(
         &mut self,
         insert: &mut nodes::InsertStmtMut<'a, 'b>,
@@ -291,49 +145,7 @@ impl StatementRewrite<'_> {
         replaced
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn replace_set_to_default_at_positions(&mut self, positions: &[usize]) -> usize {
-                let Some(stmt) = self.stmt.stmts.first_mut() else {
-                    return 0;
-                };
-                let Some(node) = stmt.stmt.as_mut() else {
-                    return 0;
-                };
-                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
-                    return 0;
-                };
-                let Some(select) = insert.select_stmt.as_mut() else {
-                    return 0;
-                };
-                let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
-                    return 0;
-                };
-
-                let mut replaced = 0;
-                let unique_id_call = Self::unique_id_func_call();
-
-                for values_node in &mut select_stmt.values_lists {
-                    if let Some(NodeEnum::List(list)) = &mut values_node.node {
-                        for &pos in positions {
-                            if pos < list.items.len()
-                                && let Some(NodeEnum::SetToDefault(_)) = &list.items[pos].node
-                            {
-                                list.items[pos] = unique_id_call.clone();
-                                replaced += 1;
-                            }
-                        }
-                    }
-                }
-
-                replaced
-            }
-        }
-        _ => {}
-    }
-
     /// Inject a column with pgdog.unique_id() as the value.
-    #[cfg(feature = "new_parser")]
     fn inject_column_with_unique_id<'a>(
         &mut self,
         insert: &mut nodes::InsertStmtMut<'a, '_>,
@@ -356,52 +168,7 @@ impl StatementRewrite<'_> {
         }
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn inject_column_with_unique_id(&mut self, column_name: &str) -> Result<(), Error> {
-                let Some(stmt) = self.stmt.stmts.first_mut() else {
-                    return Ok(());
-                };
-                let Some(node) = stmt.stmt.as_mut() else {
-                    return Ok(());
-                };
-                let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut() else {
-                    return Ok(());
-                };
-
-                // Add the column to the column list
-                let col_node = PgNode {
-                    node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-                        name: column_name.to_string(),
-                        ..Default::default()
-                    }))),
-                };
-                insert.cols.push(col_node);
-
-                // Add pgdog.unique_id() to each values list
-                let Some(select) = insert.select_stmt.as_mut() else {
-                    return Ok(());
-                };
-                let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut() else {
-                    return Ok(());
-                };
-
-                let unique_id_call = Self::unique_id_func_call();
-
-                for values_node in &mut select_stmt.values_lists {
-                    if let Some(NodeEnum::List(list)) = &mut values_node.node {
-                        list.items.push(unique_id_call.clone());
-                    }
-                }
-
-                Ok(())
-            }
-        }
-        _ => {}
-    }
-
     /// Create a function call node for pgdog.unique_id().
-    #[cfg(feature = "new_parser")]
     fn unique_id_func_call(mem: make::MemoryToken<'_>) -> make::Unique<'_, &nodes::FuncCall> {
         mem.make_func_call(
             mem.make_list(&[
@@ -411,33 +178,6 @@ impl StatementRewrite<'_> {
             mem.empty(),
             Default::default(),
         )
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn unique_id_func_call() -> PgNode {
-                PgNode {
-                    node: Some(NodeEnum::FuncCall(Box::new(FuncCall {
-                        funcname: vec![
-                            PgNode {
-                                node: Some(NodeEnum::String(PgString {
-                                    sval: "pgdog".to_string(),
-                                })),
-                            },
-                            PgNode {
-                                node: Some(NodeEnum::String(PgString {
-                                    sval: "unique_id".to_string(),
-                                })),
-                            },
-                        ],
-                        args: vec![],
-                        func_variadic: false,
-                        ..Default::default()
-                    }))),
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -744,7 +484,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "new_parser")]
     fn rewrite_sql_with_sharding_schema(
         sql: &str,
         db_schema: &Schema,
@@ -770,38 +509,6 @@ mod tests {
         })?;
         let sql = pg_raw_parse::deparse_stmts(&*ast)?;
         Ok((sql, plan))
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn rewrite_sql_with_sharding_schema(
-                sql: &str,
-                db_schema: &Schema,
-                schema: &ShardingSchema,
-            ) -> Result<(String, RewritePlan), Error> {
-                let _guard = set_env_var("NODE_ID", "pgdog-1");
-                let mut ast = pg_query::parse(sql).unwrap().protobuf;
-                let mut prepared = PreparedStatements::default();
-                let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-                    stmt: &mut ast,
-                    extended: false,
-                    prepared: false,
-                    prepared_statements: &mut prepared,
-                    schema,
-                    db_schema,
-                    user: "",
-                    search_path: None,
-                });
-                let plan = rewriter.maybe_rewrite()?;
-                let result = if plan.stmt.is_some() {
-                    plan.stmt.clone().unwrap()
-                } else {
-                    ast.deparse().unwrap()
-                };
-                Ok((result, plan))
-            }
-        }
-        _ => {}
     }
 
     #[test]

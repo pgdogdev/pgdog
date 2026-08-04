@@ -1,8 +1,5 @@
 //! Parse COPY statement.
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{NodeEnum, protobuf::CopyStmt};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::nodes;
 
 use pgdog_config::LookupResult;
@@ -105,7 +102,6 @@ impl Default for CopyParser {
 
 impl CopyParser {
     /// Create new copy parser from a COPY statement.
-    #[cfg(feature = "new_parser")]
     pub fn new(stmt: &nodes::CopyStmt, cluster: &Cluster) -> Result<Self, Error> {
         let mut parser = Self {
             is_from: stmt.is_from,
@@ -192,111 +188,6 @@ impl CopyParser {
         parser.null_string = null_string;
 
         Ok(parser)
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub fn new(stmt: &CopyStmt, cluster: &Cluster) -> Result<Self, Error> {
-                let mut parser = Self {
-                    is_from: stmt.is_from,
-                    ..Default::default()
-                };
-
-                let mut format = CopyFormat::Text;
-                let mut null_string = "\\N".to_owned();
-
-                if let Some(ref rel) = stmt.relation {
-                    let mut columns = vec![];
-
-                    for column in &stmt.attlist {
-                        if let Ok(column) = Column::from_string(column) {
-                            columns.push(column);
-                        }
-                    }
-
-                    let table = Table::from(rel);
-
-                    // The CopyParser is used for replicating
-                    // data during data-sync. This will ensure all rows
-                    // are sent to the right schema-based shard.
-                    if let Some(schema) = cluster.sharding_schema().schemas.get(table.schema()) {
-                        parser.schema_shard = Some(schema.shard().into());
-                    }
-
-                    if let Some(key) = Tables::new(&cluster.sharding_schema()).key(table, &columns) {
-                        parser.sharded_table = Some(key.table.clone());
-                        parser.sharded_column = key.position;
-                    }
-
-                    parser.columns = columns.len();
-
-                    for option in &stmt.options {
-                        if let Some(NodeEnum::DefElem(ref elem)) = option.node {
-                            match elem.defname.to_lowercase().as_str() {
-                                "format" => {
-                                    if let Some(ref arg) = elem.arg
-                                        && let Some(NodeEnum::String(ref string)) = arg.node
-                                    {
-                                        match string.sval.to_lowercase().as_str() {
-                                            "binary" => {
-                                                parser.headers = true;
-                                                format = CopyFormat::Binary;
-                                            }
-                                            "csv" => {
-                                                if parser.delimiter.is_none() {
-                                                    parser.delimiter = Some(',');
-                                                }
-                                                format = CopyFormat::Csv;
-                                            }
-                                            _ => (),
-                                        }
-                                    }
-                                }
-
-                                "delimiter" => {
-                                    if let Some(ref arg) = elem.arg
-                                        && let Some(NodeEnum::String(ref string)) = arg.node
-                                    {
-                                        parser.delimiter = Some(string.sval.chars().next().unwrap_or(','));
-                                    }
-                                }
-
-                                "header" => {
-                                    parser.headers = true;
-                                }
-
-                                "null" => {
-                                    if let Some(ref arg) = elem.arg
-                                        && let Some(NodeEnum::String(ref string)) = arg.node
-                                    {
-                                        null_string = string.sval.clone();
-                                    }
-                                }
-
-                                _ => (),
-                            }
-                        }
-                    }
-                }
-
-                parser.stream = if format == CopyFormat::Binary {
-                    CopyStream::Binary(BinaryStream::default())
-                } else {
-                    CopyStream::Text(Box::new(CsvStream::new(
-                        parser.delimiter(),
-                        parser.headers,
-                        format,
-                        &null_string,
-                    )))
-                };
-                parser.sharding_schema = cluster.sharding_schema();
-                parser.lookup_cluster = Some(cluster.clone());
-                parser.null_string = null_string;
-
-                Ok(parser)
-            }
-        }
-        _ => {}
     }
 
     #[inline]
@@ -497,7 +388,6 @@ impl CopyParser {
 #[cfg(test)]
 mod test {
     use crate::config::config;
-    #[cfg(feature = "new_parser")]
     use pg_raw_parse::{Node, Owned, make};
 
     use super::*;
@@ -839,27 +729,12 @@ mod test {
         assert_eq!(rows[2].shard(), &Shard::All);
     }
 
-    #[cfg(feature = "new_parser")]
     pub(super) fn parse(sql: &str) -> Owned<nodes::CopyStmt> {
         let stmt = pg_raw_parse::parse(sql).unwrap();
         match stmt.stmts().next() {
             Some(Node::CopyStmt(copy)) => make::owned(|mem| mem.make_unique(copy)),
             _ => panic!("not a copy"),
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn parse(sql: &str) -> Box<CopyStmt> {
-                let stmt = pg_query::parse(sql).unwrap();
-                let stmt = stmt.protobuf.stmts.first().unwrap();
-                match stmt.stmt.clone().unwrap().node.unwrap() {
-                    NodeEnum::CopyStmt(copy) => copy,
-                    _ => panic!("not a copy"),
-                }
-            }
-        }
-        _ => {}
     }
 }
 

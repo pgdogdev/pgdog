@@ -1,12 +1,5 @@
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{Error as PgQueryError, NodeEnum};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{NodeMut, make::MemoryToken};
-#[cfg(not(feature = "new_parser"))]
-use pgdog_config::QueryParserEngine;
 
-#[cfg(not(feature = "new_parser"))]
-use crate::backend::ShardingSchema;
 use crate::frontend::PreparedStatements;
 use crate::net::Parse;
 
@@ -45,7 +38,6 @@ impl StatementRewrite<'_> {
     /// should prepend `ProtocolMessage::Prepare` to the client request using the returned
     /// name and statement.
     ///
-    #[cfg(feature = "new_parser")]
     pub(super) fn rewrite_simple_prepared<'a>(
         &mut self,
         node: NodeMut<'a, '_>,
@@ -70,42 +62,9 @@ impl StatementRewrite<'_> {
 
         Ok(result)
     }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn rewrite_simple_prepared(&mut self) -> Result<SimplePreparedResult, Error> {
-                let mut result = SimplePreparedResult::default();
-
-                if !self.prepared_statements.level.full() {
-                    return Ok(result);
-                }
-
-                for stmt in &mut self.stmt.stmts {
-                    if let Some(ref mut node) = stmt.stmt
-                        && let Some(ref mut inner) = node.node
-                    {
-                        match rewrite_single_prepared(inner, self.prepared_statements, self.schema)? {
-                            SimplePreparedRewrite::Prepared => {
-                                result.rewritten = true;
-                            }
-                            SimplePreparedRewrite::Executed { name, statement } => {
-                                result.prepares.push((name, statement));
-                                result.rewritten = true;
-                            }
-                            SimplePreparedRewrite::None => {}
-                        }
-                    }
-                }
-
-                Ok(result)
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Rewrites a single `PREPARE` or `EXECUTE` node.
-#[cfg(feature = "new_parser")]
 fn rewrite_single_prepared<'a>(
     node: NodeMut<'a, '_>,
     mem: MemoryToken<'a>,
@@ -146,60 +105,6 @@ fn rewrite_single_prepared<'a>(
     }
 }
 
-cfg_select! {
-    not(feature = "new_parser") => {
-        fn rewrite_single_prepared(
-            node: &mut NodeEnum,
-            prepared_statements: &mut PreparedStatements,
-            schema: &ShardingSchema,
-        ) -> Result<SimplePreparedRewrite, Error> {
-            match node {
-                NodeEnum::PrepareStmt(stmt) => {
-                    let query = stmt
-                        .query
-                        .as_ref()
-                        .ok_or(Error::PgQuery(PgQueryError::Parse(
-                            "missing query in PREPARE".into(),
-                        )))?;
-                    let query = match schema.query_parser_engine {
-                        QueryParserEngine::PgQueryProtobuf => query.deparse(),
-                        QueryParserEngine::PgQueryRaw => query.deparse_raw(),
-                    }
-                    .map_err(Error::PgQuery)?;
-
-                    let mut parse = Parse::named(&stmt.name, &query);
-                    prepared_statements.insert_anyway(&mut parse);
-                    stmt.name = parse.name().to_string();
-
-                    Ok(SimplePreparedRewrite::Prepared)
-                }
-
-                NodeEnum::ExecuteStmt(stmt) => {
-                    let parse = prepared_statements.parse(&stmt.name);
-                    if let Some(parse) = parse {
-                        let global_name = parse.name().to_string();
-                        let statement = parse.query().to_string();
-                        stmt.name = global_name.clone();
-
-                        Ok(SimplePreparedRewrite::Executed {
-                            name: global_name,
-                            statement,
-                        })
-                    } else {
-                        Err(Error::PgQuery(PgQueryError::Parse(format!(
-                            "prepared statement '{}' does not exist",
-                            stmt.name
-                        ))))
-                    }
-                }
-
-                _ => Ok(SimplePreparedRewrite::None),
-            }
-        }
-    }
-    _ => {}
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
@@ -207,8 +112,6 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
-    #[cfg(not(feature = "new_parser"))]
-    use pg_query::parse;
     use pgdog_config::Rewrite;
 
     struct TestContext {
@@ -235,7 +138,6 @@ mod tests {
             }
         }
 
-        #[cfg(feature = "new_parser")]
         fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
             let stmt = pg_raw_parse::parse(sql)?;
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
@@ -255,27 +157,6 @@ mod tests {
             })?;
             let sql = pg_raw_parse::deparse_stmts(&*ast)?;
             Ok((sql, plan))
-        }
-
-        cfg_select! {
-            not(feature = "new_parser") => {
-                fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
-                    let mut ast = parse(sql).unwrap().protobuf;
-                    let mut rewrite = StatementRewrite::new(StatementRewriteContext {
-                        stmt: &mut ast,
-                        extended: false,
-                        prepared: false,
-                        prepared_statements: &mut self.ps,
-                        schema: &self.schema,
-                        db_schema: &self.db_schema,
-                        user: "",
-                        search_path: None,
-                    });
-                    let plan = rewrite.maybe_rewrite()?;
-                    Ok((ast.deparse().unwrap(), plan))
-                }
-            }
-            _ => {}
         }
     }
 

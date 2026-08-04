@@ -66,7 +66,6 @@ fn test_insert_multi_row() {
 }
 
 #[test]
-#[cfg_attr(not(feature = "new_parser"), should_panic)] // Fixed in port
 fn test_insert_select() {
     let mut test = QueryParserTest::new();
 
@@ -82,7 +81,6 @@ fn test_insert_select() {
 }
 
 #[test]
-#[cfg_attr(not(feature = "new_parser"), should_panic)] // Fixed in port
 fn test_insert_default_values() {
     let mut test = QueryParserTest::new();
 

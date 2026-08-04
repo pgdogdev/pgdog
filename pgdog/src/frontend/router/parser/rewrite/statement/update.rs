@@ -1,30 +1,10 @@
-#[cfg(feature = "new_parser")]
 use indexmap::IndexSet;
-#[cfg(not(feature = "new_parser"))]
-use std::collections::HashMap;
 use std::{ops::Deref, sync::Arc};
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{
-    Node as PgNode, NodeEnum,
-    protobuf::{
-        AExpr, AExprKind, AStar, ColumnRef, DeleteStmt, InsertStmt, LimitOption, List,
-        OverridingKind, ParamRef, ParseResult, RangeVar, RawStmt, ResTarget, SelectStmt,
-        SetOperation, String as PgString, UpdateStmt,
-    },
-};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::make::{owned, try_owned};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, nodes, walk};
-#[cfg(not(feature = "new_parser"))]
-use pgdog_config::QueryParserEngine;
 use pgdog_config::RewriteMode;
 
-#[cfg(not(feature = "new_parser"))]
-use crate::frontend::router::parser::rewrite::statement::visitor::visit_and_mutate_nodes;
-#[cfg(not(feature = "new_parser"))]
-use crate::net::FromDataType;
 use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
@@ -46,10 +26,7 @@ use super::*;
 pub(crate) struct Statement {
     pub(crate) ast: Ast,
     pub(crate) stmt: String,
-    #[cfg(feature = "new_parser")]
     pub(crate) params: IndexSet<u16>,
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) params: Vec<u16>,
 }
 
 impl Statement {
@@ -136,17 +113,10 @@ impl ShardingKeyUpdate {
                 return false;
             }
 
-            #[cfg(feature = "new_parser")]
-            {
-                self.from_update
-                    .target_list()
-                    .iter()
-                    .any(|rt| rt.name() == Some(&*sharded.column))
-            }
-            #[cfg(not(feature = "new_parser"))]
-            {
-                self.insert.mapping.contains_key(&sharded.column)
-            }
+            self.from_update
+                .target_list()
+                .iter()
+                .any(|rt| rt.name() == Some(&*sharded.column))
         })
     }
 }
@@ -159,11 +129,7 @@ pub(crate) struct Inner {
     pub(crate) check: Statement,
     /// Delete old row from shard.
     pub(crate) delete: Statement,
-    /// Partial insert statement.
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) insert: Insert,
     /// Update this is being constructed from
-    #[cfg(feature = "new_parser")]
     // FIXME(sage): There's no reason we need to own this, but this struct is
     // ultimately a child of AstInner, where the statement is borrowed from,
     // so we can't add a lifetime here. We should see if we can pass the update
@@ -172,7 +138,6 @@ pub(crate) struct Inner {
 }
 
 impl Inner {
-    #[cfg(feature = "new_parser")]
     pub(crate) fn target_table(&self) -> Table<'_> {
         Table::from(
             self.from_update
@@ -181,14 +146,8 @@ impl Inner {
         )
     }
 
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) fn target_table(&self) -> Table<'_> {
-        Table::from(&self.insert.table)
-    }
-
     /// Build an INSERT statement built from an existing
     /// UPDATE statement and a row returned by a SELECT statement.
-    #[cfg(feature = "new_parser")]
     pub(crate) fn build_insert_request(
         &self,
         request: &ClientRequest,
@@ -268,203 +227,9 @@ impl Inner {
         Ok(req)
     }
 
-    #[cfg(not(feature = "new_parser"))]
-    /// Build an INSERT statement built from an existing
-    /// UPDATE statement and a row returned by a SELECT statement.
-    pub(crate) fn build_insert_request(
-        &self,
-        request: &ClientRequest,
-        row_description: &RowDescription,
-        data_row: &DataRow,
-    ) -> Result<ClientRequest, Error> {
-        self.insert
-            .build_request(request, row_description, data_row)
-    }
-
-    #[cfg(feature = "new_parser")]
     /// Do we have to return the rows to the client?
     pub(crate) fn is_returning(&self) -> bool {
         self.from_update.returning_clause().is_some()
-    }
-
-    #[cfg(not(feature = "new_parser"))]
-    /// Do we have to return the rows to the client?
-    pub(crate) fn is_returning(&self) -> bool {
-        !self.insert.returning_list.is_empty() && self.insert.returnin_list_deparsed.is_some()
-    }
-}
-
-/// Partially built INSERT statement.
-#[derive(Debug)]
-#[cfg(not(feature = "new_parser"))]
-pub(crate) struct Insert {
-    pub(super) table: RangeVar,
-    /// Mapping of column name to `column name = value` from
-    /// the original UPDATE statement.
-    pub(super) mapping: HashMap<String, UpdateValue>,
-    /// Return columns.
-    pub(super) returning_list: Vec<PgNode>,
-    /// Returning list deparsed.
-    pub(super) returnin_list_deparsed: Option<String>,
-}
-
-#[cfg(not(feature = "new_parser"))]
-impl Insert {
-    /// Build an INSERT statement built from an existing
-    /// UPDATE statement and a row returned by a SELECT statement.
-    ///
-    pub(crate) fn build_request(
-        &self,
-        request: &ClientRequest,
-        row_description: &RowDescription,
-        data_row: &DataRow,
-    ) -> Result<ClientRequest, Error> {
-        let params = request.parameters()?;
-
-        let mut bind = Bind::new_statement("");
-        let mut columns = vec![];
-        let mut values = vec![];
-        let mut columns_str = vec![];
-        let mut values_str = vec![];
-
-        let mut bind_idx = 0;
-        for (row_idx, field) in row_description.iter().enumerate() {
-            columns_str.push(format!(r#""{}""#, field.name.replace("\"", "\"\""))); // Escape "
-
-            if let Some(value) = self.mapping.get(&field.name) {
-                let value = match value {
-                    UpdateValue::Value(value) => {
-                        values_str.push(format!("${}", bind_idx + 1));
-                        Value::try_from(value.as_ref()).unwrap() // SAFETY: We check that the value is valid.
-                    }
-                    UpdateValue::Expr(expr) => {
-                        values_str.push(expr.clone());
-                        continue;
-                    }
-                };
-
-                match value {
-                    Value::Placeholder(number) => {
-                        let param = params
-                            .as_ref()
-                            .expect("param")
-                            .parameter(number as usize - 1)?
-                            .ok_or(Error::MissingParameter(number as u16))?;
-                        bind.push_param(param.parameter().clone(), param.format())
-                    }
-
-                    Value::Integer(int) => bind.push_param(
-                        Parameter::new(itoa::Buffer::new().format(int).as_bytes()),
-                        Format::Text,
-                    ),
-
-                    Value::String(s) => bind.push_param(Parameter::new(s.as_bytes()), Format::Text),
-
-                    Value::Float(f) => bind.push_param(
-                        Parameter::new(ryu::Buffer::new().format(f).as_bytes()),
-                        Format::Text,
-                    ),
-
-                    Value::Boolean(b) => bind.push_param(
-                        Parameter::new(if b { "t".as_bytes() } else { "f".as_bytes() }),
-                        Format::Text,
-                    ),
-
-                    Value::Vector(vec) => {
-                        bind.push_param(Parameter::new(&vec.encode(Format::Text)?), Format::Text)
-                    }
-
-                    Value::Null => bind.push_param(Parameter::new_null(), Format::Text),
-                }
-            } else {
-                let value = data_row
-                    .get_raw(row_idx)
-                    .ok_or(Error::MissingColumn(row_idx))?;
-
-                if value.is_null() {
-                    bind.push_param(Parameter::new_null(), Format::Text);
-                } else {
-                    bind.push_param(Parameter::new(value), Format::Text);
-                }
-
-                values_str.push(format!("${}", bind_idx + 1));
-            }
-
-            columns.push(PgNode {
-                node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-                    name: field.name.clone(),
-                    ..Default::default()
-                }))),
-            });
-
-            values.push(PgNode {
-                node: Some(NodeEnum::ParamRef(ParamRef {
-                    number: bind_idx + 1,
-                    ..Default::default()
-                })),
-            });
-
-            bind_idx += 1;
-        }
-
-        let insert = InsertStmt {
-            relation: Some(self.table.clone()),
-            cols: columns,
-            select_stmt: Some(Box::new(PgNode {
-                node: Some(NodeEnum::SelectStmt(Box::new(SelectStmt {
-                    target_list: vec![],
-                    from_clause: vec![],
-                    limit_option: LimitOption::Default.into(),
-                    where_clause: None,
-                    op: SetOperation::SetopNone.into(),
-                    values_lists: vec![PgNode {
-                        node: Some(NodeEnum::List(List { items: values })),
-                    }],
-                    ..Default::default()
-                }))),
-            })),
-            returning_list: self.returning_list.clone(),
-            r#override: OverridingKind::OverridingNotSet.into(),
-            ..Default::default()
-        };
-
-        let table = Table::from(&self.table);
-
-        // This is probably one of the few places in the code where
-        // we shouldn't use the parser. It's quicker to concatenate strings
-        // than to call pg_query::deparse because of the Protobuf (de)ser.
-        //
-        // TODO: Replace protobuf (de)ser with native mappings and use the
-        // parser again.
-        //
-        let stmt = format!(
-            "INSERT INTO {} ({}) VALUES ({}){}",
-            table,
-            columns_str.join(", "),
-            values_str.join(", "),
-            if let Some(ref returning_list) = self.returnin_list_deparsed {
-                format!("RETURNING {}", returning_list)
-            } else {
-                "".into()
-            }
-        );
-
-        // Build the AST to be used with the router.
-        // It's identical to the string-generated statement above.
-        let insert = parse_result(NodeEnum::InsertStmt(Box::new(insert)));
-        let insert = pg_query::ParseResult::new(insert, "".into());
-
-        let ast = Ast::from_parse_result(insert);
-
-        let mut req = ClientRequest::from(vec![
-            ProtocolMessage::from(Parse::new_anonymous(&stmt)),
-            Describe::new_statement("").into(), // So we get both T and t,
-            bind.into(),
-            Execute::new().into(),
-            Sync.into(),
-        ]);
-        req.ast = Some(ast);
-        Ok(req)
     }
 }
 
@@ -473,51 +238,26 @@ impl<'a> StatementRewrite<'a> {
     /// in the query.
     pub(super) fn sharding_key_update(
         &mut self,
-        #[cfg(feature = "new_parser")] stmt: &nodes::UpdateStmt,
+        stmt: &nodes::UpdateStmt,
         plan: &mut RewritePlan,
     ) -> Result<(), Error> {
         if self.schema.shards == 1 || self.schema.rewrite.shard_key == RewriteMode::Ignore {
             return Ok(());
         }
 
-        #[cfg(not(feature = "new_parser"))]
-        let Some(NodeEnum::UpdateStmt(stmt)) = self
-            .stmt
-            .stmts
-            .first()
-            .and_then(|stmt| stmt.stmt.as_ref().map(|stmt| stmt.node.as_ref()))
-            .flatten()
-        else {
-            // TODO: Handle EXPLAIN ANALYZE which needs to execute.
-            // We could return a combined plan for all 3 queries
-            // we need to execute.
-            return Ok(());
-        };
-
         if let Some(value) = self.sharding_key_update_check(stmt)? {
             // Without a WHERE clause, this is a huge
             // cross-shard rewrite.
-            #[cfg(feature = "new_parser")]
             if let Node::None = stmt.where_clause() {
                 return Err(Error::WhereClauseMissing);
             }
-            #[cfg(not(feature = "new_parser"))]
-            if stmt.where_clause.is_none() {
-                return Err(Error::WhereClauseMissing);
-            }
-            plan.sharding_key_update = Some(create_stmts(
-                stmt,
-                value,
-                #[cfg(not(feature = "new_parser"))]
-                self.schema.query_parser_engine,
-            )?);
+            plan.sharding_key_update = Some(create_stmts(stmt, value)?);
         }
 
         Ok(())
     }
 
     /// Check if the sharding key could be updated.
-    #[cfg(feature = "new_parser")]
     fn sharding_key_update_check(
         &'a self,
         stmt: &'a nodes::UpdateStmt,
@@ -555,72 +295,10 @@ impl<'a> StatementRewrite<'a> {
             )))
         }
     }
-
-    #[cfg(not(feature = "new_parser"))]
-    fn sharding_key_update_check(
-        &'a self,
-        stmt: &'a UpdateStmt,
-    ) -> Result<Option<&'a ResTarget>, Error> {
-        let table = if let Some(table) = stmt.relation.as_ref().map(Table::from) {
-            table
-        } else {
-            return Ok(None);
-        };
-
-        Ok(stmt
-            .target_list
-            .iter()
-            .filter(|column| match Column::try_from(&column.node) {
-                Ok(mut column) => {
-                    column.qualify(table);
-                    self.schema.tables().get_table(column).is_some()
-                }
-                _ => false,
-            })
-            .map(|column| {
-                if let Some(NodeEnum::ResTarget(res)) = &column.node {
-                    // Check that it's a value assignment and not something like
-                    // id = id + 1
-                    let supported = res
-                        .val
-                        .as_ref()
-                        .map(|node| Value::try_from(&node.node))
-                        .transpose()
-                        .is_ok();
-
-                    if supported {
-                        Ok(Some(res.as_ref()))
-                    } else {
-                        // FIXME:
-                        //
-                        // We can technically support this. We can inject this into
-                        // the `SELECT` statement we use to pull the existing row
-                        // and use the computed value for assignment.
-                        //
-                        let expr = res
-                            .val
-                            .as_ref()
-                            .map(|node| deparse_expr_old(node, self.schema.query_parser_engine))
-                            .transpose()?
-                            .unwrap_or_else(|| "<unknown>".to_string());
-                        Err(Error::UnsupportedShardingKeyUpdate(format!(
-                            "\"{}\" = {}",
-                            res.name, expr
-                        )))
-                    }
-                } else {
-                    Ok(None)
-                }
-            })
-            .next()
-            .transpose()?
-            .flatten())
-    }
 }
 
 /// Visit all ParamRef nodes in a ParseResult and renumber them sequentially.
 /// Returns a sorted list of the original parameter numbers.
-#[cfg(feature = "new_parser")]
 fn rewrite_params(node: NodeMut<'_, '_>) -> IndexSet<u16> {
     let mut params = IndexSet::new();
     walk::walk_mut(node, |node| {
@@ -632,143 +310,7 @@ fn rewrite_params(node: NodeMut<'_, '_>) -> IndexSet<u16> {
     params
 }
 
-#[cfg(not(feature = "new_parser"))]
-fn rewrite_params(parse_result: &mut ParseResult) -> Result<Vec<u16>, Error> {
-    let mut params = HashMap::new();
-
-    visit_and_mutate_nodes(parse_result, |node| -> Result<Option<PgNode>, Error> {
-        if let Some(NodeEnum::ParamRef(ref mut param)) = node.node {
-            if let Some(existing) = params.get(&param.number) {
-                param.number = *existing;
-            } else {
-                let number = params.len() as i32 + 1;
-                params.insert(param.number, number);
-                param.number = number;
-            }
-        }
-
-        Ok(None)
-    })?;
-
-    let mut params: Vec<(i32, i32)> = params.into_iter().collect();
-    params.sort_by_key(|a| a.1);
-
-    Ok(params
-        .into_iter()
-        .map(|(original, _)| original as u16)
-        .collect())
-}
-
-#[derive(Debug, Clone)]
-#[cfg(not(feature = "new_parser"))]
-pub(super) enum UpdateValue {
-    Value(Box<PgNode>),
-    Expr(String), // We deparse the expression because we can't handle it yet.
-}
-
-/// # Example
-///
-/// ```ignore
-/// UPDATE sharded SET id = $1, email = $2 WHERE id = $3 AND user_id = $4
-/// ```
-///
-/// ```ignore
-/// [
-///   ("id", (id, $1)),
-///   ("email", (email, $2))
-/// ]
-/// ```
-///
-/// This allows us to build a partial INSERT statement.
-///
-#[cfg(not(feature = "new_parser"))]
-fn res_targets_to_insert_res_targets(
-    stmt: &UpdateStmt,
-    query_parser_engine: QueryParserEngine,
-) -> Result<HashMap<String, UpdateValue>, Error> {
-    let mut result = HashMap::new();
-    for target in &stmt.target_list {
-        if let Some(NodeEnum::ResTarget(target)) = target.node.as_ref() {
-            let valid = target
-                .val
-                .as_ref()
-                .map(|value| Value::try_from(&value.node).is_ok())
-                .unwrap_or_default();
-            let value = if valid {
-                UpdateValue::Value(target.val.clone().unwrap())
-            } else {
-                UpdateValue::Expr(deparse_expr_old(
-                    target.val.as_ref().unwrap(),
-                    query_parser_engine,
-                )?)
-            };
-            result.insert(target.name.clone(), value);
-        }
-    }
-
-    Ok(result)
-}
-
-/// Convert a ResTarget (from UPDATE SET clause) to an AExpr equality expression.
-///
-/// Transforms `SET column = value` into `column = value` expression
-/// for use in shard routing validation.
-#[cfg(not(feature = "new_parser"))]
-fn res_target_to_a_expr(res_target: &ResTarget) -> AExpr {
-    let column_ref = ColumnRef {
-        fields: vec![PgNode {
-            node: Some(NodeEnum::String(PgString {
-                sval: res_target.name.clone(),
-            })),
-        }],
-        location: res_target.location,
-    };
-
-    AExpr {
-        kind: AExprKind::AexprOp.into(),
-        name: vec![PgNode {
-            node: Some(NodeEnum::String(PgString { sval: "=".into() })),
-        }],
-        lexpr: Some(Box::new(PgNode {
-            node: Some(NodeEnum::ColumnRef(column_ref)),
-        })),
-        rexpr: res_target.val.clone(),
-        ..Default::default()
-    }
-}
-
-#[cfg(not(feature = "new_parser"))]
-fn select_star() -> Vec<PgNode> {
-    vec![PgNode {
-        node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-            name: "".into(),
-            val: Some(Box::new(PgNode {
-                node: Some(NodeEnum::ColumnRef(ColumnRef {
-                    fields: vec![PgNode {
-                        node: Some(NodeEnum::AStar(AStar {})),
-                    }],
-                    ..Default::default()
-                })),
-            })),
-            ..Default::default()
-        }))),
-    }]
-}
-
-#[cfg(not(feature = "new_parser"))]
-fn parse_result(node: NodeEnum) -> ParseResult {
-    ParseResult {
-        version: pg_query::PG_VERSION_NUM as i32,
-        stmts: vec![RawStmt {
-            stmt: Some(Box::new(PgNode { node: Some(node) })),
-            stmt_location: 0,
-            stmt_len: 0,
-        }],
-    }
-}
-
 /// Deparse an expression node by wrapping it in a SELECT statement.
-#[cfg(feature = "new_parser")]
 fn deparse_expr<'a>(nodes: impl IntoIterator<Item = Node<'a>>) -> Result<DeparseResult, Error> {
     let node = owned(|mem| {
         let mut select = mem.make_node::<nodes::SelectStmt>();
@@ -785,52 +327,6 @@ fn deparse_expr<'a>(nodes: impl IntoIterator<Item = Node<'a>>) -> Result<Deparse
     deparse(&*node).map_err(Into::into)
 }
 
-#[cfg(not(feature = "new_parser"))]
-fn deparse_expr_old(
-    node: &PgNode,
-    query_parser_engine: QueryParserEngine,
-) -> Result<String, Error> {
-    Ok(deparse_list(
-        &[PgNode {
-            node: Some(NodeEnum::ResTarget(Box::new(ResTarget {
-                val: Some(Box::new(node.clone())),
-                ..Default::default()
-            }))),
-        }],
-        query_parser_engine,
-    )?
-    .unwrap()) // SAFETY: we are not passing in an empty list.
-}
-
-/// Deparse a list of expressions by wrapping them into a SELECT statement.
-#[cfg(not(feature = "new_parser"))]
-fn deparse_list(
-    list: &[PgNode],
-    query_parser_engine: QueryParserEngine,
-) -> Result<Option<String>, Error> {
-    if list.is_empty() {
-        return Ok(None);
-    }
-
-    let stmt = SelectStmt {
-        target_list: list.to_vec(),
-        limit_option: LimitOption::Default.into(),
-        op: SetOperation::SetopNone.into(),
-        ..Default::default()
-    };
-    let result = parse_result(NodeEnum::SelectStmt(Box::new(stmt)));
-    let string = match query_parser_engine {
-        QueryParserEngine::PgQueryProtobuf => result.deparse()?,
-        QueryParserEngine::PgQueryRaw => result.deparse_raw()?,
-    }
-    .strip_prefix("SELECT ")
-    .unwrap_or_default()
-    .to_string();
-
-    Ok(Some(string))
-}
-
-#[cfg(feature = "new_parser")]
 fn create_stmts<'a>(
     stmt: &'a nodes::UpdateStmt,
     new_value: &'a nodes::ResTarget,
@@ -921,106 +417,10 @@ fn create_stmts<'a>(
     })
 }
 
-#[cfg(not(feature = "new_parser"))]
-fn create_stmts(
-    stmt: &UpdateStmt,
-    new_value: &ResTarget,
-    query_parser_engine: QueryParserEngine,
-) -> Result<ShardingKeyUpdate, Error> {
-    let select = SelectStmt {
-        target_list: select_star(),
-        from_clause: vec![PgNode {
-            node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
-        }],
-        limit_option: LimitOption::Default.into(),
-        where_clause: stmt.where_clause.clone(),
-        op: SetOperation::SetopNone.into(),
-        ..Default::default()
-    };
-
-    let mut select = parse_result(NodeEnum::SelectStmt(Box::new(select)));
-
-    let params = rewrite_params(&mut select)?;
-    let select = pg_query::ParseResult::new(select, "".into());
-
-    let select = Statement {
-        stmt: match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => select.deparse()?,
-            QueryParserEngine::PgQueryRaw => select.deparse_raw()?,
-        },
-        ast: Ast::from_parse_result(select),
-        params,
-    };
-
-    let delete = DeleteStmt {
-        relation: stmt.relation.clone(),
-        where_clause: stmt.where_clause.clone(),
-        ..Default::default()
-    };
-
-    let mut delete = parse_result(NodeEnum::DeleteStmt(Box::new(delete)));
-
-    let params = rewrite_params(&mut delete)?;
-
-    let delete = pg_query::ParseResult::new(delete, "".into());
-
-    let delete = Statement {
-        stmt: match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => delete.deparse()?,
-            QueryParserEngine::PgQueryRaw => delete.deparse_raw()?,
-        },
-        ast: Ast::from_parse_result(delete),
-        params,
-    };
-
-    let check = SelectStmt {
-        target_list: select_star(),
-        from_clause: vec![PgNode {
-            node: Some(NodeEnum::RangeVar(stmt.relation.clone().unwrap())), // SAFETY: we checked the UPDATE stmt has a table name.
-        }],
-        limit_option: LimitOption::Default.into(),
-        where_clause: Some(Box::new(PgNode {
-            node: Some(NodeEnum::AExpr(Box::new(res_target_to_a_expr(new_value)))),
-        })),
-        op: SetOperation::SetopNone.into(),
-        ..Default::default()
-    };
-
-    let mut check = parse_result(NodeEnum::SelectStmt(Box::new(check)));
-    let params = rewrite_params(&mut check)?;
-    let check = pg_query::ParseResult::new(check, "".into());
-
-    let check = Statement {
-        stmt: match query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => check.deparse()?,
-            QueryParserEngine::PgQueryRaw => check.deparse_raw()?,
-        },
-        ast: Ast::from_parse_result(check),
-        params,
-    };
-
-    Ok(ShardingKeyUpdate {
-        inner: Arc::new(Inner {
-            select,
-            delete,
-            check,
-            insert: Insert {
-                table: stmt.relation.clone().expect("UPDATE always has table"),
-                mapping: res_targets_to_insert_res_targets(stmt, query_parser_engine)?,
-                returning_list: stmt.returning_list.clone(),
-                returnin_list_deparsed: deparse_list(&stmt.returning_list, query_parser_engine)?,
-            },
-        }),
-    })
-}
-
 #[cfg(test)]
 mod test {
     use crate::frontend::router::sharding::ShardedTable;
-    #[cfg(feature = "new_parser")]
     use indexmap::indexset;
-    #[cfg(not(feature = "new_parser"))]
-    use pg_query::parse;
     use pgdog_config::Rewrite;
 
     use crate::backend::schema::Schema;
@@ -1028,13 +428,6 @@ mod test {
     use crate::net::messages::row_description::Field;
 
     use super::*;
-
-    #[cfg(not(feature = "new_parser"))]
-    macro_rules! indexset {
-        ($($t:tt)*) => {
-            vec![$($t)*]
-        };
-    }
 
     fn default_db_schema() -> Schema {
         Schema::default()
@@ -1065,17 +458,12 @@ mod test {
     }
 
     fn run_test(query: &str) -> Result<Option<ShardingKeyUpdate>, Error> {
-        #[cfg(not(feature = "new_parser"))]
-        let mut stmt_old = parse(query)?;
-        #[cfg(feature = "new_parser")]
         let stmt = pg_raw_parse::parse(query)?;
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut stmts = PreparedStatements::new();
 
         let ctx = StatementRewriteContext {
-            #[cfg(not(feature = "new_parser"))]
-            stmt: &mut stmt_old.protobuf,
             schema: &schema,
             db_schema: &db_schema,
             extended: true,
@@ -1086,7 +474,6 @@ mod test {
         };
         let mut plan = RewritePlan::default();
         StatementRewrite::new(ctx).sharding_key_update(
-            #[cfg(feature = "new_parser")]
             match stmt.stmts().next().unwrap() {
                 Node::UpdateStmt(stmt) => stmt,
                 _ => panic!("Not an update"),
@@ -1486,76 +873,6 @@ mod test {
     }
 
     #[test]
-    #[cfg(not(feature = "new_parser"))]
-    fn test_return_rows() {
-        let result = run_test("UPDATE sharded SET id = $1 WHERE id = $2 RETURNING *")
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.insert.returnin_list_deparsed, Some("*".into()));
-
-        let result =
-            run_test("UPDATE sharded SET id = $1 WHERE id = $2 RETURNING id, email, random()")
-                .unwrap()
-                .unwrap();
-        assert_eq!(
-            result.insert.returnin_list_deparsed,
-            Some("id, email, random()".into())
-        );
-    }
-
-    #[test]
-    #[cfg(not(feature = "new_parser"))]
-    fn test_res_targets_to_insert_res_targets_expr_branch() {
-        // Test that expression assignments (non-simple values) are deparsed correctly
-        // and stored as UpdateValue::Expr in the insert mapping.
-        let result = run_test("UPDATE sharded SET id = $1, email = random() WHERE id = $2")
-            .unwrap()
-            .unwrap();
-
-        // The id column should be UpdateValue::Value (simple parameter)
-        let id_value = result.insert.mapping.get("id").unwrap();
-        std::assert_matches!(id_value, UpdateValue::Value(_));
-
-        // The email column should be UpdateValue::Expr with the deparsed expression
-        let email_value = result.insert.mapping.get("email").unwrap();
-        match email_value {
-            UpdateValue::Expr(expr) => assert_eq!(expr, "random()"),
-            _ => panic!("Expected UpdateValue::Expr for email"),
-        }
-    }
-
-    #[test]
-    #[cfg(not(feature = "new_parser"))]
-    fn test_res_targets_to_insert_res_targets_expr_arithmetic() {
-        // Test arithmetic expressions are deparsed correctly
-        let result = run_test("UPDATE sharded SET id = $1, counter = counter + 1 WHERE id = $2")
-            .unwrap()
-            .unwrap();
-
-        let counter_value = result.insert.mapping.get("counter").unwrap();
-        match counter_value {
-            UpdateValue::Expr(expr) => assert_eq!(expr, "counter + 1"),
-            _ => panic!("Expected UpdateValue::Expr for counter"),
-        }
-    }
-
-    #[test]
-    #[cfg(not(feature = "new_parser"))]
-    fn test_res_targets_to_insert_res_targets_expr_coalesce() {
-        // Test COALESCE expressions are deparsed correctly
-        let result =
-            run_test("UPDATE sharded SET id = $1, name = COALESCE(name, 'default') WHERE id = $2")
-                .unwrap()
-                .unwrap();
-
-        let name_value = result.insert.mapping.get("name").unwrap();
-        match name_value {
-            UpdateValue::Expr(expr) => assert_eq!(expr, "COALESCE(name, 'default')"),
-            _ => panic!("Expected UpdateValue::Expr for name"),
-        }
-    }
-
-    #[test]
     fn test_insert_build_request_with_expr_column() {
         // Test that INSERT statement is built correctly when there are expression columns.
         // The expression should appear directly in the VALUES clause.
@@ -1569,7 +886,6 @@ mod test {
             Field::bigint("id"),
             Field::text("email"),
             Field::text("other_col"),
-            #[cfg(feature = "new_parser")]
             Field::text("other_other_col"),
         ]);
 
@@ -1578,7 +894,6 @@ mod test {
         data_row.add("1"); // id - will be overwritten by mapping
         data_row.add("old@example.com"); // email - will be overwritten by mapping
         data_row.add("other_value"); // other_col - from existing row
-        #[cfg(feature = "new_parser")]
         data_row.add("other_other_value"); // other_other_col - from existing row
 
         // Create a simple query request (not prepared statement)

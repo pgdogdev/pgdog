@@ -26,7 +26,6 @@ pub mod schema;
 mod sequence;
 pub mod statement;
 mod table;
-pub(crate) mod util;
 pub mod value;
 mod where_clause;
 

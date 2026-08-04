@@ -1,13 +1,6 @@
 use std::fmt::Display;
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{
-    Node as PgNode, NodeEnum,
-    protobuf::{List, RangeVar},
-};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::list::{CastNodeList, NodeList};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
 
 use super::{Error, Schema};
@@ -49,7 +42,6 @@ impl<'a> Table<'a> {
     }
 }
 
-#[cfg(feature = "new_parser")]
 impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
     type Error = ();
 
@@ -61,75 +53,6 @@ impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
     }
 }
 
-#[cfg(not(feature = "new_parser"))]
-impl<'a> TryFrom<&'a PgNode> for Table<'a> {
-    type Error = ();
-
-    fn try_from(value: &'a PgNode) -> Result<Self, Self::Error> {
-        if let Some(NodeEnum::RangeVar(range_var)) = &value.node {
-            return Ok(range_var.into());
-        }
-
-        Err(())
-    }
-}
-
-#[cfg(not(feature = "new_parser"))]
-impl<'a> TryFrom<&'a Vec<PgNode>> for Table<'a> {
-    type Error = Error;
-
-    fn try_from(value: &'a Vec<PgNode>) -> Result<Self, Self::Error> {
-        match value.len() {
-            1 => {
-                let table = value
-                    .first()
-                    .and_then(|node| {
-                        node.node.as_ref().map(|node| match node {
-                            NodeEnum::RangeVar(var) => Some(Ok(Table::from(var))),
-                            NodeEnum::List(list) => Some(Table::try_from(list)),
-                            NodeEnum::String(str) => Some(Ok(Table::from(str.sval.as_str()))),
-                            _ => None,
-                        })
-                    })
-                    .flatten()
-                    .ok_or(Error::TableDecode)?;
-                return table;
-            }
-
-            2 => {
-                let schema = value.iter().next().unwrap().node.as_ref().and_then(|node| {
-                    if let NodeEnum::String(sval) = node {
-                        Some(sval.sval.as_str())
-                    } else {
-                        None
-                    }
-                });
-                let table = value.iter().last().unwrap().node.as_ref().and_then(|node| {
-                    if let NodeEnum::String(sval) = node {
-                        Some(sval.sval.as_str())
-                    } else {
-                        None
-                    }
-                });
-                if let Some(schema) = schema
-                    && let Some(table) = table
-                {
-                    return Ok(Table {
-                        name: table,
-                        schema: Some(schema),
-                        alias: None,
-                    });
-                }
-            }
-
-            _ => (),
-        }
-
-        Err(Error::TableDecode)
-    }
-}
-
-#[cfg(feature = "new_parser")]
 impl<'a> From<&'a pg_raw_parse::nodes::RangeVar> for Table<'a> {
     fn from(range_var: &'a pg_raw_parse::nodes::RangeVar) -> Self {
         let name = range_var.relname().unwrap_or_default();
@@ -143,26 +66,6 @@ impl<'a> From<&'a pg_raw_parse::nodes::RangeVar> for Table<'a> {
     }
 }
 
-#[cfg(not(feature = "new_parser"))]
-impl<'a> From<&'a RangeVar> for Table<'a> {
-    fn from(range_var: &'a RangeVar) -> Self {
-        let (name, alias) = if let Some(ref alias) = range_var.alias {
-            (range_var.relname.as_str(), Some(alias.aliasname.as_str()))
-        } else {
-            (range_var.relname.as_str(), None)
-        };
-        Self {
-            name,
-            schema: if !range_var.schemaname.is_empty() {
-                Some(range_var.schemaname.as_str())
-            } else {
-                None
-            },
-            alias,
-        }
-    }
-}
-#[cfg(feature = "new_parser")]
 impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
     type Error = Error;
 
@@ -188,7 +91,6 @@ impl<'a> TryFrom<&'a CastNodeList<nodes::String>> for Table<'a> {
     }
 }
 
-#[cfg(feature = "new_parser")]
 impl<'a> TryFrom<&'a NodeList> for Table<'a> {
     type Error = Error;
 
@@ -214,44 +116,6 @@ impl<'a> TryFrom<&'a NodeList> for Table<'a> {
                 })
             }
             (_, Some(_)) => Err(Error::TableDecode),
-        }
-    }
-}
-
-#[cfg(not(feature = "new_parser"))]
-impl<'a> TryFrom<&'a List> for Table<'a> {
-    type Error = Error;
-
-    fn try_from(value: &'a List) -> Result<Self, Self::Error> {
-        fn str_value(list: &List, pos: usize) -> Option<&str> {
-            if let Some(NodeEnum::String(ref schema)) = list.items.get(pos).unwrap().node {
-                Some(schema.sval.as_str())
-            } else {
-                None
-            }
-        }
-
-        match value.items.len() {
-            2 => {
-                let schema = str_value(value, 0);
-                let name = str_value(value, 1).ok_or(Error::TableDecode)?;
-                Ok(Table {
-                    schema,
-                    name,
-                    alias: None,
-                })
-            }
-
-            1 => {
-                let name = str_value(value, 0).ok_or(Error::TableDecode)?;
-                Ok(Table {
-                    schema: None,
-                    name,
-                    alias: None,
-                })
-            }
-
-            _ => Err(Error::TableDecode),
         }
     }
 }

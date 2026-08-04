@@ -1,9 +1,7 @@
 use super::*;
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::nodes;
 
 impl QueryParser {
-    #[cfg(feature = "new_parser")]
     pub(super) fn explain(
         &mut self,
         cached_ast: &Ast,
@@ -44,67 +42,6 @@ impl QueryParser {
                 Err(err)
             }
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn explain(
-                &mut self,
-                cached_ast: &Ast,
-                stmt: &ExplainStmt,
-                context: &mut QueryParserContext,
-            ) -> Result<Command, Error> {
-                let query = stmt.query.as_ref().ok_or(Error::EmptyQuery)?;
-                let node = query.node.as_ref().ok_or(Error::EmptyQuery)?;
-
-                if context.expanded_explain() {
-                    if self.explain_recorder.is_none() {
-                        self.explain_recorder = Some(ExplainRecorder::new());
-                    }
-                } else {
-                    self.explain_recorder = None;
-                }
-
-                let result = match node {
-                    NodeEnum::SelectStmt(stmt) => self.select(
-                        cached_ast,
-                        stmt,
-                        context,
-                    ),
-                    NodeEnum::InsertStmt(stmt) => self.insert(
-                        stmt,
-                        context,
-                    ),
-                    NodeEnum::UpdateStmt(stmt) => self.update(
-                        stmt,
-                        context,
-                    ),
-                    NodeEnum::DeleteStmt(stmt) => self.delete(
-                        stmt,
-                        context,
-                    ),
-
-                    _ => {
-                        // For other statement types, route to all shards
-                        context
-                            .shards_calculator
-                            .push(ShardWithPriority::new_table(Shard::All));
-                        Ok(Command::Query(Route::write(
-                            context.shards_calculator.shard(),
-                        )))
-                    }
-                };
-
-                match result {
-                    Ok(command) => Ok(command),
-                    Err(err) => {
-                        self.explain_recorder = None;
-                        Err(err)
-                    }
-                }
-            }
-        }
-        _ => {}
     }
 }
 

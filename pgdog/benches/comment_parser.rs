@@ -1,6 +1,4 @@
 use brunch::{Bench, benches};
-#[cfg(not(feature = "new_parser"))]
-use pg_query::scan_raw;
 use pgdog::frontend::router::parser::comment::parse_edge_comment;
 
 const QUERY_WITH_LEADING: &str =
@@ -9,7 +7,6 @@ const QUERY_WITH_TRAILING: &str =
     "SELECT * FROM users WHERE id = $1 AND name = $2 /* pgdog_role: primary */";
 const QUERY_NO_COMMENT: &str = "SELECT * FROM users WHERE id = $1 AND name = $2";
 
-#[cfg(feature = "new_parser")]
 benches!(
     Bench::new("parse_edge_comment(leading)")
         .run(|| parse_edge_comment(QUERY_WITH_LEADING, &Default::default())),
@@ -17,16 +14,4 @@ benches!(
         .run(|| parse_edge_comment(QUERY_WITH_TRAILING, &Default::default())),
     Bench::new("parse_edge_comment(no comment)")
         .run(|| parse_edge_comment(QUERY_NO_COMMENT, &Default::default())),
-);
-#[cfg(not(feature = "new_parser"))]
-benches!(
-    Bench::new("parse_edge_comment(leading)")
-        .run(|| parse_edge_comment(QUERY_WITH_LEADING, &Default::default())),
-    Bench::new("parse_edge_comment(trailing)")
-        .run(|| parse_edge_comment(QUERY_WITH_TRAILING, &Default::default())),
-    Bench::new("parse_edge_comment(no comment)")
-        .run(|| parse_edge_comment(QUERY_NO_COMMENT, &Default::default())),
-    Bench::new("scan_raw(leading)").run(|| scan_raw(QUERY_WITH_LEADING)),
-    Bench::new("scan_raw(trailing)").run(|| scan_raw(QUERY_WITH_TRAILING)),
-    Bench::new("scan_raw(no comment)").run(|| scan_raw(QUERY_NO_COMMENT)),
 );

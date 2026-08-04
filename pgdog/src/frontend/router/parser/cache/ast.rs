@@ -1,6 +1,3 @@
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{NodeEnum, ParseResult, parse, parse_raw};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, Owned, StmtList, make};
 use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
@@ -40,11 +37,7 @@ pub struct Ast {
 #[derive(Debug)]
 pub struct AstInner {
     /// Cached AST.
-    // FIXME(sage): Rename to ast when parser port is done
-    #[cfg(feature = "new_parser")]
     pub(crate) ast: Owned<StmtList>,
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) ast: ParseResult,
     /// AST stats.
     pub stats: Mutex<Stats>,
     /// Rewrite plan.
@@ -55,18 +48,7 @@ pub struct AstInner {
 
 impl AstInner {
     /// Create new AST record, with no rewrite or comment routing.
-    #[cfg(feature = "new_parser")]
     pub(crate) fn new(ast: Owned<StmtList>) -> Self {
-        Self {
-            ast,
-            stats: Mutex::new(Stats::new()),
-            rewrite_plan: RewritePlan::default(),
-            query_without_comment: "".into(),
-        }
-    }
-
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) fn old(ast: ParseResult) -> Self {
         Self {
             ast,
             stats: Mutex::new(Stats::new()),
@@ -95,13 +77,6 @@ impl Ast {
         search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
-        #[cfg(not(feature = "new_parser"))]
-        let mut ast = match schema.query_parser_engine {
-            QueryParserEngine::PgQueryProtobuf => parse(query.query_without_comment),
-            QueryParserEngine::PgQueryRaw => parse_raw(query.query_without_comment),
-        }
-        .map_err(Error::PgQuery)?;
-        #[cfg(feature = "new_parser")]
         let ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
 
         // Run the rewrite unconditionally. Even when a shard comment will
@@ -109,8 +84,6 @@ impl Ast {
         // same query body (without the comment) would require a rewrite, so
         // `Cache::query` can decide whether this entry is safe to cache.
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-            #[cfg(not(feature = "new_parser"))]
-            stmt: &mut ast.protobuf,
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
             prepared_statements,
@@ -119,9 +92,7 @@ impl Ast {
             user,
             search_path,
         });
-        #[cfg(feature = "new_parser")]
         let mut rewrite_plan = Default::default();
-        #[cfg(feature = "new_parser")]
         let ast = make::try_owned(|mem| {
             // FIXME(sage): We should have a parse function on mem so we don't
             // need to parse and then copy the parsed tree just to throw the
@@ -132,9 +103,6 @@ impl Ast {
             }
             Ok::<_, Error>(copy)
         })?;
-
-        #[cfg(not(feature = "new_parser"))]
-        let rewrite_plan = rewriter.maybe_rewrite()?;
 
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
@@ -157,9 +125,6 @@ impl Ast {
             query_parser_engine: schema.query_parser_engine,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
-                #[cfg(feature = "new_parser")]
-                ast,
-                #[cfg(not(feature = "new_parser"))]
                 ast,
                 rewrite_plan,
                 query_without_comment: query.query_without_comment.into(),
@@ -184,7 +149,6 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    #[cfg(feature = "new_parser")]
     pub(crate) fn new_record(
         query: &str,
         query_parser_engine: QueryParserEngine,
@@ -200,29 +164,7 @@ impl Ast {
         })
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub fn new_record(query: &str, query_parser_engine: QueryParserEngine) -> Result<Self, Error> {
-                let ast = match query_parser_engine {
-                    QueryParserEngine::PgQueryProtobuf => parse(query),
-                    QueryParserEngine::PgQueryRaw => parse_raw(query),
-                }
-                .map_err(Error::PgQuery)?;
-
-                Ok(Self {
-                    cached: true,
-                    comment_role: None,
-                    comment_shard: None,
-                    query_parser_engine,
-                    inner: Arc::new(AstInner::old(ast)),
-                })
-            }
-        }
-        _ => {}
-    }
-
     /// Create new AST from a parse result.
-    #[cfg(feature = "new_parser")]
     pub fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
         Self {
             cached: true,
@@ -231,24 +173,6 @@ impl Ast {
             query_parser_engine: QueryParserEngine::default(),
             inner: Arc::new(AstInner::new(stmts)),
         }
-    }
-
-    /// Create new AST from a parse result.
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) fn from_parse_result(parse_result: ParseResult) -> Self {
-        Self {
-            cached: true,
-            comment_role: None,
-            comment_shard: None,
-            query_parser_engine: QueryParserEngine::default(),
-            inner: Arc::new(AstInner::old(parse_result)),
-        }
-    }
-
-    /// Get the reference to the AST.
-    #[cfg(not(feature = "new_parser"))]
-    pub(crate) fn parse_result(&self) -> &ParseResult {
-        &self.ast
     }
 
     /// Update stats for this statement, given the route
@@ -264,7 +188,6 @@ impl Ast {
     }
 
     /// Get statement type.
-    #[cfg(feature = "new_parser")]
     pub(crate) fn statement_type(&self) -> StatementType {
         let root = self.ast.stmts().next();
 
@@ -287,41 +210,6 @@ impl Ast {
 
             _ => StatementType::Ddl,
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(crate) fn statement_type(&self) -> StatementType {
-                let root = self
-                    .ast
-                    .protobuf
-                    .stmts
-                    .first()
-                    .and_then(|s| s.stmt.as_ref())
-                    .and_then(|s| s.node.as_ref());
-
-                match root {
-                    Some(NodeEnum::SelectStmt(_))
-                    | Some(NodeEnum::InsertStmt(_))
-                    | Some(NodeEnum::UpdateStmt(_))
-                    | Some(NodeEnum::DeleteStmt(_))
-                    | Some(NodeEnum::CopyStmt(_))
-                    | Some(NodeEnum::ExplainStmt(_))
-                    | Some(NodeEnum::TransactionStmt(_)) => StatementType::Dml,
-
-                    Some(NodeEnum::VariableSetStmt(_))
-                    | Some(NodeEnum::VariableShowStmt(_))
-                    | Some(NodeEnum::DeallocateStmt(_))
-                    | Some(NodeEnum::ListenStmt(_))
-                    | Some(NodeEnum::NotifyStmt(_))
-                    | Some(NodeEnum::UnlistenStmt(_))
-                    | Some(NodeEnum::DiscardStmt(_)) => StatementType::Session,
-
-                    _ => StatementType::Ddl,
-                }
-            }
-        }
-        _ => {}
     }
 }
 

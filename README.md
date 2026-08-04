@@ -149,7 +149,7 @@ Health checks maximize database availability and protect against bad network con
 &#128216; **[Single endpoint](https://docs.pgdog.dev/features/load-balancer/#single-endpoint)**
 
 
-PgDog uses [`pg_query`](https://github.com/pganalyze/pg_query.rs), which includes the PostgreSQL native parser. By parsing queries, PgDog can detect writes (e.g. `INSERT`, `UPDATE`, `CREATE TABLE`, etc.) and send them to the primary, leaving the replicas to serve reads (`SELECT`). This allows applications to connect to the same PgDog deployment for both reads and writes.
+PgDog uses [`pg_raw_parse`](https://github.com/pgdogdev/pg_raw_parse), which includes the PostgreSQL native parser. By parsing queries, PgDog can detect writes (e.g. `INSERT`, `UPDATE`, `CREATE TABLE`, etc.) and send them to the primary, leaving the replicas to serve reads (`SELECT`). This allows applications to connect to the same PgDog deployment for both reads and writes.
 
 
 ##### Transactions

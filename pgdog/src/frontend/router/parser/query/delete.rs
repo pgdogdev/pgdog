@@ -3,14 +3,10 @@ use super::*;
 impl QueryParser {
     pub(super) fn delete(
         &mut self,
-        #[cfg(not(feature = "new_parser"))] stmt: &DeleteStmt,
-        #[cfg(feature = "new_parser")] stmt: pg_raw_parse::Node<'_>,
+        stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let mut parser = StatementParser::from_delete(
-            #[cfg(not(feature = "new_parser"))]
-            stmt,
-            #[cfg(feature = "new_parser")]
+        let mut parser = StatementParser::new(
             stmt,
             context.router_context.bind,
             &context.sharding_schema,

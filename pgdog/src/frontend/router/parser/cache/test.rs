@@ -1,8 +1,5 @@
 #![allow(clippy::print_stdout)]
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query::parse;
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::parse;
 use tokio::spawn;
 
