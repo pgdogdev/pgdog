@@ -24,7 +24,9 @@ use crate::{
     net::{Query, bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
 };
 
-use super::{Address, ClusterMetrics, Config, Error, Guard, Request, Shard, ShardConfig};
+use super::{
+    Address, CanonicalOids, ClusterMetrics, Config, Error, Guard, Request, Shard, ShardConfig,
+};
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
 
@@ -86,6 +88,7 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
+    canonical_oids: Option<Arc<CanonicalOids>>,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -136,6 +139,7 @@ impl Default for Cluster {
             identity: Default::default(),
             tls_client_certificate_required: Default::default(),
             schema_loader: Default::default(),
+            canonical_oids: Default::default(),
         }
     }
 }
@@ -228,6 +232,7 @@ pub struct ClusterConfig<'a> {
     identity: &'a Option<String>,
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
+    canonicalize_oids: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -300,6 +305,7 @@ impl<'a> ClusterConfig<'a> {
             identity: &user.identity,
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
+            canonicalize_oids: general.canonicalize_type_information,
         }
     }
 }
@@ -349,12 +355,14 @@ impl Cluster {
             identity,
             tls_client_certificate_required,
             schema_cache,
+            canonicalize_oids,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
             user: user.to_owned(),
             database: name.to_owned(),
         });
+        let canonical_oids = canonicalize_oids.then(|| schema_cache.canonical_oids(name));
 
         let stats = Arc::new(Mutex::new(ClusterMetrics {
             lookup: sharded_tables.lookup_cache().stats().clone(),
@@ -419,6 +427,7 @@ impl Cluster {
             identity: identity.clone(),
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
+            canonical_oids,
         }
     }
 
@@ -473,7 +482,7 @@ impl Cluster {
     }
 
     /// Get all shards.
-    pub fn shards(&self) -> &[Shard] {
+    pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
     }
 
@@ -766,6 +775,11 @@ impl Cluster {
             .fetch_all(ServerRequest::parameterized(query, params))
             .await
     }
+
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn is_canonicalizing_oids(&self) -> bool {
+        self.canonical_oids.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -913,6 +927,11 @@ mod test {
                     config.config.general.sharding_lookup_timeout,
                 ),
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
+                canonical_oids: config
+                    .config
+                    .general
+                    .canonicalize_type_information
+                    .then(Default::default),
                 ..Default::default()
             }
         }

@@ -41,6 +41,7 @@ fn setup_test_replicas() -> LoadBalancer {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
     replicas
@@ -69,6 +70,7 @@ async fn test_include_primary_if_replica_banned_only_primary() {
         &[],
         LoadBalancingStrategy::default(),
         ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+        Default::default(),
     );
 
     lb.launch();
@@ -212,6 +214,7 @@ async fn test_primary_pool_banning() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -368,6 +371,7 @@ async fn test_read_write_split_exclude_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::ExcludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -404,6 +408,7 @@ async fn test_read_write_split_include_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -457,6 +462,7 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
             &replica_configs,
             LoadBalancingStrategy::RoundRobin,
             split,
+            Default::default(),
         );
         lb.launch();
 
@@ -504,6 +510,7 @@ async fn test_read_write_split_exclude_primary_no_replicas() {
         &replica_configs,
         LoadBalancingStrategy::RoundRobin,
         ReadWriteSplit::ExcludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -540,6 +547,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::ExcludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -570,6 +578,7 @@ async fn test_read_write_split_include_primary_no_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -601,6 +610,7 @@ async fn test_read_write_split_with_banned_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -641,6 +651,7 @@ async fn test_read_write_split_with_banned_replicas() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -681,6 +692,7 @@ async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::PreferPrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -719,6 +731,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
         &replica_configs,
         LoadBalancingStrategy::RoundRobin,
         ReadWriteSplit::ExcludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -764,6 +777,7 @@ async fn test_monitor_shuts_down_on_notify() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     replicas
@@ -826,6 +840,7 @@ async fn test_monitor_does_not_ban_single_target() {
         &[pool_config],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -898,6 +913,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -954,6 +970,7 @@ async fn test_include_primary_if_replica_banned_no_bans() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+        Default::default(),
     );
     replicas.launch();
 
@@ -990,6 +1007,7 @@ async fn test_include_primary_if_replica_banned_with_ban() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimaryIfReplicaBanned,
+        Default::default(),
     );
     replicas.launch();
 
@@ -1039,6 +1057,7 @@ async fn test_has_replicas_with_primary_and_replicas() {
         &replica_configs,
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1058,6 +1077,7 @@ async fn test_has_replicas_primary_only() {
         &[],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1073,6 +1093,7 @@ async fn test_has_replicas_empty() {
         &[],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(!lb.has_replicas());
@@ -1119,6 +1140,7 @@ async fn test_can_move_conns_to_same_config() {
         &[pool_config1.clone(), pool_config2.clone()],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     let lb2 = LoadBalancer::new(
@@ -1126,6 +1148,7 @@ async fn test_can_move_conns_to_same_config() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(lb1.can_move_conns_to(&lb2));
@@ -1143,6 +1166,7 @@ async fn test_can_move_conns_to_with_removed_replica() {
         &[pool_config1.clone(), pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     let lb2 = LoadBalancer::new(
@@ -1150,6 +1174,7 @@ async fn test_can_move_conns_to_with_removed_replica() {
         &[pool_config1],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(!lb1.can_move_conns_to(&lb2));
@@ -1167,6 +1192,7 @@ async fn test_can_move_conns_to_with_added_replica() {
         std::slice::from_ref(&pool_config1),
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     let lb_new = LoadBalancer::new(
@@ -1174,6 +1200,7 @@ async fn test_can_move_conns_to_with_added_replica() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(lb_old.can_move_conns_to(&lb_new));
@@ -1193,6 +1220,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
         std::slice::from_ref(&pool_config1),
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb_old.launch();
 
@@ -1201,6 +1229,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
         &[pool_config1.clone(), pool_config2.clone()],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb_new.launch();
 
@@ -1243,6 +1272,7 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
         std::slice::from_ref(&existing_replica_config),
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     set_lsn_stats(&lb_old.targets[0], true, 100);
@@ -1259,6 +1289,7 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
         &[existing_replica_config, added_replica_config],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     lb_old.move_conns_to(&lb_new).unwrap();
@@ -1295,6 +1326,7 @@ async fn test_redetect_roles_leaves_auto_targets_pending_when_stats_are_invalid(
         &[config1, config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(lb.targets.iter().all(|target| target.role() == Role::Auto));
@@ -1323,6 +1355,7 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
         &[config1, config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     set_lsn_stats(&lb.targets[0], true, 100);
@@ -1356,6 +1389,7 @@ async fn test_can_move_conns_to_different_addresses() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     let lb2 = LoadBalancer::new(
@@ -1363,6 +1397,7 @@ async fn test_can_move_conns_to_different_addresses() {
         &[pool_config3.clone(), pool_config3],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     assert!(!lb1.can_move_conns_to(&lb2));
@@ -1439,6 +1474,7 @@ async fn test_weighted_round_robin_smooth_distribution() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::WeightedRoundRobin,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1473,6 +1509,7 @@ async fn test_weighted_round_robin_equal_weights() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::WeightedRoundRobin,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1504,6 +1541,7 @@ async fn test_weighted_round_robin_zero_weight_never_selected() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::WeightedRoundRobin,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1532,6 +1570,7 @@ async fn test_weighted_round_robin_proportional_distribution() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::WeightedRoundRobin,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     lb.launch();
 
@@ -1563,6 +1602,7 @@ async fn test_least_active_connections_prefers_pool_with_fewer_checked_out() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::LeastActiveConnections,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     replicas.launch();
 
@@ -1599,6 +1639,7 @@ fn setup_test_replicas_no_launch() -> LoadBalancer {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     )
 }
 
@@ -1799,6 +1840,7 @@ fn test_ban_check_does_not_ban_single_target() {
         &[pool_config],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
     // Don't launch - we're unit testing ban_check
 
@@ -1864,6 +1906,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
         &[pool_config1, pool_config2],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     // Set target as unhealthy
@@ -2171,6 +2214,7 @@ async fn test_params_returns_all_replicas_down_when_empty() {
         &[],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
+        Default::default(),
     );
 
     let request = Request::default();

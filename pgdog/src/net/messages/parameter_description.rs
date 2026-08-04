@@ -1,5 +1,6 @@
 use super::code;
 use super::prelude::*;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct ParameterDescription {
@@ -46,6 +47,14 @@ impl ParameterDescription {
     /// Create a parameter description from a list of type OIDs.
     pub fn from_params(params: Vec<i32>) -> Self {
         Self { params }
+    }
+
+    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
+        for param in &mut self.params {
+            if let Some(&canonical) = mapping.get(&(*param as u32)) {
+                *param = canonical as i32;
+            }
+        }
     }
 }
 

@@ -434,6 +434,7 @@ pub enum OverrideReason {
     OnlyOneShard,
     RewriteUpdate,
     CrossShardFunction,
+    CanonicalSchemaInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -519,6 +520,14 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::OnlyOneShard),
+        }
+    }
+
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn new_override_canonical_schema_info(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::CanonicalSchemaInfo),
         }
     }
 

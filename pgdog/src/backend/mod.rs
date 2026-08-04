@@ -21,7 +21,9 @@ pub mod validation;
 pub use connect_reason::ConnectReason;
 pub use disconnect_reason::DisconnectReason;
 pub use error::Error;
-pub use pool::{Cluster, ClusterShardConfig, LoadBalancer, Pool, Shard, ShardingSchema};
+pub(crate) use pool::{
+    CanonicalOids, Cluster, ClusterShardConfig, Oids, Pool, Shard, ShardingSchema,
+};
 pub use prepared_statements::PreparedStatements;
 pub use protocol::*;
 pub use pub_sub::{PubSubClient, PubSubListener};

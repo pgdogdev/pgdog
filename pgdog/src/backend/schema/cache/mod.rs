@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::backend::{Schema, Shard};
+use crate::backend::{CanonicalOids, Oids, Schema, Shard};
 
 type Entry = Arc<Mutex<Schema>>;
 
@@ -13,7 +13,12 @@ type Entry = Arc<Mutex<Schema>>;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SchemaCache {
     // Database => shard => Schema
-    cache: Arc<DashMap<String, DashMap<usize, Entry>>>,
+    cache: Arc<DashMap<(String, usize), Entry>>,
+    /// The canonical mapping of type names to OID
+    /// A cluster's canonical mapping of type names to OID
+    canonical_oids: Arc<DashMap<String, Arc<CanonicalOids>>>,
+    /// Each database, shard pair's mappings to the canonical type OIDs
+    shard_oids: Arc<DashMap<(String, usize), Arc<Oids>>>,
 }
 
 impl SchemaCache {
@@ -26,9 +31,7 @@ impl SchemaCache {
         // This is synchronized.
         let entry = self
             .cache
-            .entry(shard.identifier().database.clone())
-            .or_default()
-            .entry(shard.number())
+            .entry((shard.identifier().database.clone(), shard.number()))
             .or_default()
             .clone();
 
@@ -45,5 +48,18 @@ impl SchemaCache {
         *guard = schema.clone();
 
         Ok(schema)
+    }
+
+    pub(crate) fn canonical_oids(&self, database: &str) -> Arc<CanonicalOids> {
+        Arc::clone(&self.canonical_oids.entry(database.to_owned()).or_default())
+    }
+
+    pub(crate) fn oids(&self, database: &str, shard_number: usize) -> Arc<Oids> {
+        Arc::clone(
+            &self
+                .shard_oids
+                .entry((database.to_owned(), shard_number))
+                .or_insert_with(|| Oids::new(&self.canonical_oids(database))),
+        )
     }
 }

@@ -247,9 +247,9 @@ fn test_system_catalog_sharded() {
 
     let mut updated = config().deref().clone();
     updated.config.general.system_catalogs = SystemCatalogsBehavior::Sharded;
-    config::set(updated).unwrap();
+    updated.config.general.canonicalize_type_information = true;
 
-    let mut test = QueryParserTest::new_with_config(&config());
+    let mut test = QueryParserTest::new_with_config(&updated);
 
     let command = test.execute(vec![Query::new("SELECT * FROM pg_class").into()]);
     assert_eq!(
@@ -259,7 +259,7 @@ fn test_system_catalog_sharded() {
     );
 
     let command = test.execute(vec![
-        Query::new("SELECT * FROM pg_type WHERE typname = 'int4'").into(),
+        Query::new("SELECT * FROM pg_class WHERE relname = $1").into(),
     ]);
     assert_eq!(
         command.route().shard(),
@@ -268,10 +268,29 @@ fn test_system_catalog_sharded() {
     );
     assert!(!command.route().is_omnisharded());
 
-    // Reset to default
-    let mut updated = config().deref().clone();
-    updated.config.general.system_catalogs = SystemCatalogsBehavior::default();
-    config::set(updated).unwrap();
+    #[cfg(feature = "new_parser")]
+    {
+        let command = test.execute(vec![Query::new("SELECT * FROM pg_type").into()]);
+        assert_eq!(
+            command.route().shard(),
+            &Shard::Direct(0),
+            "pg_type queries should go to shard 0",
+        );
+
+        let command = test.execute(vec![Query::new("SELECT $1::regtype").into()]);
+        assert_eq!(
+            command.route().shard(),
+            &Shard::Direct(0),
+            "regtype casts should go to shard 0",
+        );
+
+        let command = test.execute(vec![Query::new("SELECT to_regtype($1)").into()]);
+        assert_eq!(
+            command.route().shard(),
+            &Shard::Direct(0),
+            "to_regtype should go to shard 0",
+        );
+    }
 }
 
 #[test]

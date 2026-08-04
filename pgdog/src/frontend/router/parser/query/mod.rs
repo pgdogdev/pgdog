@@ -377,7 +377,16 @@ impl QueryParser {
                 return Ok(Command::Deallocate);
             }
 
-            Node::SelectStmt(stmt) => self.select(&statement, stmt, context),
+            Node::SelectStmt(stmt) => {
+                if context.is_canonicalizing_oids() && references_pg_type(stmt) {
+                    // Shard 0 is considered the canonical source for now
+                    return Ok(Command::Query(Route::read(
+                        ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
+                    )));
+                } else {
+                    self.select(&statement, stmt, context)
+                }
+            }
 
             Node::CopyStmt(stmt) => Self::copy(stmt, context),
 
@@ -1048,6 +1057,35 @@ cfg_select! {
         }
     }
     _ => {}
+}
+
+#[cfg(feature = "new_parser")]
+fn references_pg_type(stmt: &nodes::SelectStmt) -> bool {
+    use pg_raw_parse::walk::{self, Recurse};
+    use std::ops::ControlFlow;
+
+    walk::walk_manual(stmt.into(), |node| match node {
+        Node::RangeVar(rv) if rv.relname() == Some("pg_type") => ControlFlow::Break(true),
+        // atttypid references pg_type.oid
+        Node::RangeVar(rv) if rv.relname() == Some("pg_attribute") => ControlFlow::Break(true),
+        Node::TypeCast(tc)
+            if let Some(tn) = tc.type_name()
+                && tn.names().iter().map(|s| s.sval()).eq([Some("regtype")]) =>
+        {
+            ControlFlow::Break(true)
+        }
+        Node::FuncCall(fc)
+            if fc
+                .funcname()
+                .iter()
+                .map(Node::as_str)
+                .eq([Some("to_regtype")]) =>
+        {
+            ControlFlow::Break(true)
+        }
+        _ => Recurse::yes(),
+    })
+    .unwrap_or_default()
 }
 
 #[cfg(test)]

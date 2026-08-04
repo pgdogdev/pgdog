@@ -783,6 +783,14 @@ pub struct General {
     #[serde(default = "General::load_schema")]
     pub load_schema: LoadSchema,
 
+    /// Controls whether PgDog maps each shard's type information to a canonical source.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#canonicalize_type_information>
+    #[serde(default = "General::canonicalize_type_information")]
+    pub canonicalize_type_information: bool,
+
     /// Replication lag threshold (in bytes) at which PgDog will pause traffic automatically during a traffic cutover.
     ///
     /// _Default:_ `1000000`
@@ -933,6 +941,7 @@ impl Default for General {
             resharding_replication_retry_min_delay: Self::resharding_replication_retry_min_delay(),
             reload_schema_on_ddl: Self::reload_schema_on_ddl(),
             load_schema: Self::load_schema(),
+            canonicalize_type_information: Self::canonicalize_type_information(),
             cutover_replication_lag_threshold: Self::cutover_replication_lag_threshold(),
             cutover_traffic_stop_threshold: Self::cutover_traffic_stop_threshold(),
             cutover_last_transaction_delay: Self::cutover_last_transaction_delay(),
@@ -1354,6 +1363,10 @@ impl General {
 
     fn load_schema() -> LoadSchema {
         Self::env_enum_or_default("PGDOG_LOAD_SCHEMA")
+    }
+
+    fn canonicalize_type_information() -> bool {
+        Self::env_or_default("PGDOG_CANONICALIZE_TYPE_INFORMATION", false)
     }
 
     pub fn mirror_queue() -> usize {

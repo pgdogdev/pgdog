@@ -43,6 +43,7 @@
 //! The loop exits when the pool shuts down (e.g. on config reload), preventing
 //! refresh tasks from leaking across reloads.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Pool, Request};
@@ -444,7 +445,12 @@ impl Monitor {
         for attempt in 0..connect_attempts {
             match safe_timeout(
                 connect_timeout,
-                Server::connect(pool.addr(), options.clone(), reason),
+                Server::connect(
+                    pool.addr(),
+                    options.clone(),
+                    reason,
+                    Arc::clone(&pool.inner().oids),
+                ),
             )
             .await
             {

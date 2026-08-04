@@ -584,7 +584,12 @@ Cutover can be done atomically with multiple PgDog containers because `RELOAD` d
 &#128216; **[Metrics](https://docs.pgdog.dev/features/metrics/)**
 
 PgDog exposes both the standard PgBouncer-style admin database, an OpenMetrics endpoint and can push metrics to an OTEL endpoint. The admin database isn't 100% compatible,
-so we recommend you use either OpenMetrics or OTEL ingestion for monitoring. Example Datadog configuration and dashboard are [included](examples/datadog).
+so we recommend you use either OpenMetrics or OTEL ingestion for monitoring.
+
+We include two examples:
+
+- [Datadog configuration and dashboard](examples/datadog)
+- [Graphana + Prometheus configuration and dashboard](examples/grafana_prometheus)
 
 
 ## Running PgDog locally
