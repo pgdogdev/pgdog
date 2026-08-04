@@ -23,7 +23,32 @@ pub struct RoleConfig {
 
 #[cfg(test)]
 mod test {
-    use super::super::Users;
+    use super::super::{Config, Users};
+
+    #[test]
+    fn test_role_config_with_databases() {
+        let config = r#"
+[[databases]]
+name = "prod"
+host = "127.0.0.1"
+pool_size_primary = 10
+pool_size_replica = 20
+min_pool_size_primary = 2
+min_pool_size_replica = 4
+idle_timeout_primary = 500
+idle_timeout_replica = 1_000
+            "#;
+
+        let config: Config = toml::from_str(config).unwrap();
+        let role_config = &config.databases[0].role_config;
+
+        assert_eq!(role_config.pool_size_primary, Some(10));
+        assert_eq!(role_config.pool_size_replica, Some(20));
+        assert_eq!(role_config.min_pool_size_primary, Some(2));
+        assert_eq!(role_config.min_pool_size_replica, Some(4));
+        assert_eq!(role_config.idle_timeout_primary, Some(500));
+        assert_eq!(role_config.idle_timeout_replica, Some(1_000));
+    }
 
     #[test]
     fn test_role_config_with_users() {
