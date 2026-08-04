@@ -233,7 +233,7 @@ fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>>
     let Node::SelectStmt(s) = rs.subquery() else {
         return None;
     };
-    if s.values_lists().len() == 0 {
+    if s.values_lists().is_empty() {
         return None;
     }
     let colnames = alias

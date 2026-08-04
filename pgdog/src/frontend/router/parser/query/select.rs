@@ -515,7 +515,7 @@ impl QueryParser {
                     Node::ColumnRef(c) => {
                         // TODO: save the entire column and disambiguate
                         // when reading data with RowDescription as context.
-                        let col_name = c.fields().into_iter().last()?.as_str()?;
+                        let col_name = c.fields().into_iter().next_back()?.as_str()?;
                         if asc {
                             Some(OrderBy::AscColumn(col_name.into()))
                         } else {

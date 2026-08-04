@@ -123,13 +123,11 @@ impl QueryParser {
         for option in options {
             if let Node::DefElem(def_elem) = option
                 && def_elem.defname() == Some("transaction_read_only")
+                && let Node::A_Const(ac) = def_elem.arg()
+                && let Some(val) = ac.val()
+                && let Some(1) = val.numeric_value::<i32>()
             {
-                if let Node::A_Const(ac) = def_elem.arg()
-                    && let Some(val) = ac.val()
-                    && let Some(1) = val.numeric_value::<i32>()
-                {
-                    return Some(TransactionType::ReadOnly);
-                }
+                return Some(TransactionType::ReadOnly);
             }
         }
 

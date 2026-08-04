@@ -149,7 +149,9 @@ mod test {
     fn first_func(query: &str, check: impl FnOnce(Function<'_>)) {
         let mut check = Some(check);
         funcs(query, |func| {
-            check.take().map(|c| c(func));
+            if let Some(c) = check.take() {
+                c(func)
+            }
         });
     }
 

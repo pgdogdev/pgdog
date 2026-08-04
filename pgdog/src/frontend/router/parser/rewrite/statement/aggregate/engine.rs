@@ -453,7 +453,7 @@ mod tests {
             };
             let mut stmt = mem.make_unique(stmt);
 
-            let aggregate = Aggregate::parse(&*stmt, &Default::default());
+            let aggregate = Aggregate::parse(&stmt, &Default::default());
             output = Some(AggregatesRewrite::rewrite_select(
                 &mut stmt.as_mut(),
                 mem,

@@ -242,10 +242,9 @@ impl<'a> WhereClause<'a> {
                 if matches!(
                     expr.kind,
                     A_Expr_Kind::AEXPR_OP | A_Expr_Kind::AEXPR_IN | A_Expr_Kind::AEXPR_OP_ANY
-                ) {
-                    if expr.name().first().and_then(Node::as_str) != Some("=") {
-                        return Vec::new();
-                    }
+                ) && expr.name().first().and_then(Node::as_str) != Some("=")
+                {
+                    return Vec::new();
                 }
                 let array = matches!(expr.kind, A_Expr_Kind::AEXPR_OP_ANY);
                 let left = Self::parse(source, expr.lexpr(), array);

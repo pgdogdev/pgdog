@@ -125,9 +125,10 @@ impl<'a> StatementRewrite<'a> {
             Node::InsertStmt(_)
             | Node::SelectStmt(_)
             | Node::UpdateStmt(_)
-            | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| match node {
-                Node::ParamRef(param) => plan.params = plan.params.max(param.number as u16),
-                _ => {}
+            | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| {
+                if let Node::ParamRef(param) = node {
+                    plan.params = plan.params.max(param.number as u16)
+                }
             }),
             Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
             // We can't do anything with DDL statements

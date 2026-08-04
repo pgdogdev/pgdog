@@ -451,7 +451,7 @@ mod test {
         let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
             panic!("not a select")
         };
-        Aggregate::parse(&stmt, &Default::default())
+        Aggregate::parse(stmt, &Default::default())
     }
 
     #[cfg(not(feature = "new_parser"))]
