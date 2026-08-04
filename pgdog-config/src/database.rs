@@ -6,6 +6,8 @@ use std::{
     str::FromStr,
 };
 
+use crate::RoleConfig;
+
 use super::pooling::PoolerMode;
 
 /// How aggressive the query parser should be in determining read vs. write queries.
@@ -207,6 +209,10 @@ pub struct Database {
     /// Used for weighted load balancing.
     #[serde(default = "Database::lb_weight")]
     pub lb_weight: u8,
+
+    /// Role-specific settings.
+    #[serde(flatten, default)]
+    pub role_config: RoleConfig,
 }
 
 impl Database {

@@ -3,11 +3,14 @@
 use std::cmp::max;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::time::Duration;
 
 use crate::backend::{ConnectReason, DisconnectReason};
 use crate::backend::{Server, stats::Counts as BackendCounts};
 use crate::net::messages::{BackendKeyData, BackendPid, FrontendPid};
 
+use pgdog_config::Role;
+use pgdog_stats::RoleSpecificConfig;
 use tokio::time::Instant;
 
 use super::{Config, Error, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
@@ -49,6 +52,8 @@ pub(super) struct Inner {
     /// Bumped each time Vault credentials rotate. Connections stamped with
     /// an older generation are closed on check-in rather than reused.
     pub(super) credentials_generation: u64,
+    /// Pool role.
+    pub(super) role: Role,
 }
 
 impl std::fmt::Debug for Inner {
@@ -82,6 +87,7 @@ impl Inner {
             id,
             replica_lag: ReplicaLag::default(),
             credentials_generation: 0,
+            role: Role::Auto,
         }
     }
     /// Total number of connections managed by the pool.
@@ -151,13 +157,34 @@ impl Inner {
     /// Minimum number of connections the pool should keep open.
     #[inline]
     pub(super) fn min(&self) -> usize {
-        self.config.min
+        RoleSpecificConfig {
+            value: self.config.min,
+            value_primary: self.config.min_primary,
+            value_replica: self.config.min_replica,
+        }
+        .value(self.role)
     }
 
     /// Maximum number of connections in the pool.
     #[inline]
     pub(super) fn max(&self) -> usize {
-        self.config.max
+        RoleSpecificConfig {
+            value: self.config.max,
+            value_primary: self.config.max_primary,
+            value_replica: self.config.max_replica,
+        }
+        .value(self.role)
+    }
+
+    /// Close connections that have been idle for longer than this.
+    #[inline]
+    pub(super) fn idle_timeout(&self) -> Duration {
+        RoleSpecificConfig {
+            value: self.config.idle_timeout,
+            value_primary: self.config.idle_timeout_primary,
+            value_replica: self.config.idle_timeout_replica,
+        }
+        .value(self.role)
     }
 
     /// The pool should create more connections now.
@@ -216,7 +243,7 @@ impl Inner {
     #[inline]
     pub(crate) fn close_idle(&mut self, now: Instant) -> usize {
         let (mut remove, mut removed) = (self.can_remove(), 0);
-        let idle_timeout = self.config.idle_timeout;
+        let idle_timeout = self.idle_timeout();
 
         self.idle_connections.retain_mut(|c| {
             let idle_for = c.idle_for(now);
@@ -453,6 +480,14 @@ impl Inner {
             let _ = waiter.tx.send(Err(err));
         }
     }
+
+    #[inline]
+    pub(super) fn set_role(&mut self, role: Role) -> bool {
+        let changed = role != self.role;
+        self.role = role;
+
+        changed
+    }
 }
 
 /// Result of connection check into the pool.
@@ -661,6 +696,29 @@ mod test {
                 waiting: 0,
             }
         ));
+    }
+
+    #[test]
+    fn test_role_specific_min_and_idle_timeout() {
+        let mut inner = Inner::default();
+        inner.config.min = 1;
+        inner.config.min_primary = Some(2);
+        inner.config.min_replica = Some(3);
+        inner.config.idle_timeout = Duration::from_millis(10);
+        inner.config.idle_timeout_primary = Some(Duration::from_millis(20));
+        inner.config.idle_timeout_replica = Some(Duration::from_millis(30));
+
+        // Auto targets use replica settings until role detection completes.
+        assert_eq!(inner.min(), 3);
+        assert_eq!(inner.idle_timeout(), Duration::from_millis(30));
+
+        inner.set_role(Role::Primary);
+        assert_eq!(inner.min(), 2);
+        assert_eq!(inner.idle_timeout(), Duration::from_millis(20));
+
+        inner.set_role(Role::Replica);
+        assert_eq!(inner.min(), 3);
+        assert_eq!(inner.idle_timeout(), Duration::from_millis(30));
     }
 
     #[test]

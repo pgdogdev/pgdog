@@ -8,6 +8,7 @@ use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use pgdog_config::Role;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::{debug, error};
@@ -493,6 +494,11 @@ impl Pool {
     /// LSN stats
     pub fn lsn_stats(&self) -> LsnStats {
         *self.inner().lsn_stats.read()
+    }
+
+    /// Set pool role returning true if the role changed.
+    pub(crate) fn set_role(&self, role: Role) -> bool {
+        self.lock().set_role(role)
     }
 
     /// Update pool configuration used in internals.
