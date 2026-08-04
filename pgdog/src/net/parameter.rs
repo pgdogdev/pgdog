@@ -310,12 +310,18 @@ impl Parameters {
     }
 
     fn resettable_keys(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self.params.keys().cloned().collect();
-        keys.extend(self.transaction_params.keys().cloned());
-        keys.extend(self.transaction_local_params.keys().cloned());
+        // The keys have to be lifted out before we can reset them: resetting
+        // borrows the maps we'd be iterating.
+        let mut keys: Vec<String> = self
+            .params
+            .keys()
+            .chain(self.transaction_params.keys())
+            .chain(self.transaction_local_params.keys())
+            .filter(|key| !UNTRACKED_PARAMS.contains(key))
+            .cloned()
+            .collect();
         keys.sort();
         keys.dedup();
-        keys.retain(|key| !UNTRACKED_PARAMS.contains(key));
 
         keys
     }
