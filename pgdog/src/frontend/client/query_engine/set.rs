@@ -44,7 +44,11 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if context.in_transaction() {
+                    context.params.reset_transaction(&param.name);
+                } else {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -56,6 +60,10 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The server is ours right now, so its session changes with the
+            // client's. Record it, or we won't know to undo it for whoever
+            // gets this connection next.
+            self.backend.record_params(params, context.in_transaction());
             self.execute(context).await?;
         } else {
             let values_to_return =
@@ -96,9 +104,14 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        context.params.reset_all();
+        if context.in_transaction() {
+            context.params.reset_all_transaction();
+        } else {
+            context.params.reset_all();
+        }
 
         if self.backend.connected() {
+            self.backend.record_reset_all(context.in_transaction());
             self.execute(context).await?;
         } else {
             self.fake_command_response(context, "RESET", None::<Option<_>>)
