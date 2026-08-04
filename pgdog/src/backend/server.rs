@@ -141,8 +141,8 @@ pub struct Server {
     streaming: bool,
     schema_changed: bool,
     sync_prepared: bool,
-    // The client's parameter change for the statement in flight is already
-    // recorded, so its CommandComplete tells us nothing we don't know.
+    // The change in flight is already recorded, so its CommandComplete
+    // tells us nothing new.
     params_recorded: bool,
     in_transaction: bool,
     re_synced: bool,
@@ -673,9 +673,8 @@ impl Server {
                         self.prepared_statements.clear();
                         self.client_params.clear();
                     }
-                    // Someone reset params. If we didn't see which ones (the query
-                    // parser is off, or the RESET came from somewhere we don't
-                    // track), the cache is worthless and we re-sync from scratch.
+                    // A RESET nobody told us the contents of: we can't tell
+                    // what it touched, so drop everything.
                     "RESET" if !self.params_recorded => self.client_params.clear(),
                     _ => (),
                 }
@@ -771,8 +770,8 @@ impl Server {
         Ok(executed)
     }
 
-    /// Record a parameter change the client is making on this connection, so
-    /// we know what to undo before handing it to somebody else.
+    /// Record a client's parameter change, so we know what to undo before
+    /// this connection goes to somebody else.
     pub fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
         for param in params {
             match (&param.value, in_transaction) {
@@ -791,7 +790,7 @@ impl Server {
         self.params_recorded = true;
     }
 
-    /// Record a `RESET ALL` the client is making on this connection.
+    /// Record a client's `RESET ALL`.
     pub fn record_reset_all(&mut self, in_transaction: bool) {
         if in_transaction {
             self.client_params.reset_all_transaction();
@@ -3265,8 +3264,6 @@ pub mod test {
         server.execute("ROLLBACK").await.unwrap();
         server.transaction_params_hook(true);
 
-        // The ROLLBACK brought search_path back, so we still owe the next
-        // client a RESET for it.
         let queries = server
             .client_params
             .reset_queries(&Parameters::default())
@@ -3299,7 +3296,6 @@ pub mod test {
         server.execute("COMMIT").await.unwrap();
         server.transaction_params_hook(false);
 
-        // Committed: the server really is back to its default, nothing to undo.
         assert!(
             server
                 .client_params
@@ -3316,7 +3312,6 @@ pub mod test {
             .await
             .unwrap();
 
-        // A SET that lands after the connection is already ours.
         server.record_params(
             &[SetParam {
                 name: "statement_timeout".into(),
@@ -3360,7 +3355,6 @@ pub mod test {
             .await
             .unwrap();
 
-        // Resetting one parameter says nothing about the others.
         server.record_params(
             &[SetParam {
                 name: "search_path".into(),
@@ -3390,8 +3384,7 @@ pub mod test {
             .await
             .unwrap();
 
-        // Nobody told us what this RESET touched (query parser off), so the
-        // cache is worthless and we start over.
+        // A RESET we never recorded, as when the query parser is off.
         server.execute("RESET search_path").await.unwrap();
 
         assert!(server.client_params.is_empty());

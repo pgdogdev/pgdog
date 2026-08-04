@@ -267,8 +267,7 @@ impl Parameters {
         }
     }
 
-    /// Remove parameter from params temporarily. The transaction
-    /// is comitted, it will be removed permanently.
+    /// Remove a parameter permanently.
     pub fn reset(&mut self, name: impl AsRef<str>) {
         let name = name.as_ref().to_lowercase();
 
@@ -278,12 +277,11 @@ impl Parameters {
 
         self.transaction_params.remove(&name);
         self.transaction_local_params.remove(&name);
-        // Nothing left to restore: the value is gone for good.
+        // Nothing left to restore on a rollback.
         self.reset_params.remove(&name);
     }
 
-    /// Remove a parameter, but only for the duration of the transaction:
-    /// a ROLLBACK brings its value back.
+    /// Remove a parameter until the transaction ends: a ROLLBACK brings it back.
     pub fn reset_transaction(&mut self, name: impl AsRef<str>) {
         let name = name.as_ref().to_lowercase();
 
@@ -303,7 +301,7 @@ impl Parameters {
         }
     }
 
-    /// Reset all tracked parameters for the duration of the transaction.
+    /// Reset all tracked parameters until the transaction ends.
     pub fn reset_all_transaction(&mut self) {
         for key in self.resettable_keys() {
             self.reset_transaction(&key);
@@ -311,8 +309,7 @@ impl Parameters {
     }
 
     fn resettable_keys(&self) -> Vec<String> {
-        // The keys have to be lifted out before we can reset them: resetting
-        // borrows the maps we'd be iterating.
+        // Lifted out first: resetting borrows the maps we'd be iterating.
         let mut keys: Vec<String> = self
             .params
             .keys()
@@ -1035,7 +1032,7 @@ mod test {
 
         params.reset("search_path");
 
-        // A transaction that comes later has nothing to do with that RESET.
+        // A later transaction has nothing to do with that RESET.
         params.rollback();
 
         assert_eq!(params.get("search_path"), None);
