@@ -23,7 +23,9 @@ use crate::{
     net::{Query, messages::FrontendPid},
 };
 
-use super::{Address, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig};
+use super::{
+    Address, CanonicalOids, Config, Error, Guard, MirrorStats, Request, Shard, ShardConfig,
+};
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
 
@@ -85,6 +87,7 @@ pub struct Cluster {
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
+    canonical_oids: Option<Arc<CanonicalOids>>,
 }
 
 /// Sharding configuration from the cluster.
@@ -174,6 +177,7 @@ pub struct ClusterConfig<'a> {
     identity: &'a Option<String>,
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
+    canonicalize_oids: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -245,6 +249,7 @@ impl<'a> ClusterConfig<'a> {
             identity: &user.identity,
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
+            canonicalize_oids: general.canonicalize_type_information,
         }
     }
 }
@@ -293,12 +298,14 @@ impl Cluster {
             identity,
             tls_client_certificate_required,
             schema_cache,
+            canonicalize_oids,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
             user: user.to_owned(),
             database: name.to_owned(),
         });
+        let canonical_oids = canonicalize_oids.then(|| schema_cache.canonical_oids(name));
 
         Self {
             identifier: identifier.clone(),
@@ -357,6 +364,7 @@ impl Cluster {
             identity: identity.clone(),
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
+            canonical_oids,
         }
     }
 
@@ -411,7 +419,7 @@ impl Cluster {
     }
 
     /// Get all shards.
-    pub fn shards(&self) -> &[Shard] {
+    pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
     }
 
@@ -678,6 +686,11 @@ impl Cluster {
 
         Ok(())
     }
+
+    #[cfg(feature = "new_parser")]
+    pub(crate) fn is_canonicalizing_oids(&self) -> bool {
+        self.canonical_oids.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -813,6 +826,11 @@ mod test {
                 rewrite: config.config.rewrite.clone(),
                 two_phase_commit: config.config.general.two_phase_commit,
                 two_phase_commit_auto: config.config.general.two_phase_commit_auto.unwrap_or(false),
+                canonical_oids: config
+                    .config
+                    .general
+                    .canonicalize_type_information
+                    .then(Default::default),
                 ..Default::default()
             }
         }

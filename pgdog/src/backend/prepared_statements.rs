@@ -6,13 +6,13 @@ use crate::{
     net::{
         Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
         ToBytes,
-        messages::{RowDescription, parse::Parse},
+        messages::{ParameterDescription, RowDescription, parse::Parse},
     },
 };
 use parking_lot::RwLock;
 use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
-use super::Error;
+use super::{Error, Oids};
 use super::{
     protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
@@ -24,7 +24,7 @@ fn str_mem(s: &str) -> usize {
     s.len() + std::mem::size_of::<String>()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HandleResult {
     Forward,
     Drop,
@@ -53,17 +53,19 @@ pub struct PreparedStatements {
     capacity: usize,
     memory_used: usize,
     level: PreparedStatementsLevel,
+    oids: Arc<Oids>,
 }
 
+#[cfg(test)]
 impl Default for PreparedStatements {
     fn default() -> Self {
-        Self::new()
+        Self::new(Default::default())
     }
 }
 
 impl PreparedStatements {
     /// New server prepared statements.
-    pub fn new() -> Self {
+    pub(crate) fn new(oids: Arc<Oids>) -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: LruCache::unbounded(),
@@ -73,6 +75,7 @@ impl PreparedStatements {
             capacity: usize::MAX,
             memory_used: 0,
             level: PreparedStatementsLevel::default(),
+            oids,
         }
     }
 
@@ -208,24 +211,28 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Parse(parse) => {
+                let mut parse = parse.clone();
+                let mut rewritten = self.rewrite_parse_data_types(&mut parse);
+
                 if !parse.anonymous() {
                     if self.contains(parse.name()) {
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.state.add('1');
                         self.parses.push_back(parse.name().to_string());
                     }
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
                     // them to anonymous to avoid storing them in Postgres.
                     if self.level.rewrite_anonymous() {
-                        let mut parse = parse.clone();
                         parse.anonymize();
-                        return Ok(HandleResult::Rewrite(ProtocolMessage::Parse(parse)));
+                        rewritten = true;
                     }
-                } else {
-                    self.state.add('1');
+                }
+
+                self.state.add('1');
+                if rewritten {
+                    return Ok(HandleResult::Rewrite(ProtocolMessage::Parse(parse)));
                 }
             }
 
@@ -272,7 +279,7 @@ impl PreparedStatements {
     }
 
     /// Should we forward the message to the client.
-    pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+    pub(crate) fn forward(&mut self, message: &mut Message) -> Result<bool, Error> {
         let code = message.code();
         let action = self.state.action(code)?;
 
@@ -287,11 +294,12 @@ impl PreparedStatements {
             }
 
             'T' => {
+                let maybe_row_description = self.parse_and_rewrite_row_description(message)?;
                 if let Some(describe) = self.describes.pop_front() {
-                    self.add_row_description(
-                        &describe,
-                        &RowDescription::from_bytes(message.to_bytes())?,
-                    );
+                    let row_description = maybe_row_description
+                        .map(Ok)
+                        .unwrap_or_else(|| RowDescription::from_bytes(message.payload()))?;
+                    self.add_row_description(&describe, row_description);
                 };
             }
 
@@ -313,6 +321,10 @@ impl PreparedStatements {
             // Backend told us the copy is done.
             'c' => {
                 self.state.action(code)?;
+            }
+
+            't' => {
+                self.rewrite_parameter_description_data_types(message)?;
             }
 
             _ => (),
@@ -383,18 +395,18 @@ impl PreparedStatements {
     /// Get the Parse message stored in the global prepared statements
     /// cache for this statement.
     pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
-        self.global_cache.read().rewritten_parse(name)
-    }
-
-    /// Get the globally stored RowDescription for this prepared statement,
-    /// if any.
-    pub fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.global_cache.read().row_description(name)
+        self.global_cache
+            .read()
+            .rewritten_parse(name)
+            .map(|mut parse| {
+                self.rewrite_parse_data_types(&mut parse);
+                parse
+            })
     }
 
     /// Handle a Describe message, storing the RowDescription for the
     /// statement in the global cache.
-    fn add_row_description(&self, name: &str, row_description: &RowDescription) {
+    fn add_row_description(&self, name: &str, row_description: RowDescription) {
         self.global_cache
             .write()
             .insert_row_description(name, row_description);
@@ -459,6 +471,54 @@ impl PreparedStatements {
 
         close
     }
+
+    pub(crate) fn replace_oids(&mut self, oids: &Arc<Oids>) {
+        self.oids = Arc::clone(oids)
+    }
+
+    fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
+        let Some(mappings) = self.oids.get() else {
+            return false;
+        };
+        parse.rewrite_data_types(&mappings.canonical_to_shard)
+    }
+
+    /// Rewrite the given RowDescription Message to have the canonical set of
+    /// OIDs. Returns the parsed RowDescription if parsing occurred
+    fn parse_and_rewrite_row_description(
+        &self,
+        message: &mut Message,
+    ) -> Result<Option<RowDescription>, Error> {
+        // RowDescription is emitted during cluster startup, so we can't
+        // require OIDs to be loaded.
+        let empty_mapping = Default::default();
+        let mappings = &self.oids.get().unwrap_or(&empty_mapping).shard_to_canonical;
+
+        if !mappings.is_empty() {
+            let mut row_description = RowDescription::from_bytes(message.payload())?;
+            if row_description.rewrite_data_types(mappings) {
+                message.replace_payload(row_description.to_bytes());
+            }
+            Ok(Some(row_description))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
+        let Some(mappings) = self.oids.get() else {
+            return Ok(());
+        };
+        let mappings = &mappings.shard_to_canonical;
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
+        let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
+        parameter_description.rewrite_data_types(mappings);
+        message.replace_payload(parameter_description.to_bytes());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -473,14 +533,14 @@ mod test {
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
     fn new_extended_anonymous() -> PreparedStatements {
-        let mut ps = PreparedStatements::new();
+        let mut ps = PreparedStatements::default();
         ps.set_prepared_statements_level(PreparedStatementsLevel::ExtendedAnonymous);
         ps
     }
 
     /// Build a PreparedStatements instance configured for Extended (default) mode.
     fn new_extended() -> PreparedStatements {
-        let mut ps = PreparedStatements::new();
+        let mut ps = PreparedStatements::default();
         ps.set_prepared_statements_level(PreparedStatementsLevel::Extended);
         ps
     }
@@ -709,8 +769,8 @@ mod test {
         // Simulate a ReadyForQuery message.
         // First we need to add a 'Z' to the state so we can action it.
         ps.state.add('Z');
-        let rfq = Message::new(ReadyForQuery::idle().to_bytes());
-        ps.forward(&rfq).unwrap();
+        let mut rfq = Message::new(ReadyForQuery::idle().to_bytes());
+        ps.forward(&mut rfq).unwrap();
 
         // In extended_anonymous mode, cache should be cleared after done.
         assert_eq!(ps.len(), 0, "local cache should be cleared after RFQ");
@@ -724,8 +784,8 @@ mod test {
         assert_eq!(ps.len(), 2);
 
         ps.state.add('Z');
-        let rfq = Message::new(ReadyForQuery::idle().to_bytes());
-        ps.forward(&rfq).unwrap();
+        let mut rfq = Message::new(ReadyForQuery::idle().to_bytes());
+        ps.forward(&mut rfq).unwrap();
 
         // In extended mode, cache should be preserved.
         assert_eq!(
@@ -805,6 +865,21 @@ mod test {
 
         let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
         assert!(matches!(result, HandleResult::Forward));
+    }
+
+    #[test]
+    fn parse_rewrites_if_oids_change() {
+        let mut ps = new_extended();
+        ps.oids = Oids::from_canonical([(10000, 10001)].into_iter().collect());
+
+        let parse = Parse::named("stmt1", "SELECT $1, $2");
+        let client_parse = parse.with_data_types(&[10000, 10002]);
+        let result = ps.handle(&ProtocolMessage::Parse(client_parse)).unwrap();
+        let expected = parse.with_data_types(&[10001, 10002]);
+        assert_eq!(
+            result,
+            HandleResult::Rewrite(ProtocolMessage::Parse(expected))
+        );
     }
 
     // -------------------------------------------------------

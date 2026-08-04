@@ -110,6 +110,7 @@ impl ReplicationSlot {
                 &self.address,
                 ServerOptions::new_replication(),
                 ConnectReason::Replication,
+                Default::default(),
             )
             .await?,
         );
@@ -127,6 +128,7 @@ impl ReplicationSlot {
                     &self.address,
                     ServerOptions::default(),
                     ConnectReason::Replication,
+                    Default::default(),
                 )
                 .await?,
             );

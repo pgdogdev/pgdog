@@ -211,6 +211,10 @@ impl Command for Set {
                 config.config.general.connect_timeout = self.value.parse()?;
             }
 
+            "canonicalize_type_information" => {
+                config.config.general.canonicalize_type_information = Self::from_json(&self.value)?;
+            }
+
             _ => return Ok(vec![]),
         }
 
