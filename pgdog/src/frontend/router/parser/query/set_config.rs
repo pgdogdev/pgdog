@@ -4,8 +4,8 @@ use crate::net::messages::{Bind, Format};
 impl QueryParser {
     /// Handle SELECT set_config('key', 'value', is_local)
     ///
-    /// Arguments we can't resolve leave the statement an ordinary query: it
-    /// runs, but we don't know what it changed.
+    /// Arguments we can't resolve leave it an ordinary query: it runs, but
+    /// we don't learn what it changed.
     pub(super) fn set_config(
         &mut self,
         fcall: &nodes::FuncCall,
@@ -34,7 +34,19 @@ fn parse_args(fcall: &nodes::FuncCall, bind: Option<&Bind>) -> Option<SetParam> 
     Some(SetParam { name, value, local })
 }
 
-/// Get the value bound to `$number`. The inner Option is the SQL NULL.
+cfg_select! {
+    not(feature = "new_parser") => {
+        fn parse_args(fcall: &FuncCall, bind: Option<&Bind>) -> Option<SetParam> {
+            let name = parse_config_name(fcall.args.first()?, bind)?;
+            let value = parse_config_value(fcall.args.get(1)?, bind)?;
+            let local = parse_is_local(fcall.args.get(2)?, bind)?;
+            Some(SetParam { name, value, local })
+        }
+    }
+    _ => {}
+}
+
+/// Value bound to `$number`; the inner Option is the SQL NULL.
 fn bound_text(bind: Option<&Bind>, number: i32) -> Option<Option<String>> {
     let index = usize::try_from(number).ok()?.checked_sub(1)?;
     let param = bind?.parameter(index).ok()??;
