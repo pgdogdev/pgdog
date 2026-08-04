@@ -59,6 +59,15 @@ def test_set_committed_after_connecting():
     assert read("statement_timeout") == "0"
 
 
+def test_set_config_bound_params():
+    """set_config() arguments arrive in the Bind message, not as constants."""
+    conn = connect()
+    conn.execute("SELECT pg_catalog.set_config(%s, %s, false)", ("search_path", ""))
+    conn.close()
+
+    assert read("search_path") not in ("", '""')
+
+
 def test_reset_committed():
     """A committed RESET is permanent and needs no undoing."""
     conn = connect()

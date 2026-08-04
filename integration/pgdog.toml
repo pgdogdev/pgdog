@@ -512,3 +512,10 @@ password = "pgdog"
 database = "pgdog"
 level = "auto"
 engine = "pg_query_raw"
+
+# Session state leaks are what these tests are about, so don't let the parser
+# opt out of looking at the statements that cause them.
+[[query_parsers]]
+database = "pgdog_leak"
+level = "on"
+engine = "pg_query_raw"
