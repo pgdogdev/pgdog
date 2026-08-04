@@ -58,7 +58,7 @@ enum OpSyncPoint {
 enum Command {
     // Fire-and-forget DML: Bind/Execute/Flush. `is_direct` drives missed-row counting.
     Execute {
-        messages: Vec<ProtocolMessage>,
+        bind: Bind,
         is_direct: bool,
     },
     // A synchronization point: write `messages`, then resolve `done` per `kind`.
@@ -114,13 +114,9 @@ impl PipelinedConnection {
     /// Enqueue a DML statement (`Bind/Execute/Flush`) without waiting for its
     /// response. `is_direct` marks a single-shard write whose 0-row result
     /// counts as a missed row.
-    pub async fn execute(&self, bind: &Bind, is_direct: bool) -> Result<(), Error> {
-        let messages = vec![bind.clone().into(), Execute::new().into(), Flush.into()];
+    pub async fn execute(&self, bind: Bind, is_direct: bool) -> Result<(), Error> {
         self.tx
-            .send(Command::Execute {
-                messages,
-                is_direct,
-            })
+            .send(Command::Execute { bind, is_direct })
             .await
             .map_err(|_| Error::PipelineClosed)
     }
@@ -258,14 +254,11 @@ impl Listener {
         }
 
         match command {
-            Command::Execute {
-                messages,
-                is_direct,
-            } => {
+            Command::Execute { bind, is_direct } => {
                 // If our command fails to be executed, we latch the error to the shared state.
                 // we also wake up all the sync point and resolve all the sync point waiters to
                 // resolve with the error.
-                if let Err(err) = self.write(&messages).await {
+                if let Err(err) = self.write_dml(bind).await {
                     self.latch_error(err);
                     self.wake_all();
                     return Err(Error::PipelineClosed);
@@ -375,6 +368,16 @@ impl Listener {
     }
 
     // Write messages to the socket and flush so the bytes reach Postgres.
+    /// Write one DML: Bind/Execute/Flush, no intermediate buffer.
+    async fn write_dml(&mut self, bind: Bind) -> Result<(), Error> {
+        let bind: ProtocolMessage = bind.into();
+        self.server.send_one(&bind).await?;
+        self.server.send_one(&Execute::new().into()).await?;
+        self.server.send_one(&Flush.into()).await?;
+        self.server.flush().await?;
+        Ok(())
+    }
+
     async fn write(&mut self, messages: &[ProtocolMessage]) -> Result<(), Error> {
         for message in messages {
             self.server.send_one(message).await?;
@@ -429,7 +432,7 @@ mod test {
         )
         .await
         .unwrap();
-        conn.execute(&Bind::new_statement("__pipe_create"), false)
+        conn.execute(Bind::new_statement("__pipe_create"), false)
             .await
             .unwrap();
 
@@ -444,7 +447,7 @@ mod test {
         .await
         .unwrap();
         conn.execute(
-            &Bind::new_params("__pipe_insert", &[Parameter::new(b"42")]),
+            Bind::new_params("__pipe_insert", &[Parameter::new(b"42")]),
             false,
         )
         .await
@@ -469,7 +472,7 @@ mod test {
 
         // Execute against the just-prepared statement, then commit.
         conn.execute(
-            &Bind::new_params("__pipe_flush", &[Parameter::new(b"42")]),
+            Bind::new_params("__pipe_flush", &[Parameter::new(b"42")]),
             false,
         )
         .await
@@ -531,7 +534,7 @@ mod test {
             .await
             .unwrap();
         conn.execute(
-            &Bind::new_params("__pipe_div", &[Parameter::new(b"0")]),
+            Bind::new_params("__pipe_div", &[Parameter::new(b"0")]),
             false,
         )
         .await
@@ -558,7 +561,7 @@ mod test {
             let _ = timeout(
                 Duration::from_secs(5),
                 conn.execute(
-                    &Bind::new_params("__pipe_div", &[Parameter::new(b"1")]),
+                    Bind::new_params("__pipe_div", &[Parameter::new(b"1")]),
                     false,
                 ),
             )
@@ -583,7 +586,7 @@ mod test {
             .await
             .unwrap();
         conn.execute(
-            &Bind::new_params("__drain_div", &[Parameter::new(b"0")]),
+            Bind::new_params("__drain_div", &[Parameter::new(b"0")]),
             true,
         )
         .await
@@ -618,7 +621,7 @@ mod test {
         )
         .await
         .unwrap();
-        conn.execute(&Bind::new_statement("__miss_create"), false)
+        conn.execute(Bind::new_statement("__miss_create"), false)
             .await
             .unwrap();
         conn.prepare(
@@ -630,7 +633,7 @@ mod test {
         )
         .await
         .unwrap();
-        conn.execute(&Bind::new_statement("__miss_seed"), false)
+        conn.execute(Bind::new_statement("__miss_seed"), false)
             .await
             .unwrap();
 
@@ -645,7 +648,7 @@ mod test {
         .await
         .unwrap();
         conn.execute(
-            &Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
+            Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
             true,
         )
         .await
@@ -662,7 +665,7 @@ mod test {
         .await
         .unwrap();
         conn.execute(
-            &Bind::new_params("__miss_upd", &[Parameter::new(b"999")]),
+            Bind::new_params("__miss_upd", &[Parameter::new(b"999")]),
             true,
         )
         .await
@@ -670,7 +673,7 @@ mod test {
 
         // Negative control 1: same 0-row DELETE but not direct -> not counted.
         conn.execute(
-            &Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
+            Bind::new_params("__miss_del", &[Parameter::new(b"999")]),
             false,
         )
         .await
@@ -679,7 +682,7 @@ mod test {
         // Negative control 2: direct DELETE that hits the seeded row (1 row) ->
         // rows != 0 -> not counted.
         conn.execute(
-            &Bind::new_params("__miss_del", &[Parameter::new(b"1")]),
+            Bind::new_params("__miss_del", &[Parameter::new(b"1")]),
             true,
         )
         .await

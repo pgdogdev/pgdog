@@ -27,6 +27,7 @@ pub(crate) struct QueryParserTest {
     prepared: PreparedStatements,
     pub(crate) parser: QueryParser,
     last_parse: Option<String>,
+    resolved_lookups: crate::frontend::router::sharding::ResolvedLookups,
 }
 
 impl QueryParserTest {
@@ -47,6 +48,7 @@ impl QueryParserTest {
             parser: QueryParser::default(),
             prepared: PreparedStatements::new(),
             last_parse: None,
+            resolved_lookups: Default::default(),
         }
     }
 
@@ -62,6 +64,7 @@ impl QueryParserTest {
             parser: QueryParser::default(),
             prepared: PreparedStatements::new(),
             last_parse: None,
+            resolved_lookups: Default::default(),
         }
     }
 
@@ -99,6 +102,32 @@ impl QueryParserTest {
     /// Set the read/write strategy on the cluster.
     pub(crate) fn with_read_write_strategy(mut self, strategy: ReadWriteStrategy) -> Self {
         self.cluster.set_read_write_strategy(strategy);
+        self
+    }
+
+    /// Replace the sharded tables configuration on the cluster.
+    pub(crate) fn with_sharded_tables(
+        mut self,
+        sharded_tables: crate::backend::ShardedTables,
+    ) -> Self {
+        self.cluster.set_sharded_tables(sharded_tables);
+        self
+    }
+
+    /// Sharding key translations resolved for the statements this
+    /// test executes, as if a first routing pass had resolved them.
+    pub(crate) fn with_resolved_lookups(
+        mut self,
+        resolved: crate::frontend::router::sharding::ResolvedLookups,
+    ) -> Self {
+        self.resolved_lookups = resolved;
+        self
+    }
+
+    /// Remove the sharded schemas configuration from the cluster.
+    pub(crate) fn without_sharded_schemas(mut self) -> Self {
+        self.cluster
+            .set_sharded_schemas(crate::backend::replication::ShardedSchemas::default());
         self
     }
 
@@ -173,9 +202,9 @@ impl QueryParserTest {
             // Some requests (like Close) don't have a query
             if let Ok(Some(buffered_query)) = request.query() {
                 let ctx = AstContext::from_cluster(&self.cluster, &self.params);
-                let ast = Cache::get()
-                    .query(&buffered_query, &ctx, &mut self.prepared)
-                    .unwrap();
+                // The engine surfaces cache-time errors (e.g. a comment
+                // directive that fails to resolve) as client errors.
+                let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared)?;
                 request.ast = Some(ast);
             }
         }
@@ -187,7 +216,8 @@ impl QueryParserTest {
             self.transaction,
             self.sticky,
         )
-        .unwrap();
+        .unwrap()
+        .with_resolved_lookups(self.resolved_lookups.clone());
 
         let command = self.parser.parse(router_ctx)?;
         Ok(command.clone())

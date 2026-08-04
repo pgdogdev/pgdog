@@ -2,6 +2,9 @@ use pgdog_config::PoolerMode;
 use tracing::trace;
 
 use crate::backend::Cluster;
+use crate::frontend::router::Error as RouterError;
+use crate::frontend::router::parser::Error as ParserError;
+use crate::frontend::router::sharding::lookup;
 use crate::util::safe_timeout;
 
 use super::*;
@@ -91,8 +94,57 @@ impl QueryEngine {
             context.transaction,
             context.sticky,
         )?;
-        match self.router.query(router_context) {
-            Ok(command) => {
+        let mut result = self.router.query(router_context).map(|_| ());
+
+        // Resolve sharding key lookups that missed the cache and route
+        // the query once more, with the translations handed to the
+        // second pass through the router context. Parsing is
+        // deterministic, so the second pass asks for exactly the keys
+        // the first pass collected and can't miss: no retry loop. A
+        // lookup that can't be resolved fails the statement: routing
+        // by the untranslated value could put it on the wrong shard.
+        if result.is_ok() {
+            let pending = self.router.command().route().pending_lookups().to_vec();
+            if !pending.is_empty() {
+                match lookup::resolve(cluster, pending).await {
+                    Ok(resolved) => {
+                        let router_context = RouterContext::new(
+                            context.client_request,
+                            cluster,
+                            context.params,
+                            context.transaction,
+                            context.sticky,
+                        )?
+                        .with_resolved_lookups(resolved);
+                        result = self.router.query(router_context).map(|_| ());
+
+                        // Defensive: can't happen unless routing stops
+                        // being deterministic.
+                        if result.is_ok()
+                            && !self.router.command().route().pending_lookups().is_empty()
+                        {
+                            self.error_response(
+                                context,
+                                ErrorResponse::sharding_key_lookup(
+                                    "lookups did not resolve routing",
+                                ),
+                            )
+                            .await?;
+                            return Ok(false);
+                        }
+                    }
+
+                    Err(response) => {
+                        self.error_response(context, response).await?;
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+
+        match result {
+            Ok(()) => {
+                let command = self.router.command();
                 context.client_request.route = Some(command.route().clone());
                 trace!(
                     "routing {:#?} to {:#?}",
@@ -121,6 +173,12 @@ impl QueryEngine {
                         return Ok(false);
                     }
                 }
+            }
+            Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {
+                self.error_response(context, ErrorResponse::omni_write_with_directive())
+                    .await?;
+
+                return Ok(false);
             }
             Err(err) => {
                 self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))

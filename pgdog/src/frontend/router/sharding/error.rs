@@ -19,6 +19,12 @@ pub enum Error {
     #[error("context incomplete")]
     IncompleteContext,
 
+    #[error("sharding key lookup returned \"{0}\", which is not a shard number")]
+    LookupShardInvalid(String),
+
+    #[error("sharding key lookup returned shard {shard}, but the cluster has {shards} shards")]
+    LookupShardOutOfRange { shard: usize, shards: usize },
+
     #[error("{0}")]
     Utf8(#[from] std::str::Utf8Error),
 

@@ -16,6 +16,7 @@ impl QueryParser {
             &context.sharding_schema,
             self.recorder_mut(),
         );
+        parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
             &context.router_context.schema,
@@ -23,7 +24,10 @@ impl QueryParser {
             context.router_context.parameter_hints.search_path,
         );
         let shard = parser.shard()?;
+        let pending_lookups = parser.take_pending_lookups();
+        context.pending_lookups.extend(pending_lookups);
         let omnisharded = !is_sharded && shard.is_none();
+
         if let Some(shard) = shard {
             if let Some(recorder) = self.recorder_mut() {
                 recorder.record_entry(

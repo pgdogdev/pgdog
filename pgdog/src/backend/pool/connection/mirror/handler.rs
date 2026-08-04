@@ -4,7 +4,7 @@
 //!
 
 use super::*;
-use crate::backend::pool::MirrorStats;
+use crate::backend::pool::ClusterMetrics;
 use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::cache::StatementType;
 use parking_lot::Mutex;
@@ -37,7 +37,7 @@ pub struct MirrorHandler {
     /// Request timer, to simulate delays between queries.
     timer: Instant,
     /// Reference to cluster stats for tracking mirror metrics.
-    stats: Arc<Mutex<MirrorStats>>,
+    stats: Arc<Mutex<ClusterMetrics>>,
 }
 
 impl MirrorHandler {
@@ -50,7 +50,7 @@ impl MirrorHandler {
     pub fn new(
         tx: Sender<MirrorRequest>,
         config: &MirrorConfig,
-        stats: Arc<Mutex<MirrorStats>>,
+        stats: Arc<Mutex<ClusterMetrics>>,
     ) -> Self {
         Self {
             tx,
@@ -162,44 +162,44 @@ impl MirrorHandler {
     /// Increment the total request count.
     pub fn increment_total_count(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.total_count += 1;
+        stats.mirror.total_count += 1;
     }
 
     /// Increment the mirrored request count.
     pub fn increment_mirrored_count(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.mirrored_count += 1;
+        stats.mirror.mirrored_count += 1;
     }
 
     /// Increment the dropped request count.
     pub fn increment_dropped_count(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.dropped_count += 1;
+        stats.mirror.dropped_count += 1;
     }
 
     /// Increment the error count.
     pub fn increment_error_count(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.error_count += 1;
+        stats.mirror.error_count += 1;
     }
 
     /// Increment the queue length.
     pub fn increment_queue_length(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.queue_length += 1;
+        stats.mirror.queue_length += 1;
     }
 
     /// Decrement the queue length.
     pub fn decrement_queue_length(&self) {
         let mut stats = self.stats.lock();
-        stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+        stats.mirror.queue_length = stats.mirror.queue_length.saturating_sub(1);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::pool::MirrorStats;
+    use crate::backend::pool::ClusterMetrics;
     use parking_lot::Mutex;
     use pgdog_config::QueryParserEngine;
     use std::sync::Arc;
@@ -209,11 +209,11 @@ mod tests {
         exposure: f32,
     ) -> (
         MirrorHandler,
-        Arc<Mutex<MirrorStats>>,
+        Arc<Mutex<ClusterMetrics>>,
         Receiver<MirrorRequest>,
     ) {
         let (tx, rx) = channel(1000); // Keep receiver to prevent channel closure
-        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats = Arc::new(Mutex::new(ClusterMetrics::default()));
         let handler = MirrorHandler::new(
             tx,
             &MirrorConfig {
@@ -225,13 +225,13 @@ mod tests {
         (handler, stats, rx)
     }
 
-    fn get_stats_counts(stats: &Arc<Mutex<MirrorStats>>) -> (usize, usize, usize, usize) {
+    fn get_stats_counts(stats: &Arc<Mutex<ClusterMetrics>>) -> (usize, usize, usize, usize) {
         let stats = stats.lock();
         (
-            stats.counts.total_count,
-            stats.counts.mirrored_count,
-            stats.counts.dropped_count,
-            stats.counts.error_count,
+            stats.mirror.total_count,
+            stats.mirror.mirrored_count,
+            stats.mirror.dropped_count,
+            stats.mirror.error_count,
         )
     }
 
@@ -375,7 +375,7 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 0,
+                stats.mirror.queue_length, 0,
                 "queue_length should be 0 initially"
             );
         }
@@ -389,7 +389,7 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 0,
+                stats.mirror.queue_length, 0,
                 "queue_length should still be 0 before flush"
             );
         }
@@ -399,7 +399,7 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 1,
+                stats.mirror.queue_length, 1,
                 "queue_length should be 1 after flush"
             );
         }
@@ -419,7 +419,7 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 0,
+                stats.mirror.queue_length, 0,
                 "queue_length should be 0 initially"
             );
         }
@@ -434,17 +434,17 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 0,
+                stats.mirror.queue_length, 0,
                 "queue_length should remain 0 for dropped transactions"
             );
-            assert_eq!(stats.counts.dropped_count, 1, "dropped_count should be 1");
+            assert_eq!(stats.mirror.dropped_count, 1, "dropped_count should be 1");
         }
     }
 
     #[test]
     fn test_queue_length_with_channel_overflow() {
         let (tx, _rx) = channel(1); // Channel with capacity of 1
-        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats = Arc::new(Mutex::new(ClusterMetrics::default()));
         let mut handler = MirrorHandler::new(
             tx,
             &MirrorConfig {
@@ -466,11 +466,11 @@ mod tests {
         {
             let stats = stats.lock();
             assert_eq!(
-                stats.counts.queue_length, 1,
+                stats.mirror.queue_length, 1,
                 "queue_length should be 1 (first successful send)"
             );
             assert_eq!(
-                stats.counts.error_count, 1,
+                stats.mirror.error_count, 1,
                 "error_count should be 1 due to overflow"
             );
         }
@@ -481,11 +481,11 @@ mod tests {
         level: MirroringLevel,
     ) -> (
         MirrorHandler,
-        Arc<Mutex<MirrorStats>>,
+        Arc<Mutex<ClusterMetrics>>,
         Receiver<MirrorRequest>,
     ) {
         let (tx, rx) = channel(1000);
-        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats = Arc::new(Mutex::new(ClusterMetrics::default()));
         let handler = MirrorHandler::new(
             tx,
             &MirrorConfig {
@@ -577,16 +577,16 @@ mod tests {
     #[test]
     fn test_queue_length_never_negative() {
         // Test to ensure queue_length never goes negative even with mismatched increment/decrement
-        let stats = Arc::new(Mutex::new(MirrorStats::default()));
+        let stats = Arc::new(Mutex::new(ClusterMetrics::default()));
 
         // Manually try to decrement without incrementing (should use saturating_sub)
         // This will be tested more thoroughly once decrement_queue_length is implemented
         {
             let mut stats = stats.lock();
             // Simulating a decrement when queue is already 0
-            stats.counts.queue_length = stats.counts.queue_length.saturating_sub(1);
+            stats.mirror.queue_length = stats.mirror.queue_length.saturating_sub(1);
             assert_eq!(
-                stats.counts.queue_length, 0,
+                stats.mirror.queue_length, 0,
                 "queue_length should not go negative"
             );
         }

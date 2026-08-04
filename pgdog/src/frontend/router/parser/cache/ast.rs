@@ -11,12 +11,13 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::warn;
 
-use super::super::{Error, Route, Shard, StatementRewrite, StatementRewriteContext};
+use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
 use crate::backend::schema::Schema;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
+use crate::frontend::router::sharding::ShardOrLookup;
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, config::Role};
 
@@ -27,7 +28,7 @@ pub struct Ast {
     /// Was this entry cached?
     pub cached: bool,
     /// Shard.
-    pub comment_shard: Option<Shard>,
+    pub comment_shard: Option<ShardOrLookup>,
     /// Role.
     pub comment_role: Option<Role>,
     /// Parser query engine used.

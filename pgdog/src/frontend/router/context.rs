@@ -5,6 +5,7 @@ use crate::{
         BufferedQuery, ClientRequest,
         client::{Sticky, TransactionType},
         router::Ast,
+        router::sharding::ResolvedLookups,
     },
     net::{Bind, Parameters},
 };
@@ -37,6 +38,10 @@ pub struct RouterContext<'a> {
     pub schema: Schema,
     /// Original client request.
     pub client_request: &'a ClientRequest,
+    /// Sharding key translations resolved for this statement. Routing
+    /// reads these before the lookup cache, so a second routing pass
+    /// after resolving lookups can't miss.
+    pub resolved_lookups: ResolvedLookups,
 }
 
 impl<'a> RouterContext<'a> {
@@ -65,7 +70,14 @@ impl<'a> RouterContext<'a> {
             ast: buffer.ast.clone(),
             schema: cluster.schema(),
             client_request: buffer,
+            resolved_lookups: ResolvedLookups::default(),
         })
+    }
+
+    /// Attach sharding key translations resolved for this statement.
+    pub fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
+        self.resolved_lookups = resolved;
+        self
     }
 
     pub fn in_transaction(&self) -> bool {

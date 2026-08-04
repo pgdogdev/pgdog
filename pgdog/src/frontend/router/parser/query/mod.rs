@@ -8,9 +8,9 @@ use crate::{
     config::Role,
     frontend::router::{
         context::RouterContext,
-        parser::{OrderBy, Shard},
+        parser::{OrderBy, Shard, route::ShardSource},
         round_robin,
-        sharding::{Centroids, ContextBuilder},
+        sharding::{self, Centroids, ContextBuilder, ShardOrLookup},
     },
     net::{
         messages::{Bind, Vector},
@@ -141,7 +141,27 @@ impl QueryParser {
                     route.set_shard(context.shards_calculator.shard());
                 }
 
+                // A write that only touches omnisharded tables must reach
+                // every shard. A shard directive (a comment or SET) routing
+                // it to one shard would silently diverge the table, so it's
+                // an error. A pending lookup for a bare key means the same
+                // directive is present with a cold cache, so it errors
+                // without running the lookup.
+                if route.is_omnisharded()
+                    && route.is_write()
+                    && (matches!(
+                        route.shard_with_priority().source(),
+                        ShardSource::Comment | ShardSource::Set
+                    ) || !context.bare_key_lookups.is_empty())
+                {
+                    return Err(Error::OmniWriteWithDirective);
+                }
+                context
+                    .pending_lookups
+                    .extend(std::mem::take(&mut context.bare_key_lookups));
+
                 route.set_search_path_driven(context.shards_calculator.is_search_path());
+                route.set_pending_lookups(std::mem::take(&mut context.pending_lookups));
 
                 if let Some(role) = context.router_context.sticky.role {
                     match role {
@@ -250,10 +270,35 @@ impl QueryParser {
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
-            if let Some(comment_shard) = statement.comment_shard.clone() {
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_comment(comment_shard));
+            let mut comment_shard_set = false;
+            match &statement.comment_shard {
+                Some(ShardOrLookup::Shard(comment_shard)) => {
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_comment(comment_shard.clone()));
+                    comment_shard_set = true;
+                }
+                // The sharding key in the comment missed the lookup
+                // cache when the comment was parsed, which happens
+                // before routing. Check again: on the second routing
+                // pass the translation has been resolved. The pending
+                // lookup is cloned only when it actually has to run.
+                Some(ShardOrLookup::Lookup(pending)) => {
+                    match sharding::lookup::shard_for_pending(
+                        pending,
+                        &context.sharding_schema,
+                        &context.router_context.resolved_lookups,
+                    )? {
+                        Some(shard) => {
+                            context
+                                .shards_calculator
+                                .push(ShardWithPriority::new_comment(shard));
+                            comment_shard_set = true;
+                        }
+                        None => context.bare_key_lookups.push(pending.clone()),
+                    }
+                }
+                None => {}
             }
 
             let role_override = statement.comment_role;
@@ -261,7 +306,7 @@ impl QueryParser {
                 self.write_override = role == Role::Primary;
             }
 
-            if statement.comment_shard.is_some() || role_override.is_some() {
+            if comment_shard_set || role_override.is_some() {
                 let shard = context.shards_calculator.shard();
 
                 if let Some(recorder) = self.recorder_mut() {
@@ -526,10 +571,35 @@ impl QueryParser {
 
                 // Parse hardcoded shard from a query comment.
                 if context.router_needed || context.dry_run {
-                    if let Some(comment_shard) = statement.comment_shard.clone() {
-                        context
-                            .shards_calculator
-                            .push(ShardWithPriority::new_comment(comment_shard));
+                    let mut comment_shard_set = false;
+                    match &statement.comment_shard {
+                        Some(ShardOrLookup::Shard(comment_shard)) => {
+                            context
+                                .shards_calculator
+                                .push(ShardWithPriority::new_comment(comment_shard.clone()));
+                            comment_shard_set = true;
+                        }
+                        // The sharding key in the comment missed the lookup
+                        // cache when the comment was parsed, which happens
+                        // before routing. Check again: on the second routing
+                        // pass the translation has been resolved. The pending
+                        // lookup is cloned only when it actually has to run.
+                        Some(ShardOrLookup::Lookup(pending)) => {
+                            match sharding::lookup::shard_for_pending(
+                                pending,
+                                &context.sharding_schema,
+                                &context.router_context.resolved_lookups,
+                            )? {
+                                Some(shard) => {
+                                    context
+                                        .shards_calculator
+                                        .push(ShardWithPriority::new_comment(shard));
+                                    comment_shard_set = true;
+                                }
+                                None => context.bare_key_lookups.push(pending.clone()),
+                            }
+                        }
+                        None => {}
                     }
 
                     let role_override = statement.comment_role;
@@ -537,7 +607,7 @@ impl QueryParser {
                         self.write_override = role == Role::Primary;
                     }
 
-                    if statement.comment_shard.is_some() || role_override.is_some() {
+                    if comment_shard_set || role_override.is_some() {
                         let shard = context.shards_calculator.shard();
 
                         if let Some(recorder) = self.recorder_mut() {
@@ -790,6 +860,7 @@ impl QueryParser {
         // phase of data-sync.
         //
         let table = stmt.relation().map(Table::from);
+
         if let Some(table) = table
             && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
         {
@@ -835,6 +906,7 @@ impl QueryParser {
                 // phase of data-sync.
                 //
                 let table = stmt.relation.as_ref().map(Table::from);
+
                 if let Some(table) = table
                     && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
                 {
@@ -897,6 +969,7 @@ impl QueryParser {
             self.recorder_mut(),
         )
         .with_schema_lookup(schema_lookup);
+        parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
             &context.router_context.schema,
@@ -906,6 +979,8 @@ impl QueryParser {
         let shard = parser.shard()?;
         let omnisharded = !is_sharded && shard.is_none();
         let shard = shard.unwrap_or(Shard::All);
+        let pending_lookups = parser.take_pending_lookups();
+        context.pending_lookups.extend(pending_lookups);
 
         context.shards_calculator.push(if is_sharded {
             ShardWithPriority::new_table(shard.clone())

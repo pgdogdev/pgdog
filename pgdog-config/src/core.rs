@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
@@ -393,6 +393,30 @@ impl Config {
         mappings
     }
 
+    /// Databases whose shard numbers don't form a contiguous `0..n`
+    /// range, with the first missing shard number for each. A gap
+    /// creates a shard with no servers behind it.
+    pub fn shard_number_gaps(&self) -> Vec<(String, usize)> {
+        let mut shards_by_database: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
+        for database in &self.databases {
+            shards_by_database
+                .entry(database.name.as_str())
+                .or_default()
+                .insert(database.shard);
+        }
+
+        let mut gaps = vec![];
+        for (name, shards) in shards_by_database {
+            for (expected, shard) in shards.iter().enumerate() {
+                if *shard != expected {
+                    gaps.push((name.to_owned(), expected));
+                    break;
+                }
+            }
+        }
+        gaps
+    }
+
     pub fn check(&mut self) {
         // Check databases.
         let mut duplicate_dbs = HashSet::new();
@@ -411,6 +435,17 @@ impl Config {
                     database.name, database.shard, database.role,
                 );
             }
+        }
+
+        // Shard numbers must be contiguous starting at 0: a gap creates
+        // a shard with no servers that fails every query routed to it,
+        // including cross-shard and omnisharded traffic.
+        for (name, missing) in self.shard_number_gaps() {
+            warn!(
+                "database \"{}\" has a gap in shard numbers: shard {} is not configured; \
+                 queries routed to it will fail",
+                name, missing,
+            );
         }
 
         struct Check {
@@ -1681,5 +1716,45 @@ column = "legacy_id"
         );
 
         assert_eq!(config.sharded_tables[4].mapping, None);
+    }
+}
+
+#[cfg(test)]
+mod shard_gap_tests {
+    use super::*;
+
+    fn config_with_shards(shards: &[usize]) -> Config {
+        let entries = shards
+            .iter()
+            .map(|shard| {
+                format!(
+                    "[[databases]]\nname = \"sharded\"\nhost = \"127.0.0.1\"\nshard = {}\n",
+                    shard
+                )
+            })
+            .collect::<String>();
+        toml::from_str(&entries).unwrap()
+    }
+
+    #[test]
+    fn test_shard_number_gaps() {
+        assert!(
+            config_with_shards(&[0, 1, 2])
+                .shard_number_gaps()
+                .is_empty()
+        );
+        assert!(config_with_shards(&[0]).shard_number_gaps().is_empty());
+
+        // A gap reports the first missing number.
+        assert_eq!(
+            config_with_shards(&[0, 1, 3]).shard_number_gaps(),
+            vec![("sharded".to_string(), 2)]
+        );
+
+        // Not starting at zero is a gap at zero.
+        assert_eq!(
+            config_with_shards(&[1, 2]).shard_number_gaps(),
+            vec![("sharded".to_string(), 0)]
+        );
     }
 }

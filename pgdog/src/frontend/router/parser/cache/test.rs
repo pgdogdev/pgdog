@@ -14,6 +14,7 @@ use crate::{
 };
 
 use super::*;
+use crate::frontend::router::sharding::ShardOrLookup;
 use std::time::{Duration, Instant};
 
 fn test_context() -> AstContext<'static> {
@@ -236,14 +237,17 @@ fn test_cache_hit_overrides_shard_hint() {
     Cache::reset();
 
     let first = run_prepared("/* pgdog_shard: 0 */ SELECT 1 FROM cache_shard_override");
-    assert_eq!(first.comment_shard, Some(Shard::Direct(0)));
+    assert_eq!(
+        first.comment_shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(0)))
+    );
 
     let second = run_prepared("/* pgdog_shard: 1 */ SELECT 1 FROM cache_shard_override");
     let (stats, _) = Cache::stats();
     assert_eq!(stats.hits, 1, "second query should hit cache");
     assert_eq!(
         second.comment_shard,
-        Some(Shard::Direct(1)),
+        Some(ShardOrLookup::Shard(Shard::Direct(1))),
         "cached Ast must be overridden with the incoming shard hint"
     );
 }

@@ -3,6 +3,7 @@ use pgdog_config::SystemCatalogsBehavior;
 use crate::backend::ShardedTables;
 use crate::backend::ShardingSchema;
 use crate::config::database::Role;
+use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::super::Shard;
 use super::directive::{SHARDING_KEY, get_matched_value};
@@ -97,7 +98,7 @@ fn test_role_and_shard_detection() {
 
     let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.shard, Some(Shard::Direct(2)));
+    assert_eq!(result.shard, Some(ShardOrLookup::Shard(Shard::Direct(2))));
     assert_eq!(result.role, Some(Role::Replica));
 }
 
@@ -215,7 +216,7 @@ fn test_remove_comment_preserves_inner_content() {
     let qac = parse_edge_comment("SELECT 'a/*b*/c' /* pgdog_shard: 1 */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 'a/*b*/c'");
     assert_eq!(qac.comment, "/* pgdog_shard: 1 */");
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -253,7 +254,7 @@ fn test_remove_comment_multiple_leading() {
     let qac = parse_edge_comment("/* a */ /* pgdog_shard: 1 */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
     assert_eq!(qac.comment, "/* a */ /* pgdog_shard: 1 */");
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -271,7 +272,7 @@ fn test_remove_comment_multiple_trailing() {
     assert_eq!(qac.query, "SELECT 1");
     assert_eq!(qac.comment, "/* pgdog_role: primary *//* pgdog_shard: 1 */");
     assert_eq!(qac.role, Some(Role::Primary));
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -343,7 +344,7 @@ fn test_strips_datadog_trailing_with_pgdog_leading() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(Shard::Direct(0)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(0))));
 }
 
 #[test]
@@ -355,7 +356,7 @@ fn test_strips_directive_in_trailing_with_leading_noise() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -367,7 +368,7 @@ fn test_leading_wins_on_conflicting_shard() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(Shard::Direct(0)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(0))));
 }
 
 #[test]
@@ -380,7 +381,7 @@ fn test_role_and_shard_split_across_sides() {
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
     assert_eq!(qac.role, Some(Role::Primary));
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -409,7 +410,7 @@ fn test_remove_comment_directive_in_first_of_stack() {
     let qac = parse_edge_comment("/* pgdog_shard: 1 */ /* noise */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
     assert_eq!(qac.comment, "/* pgdog_shard: 1 */ /* noise */");
-    assert_eq!(qac.shard, Some(Shard::Direct(1)));
+    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
 }
 
 #[test]
@@ -442,5 +443,70 @@ fn test_sharding_key_with_schema_name() {
 
     let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.shard, Some(Shard::Direct(1)));
+    assert_eq!(result.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+}
+
+fn lookup_schema() -> ShardingSchema {
+    use crate::frontend::router::sharding::ShardedTable;
+    use pgdog_config::DataType;
+
+    ShardingSchema {
+        shards: 3,
+        tables: ShardedTables::new(
+            vec![ShardedTable {
+                database: "pgdog".into(),
+                name: None,
+                column: "organization_id".into(),
+                data_type: DataType::Varchar,
+                lookup_query: Some(
+                    "SELECT COALESCE(parent_organization_id, id) FROM organizations WHERE id = $1"
+                        .into(),
+                ),
+                ..Default::default()
+            }],
+            vec![],
+            false,
+            SystemCatalogsBehavior::default(),
+        ),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_sharding_key_comment_misses_lookup_cache() {
+    let schema = lookup_schema();
+    let result =
+        parse_edge_comment("/* pgdog_sharding_key: 'org_child' */ SELECT 1", &schema).unwrap();
+
+    match result.shard {
+        Some(ShardOrLookup::Lookup(pending)) => {
+            assert_eq!(pending.value, "org_child");
+            assert_eq!(pending.table.column, "organization_id");
+            assert!(pending.query.contains("FROM organizations"));
+        }
+        other => panic!("expected pending lookup, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_sharding_key_comment_translates_through_lookup() {
+    use crate::frontend::router::sharding::{LookupTable, shard_value};
+    use pgdog_config::DataType;
+
+    let schema = lookup_schema();
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    schema
+        .tables
+        .lookup_cache()
+        .insert(key, "org_child".into(), "org_root".into());
+
+    let result =
+        parse_edge_comment("/* pgdog_sharding_key: 'org_child' */ SELECT 1", &schema).unwrap();
+
+    let expected = shard_value("org_root", &DataType::Varchar, 3, &vec![], 0);
+    assert_eq!(result.shard, Some(ShardOrLookup::Shard(expected)));
 }

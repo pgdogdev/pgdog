@@ -11,7 +11,9 @@ use tokio::net::TcpListener;
 use tokio::select;
 use tracing::{info, warn};
 
-use super::{Clients, ClientsLocked, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use super::{
+    Clients, ClientsLocked, Listeners, LookupMetrics, MirrorStatsMetrics, Pools, QueryCache, TwoPc,
+};
 use crate::tasks;
 
 async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
@@ -23,6 +25,11 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .map(|m| m.to_string())
         .collect();
     let mirror_stats = mirror_stats.join("\n");
+    let lookup_stats: Vec<_> = LookupMetrics::load()
+        .into_iter()
+        .map(|m| m.to_string())
+        .collect();
+    let lookup_stats = lookup_stats.join("\n");
     let listeners: Vec<_> = Listeners::load()
         .into_iter()
         .map(|m| m.to_string())
@@ -42,6 +49,8 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         + &pools.to_string()
         + "\n"
         + &mirror_stats
+        + "\n"
+        + &lookup_stats
         + "\n"
         + &listeners
         + "\n"

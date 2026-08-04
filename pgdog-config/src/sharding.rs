@@ -86,6 +86,40 @@ pub struct ShardedTableConfig {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>
     pub mapping: Option<Vec<ShardedMappingConfig>>,
+
+    /// Query used to translate a sharding key value into the value that's hashed
+    /// to pick a shard, e.g. `SELECT COALESCE(parent_org_id, id) FROM orgs
+    /// WHERE id = $1`. Must contain exactly one `$1` placeholder and return at
+    /// most one row. Results are cached in memory, keyed by the value; the
+    /// cache is emptied on config reload.
+    ///
+    /// **Note:** The query should return a row for every valid sharding key
+    /// value, including values that translate to themselves. A value with no
+    /// row fails the statement with an error: routing it by its original value
+    /// could place data on the wrong shard, e.g. when the row just hasn't been
+    /// inserted yet. Absence isn't cached, so rows added later are picked up
+    /// on the next statement.
+    ///
+    /// **Note:** The table the query reads must contain the same data on all
+    /// shards (omnisharded): the query runs on a single shard picked
+    /// round-robin.
+    #[serde(default)]
+    pub lookup_query: Option<String>,
+
+    /// How the `lookup_query` result is interpreted. `value` (default) hashes
+    /// the returned value to pick a shard. `shard` uses the returned value as
+    /// the 0-based shard number directly, bypassing hashing entirely: the
+    /// application controls placement, e.g. by storing a permanent shard id
+    /// per tenant, and new shards can be added without resharding.
+    ///
+    /// **Note:** With `shard`, the query must return a number between 0 and
+    /// the shard count minus one; anything else fails the statement. Shard
+    /// numbers are interpreted against the destination topology during
+    /// resharding data sync, so existing assignments stay valid when shards
+    /// are added. `mapping`, `centroids` and a non-default `hasher` can't be
+    /// combined with `shard`: this mode never hashes.
+    #[serde(default)]
+    pub lookup_result: LookupResult,
 }
 
 impl ShardedTableConfig {
@@ -497,6 +531,30 @@ impl Display for CopyFormat {
     }
 }
 
+/// How a `lookup_query` result is interpreted when routing.
+///
+/// **Note:** `shard` mode never hashes: the query returns the shard number.
+///
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#lookup_result>
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum LookupResult {
+    /// The returned value is hashed to pick a shard (default).
+    #[default]
+    Value,
+    /// The returned value is the 0-based shard number itself.
+    Shard,
+}
+
+impl Display for LookupResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value => write!(f, "value"),
+            Self::Shard => write!(f, "shard"),
+        }
+    }
+}
+
 /// Controls whether PgDog loads the database schema at startup for query routing.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#load_schema>
@@ -599,9 +657,61 @@ pub struct QueryParser {
 
 #[cfg(test)]
 mod tests {
-    use crate::Config;
+    use crate::{Config, ConfigAndUsers};
 
-    use super::{QueryParserEngine, QueryParserLevel};
+    use super::{DataType, LookupResult, QueryParserEngine, QueryParserLevel};
+
+    #[test]
+    fn sharded_table_reads_lookup_query_from_config() {
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "tenant_id"
+data_type = "varchar"
+lookup_query = "SELECT COALESCE(parent_tenant_id, id) FROM tenants WHERE id = $1"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        assert_eq!(config.sharded_tables.len(), 1);
+        let table = &config.sharded_tables[0];
+        assert_eq!(table.database, "houston");
+        assert_eq!(table.column, "tenant_id");
+        assert_eq!(table.data_type, DataType::Varchar);
+        assert_eq!(
+            table.lookup_query.as_deref(),
+            Some("SELECT COALESCE(parent_tenant_id, id) FROM tenants WHERE id = $1")
+        );
+
+        let mut config = ConfigAndUsers {
+            config,
+            ..Default::default()
+        };
+        config.check().unwrap();
+    }
+
+    #[test]
+    fn sharded_table_reads_lookup_result_from_config() {
+        // Default when omitted.
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+"#;
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.sharded_tables[0].lookup_result, LookupResult::Value);
+
+        let source = r#"
+[[sharded_tables]]
+database = "houston"
+column = "tenant_id"
+lookup_query = "SELECT shard_id FROM tenants WHERE id = $1"
+lookup_result = "shard"
+"#;
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.sharded_tables[0].lookup_result, LookupResult::Shard);
+    }
 
     #[test]
     fn query_parser_reads_default_values_from_config() {

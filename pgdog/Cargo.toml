@@ -68,6 +68,7 @@ lru = "0.16"
 hickory-resolver = "0.25.2"
 lazy_static = "1"
 dashmap = "6"
+moka = { version = "0.12", features = ["sync"] }
 derive_builder = "0.20.2"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-rds = { version = "1", default-features = false }

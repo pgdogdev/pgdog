@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::str::{FromStr, from_utf8};
 
 use uuid::Uuid;
@@ -127,6 +128,19 @@ impl<'a> Value<'a> {
         }
     }
 
+    /// The value's canonical text form, used to translate binary
+    /// values through sharding key lookups. `None` for data types
+    /// without one, e.g. vectors. Text that is already in place is
+    /// borrowed, not copied.
+    pub fn to_text(&self) -> Result<Option<Cow<'_, str>>, Error> {
+        match self.data_type {
+            DataType::Bigint => Ok(self.integer()?.map(|int| Cow::Owned(int.to_string()))),
+            DataType::Varchar => Ok(self.varchar()?.map(Cow::Borrowed)),
+            DataType::Uuid => Ok(self.uuid()?.map(|uuid| Cow::Owned(uuid.to_string()))),
+            _ => Ok(None),
+        }
+    }
+
     pub fn varchar(&self) -> Result<Option<&str>, Error> {
         if self.data_type == DataType::Varchar {
             match self.data {
@@ -191,6 +205,41 @@ impl<'a> Value<'a> {
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn to_text_decodes_binary_values() -> Result<(), Error> {
+        let bigint = 42_i64.to_be_bytes();
+        let value = Value {
+            data_type: DataType::Bigint,
+            data: Data::Binary(&bigint),
+        };
+        assert_eq!(value.to_text()?.as_deref(), Some("42"));
+
+        let value = Value {
+            data_type: DataType::Varchar,
+            data: Data::Binary(b"tenant_a"),
+        };
+        assert_eq!(value.to_text()?.as_deref(), Some("tenant_a"));
+
+        let uuid_bytes = [0x11_u8; 16];
+        let value = Value {
+            data_type: DataType::Uuid,
+            data: Data::Binary(&uuid_bytes),
+        };
+        assert_eq!(
+            value.to_text()?.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+
+        // Text values pass through.
+        let value = Value {
+            data_type: DataType::Bigint,
+            data: Data::Text("42"),
+        };
+        assert_eq!(value.to_text()?.as_deref(), Some("42"));
+
+        Ok(())
+    }
 
     #[test]
     fn uuid_binary_parses_correctly() -> Result<(), Error> {

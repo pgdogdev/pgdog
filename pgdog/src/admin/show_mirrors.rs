@@ -35,7 +35,7 @@ impl Command for ShowMirrors {
             let counts = {
                 let stats = cluster.stats();
                 let stats = stats.lock();
-                stats.counts
+                stats.mirror
             };
 
             // Create a data row for this cluster

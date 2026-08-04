@@ -106,6 +106,8 @@
         "rollback_timeout": 5000,
         "server_lifetime": 86400000,
         "server_lifetime_jitter": 0,
+        "sharding_lookup_cache_size": 67108864,
+        "sharding_lookup_timeout": 5000,
         "shutdown_termination_timeout": null,
         "shutdown_timeout": 60000,
         "stats_period": 15000,
@@ -135,7 +137,7 @@
       "default": {
         "message_buffer": 4096,
         "net_buffer": 4096,
-        "stack_size": 2097152
+        "stack_size": 8388608
       }
     },
     "mirroring": {
@@ -1119,6 +1121,20 @@
           "default": 0,
           "minimum": 0
         },
+        "sharding_lookup_cache_size": {
+          "description": "Maximum size, in bytes, of the sharding key lookup cache holding\n`lookup_query` results, per cluster. The least recently used\ntranslations are evicted when the cache is full; evicted values\nare looked up again on their next use.\n\n_Default:_ `67108864` (64MB)",
+          "type": "integer",
+          "format": "uint",
+          "default": 67108864,
+          "minimum": 0
+        },
+        "sharding_lookup_timeout": {
+          "description": "How long a sharding key lookup query (`lookup_query`) can run, in\nmilliseconds, before the statement waiting on it fails.\n\n_Default:_ `5000` (5 seconds)",
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
         "shutdown_termination_timeout": {
           "description": "How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.\n\n**Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout>",
           "type": [
@@ -1344,6 +1360,21 @@
         }
       ]
     },
+    "LookupResult": {
+      "description": "How a `lookup_query` result is interpreted when routing.\n\n**Note:** `shard` mode never hashes: the query returns the shard number.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#lookup_result>",
+      "oneOf": [
+        {
+          "description": "The returned value is hashed to pick a shard (default).",
+          "type": "string",
+          "const": "value"
+        },
+        {
+          "description": "The returned value is the 0-based shard number itself.",
+          "type": "string",
+          "const": "shard"
+        }
+      ]
+    },
     "Memory": {
       "description": "Memory settings manage buffer allocations that PgDog uses during network I/O operations and task execution.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/>",
       "type": "object",
@@ -1363,10 +1394,10 @@
           "minimum": 0
         },
         "stack_size": {
-          "description": "Stack size for Tokio tasks in bytes. Increase this if you encounter stack overflow errors with complex queries.\n\n_Default:_ `2097152`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size>",
+          "description": "Stack size for Tokio tasks in bytes. Increase this if you encounter stack overflow errors with complex queries.\n\n_Default:_ `2097152` (`8388608` in debug builds, whose unoptimized futures are several times larger)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/memory/#stack_size>",
           "type": "integer",
           "format": "uint",
-          "default": 2097152,
+          "default": 8388608,
           "minimum": 0
         }
       },
@@ -2099,6 +2130,19 @@
           "description": "The hash function to use for sharding.\n\n_Default:_ `postgres`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#hasher>",
           "$ref": "#/$defs/Hasher",
           "default": "postgres"
+        },
+        "lookup_query": {
+          "description": "Query used to translate a sharding key value into the value that's hashed\nto pick a shard, e.g. `SELECT COALESCE(parent_org_id, id) FROM orgs\nWHERE id = $1`. Must contain exactly one `$1` placeholder and return at\nmost one row. Results are cached in memory, keyed by the value; the\ncache is emptied on config reload.\n\n**Note:** The query should return a row for every valid sharding key\nvalue, including values that translate to themselves. A value with no\nrow fails the statement with an error: routing it by its original value\ncould place data on the wrong shard, e.g. when the row just hasn't been\ninserted yet. Absence isn't cached, so rows added later are picked up\non the next statement.\n\n**Note:** The table the query reads must contain the same data on all\nshards (omnisharded): the query runs on a single shard picked\nround-robin.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "lookup_result": {
+          "description": "How the `lookup_query` result is interpreted. `value` (default) hashes\nthe returned value to pick a shard. `shard` uses the returned value as\nthe 0-based shard number directly, bypassing hashing entirely: the\napplication controls placement, e.g. by storing a permanent shard id\nper tenant, and new shards can be added without resharding.\n\n**Note:** With `shard`, the query must return a number between 0 and\nthe shard count minus one; anything else fails the statement. Shard\nnumbers are interpreted against the destination topology during\nresharding data sync, so existing assignments stay valid when shards\nare added. `mapping`, `centroids` and a non-default `hasher` can't be\ncombined with `shard`: this mode never hashes.",
+          "$ref": "#/$defs/LookupResult",
+          "default": "value"
         },
         "mapping": {
           "description": "Explicit value-to-shard routing rules for the column. When omitted (the\ndefault), PgDog shards by hashing the column value instead. Each entry is\na [`ShardedMappingConfig`]; see it for the list/range/default forms.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#shard-by-list-and-range>",

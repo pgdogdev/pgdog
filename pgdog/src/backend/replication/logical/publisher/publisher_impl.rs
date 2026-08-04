@@ -444,10 +444,11 @@ impl Publisher {
                 resharding_only
             };
 
+            let source = source.clone();
             let dest = dest.clone();
             let cancel = cancel.clone();
             handles.push(tasks::spawn("parallel sync manager", async move {
-                let manager = ParallelSyncManager::new(tables, replicas, dest)?;
+                let manager = ParallelSyncManager::new(tables, replicas, source, dest)?;
                 let tables = manager.run(cancel).await?;
 
                 Ok::<(usize, Vec<Table>), Error>((number, tables))

@@ -4,6 +4,7 @@ use pgdog_config::Role;
 
 use crate::frontend::client::TransactionType;
 use crate::frontend::router::parser::ShardsWithPriority;
+use crate::frontend::router::sharding::PendingLookup;
 use crate::{
     backend::ShardingSchema,
     config::{MultiTenant, ReadWriteStrategy},
@@ -45,17 +46,29 @@ pub struct QueryParserContext<'a> {
     pub(super) expanded_explain: bool,
     /// Shards calculator.
     pub(super) shards_calculator: ShardsWithPriority,
+    /// Sharding key lookups that missed the cache while routing;
+    /// returned to the query engine on the route.
+    pub(super) pending_lookups: Vec<PendingLookup>,
+    /// Lookups for bare sharding keys (a comment directive or `SET
+    /// pgdog.sharding_key`) that missed the cache. Kept separate until
+    /// the statement is classified: they don't apply to omnisharded
+    /// writes, which route to every shard regardless of the key.
+    pub(super) bare_key_lookups: Vec<PendingLookup>,
 }
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
     pub fn new(router_context: RouterContext<'a>) -> Result<Self, Error> {
         let mut shards_calculator = ShardsWithPriority::default();
+        let mut bare_key_lookups = Vec::new();
         let sharding_schema = router_context.cluster.sharding_schema();
 
-        router_context
-            .parameter_hints
-            .compute_shard(&mut shards_calculator, &sharding_schema)?;
+        router_context.parameter_hints.compute_shard(
+            &mut shards_calculator,
+            &mut bare_key_lookups,
+            &router_context.resolved_lookups,
+            &sharding_schema,
+        )?;
 
         Ok(Self {
             read_only: router_context.cluster.read_only(),
@@ -71,6 +84,8 @@ impl<'a> QueryParserContext<'a> {
             expanded_explain: router_context.cluster.expanded_explain(),
             router_context,
             shards_calculator,
+            pending_lookups: Vec::new(),
+            bare_key_lookups,
         })
     }
 

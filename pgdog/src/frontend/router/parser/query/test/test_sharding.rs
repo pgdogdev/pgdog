@@ -267,3 +267,387 @@ fn test_omnisharded_overrides_sharded_table_config() {
         shards_seen
     );
 }
+
+fn lookup_rule_tables() -> crate::backend::ShardedTables {
+    use crate::backend::ShardedTables;
+    use crate::frontend::router::sharding::ShardedTable;
+    use pgdog_config::{DataType, OmnishardedTable, SystemCatalogsBehavior};
+
+    ShardedTables::new(
+        vec![ShardedTable {
+            database: "pgdog".into(),
+            name: None,
+            column: "organization_id".into(),
+            data_type: DataType::Varchar,
+            lookup_query: Some(
+                "SELECT COALESCE(parent_organization_id, id) FROM organizations WHERE id = $1"
+                    .into(),
+            ),
+            ..Default::default()
+        }],
+        vec![OmnishardedTable {
+            name: "organizations".into(),
+            sticky_routing: false,
+        }],
+        false,
+        SystemCatalogsBehavior::default(),
+    )
+}
+
+fn warm_lookup_cache(tables: &crate::backend::ShardedTables, value: &str, translated: &str) {
+    use crate::frontend::router::sharding::LookupTable;
+
+    tables.lookup_cache().insert(
+        LookupTable {
+            schema: None,
+            name: None,
+            column: "organization_id".into(),
+        },
+        value.into(),
+        translated.into(),
+    );
+}
+
+/// A sharding key comment on a statement routed by it goes through
+/// the lookup: a cache miss makes the route carry the pending lookup
+/// instead of routing by the untranslated value.
+#[test]
+fn test_comment_key_misses_lookup_records_pending() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new().with_sharded_tables(tables);
+
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT * FROM some_table").into(),
+    ]);
+
+    let pending = command.route().pending_lookups();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].value, "org_child");
+}
+
+/// Same statement with the translation cached routes by the
+/// translated value.
+#[test]
+fn test_comment_key_translates_through_lookup() {
+    use crate::frontend::router::sharding::shard_value;
+    use pgdog_config::DataType;
+
+    let tables = lookup_rule_tables();
+    warm_lookup_cache(&tables, "org_child", "org_root");
+    let mut test = QueryParserTest::new().with_sharded_tables(tables);
+
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT * FROM some_table").into(),
+    ]);
+
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(
+        command.route().shard(),
+        &shard_value("org_root", &DataType::Varchar, 2, &vec![], 0)
+    );
+}
+
+/// SET pgdog.sharding_key goes through the lookup too.
+#[test]
+fn test_set_sharding_key_goes_through_lookup() {
+    use crate::frontend::router::sharding::shard_value;
+    use pgdog_config::DataType;
+
+    // Cold cache: the route carries the pending lookup.
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables.clone())
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child");
+    let command = test.execute(vec![Query::new("SELECT * FROM some_table").into()]);
+    let pending = command.route().pending_lookups();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].value, "org_child");
+
+    // Warm cache: routes by the translated value.
+    warm_lookup_cache(&tables, "org_child", "org_root");
+    let command = test.execute(vec![Query::new("SELECT * FROM some_table").into()]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(
+        command.route().shard(),
+        &shard_value("org_root", &DataType::Varchar, 2, &vec![], 0)
+    );
+}
+
+/// A write that only touches omnisharded tables must reach every
+/// shard: a shard directive on it is an error, with a cold cache
+/// (the key's lookup doesn't run) and with a warm one.
+#[test]
+fn test_comment_key_errors_on_omnisharded_write() {
+    use crate::frontend::router::parser::Error;
+
+    // Cold cache.
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new().with_sharded_tables(tables.clone());
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+
+    // Warm cache.
+    warm_lookup_cache(&tables, "org_child", "org_root");
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+
+    // An explicit shard directive errors the same way.
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_shard: 1 */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+
+    // Without the directive, the write broadcasts.
+    let command = test.execute(vec![
+        Query::new("INSERT INTO organizations (id, name) VALUES ('org_child', 'child')").into(),
+    ]);
+    assert!(command.route().is_omnisharded());
+    assert_eq!(command.route().shard(), &Shard::All);
+
+    // Reads keep the directive: any shard holds the data.
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT * FROM organizations").into(),
+    ]);
+    assert!(command.route().is_omnisharded());
+    assert!(command.route().shard().is_direct());
+}
+
+/// SET pgdog.sharding_key errors on omnisharded writes the same way.
+#[test]
+fn test_set_key_errors_on_omnisharded_write() {
+    use crate::frontend::router::parser::Error;
+
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child");
+    let result = test.try_execute(vec![
+        Query::new("INSERT INTO organizations (id, name) VALUES ('org_child', 'child')").into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+}
+
+/// Translations resolved for a statement route it without consulting
+/// the lookup cache: the second routing pass after resolving lookups
+/// can't miss, even if the cache already evicted the entry.
+#[test]
+fn test_resolved_lookups_route_without_cache() {
+    use crate::frontend::router::sharding::{LookupTable, ResolvedLookups, shard_value};
+    use pgdog_config::DataType;
+
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    let mut resolved = ResolvedLookups::default();
+    resolved.insert(key, "org_child".into(), "org_root".into());
+
+    // The cache is fresh and empty: only the resolved translations
+    // can route these.
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(lookup_rule_tables())
+        .without_sharded_schemas()
+        .with_resolved_lookups(resolved);
+    let expected = shard_value("org_root", &DataType::Varchar, 2, &vec![], 0);
+
+    // Statement-extracted key.
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM some_table WHERE organization_id = 'org_child'").into(),
+    ]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), &expected);
+
+    // Comment directive: parsed before routing with a cold cache, so
+    // its pending lookup gets a second chance at routing time.
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT 1").into(),
+    ]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), &expected);
+}
+
+/// SET pgdog.sharding_key routes from resolved translations too.
+#[test]
+fn test_resolved_lookups_route_set_key() {
+    use crate::frontend::router::sharding::{LookupTable, ResolvedLookups, shard_value};
+    use pgdog_config::DataType;
+
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    let mut resolved = ResolvedLookups::default();
+    resolved.insert(key, "org_child".into(), "org_root".into());
+
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(lookup_rule_tables())
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child")
+        .with_resolved_lookups(resolved);
+
+    let command = test.execute(vec![Query::new("SELECT * FROM some_table").into()]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(
+        command.route().shard(),
+        &shard_value("org_root", &DataType::Varchar, 2, &vec![], 0)
+    );
+}
+
+fn shard_mode_tables() -> crate::backend::ShardedTables {
+    use crate::backend::ShardedTables;
+    use crate::frontend::router::sharding::ShardedTable;
+    use pgdog_config::{DataType, LookupResult, OmnishardedTable, SystemCatalogsBehavior};
+
+    ShardedTables::new(
+        vec![ShardedTable {
+            database: "pgdog".into(),
+            name: None,
+            column: "organization_id".into(),
+            data_type: DataType::Varchar,
+            lookup_query: Some("SELECT shard_id::text FROM organizations WHERE id = $1".into()),
+            lookup_result: LookupResult::Shard,
+            ..Default::default()
+        }],
+        vec![OmnishardedTable {
+            name: "organizations".into(),
+            sticky_routing: false,
+        }],
+        false,
+        SystemCatalogsBehavior::default(),
+    )
+}
+
+/// Shard-mode lookups route by the returned shard number, never
+/// hashing it. Warm cache: statement, comment directive and SET.
+#[test]
+fn test_lookup_result_shard_routes_directly() {
+    let tables = shard_mode_tables();
+    warm_lookup_cache(&tables, "org_child", "1");
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables.clone())
+        .without_sharded_schemas();
+
+    // Statement-extracted key.
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM some_table WHERE organization_id = 'org_child'").into(),
+    ]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), &Shard::Direct(1));
+
+    // Comment directive.
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT 1").into(),
+    ]);
+    assert_eq!(command.route().shard(), &Shard::Direct(1));
+
+    // SET pgdog.sharding_key.
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child");
+    let command = test.execute(vec![Query::new("SELECT * FROM some_table").into()]);
+    assert_eq!(command.route().shard(), &Shard::Direct(1));
+}
+
+/// A shard number out of range or non-numeric fails the statement.
+#[test]
+fn test_lookup_result_shard_out_of_range_errors() {
+    // The test cluster has 2 shards.
+    let tables = shard_mode_tables();
+    warm_lookup_cache(&tables, "org_child", "5");
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+    let result = test.try_execute(vec![
+        Query::new("SELECT * FROM some_table WHERE organization_id = 'org_child'").into(),
+    ]);
+    assert!(result.is_err());
+
+    let tables = shard_mode_tables();
+    warm_lookup_cache(&tables, "org_child", "not-a-shard");
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+    let result = test.try_execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT 1").into(),
+    ]);
+    assert!(result.is_err());
+}
+
+/// Shard-mode tables never hash, not even into the discarded
+/// first-pass route: a cold cache contributes no shard at all. A
+/// value-mode table would hash the raw key into a Direct route here;
+/// a shard-mode table's INSERT stays cross-shard until the lookup
+/// resolves and the statement routes again.
+#[test]
+fn test_lookup_result_shard_never_hashes() {
+    use crate::frontend::router::sharding::shard_value;
+    use pgdog_config::DataType;
+
+    let tables = shard_mode_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    let command = test.execute(vec![
+        Query::new("INSERT INTO some_table (organization_id, value) VALUES ('org_child', 1)")
+            .into(),
+    ]);
+
+    // The lookup is pending, and the first-pass route is NOT the
+    // hash of the raw key: the raw key was never hashed at all.
+    assert_eq!(command.route().pending_lookups().len(), 1);
+    let hashed = shard_value("org_child", &DataType::Varchar, 2, &vec![], 0);
+    assert_ne!(command.route().shard(), &hashed);
+    assert_eq!(command.route().shard(), &Shard::All);
+}
+
+/// Shard-mode translations resolved for the statement route the
+/// second pass without the cache.
+#[test]
+fn test_lookup_result_shard_routes_from_resolved() {
+    use crate::frontend::router::sharding::{LookupTable, ResolvedLookups};
+
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    let mut resolved = ResolvedLookups::default();
+    resolved.insert(key, "org_child".into(), "1".into());
+
+    // Cache is fresh and empty: only the resolved translations route.
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(shard_mode_tables())
+        .without_sharded_schemas()
+        .with_resolved_lookups(resolved);
+
+    let command = test.execute(vec![
+        Query::new("SELECT * FROM some_table WHERE organization_id = 'org_child'").into(),
+    ]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), &Shard::Direct(1));
+
+    let command = test.execute(vec![
+        Query::new("/* pgdog_sharding_key: 'org_child' */ SELECT 1").into(),
+    ]);
+    assert!(command.route().pending_lookups().is_empty());
+    assert_eq!(command.route().shard(), &Shard::Direct(1));
+}

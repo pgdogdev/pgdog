@@ -5,7 +5,10 @@ use crate::{
     backend::ShardingSchema,
     frontend::router::{
         parser::{Schema, Shard, ShardWithPriority, ShardsWithPriority, ee::ParserHooks},
-        sharding::{ContextBuilder, SchemaSharder},
+        sharding::{
+            PendingLookup, ResolvedLookups, SchemaSharder, ShardOrLookup,
+            lookup::shard_for_bare_key,
+        },
     },
     net::{Parameters, parameter::ParameterValue},
 };
@@ -45,6 +48,8 @@ impl ParameterHints<'_> {
     pub(crate) fn compute_shard(
         &self,
         shards: &mut ShardsWithPriority,
+        pending_lookups: &mut Vec<PendingLookup>,
+        resolved: &ResolvedLookups,
         sharding_schema: &ShardingSchema,
     ) -> Result<(), Error> {
         let mut schema_sharder = SchemaSharder::default();
@@ -63,13 +68,18 @@ impl ParameterHints<'_> {
         }
         if let Some(ParameterValue::String(val)) = self.pgdog_sharding_key {
             if sharding_schema.schemas.is_empty() {
-                let ctx =
-                    ContextBuilder::infer_from_from_and_config(val.as_str(), sharding_schema)?
-                        .shards(sharding_schema.shards)
-                        .build()?;
-                let shard = ctx.apply()?;
-                self.hooks.record_set_sharding_key(&shard, val);
-                shards.push(ShardWithPriority::new_set(shard));
+                match shard_for_bare_key(val.as_str(), sharding_schema, Some(resolved))? {
+                    ShardOrLookup::Shard(shard) => {
+                        self.hooks.record_set_sharding_key(&shard, val);
+                        shards.push(ShardWithPriority::new_set(shard));
+                    }
+                    // The key missed the lookup cache. The query engine
+                    // resolves it and routes the query again; that pass
+                    // hits the cache and computes the shard.
+                    ShardOrLookup::Lookup(pending) => {
+                        pending_lookups.push(pending);
+                    }
+                }
             } else {
                 schema_sharder.resolve(Some(Schema::from(val.as_str())), &sharding_schema.schemas);
 
@@ -158,7 +168,14 @@ mod tests {
         };
 
         let mut shards = ShardsWithPriority::default();
-        hints.compute_shard(&mut shards, &sharding_schema).unwrap();
+        hints
+            .compute_shard(
+                &mut shards,
+                &mut Vec::new(),
+                &ResolvedLookups::default(),
+                &sharding_schema,
+            )
+            .unwrap();
 
         let result = shards.shard();
         assert_eq!(*result, Shard::Direct(1));
@@ -177,7 +194,14 @@ mod tests {
         };
 
         let mut shards = ShardsWithPriority::default();
-        hints.compute_shard(&mut shards, &sharding_schema).unwrap();
+        hints
+            .compute_shard(
+                &mut shards,
+                &mut Vec::new(),
+                &ResolvedLookups::default(),
+                &sharding_schema,
+            )
+            .unwrap();
 
         let result = shards.shard();
         assert_eq!(*result, Shard::Direct(0));

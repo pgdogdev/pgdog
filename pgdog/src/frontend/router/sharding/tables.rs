@@ -1,4 +1,4 @@
-use pgdog_config::{DataType, Hasher};
+use pgdog_config::{DataType, Hasher, LookupResult};
 use pgdog_vector::Vector;
 
 use crate::{
@@ -21,6 +21,8 @@ pub struct ShardedTable {
     pub centroid_probes: usize,
     pub hasher: Hasher,
     pub mapping: Option<Mapping>,
+    pub lookup_query: Option<String>,
+    pub lookup_result: LookupResult,
 }
 
 #[derive(Debug)]
