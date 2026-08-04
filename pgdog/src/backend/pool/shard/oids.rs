@@ -4,7 +4,6 @@ use crate::{
     net::DataRow,
     sync::SetOnceCell,
 };
-use futures::{prelude::*, try_join};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::info;
@@ -27,12 +26,12 @@ impl Oids {
     pub(crate) async fn load(&self, shard: &Shard) -> Result<&OidMappings, Error> {
         self.mappings
             .get_or_try_init(|| async {
-                let oids = async {
-                    let mut server = shard.primary_or_replica(&Request::default()).await?;
-                    Ok::<_, Error>((server.addr().clone(), load_oids(&mut server).await?))
-                };
-                let canonical = self.canonical_oids.oids.wait().map(Ok);
-                let ((server_addr, oids), canonical) = try_join!(oids, canonical)?;
+                let mut server = shard.primary_or_replica(&Request::default()).await?;
+                let oids = load_oids(&mut server).await?;
+                let server_addr = server.addr().clone();
+                drop(server);
+
+                let canonical = self.canonical_oids.oids.wait().await;
                 let mut canonical_to_shard = HashMap::new();
                 let mut shard_to_canonical = HashMap::new();
                 for (type_name, oid) in oids {
