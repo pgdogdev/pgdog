@@ -20,7 +20,7 @@ pub(crate) struct PoolRole {
 impl PoolRole {
     pub(crate) fn new(role: Role) -> Self {
         Self {
-            role: Arc::new(AtomicU8::new(role.try_into().expect("valid role"))),
+            role: Arc::new(AtomicU8::new(role.into())),
         }
     }
 
@@ -30,8 +30,6 @@ impl PoolRole {
     }
 
     pub(crate) fn set_role(&self, role: Role) -> bool {
-        self.role
-            .swap(role.try_into().expect("valid role"), Ordering::Relaxed)
-            != u8::try_from(role).expect("valid role")
+        self.role.swap(role.into(), Ordering::Relaxed) != u8::from(role)
     }
 }

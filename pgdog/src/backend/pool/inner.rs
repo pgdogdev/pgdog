@@ -700,7 +700,10 @@ mod test {
 
     #[test]
     fn test_role_specific_min_and_idle_timeout() {
-        let mut inner = Inner::default();
+        let mut inner = Inner {
+            role: Role::Auto,
+            ..Default::default()
+        };
         inner.config.min = 1;
         inner.config.min_primary = Some(2);
         inner.config.min_replica = Some(3);
