@@ -62,7 +62,7 @@ idle_timeout_primary = 500
 idle_timeout_replica = 1_000
             "#;
 
-        let users: Users = toml::from_str(&config).unwrap();
+        let users: Users = toml::from_str(config).unwrap();
         assert_eq!(users.users[0].role_config.pool_size_primary, Some(10));
         assert_eq!(users.users[0].role_config.min_pool_size_primary, Some(2));
         assert_eq!(users.users[0].role_config.idle_timeout_primary, Some(500));
