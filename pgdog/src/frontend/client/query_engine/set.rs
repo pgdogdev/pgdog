@@ -51,7 +51,11 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if context.in_transaction() {
+                    context.params.reset_transaction(&param.name);
+                } else {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -63,6 +67,10 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The server is ours right now, so its session changes with the
+            // client's. Record it, or we won't know to undo it for whoever
+            // gets this connection next.
+            self.backend.record_params(params, context.in_transaction());
             self.execute(context, client_request, None).await?;
         } else {
             let fake_response = set_config
@@ -116,7 +124,9 @@ impl QueryEngine {
         // FIXME(sage): Remove mut
         client_request: &mut ClientRequest,
     ) -> Result<(), Error> {
-        if context.in_transaction() || self.backend.connected() {
+        if context.in_transaction() {
+            context.params.reset_all_transaction();
+        } else if self.backend.connected() {
             context.params.reset_all();
         } else {
             context.params.restore_startup(context.startup_params);
@@ -124,6 +134,7 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            self.backend.record_reset_all(context.in_transaction());
             self.execute(context, client_request, None).await?;
         } else {
             self.fake_command_response(context, &client_request.messages, "RESET", None)
