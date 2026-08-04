@@ -28,8 +28,6 @@ async fn test_set_config_behaves_like_set() {
         .unwrap();
     assert_eq!(lock_timeout, "500s");
 
-    // A NULL resets the setting, and set_config answers with the value the
-    // setting landed on, not with the NULL it was handed.
     let set_config: String = query_scalar("SELECT set_config('lock_timeout', NULL, false);")
         .fetch_one(&mut *conn)
         .await

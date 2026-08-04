@@ -318,7 +318,6 @@ fn test_set_config_bound_null_value() {
 fn test_set_config_unresolvable_args_stay_a_query() {
     let mut test = QueryParserTest::new();
 
-    // No Bind message, so the parameters can't be resolved.
     let command = test.execute(vec![
         Query::new("SELECT pg_catalog.set_config($1, $2, false)").into(),
     ]);
@@ -380,8 +379,7 @@ fn test_set_config_bound_binary_is_local() {
 fn test_set_config_bound_non_utf8_stays_a_query() {
     let mut test = QueryParserTest::new();
 
-    // set_config() only takes text; a value we can't read as text is one we
-    // can't track.
+    // set_config() takes text; what we can't read as text we can't track.
     let command = test.execute(vec![
         Parse::named(
             "__test_set_config_bytes",
