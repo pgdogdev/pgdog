@@ -19,13 +19,14 @@ If a test fails, run it directly by name. Integration tests require Postgres con
 
 The integration harness is multi-language: each suite lives in `integration/<lang>/`.
 `integration/run.sh` only dispatches the `python`, `ruby`, `java`, and `sql` suites.
-Other suites (`go`, `rust`, `dry_run`, `pgbench`, `toxi`, `two_pc`, `plugins`,
-`schema_sync`, `complex`, `mirror`, `load_balancer`, `copy_data`, ...) must be run
-directly via their own `run.sh`.
+Other suites (`go`, `elixir`, `rust`, `dry_run`, `pgbench`, `toxi`, `two_pc`,
+`plugins`, `schema_sync`, `complex`, `mirror`, `load_balancer`, `copy_data`, ...)
+must be run directly via their own `run.sh`.
 
 ```sh
-bash integration/run.sh          # python + ruby + java + sql
-bash integration/go/run.sh       # Go suite
+bash integration/run.sh           # python + ruby + java + sql
+bash integration/go/run.sh        # Go suite
+bash integration/elixir/run.sh    # Elixir/Postgrex suite
 ```
 
 Format before committing: `cargo fmt`. Run `cargo clippy` where practical.
