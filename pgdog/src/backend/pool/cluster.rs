@@ -830,7 +830,7 @@ mod test {
                     .config
                     .general
                     .canonicalize_type_information
-                    .then(|| Default::default()),
+                    .then(Default::default),
                 ..Default::default()
             }
         }
