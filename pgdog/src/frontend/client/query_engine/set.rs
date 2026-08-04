@@ -24,9 +24,8 @@ impl QueryEngine {
             return Ok(());
         }
 
-        // `SELECT set_config(...)` is a query and Postgres answers it, so take a
-        // server before touching the parameters: syncing a change the statement
-        // is about to make itself would just send it twice.
+        // Take a server before touching the parameters: syncing a change the
+        // statement is about to make itself would send it twice.
         if set_config && !self.backend.connected() {
             let connected = if context.in_transaction() {
                 self.connect_transaction(context).await?
