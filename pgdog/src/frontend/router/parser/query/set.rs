@@ -27,7 +27,7 @@ impl QueryParser {
             Ok(Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                is_select: false,
             })
         }
     }
@@ -99,7 +99,7 @@ impl QueryParser {
             Ok(Some(Command::Set {
                 params,
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                is_select: false,
             }))
         }
     }
@@ -130,4 +130,5 @@ impl QueryParser {
 
         Ok(value)
     }
+
 }

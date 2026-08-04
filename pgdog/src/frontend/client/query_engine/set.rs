@@ -15,11 +15,26 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         params: &[SetParam],
-        behave_like_select: bool,
+        is_select: bool,
     ) -> Result<(), Error> {
         // Make sure client isn't changing route mid-transaction.
         if self.route_change_check(context, params).await? {
             return Ok(());
+        }
+
+        // `SELECT set_config(...)` is a query and Postgres answers it, so take a
+        // server before touching the parameters: syncing a change the statement
+        // is about to make itself would just send it twice.
+        if is_select && !self.backend.connected() {
+            let connected = if context.in_transaction() {
+                self.connect_transaction(context).await?
+            } else {
+                self.connect(context, None).await?
+            };
+
+            if !connected {
+                return Ok(());
+            }
         }
 
         let mut fake_command = "SET";
@@ -65,9 +80,7 @@ impl QueryEngine {
             self.backend.record_params(params, context.in_transaction());
             self.execute(context).await?;
         } else {
-            let values_to_return =
-                behave_like_select.then(|| params.iter().map(|p| p.value.as_ref()));
-            self.fake_command_response(context, fake_command, values_to_return)
+            self.fake_command_response(context, fake_command, None::<Option<_>>)
                 .await?;
         }
 
