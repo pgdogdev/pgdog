@@ -28,7 +28,7 @@ impl SchemaLoader for FromServer {
 
         // For now we treat shard 0 as the canonical OID source
         if let Some(shard) = cluster.shards().first()
-            && let Some(canonical_oids) = dbg!(&cluster.canonical_oids)
+            && let Some(canonical_oids) = &cluster.canonical_oids
         {
             let canonical_oids = Arc::clone(canonical_oids);
             let shard = shard.clone();

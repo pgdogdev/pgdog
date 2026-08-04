@@ -4,6 +4,7 @@ use crate::{
     net::DataRow,
     sync::SetOnceCell,
 };
+use futures::{prelude::*, try_join};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::info;
@@ -26,9 +27,12 @@ impl Oids {
     pub(crate) async fn load(&self, shard: &Shard) -> Result<&OidMappings, Error> {
         self.mappings
             .get_or_try_init(|| async {
-                let mut server = shard.primary_or_replica(&Request::default()).await?;
-                let oids = load_oids(&mut server).await?;
-                let canonical = self.canonical_oids.oids.wait().await;
+                let oids = async {
+                    let mut server = shard.primary_or_replica(&Request::default()).await?;
+                    Ok::<_, Error>((server.addr().clone(), load_oids(&mut server).await?))
+                };
+                let canonical = self.canonical_oids.oids.wait().map(Ok);
+                let ((server_addr, oids), canonical) = try_join!(oids, canonical)?;
                 let mut canonical_to_shard = HashMap::new();
                 let mut shard_to_canonical = HashMap::new();
                 for (type_name, oid) in oids {
@@ -48,7 +52,7 @@ impl Oids {
                     "loaded type info for {} types on shard {} [{}]",
                     canonical_to_shard.len(),
                     shard.number(),
-                    server.addr(),
+                    server_addr,
                 );
 
                 Ok(OidMappings {
@@ -115,7 +119,9 @@ impl CanonicalOids {
     }
 }
 
-async fn load_oids(server: &mut Server) -> Result<impl Iterator<Item = (String, u32)>, Error> {
+async fn load_oids(
+    server: &mut Server,
+) -> Result<impl Iterator<Item = (String, u32)> + use<>, Error> {
     // OIDs < 10,000 are reserved for PG's internal use and are assumed to be stable
     Ok(server
         .fetch_all::<DataRow>(
