@@ -31,8 +31,7 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
-        /// The statement is `SELECT set_config(...)`, not `SET`: Postgres has
-        /// to answer it, we only note what it changes.
+        /// `SELECT set_config(...)`, not `SET`: Postgres has to answer it.
         is_select: bool,
     },
     ResetAll,
