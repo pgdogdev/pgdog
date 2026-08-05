@@ -120,7 +120,8 @@ impl Command for Set {
                 if config.config.general.prepared_statements_limit == 0 {
                     tracing::warn!(
                         "prepared_statements_limit set to 0, which now means unlimited; \
-                        to clear the cache, use RESET PREPARED"
+                        to clear the cache, use {}",
+                        super::reset_prepared::RESET_PREPARED,
                     );
                 }
                 PreparedStatements::global().write().configure(

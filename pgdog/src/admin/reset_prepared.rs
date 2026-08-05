@@ -3,12 +3,16 @@ use crate::frontend::prepared_statements::PreparedStatements;
 
 use super::prelude::*;
 
+/// The admin console spelling of this command. The limit-0 warning quotes
+/// it, and a parser test keeps the advice parseable.
+pub(super) const RESET_PREPARED: &str = "RESET PREPARED";
+
 pub struct ResetPrepared;
 
 #[async_trait]
 impl Command for ResetPrepared {
     fn name(&self) -> String {
-        "RESET PREPARED".into()
+        RESET_PREPARED.into()
     }
 
     fn parse(_: &str) -> Result<Self, Error> {

@@ -256,6 +256,14 @@ mod tests {
     }
 
     #[test]
+    fn parses_reset_prepared_command() {
+        // The exact string the prepared_statements_limit=0 warning advises:
+        // if this stops parsing, the advice is broken.
+        let result = Parser::parse(super::super::reset_prepared::RESET_PREPARED);
+        assert!(matches!(result, Ok(ParseResult::ResetPrepared(_))));
+    }
+
+    #[test]
     fn rejects_unknown_admin_command() {
         let result = Parser::parse("FOO BAR");
         assert!(matches!(result, Err(Error::Syntax)));
