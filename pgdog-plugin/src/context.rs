@@ -1,6 +1,9 @@
 //! Context passed to and from the plugins.
 
-use crate::parameters::Parameters;
+use crate::{
+    parameters::Parameters,
+    value::{ShardingKeys, Value},
+};
 
 /// Context information provided by PgDog to the plugin at statement execution. It contains the actual statement and several metadata about
 /// the state of the database cluster:
@@ -355,6 +358,13 @@ impl From<ReadWrite> for u8 {
 /// // No routing information is available. PgDog will ignore it
 /// // and make its own decision.
 /// let route = Route::unknown();
+///
+/// // Let PgDog calculate shards for keys extracted by the plugin.
+/// let route = Route::with_sharding_keys(
+///     vec![123_i64.into(), "tenant-a".into()],
+///     ReadWrite::Read,
+/// );
+/// ```
 #[repr(C)]
 pub struct Route {
     /// Which shard the query should go to.
@@ -365,6 +375,18 @@ pub struct Route {
     ///
     /// `1` for `true`, `0` for `false`, `2` for unknown, this setting is ignored.
     pub read_write: u8,
+    /// Plugin-allocated sharding keys.
+    sharding_keys: ShardingKeys,
+}
+
+impl std::fmt::Debug for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Route")
+            .field("shard", &self.shard)
+            .field("read_write", &self.read_write)
+            .field("sharding_keys", &self.sharding_keys())
+            .finish()
+    }
 }
 
 impl Default for Route {
@@ -385,7 +407,26 @@ impl Route {
         Self {
             shard: shard.into(),
             read_write: read_write.into(),
+            sharding_keys: ShardingKeys::default(),
         }
+    }
+
+    /// Create a route from sharding keys extracted from the query.
+    ///
+    /// The plugin transfers ownership of the values to PgDog when it returns
+    /// this route. PgDog can then pass each typed value to the sharding
+    /// function selected for the query.
+    pub fn with_sharding_keys(sharding_keys: Vec<Value>, read_write: ReadWrite) -> Route {
+        Self {
+            shard: Shard::Unknown.into(),
+            read_write: read_write.into(),
+            sharding_keys: ShardingKeys::new(sharding_keys),
+        }
+    }
+
+    /// Sharding keys extracted by the plugin.
+    pub fn sharding_keys(&self) -> &ShardingKeys {
+        &self.sharding_keys
     }
 
     /// Create new route with no sharding or read/write information.
@@ -393,18 +434,43 @@ impl Route {
     /// Plugins that do something else with queries, e.g., logging, metrics,
     /// can return this route.
     pub fn unknown() -> Route {
-        Self {
-            shard: -2,
-            read_write: 2,
-        }
+        Self::new(Shard::Unknown, ReadWrite::Unknown)
     }
 
     /// Block the query from being sent to a database. PgDog will abort the query
     /// and return an error to the client, telling them which plugin blocked it.
     pub fn block() -> Route {
-        Self {
-            shard: -3,
-            read_write: 2,
-        }
+        Self::new(Shard::Blocked, ReadWrite::Unknown)
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn route_owns_sharding_keys() {
+        let uuid = uuid::Uuid::nil();
+        let route = Route::with_sharding_keys(
+            vec![1_i64.into(), "tenant".into(), uuid.into()],
+            ReadWrite::Read,
+        );
+
+        assert_eq!(
+            route.sharding_keys().as_slice(),
+            &[
+                Value::Integer(1),
+                Value::String("tenant".to_owned()),
+                Value::Uuid(uuid),
+            ]
+        );
+        assert_eq!(route.shard, i64::from(Shard::Unknown));
+        assert_eq!(route.read_write, u8::from(ReadWrite::Read));
+    }
+
+    #[test]
+    fn empty_sharding_keys_are_valid() {
+        let route = Route::with_sharding_keys(Vec::new(), ReadWrite::Unknown);
+        assert!(route.sharding_keys().is_empty());
     }
 }

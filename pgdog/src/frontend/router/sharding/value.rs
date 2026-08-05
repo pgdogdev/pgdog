@@ -10,7 +10,7 @@ use crate::{
 };
 use bytes::Bytes;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Data<'a> {
     Text(&'a str),
     Binary(&'a [u8]),
@@ -38,6 +38,25 @@ impl From<i64> for Data<'_> {
 impl<'a> From<&'a Bytes> for Data<'a> {
     fn from(value: &'a Bytes) -> Self {
         Self::Binary(&value[..])
+    }
+}
+
+impl<'a> From<&'a pgdog_plugin::Value> for Value<'a> {
+    fn from(value: &'a pgdog_plugin::Value) -> Self {
+        match value {
+            pgdog_plugin::Value::Integer(int) => Value {
+                data: Data::Integer(*int),
+                data_type: DataType::Bigint,
+            },
+            pgdog_plugin::Value::String(string) => Value {
+                data: Data::Text(string.as_str()),
+                data_type: DataType::Varchar,
+            },
+            pgdog_plugin::Value::Uuid(uuid) => Value {
+                data: Data::Binary(uuid.as_bytes()),
+                data_type: DataType::Uuid,
+            },
+        }
     }
 }
 
@@ -104,8 +123,9 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn data(&self) -> &Data<'_> {
-        &self.data
+    /// Get the data referenced by this value.
+    pub(crate) fn data(&self) -> Data<'_> {
+        self.data
     }
 
     pub fn integer(&self) -> Result<Option<i64>, Error> {

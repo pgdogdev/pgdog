@@ -48,8 +48,8 @@ impl<'a> ContextBuilder<'a> {
 
     /// Infer sharding function from config, iff
     /// only one sharding function is configured.
-    pub fn infer_from_from_and_config(
-        value: &'a str,
+    pub(crate) fn infer_from_value_and_config(
+        value: impl Into<Data<'a>>,
         sharding_schema: &'a ShardingSchema,
     ) -> Result<Self, Error> {
         if let Some(common_mapping) = sharding_schema.tables.common_mapping() {
@@ -181,7 +181,7 @@ mod test {
             ..Default::default()
         };
 
-        let ctx = ContextBuilder::infer_from_from_and_config("test_value", &schema)
+        let ctx = ContextBuilder::infer_from_value_and_config("test_value", &schema)
             .unwrap()
             .shards(2)
             .build()
@@ -211,7 +211,7 @@ mod test {
             ..Default::default()
         };
 
-        let ctx = ContextBuilder::infer_from_from_and_config("15", &schema)
+        let ctx = ContextBuilder::infer_from_value_and_config("15", &schema)
             .unwrap()
             .shards(2)
             .build()
@@ -240,7 +240,7 @@ mod test {
             ..Default::default()
         };
 
-        let builder = ContextBuilder::infer_from_from_and_config("1", &schema).unwrap();
+        let builder = ContextBuilder::infer_from_value_and_config("1", &schema).unwrap();
 
         let ctx = builder.shards(2).build().unwrap();
         let shard = ctx.apply().unwrap();

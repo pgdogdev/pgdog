@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::cache::Ast;
+use crate::frontend::router::parser::{cache::Ast, query::shared::ConvergeAlgorithm};
 use pgdog_plugin::{
     Context as PdRouterContext, ReadWrite, Shard as PdShard,
     parameters::{Parameter, Parameters},
@@ -70,7 +70,7 @@ impl QueryParser {
         } else {
             Parameters::default()
         };
-        let context = PdRouterContext {
+        let plugin_context = PdRouterContext {
             shards: context.shards as u64,
             has_replicas: !context.read_only,
             has_primary: !context.write_only,
@@ -84,7 +84,7 @@ impl QueryParser {
         };
 
         for (plugin_name, plugin) in plugins {
-            let route = plugin.route(context);
+            let route = plugin.route(plugin_context);
             match route.shard.try_into() {
                 Ok(shard) => match shard {
                     PdShard::All => self.plugin_output.shard = Some(Shard::All),
@@ -104,6 +104,31 @@ impl QueryParser {
             }
 
             self.plugin_output.plugin_name = Some(plugin_name.clone());
+
+            if !route.sharding_keys().as_slice().is_empty() {
+                use crate::frontend::router::sharding::Value;
+                let mut shards = HashSet::new();
+
+                for key in route.sharding_keys().as_slice() {
+                    // FIXME(lev): This doesn't use the lookup
+                    // table so plugins won't be able to use the lookup
+                    // functionality for now.
+                    //
+                    // This is because I can't think of a way to return pending lookup from
+                    // here.
+                    let value: Value = key.into();
+                    let shard = ContextBuilder::infer_from_value_and_config(
+                        value.data(),
+                        &context.sharding_schema,
+                    )?
+                    .shards(context.sharding_schema.shards)
+                    .build()?
+                    .apply()?;
+                    shards.insert(shard);
+                }
+
+                self.plugin_output.shard = Self::converge(&shards, ConvergeAlgorithm::default());
+            }
 
             if self.plugin_output.provided() {
                 let shard_override = self.plugin_output.shard.clone();

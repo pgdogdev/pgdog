@@ -113,4 +113,7 @@ pub enum Error {
 
     #[error("multi-statement queries cannot mix SET with other commands")]
     MultiStatementMixedSet,
+
+    #[error("plugin returned unsupported data type")]
+    PluginUnsupportedDataType,
 }
