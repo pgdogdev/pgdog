@@ -215,6 +215,10 @@ impl Command for Set {
                 config.config.general.canonicalize_type_information = Self::from_json(&self.value)?;
             }
 
+            "dry_run" => {
+                config.config.general.dry_run = Self::from_json(&self.value)?;
+            }
+
             _ => return Ok(vec![]),
         }
 
