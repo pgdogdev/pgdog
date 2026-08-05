@@ -554,6 +554,28 @@ mod test {
     }
 
     #[test]
+    fn test_decrement_releases_for_eviction() {
+        let mut cache = GlobalCache::default();
+        cache.configure(1, 0);
+
+        let (_, first) = cache.insert(&Parse::named("s", "SELECT 1"));
+        let (_, second) = cache.insert(&Parse::named("s", "SELECT 2"));
+        assert_eq!(
+            cache.len(),
+            2,
+            "both in use: over capacity, nothing to evict"
+        );
+
+        // decrement() is the other way a statement gets released.
+        cache.decrement(&first);
+        assert_eq!(cache.len(), 1);
+        assert!(
+            cache.parse(&second).is_some(),
+            "the statement still in use survives"
+        );
+    }
+
+    #[test]
     fn test_memory_accounting_survives_mixed_operations() {
         let mut cache = GlobalCache::default();
         cache.configure(0, 0);
