@@ -1,5 +1,4 @@
 //! RESET PREPARED.
-use crate::config::config;
 use crate::frontend::prepared_statements::PreparedStatements;
 
 use super::prelude::*;
@@ -17,10 +16,10 @@ impl Command for ResetPrepared {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let config = config();
-        PreparedStatements::global()
-            .write()
-            .close_unused(config.config.general.prepared_statements_limit);
+        // Explicit 0: drop everything not in use, whatever the configured
+        // limit is. With the default (unlimited) limit this would otherwise
+        // be a no-op.
+        PreparedStatements::global().write().close_unused(0);
         Ok(vec![])
     }
 }

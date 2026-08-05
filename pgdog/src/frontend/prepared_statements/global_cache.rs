@@ -32,6 +32,7 @@ impl MemoryUsage for Statement {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.parse.len()
+            + self.rewrite.as_ref().map(|parse| parse.len()).unwrap_or(0)
             + if let Some(ref row_description) = self.row_description {
                 row_description.memory_usage()
             } else {
@@ -133,10 +134,11 @@ pub struct GlobalCache {
 }
 
 impl MemoryUsage for GlobalCache {
+    /// The same number the memory limit is enforced against, so the metric
+    /// and the budget can't drift apart, plus the bookkeeping fields.
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.statements.memory_usage()
-            + self.names.memory_usage()
+        self.bytes
             + self.counter.memory_usage()
             + self.versions.memory_usage()
             + self.unused.len() * std::mem::size_of::<usize>()
@@ -185,10 +187,9 @@ impl GlobalCache {
     /// break the client using it.
     fn enforce(&mut self) {
         while self.over_budget() {
-            let Some(&counter) = self.unused.iter().next() else {
+            let Some(counter) = self.unused.pop_first() else {
                 break;
             };
-            self.unused.remove(&counter);
             self.remove(&global_name(counter));
         }
     }
@@ -278,7 +279,12 @@ impl GlobalCache {
     /// Rewrite prepared statement in the global cache.
     pub fn rewrite(&mut self, parse: &Parse) {
         if let Some(stmt) = self.names.get_mut(parse.name()) {
+            if let Some(old) = stmt.rewrite.take() {
+                self.bytes = self.bytes.saturating_sub(old.len());
+            }
+            self.bytes += parse.len();
             stmt.rewrite = Some(parse.clone());
+            self.enforce();
         }
     }
 
@@ -290,6 +296,7 @@ impl GlobalCache {
         {
             self.bytes += row_description.memory_usage();
             entry.row_description = Some(row_description);
+            self.enforce();
         }
     }
 
@@ -375,14 +382,11 @@ impl GlobalCache {
         }
     }
 
-    /// Close all unused statements exceeding capacity.
+    /// Close unused statements until the cache is down to `capacity` entries,
+    /// or nothing unused is left. `0` removes every statement not in use;
+    /// statements clients hold, and the name counter, are never touched, so
+    /// global names are not reused.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
-        if capacity == 0 {
-            let removed = self.len();
-            self.reset();
-            return removed;
-        }
-
         let over = self.len().saturating_sub(capacity);
         let remove = self.unused.iter().take(over).copied().collect::<Vec<_>>();
 
@@ -396,10 +400,13 @@ impl GlobalCache {
 
     /// Remove statement from global cache.
     fn remove(&mut self, name: &str) {
-        if let Some(stmt) = self.names.remove(name)
-            && let Some(cached) = self.statements.remove(&stmt.cache_key())
-        {
-            self.entry_removed(name, &stmt, &cached);
+        if let Some(stmt) = self.names.remove(name) {
+            let cached = self.statements.remove(&stmt.cache_key());
+            debug_assert!(cached.is_some(), "names and statements maps out of sync");
+            if let Some(cached) = cached {
+                self.unused.remove(&cached.counter);
+                self.entry_removed(name, &stmt, &cached);
+            }
         }
     }
 
@@ -585,6 +592,24 @@ mod test {
     }
 
     #[test]
+    fn test_close_unused_zero_keeps_in_use_and_counter() {
+        let mut cache = GlobalCache::default();
+
+        let (_, held) = cache.insert(&Parse::named("s", "SELECT 'held'"));
+        let (_, released) = cache.insert(&Parse::named("s", "SELECT 'released'"));
+        cache.close(&released);
+
+        assert_eq!(cache.close_unused(0), 1);
+        assert!(cache.parse(&held).is_some(), "statements in use survive");
+        assert!(cache.parse(&released).is_none());
+
+        // The counter moves on: global names are never reused, so server
+        // connections holding old names can't be handed a different query.
+        let (_, next) = cache.insert(&Parse::named("s", "SELECT 'next'"));
+        assert_eq!(next, "__pgdog_3");
+    }
+
+    #[test]
     fn test_memory_accounting_survives_mixed_operations() {
         let mut cache = GlobalCache::default();
         cache.configure(0, 0);
@@ -597,6 +622,9 @@ mod test {
 
         // A RowDescription recorded later grows the entry.
         cache.insert_row_description(&names[0], RowDescription::new(&[Field::text("x")]));
+        // So does a rewritten Parse, twice to cover the replacement path.
+        cache.rewrite(&Parse::named(&names[1], "SELECT 1, 2"));
+        cache.rewrite(&Parse::named(&names[1], "SELECT 1, 2, 3"));
         // Duplicate insert of an existing statement adds nothing.
         cache.insert(&Parse::named("s", "SELECT 00"));
         // insert_anyway always creates a fresh entry.

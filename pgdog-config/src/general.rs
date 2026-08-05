@@ -384,6 +384,8 @@ pub struct General {
 
     /// Approximate memory limit (bytes) for the global prepared statements cache. Statements no client is holding are evicted once the cache grows past it. `0` disables the limit.
     ///
+    /// **Note:** A limit smaller than the working set causes constant eviction and re-preparation of statements; size it well above what the active workload keeps in flight.
+    ///
     /// _Default:_ `0`
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_memory_limit>
