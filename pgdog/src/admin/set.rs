@@ -117,6 +117,12 @@ impl Command for Set {
 
             "prepared_statements_limit" => {
                 config.config.general.prepared_statements_limit = self.value.parse()?;
+                if config.config.general.prepared_statements_limit == 0 {
+                    tracing::warn!(
+                        "prepared_statements_limit set to 0, which now means unlimited; \
+                        to clear the cache, use RESET prepared_statements"
+                    );
+                }
                 PreparedStatements::global().write().configure(
                     config.config.general.prepared_statements_limit,
                     config.config.general.prepared_statements_memory_limit,

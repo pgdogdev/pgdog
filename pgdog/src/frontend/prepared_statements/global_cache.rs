@@ -4,9 +4,10 @@ use crate::{
     net::messages::{Parse, RowDescription},
     stats::memory::MemoryUsage,
 };
-use std::{collections::hash_map::HashMap, str::from_utf8};
-
-use fnv::FnvHashSet as HashSet;
+use std::{
+    collections::{BTreeSet, hash_map::HashMap},
+    str::from_utf8,
+};
 
 use super::str_mem;
 
@@ -114,7 +115,9 @@ impl CachedStmt {
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
-    unused: HashSet<usize>,
+    /// Statements no client is holding, ordered by creation: eviction takes
+    /// the oldest first, deterministically.
+    unused: BTreeSet<usize>,
     counter: usize,
     versions: usize,
     /// Maximum number of cached statements (0 = unlimited). Only statements
@@ -457,11 +460,17 @@ mod test {
         }
         assert_eq!(cache.len(), 10);
 
-        // The next insert pushes an unused one out instead of growing the cache.
+        // The next insert pushes the oldest unused one out instead of growing
+        // the cache.
         let (new, name) = cache.insert(&Parse::named("s", "SELECT 'over'"));
         assert!(new);
         assert_eq!(cache.len(), 10);
         assert!(cache.parse(&name).is_some(), "the new statement is cached");
+        assert!(
+            cache.parse("__pgdog_1").is_none(),
+            "eviction is deterministic: oldest unused goes first"
+        );
+        assert!(cache.parse("__pgdog_2").is_some());
     }
 
     #[test]
