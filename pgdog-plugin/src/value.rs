@@ -64,8 +64,15 @@ impl ShardingKeys {
 
     /// Borrow the sharding keys as a slice.
     pub fn as_slice(&self) -> &[Value] {
-        // SAFETY: `data` and `len` originate from the boxed slice created in
-        // `Self::new`, or are the valid dangling/zero pair from `Self::default`.
+        // An empty array received across the plugin ABI may use a null data
+        // pointer. `slice::from_raw_parts` requires a non-null, aligned pointer
+        // even when the length is zero, so do not inspect the pointer here.
+        if self.len == 0 {
+            return &[];
+        }
+
+        // SAFETY: For a non-empty array, `data` and `len` originate from the
+        // boxed slice created in `Self::new`.
         unsafe { slice::from_raw_parts(self.data, self.len) }
     }
 }
@@ -107,9 +114,16 @@ impl fmt::Debug for ShardingKeys {
 
 impl Drop for ShardingKeys {
     fn drop(&mut self) {
+        // Empty arrays may use a null pointer across the plugin ABI and have
+        // no allocation or values to release.
+        if self.len == 0 {
+            return;
+        }
+
         // SAFETY: `data` is created exclusively by `Self::new` using
-        // `Box::into_raw`. `ShardingKeys` cannot be cloned or copied, so this
-        // reconstructs and drops the boxed slice exactly once.
+        // `Box::into_raw` for non-empty arrays. `ShardingKeys` cannot be cloned
+        // or copied, so this reconstructs and drops the boxed slice exactly
+        // once.
         unsafe {
             drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
                 self.data, self.len,
@@ -135,5 +149,15 @@ mod tests {
     #[test]
     fn default_is_empty() {
         assert!(ShardingKeys::default().is_empty());
+    }
+
+    #[test]
+    fn null_empty_array_is_a_valid_slice() {
+        let keys = ShardingKeys {
+            data: ptr::null_mut(),
+            len: 0,
+        };
+
+        assert_eq!(keys.as_slice(), &[]);
     }
 }
