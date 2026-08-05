@@ -382,6 +382,14 @@ pub struct General {
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
 
+    /// Approximate memory limit (bytes) for the global prepared statements cache. Statements no client is holding are evicted once the cache grows past it. `0` disables the limit.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_memory_limit>
+    #[serde(default = "General::prepared_statements_memory_limit")]
+    pub prepared_statements_memory_limit: usize,
+
     /// Limit on the number of statements saved in the statement cache used to accelerate query parsing.
     ///
     /// _Default:_ `50000`
@@ -887,6 +895,7 @@ impl Default for General {
             regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
+            prepared_statements_memory_limit: Self::prepared_statements_memory_limit(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
             connect_timeout: Self::default_connect_timeout(),
@@ -1381,6 +1390,10 @@ impl General {
         Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
     }
 
+    pub fn prepared_statements_memory_limit() -> usize {
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_MEMORY_LIMIT", 0)
+    }
+
     pub fn query_cache_limit() -> usize {
         Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
@@ -1826,12 +1839,14 @@ mod tests {
         let _guard = set_env_var("PGDOG_MIRROR_EXPOSURE", "0.5");
         let _guard = set_env_var("PGDOG_DNS_TTL", "60000");
         let _guard = set_env_var("PGDOG_PUB_SUB_CHANNEL_SIZE", "100");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_MEMORY_LIMIT", "4294967296");
         let _guard = set_env_var("PGDOG_LOG_MIN_DURATION_PARSE", "5");
         let _guard = set_env_var("PGDOG_LOG_QUERY_SAMPLE_LENGTH", "200");
 
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
         assert_eq!(General::prepared_statements_limit(), 1000);
+        assert_eq!(General::prepared_statements_memory_limit(), 4294967296);
         assert_eq!(General::query_cache_limit(), 500);
         assert_eq!(General::connect_attempts(), 3);
         assert_eq!(General::mirror_queue(), 256);
@@ -1844,6 +1859,7 @@ mod tests {
         let _guard = remove_env_var("PGDOG_BROADCAST_PORT");
         let _guard = remove_env_var("PGDOG_OPENMETRICS_PORT");
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_MEMORY_LIMIT");
         let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
         let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
@@ -1856,6 +1872,7 @@ mod tests {
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
         assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
+        assert_eq!(General::prepared_statements_memory_limit(), 0);
         assert_eq!(General::query_cache_limit(), 1_000);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);

@@ -8,6 +8,8 @@ use std::{collections::hash_map::HashMap, str::from_utf8};
 
 use fnv::FnvHashSet as HashSet;
 
+use super::str_mem;
+
 // Format the globally unique prepared statement
 // name based on the counter.
 fn global_name(counter: usize) -> String {
@@ -115,6 +117,16 @@ pub struct GlobalCache {
     unused: HashSet<usize>,
     counter: usize,
     versions: usize,
+    /// Maximum number of cached statements (0 = unlimited). Only statements
+    /// no client holds can be evicted, so the cache can exceed this while
+    /// they are all in use.
+    capacity: usize,
+    /// Approximate memory budget in bytes (0 = unlimited), enforced the same
+    /// way as `capacity`.
+    memory_limit: usize,
+    /// Incremental sum of what the live entries cost; kept in step with every
+    /// insert and remove so enforcement doesn't rescan the maps.
+    bytes: usize,
 }
 
 impl MemoryUsage for GlobalCache {
@@ -129,6 +141,55 @@ impl MemoryUsage for GlobalCache {
 }
 
 impl GlobalCache {
+    /// Apply cache limits from configuration, evicting anything over the new
+    /// caps. A `capacity` or `memory_limit` of 0 disables that limit.
+    pub fn configure(&mut self, capacity: usize, memory_limit: usize) {
+        self.capacity = capacity;
+        self.memory_limit = memory_limit;
+        self.enforce();
+    }
+
+    /// Approximate memory used by the cached statements.
+    pub fn memory_bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// What an entry adds to the byte total: both map entries, keyed by the
+    /// global name and the cache key. Kept symmetrical with `entry_removed`.
+    fn entry_inserted(&mut self, name: &str, statement: &Statement, cached: &CachedStmt) {
+        self.bytes += str_mem(name)
+            + statement.memory_usage()
+            + statement.cache_key.memory_usage()
+            + cached.memory_usage();
+    }
+
+    fn entry_removed(&mut self, name: &str, statement: &Statement, cached: &CachedStmt) {
+        self.bytes = self.bytes.saturating_sub(
+            str_mem(name)
+                + statement.memory_usage()
+                + statement.cache_key.memory_usage()
+                + cached.memory_usage(),
+        );
+    }
+
+    fn over_budget(&self) -> bool {
+        (self.capacity > 0 && self.statements.len() > self.capacity)
+            || (self.memory_limit > 0 && self.bytes > self.memory_limit)
+    }
+
+    /// Evict statements nobody holds until the cache fits its limits. If every
+    /// statement is in use the cache stays over budget: evicting one would
+    /// break the client using it.
+    fn enforce(&mut self) {
+        while self.over_budget() {
+            let Some(&counter) = self.unused.iter().next() else {
+                break;
+            };
+            self.unused.remove(&counter);
+            self.remove(&global_name(counter));
+        }
+    }
+
     /// Record a Parse message with the global cache and return a globally unique
     /// name PgDog is using for that statement.
     ///
@@ -158,22 +219,20 @@ impl GlobalCache {
                 version: 0,
             };
 
-            self.statements.insert(
-                cache_key.clone(),
-                CachedStmt {
-                    counter: self.counter,
-                    used: 1,
-                },
-            );
+            let cached = CachedStmt {
+                counter: self.counter,
+                used: 1,
+            };
+            let statement = Statement {
+                parse,
+                cache_key: cache_key.clone(),
+                ..Default::default()
+            };
 
-            self.names.insert(
-                name.clone(),
-                Statement {
-                    parse,
-                    cache_key,
-                    ..Default::default()
-                },
-            );
+            self.entry_inserted(&name, &statement, &cached);
+            self.statements.insert(cache_key, cached);
+            self.names.insert(name.clone(), statement);
+            self.enforce();
 
             (true, name)
         }
@@ -194,23 +253,21 @@ impl GlobalCache {
             version: self.versions,
         };
 
-        self.statements.insert(
-            key.clone(),
-            CachedStmt {
-                counter: self.counter,
-                used: 1,
-            },
-        );
+        let cached = CachedStmt {
+            counter: self.counter,
+            used: 1,
+        };
+        let statement = Statement {
+            parse,
+            version: self.versions,
+            cache_key: key.clone(),
+            ..Default::default()
+        };
 
-        self.names.insert(
-            name.clone(),
-            Statement {
-                parse,
-                version: self.versions,
-                cache_key: key,
-                ..Default::default()
-            },
-        );
+        self.entry_inserted(&name, &statement, &cached);
+        self.statements.insert(key, cached);
+        self.names.insert(name.clone(), statement);
+        self.enforce();
 
         name
     }
@@ -228,6 +285,7 @@ impl GlobalCache {
         if let Some(ref mut entry) = self.names.get_mut(name)
             && entry.row_description.is_none()
         {
+            self.bytes += row_description.memory_usage();
             entry.row_description = Some(row_description);
         }
     }
@@ -239,6 +297,7 @@ impl GlobalCache {
         self.unused.clear();
         self.counter = 0;
         self.versions = 0;
+        self.bytes = 0;
     }
 
     /// Get the query string stored in the global cache
@@ -305,6 +364,9 @@ impl GlobalCache {
                     self.remove(name);
                 } else if entry.used == 0 {
                     self.unused.insert(entry.counter);
+                    // The statement just became evictable; if the cache is
+                    // over budget, this is the moment it can shrink.
+                    self.enforce();
                 }
             }
         }
@@ -331,8 +393,10 @@ impl GlobalCache {
 
     /// Remove statement from global cache.
     fn remove(&mut self, name: &str) {
-        if let Some(stmt) = self.names.remove(name) {
-            self.statements.remove(&stmt.cache_key());
+        if let Some(stmt) = self.names.remove(name)
+            && let Some(cached) = self.statements.remove(&stmt.cache_key())
+        {
+            self.entry_removed(name, &stmt, &cached);
         }
     }
 
@@ -344,6 +408,7 @@ impl GlobalCache {
             stmt.used = stmt.used.saturating_sub(1);
             if stmt.used == 0 {
                 self.unused.insert(stmt.counter);
+                self.enforce();
             }
         }
     }
@@ -361,6 +426,166 @@ impl GlobalCache {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use super::super::str_mem;
+    use crate::net::messages::Field;
+
+    /// The incremental byte counter must equal a from-scratch recount over the
+    /// live entries, no matter what sequence of operations got us here.
+    fn recount(cache: &GlobalCache) -> usize {
+        cache
+            .names()
+            .iter()
+            .map(|(name, stmt)| str_mem(name) + stmt.memory_usage())
+            .sum::<usize>()
+            + cache
+                .statements()
+                .iter()
+                .map(|(key, stmt)| key.memory_usage() + stmt.memory_usage())
+                .sum::<usize>()
+    }
+
+    #[test]
+    fn test_capacity_evicts_unused_on_insert() {
+        let mut cache = GlobalCache::default();
+        cache.configure(10, 0);
+
+        // Ten statements nobody uses anymore.
+        for i in 0..10 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:02}")));
+            cache.close(&name);
+        }
+        assert_eq!(cache.len(), 10);
+
+        // The next insert pushes an unused one out instead of growing the cache.
+        let (new, name) = cache.insert(&Parse::named("s", "SELECT 'over'"));
+        assert!(new);
+        assert_eq!(cache.len(), 10);
+        assert!(cache.parse(&name).is_some(), "the new statement is cached");
+    }
+
+    #[test]
+    fn test_capacity_never_evicts_statements_in_use() {
+        let mut cache = GlobalCache::default();
+        cache.configure(5, 0);
+
+        let mut names = vec![];
+        for i in 0..10 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:02}")));
+            names.push(name);
+        }
+
+        // All ten are still held by clients: over capacity, but evicting any
+        // of them would break the client using it.
+        assert_eq!(cache.len(), 10);
+
+        // As clients let go, the cache falls back to its capacity.
+        for name in &names {
+            cache.close(name);
+        }
+        assert_eq!(cache.len(), 5);
+    }
+
+    #[test]
+    fn test_memory_limit_evicts_unused() {
+        // Measure what one entry costs, then budget for about three.
+        let mut probe = GlobalCache::default();
+        let (_, name) = probe.insert(&Parse::named("s", "SELECT 00"));
+        probe.close(&name);
+        let per_entry = probe.memory_bytes();
+        assert!(per_entry > 0);
+
+        let budget = per_entry * 3 + per_entry / 2;
+        let mut cache = GlobalCache::default();
+        cache.configure(0, budget);
+
+        for i in 0..10 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:02}")));
+            cache.close(&name);
+        }
+
+        assert!(
+            cache.memory_bytes() <= budget,
+            "cache stays within its memory budget: {} <= {}",
+            cache.memory_bytes(),
+            budget
+        );
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[test]
+    fn test_memory_limit_never_evicts_statements_in_use() {
+        let mut cache = GlobalCache::default();
+        cache.configure(0, 1); // Nothing fits.
+
+        let (_, name) = cache.insert(&Parse::named("s", "SELECT 1"));
+        assert_eq!(cache.len(), 1, "a statement in use stays regardless");
+
+        cache.close(&name);
+        assert_eq!(cache.len(), 0, "and goes as soon as nobody holds it");
+    }
+
+    #[test]
+    fn test_zero_limits_mean_unlimited() {
+        let mut cache = GlobalCache::default();
+        cache.configure(0, 0);
+
+        for i in 0..1000 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:04}")));
+            cache.close(&name);
+        }
+
+        assert_eq!(cache.len(), 1000);
+    }
+
+    #[test]
+    fn test_configure_enforces_immediately() {
+        let mut cache = GlobalCache::default();
+
+        for i in 0..100 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:03}")));
+            cache.close(&name);
+        }
+        assert_eq!(cache.len(), 100);
+
+        // A reload with a smaller limit shrinks the cache on the spot.
+        cache.configure(10, 0);
+        assert_eq!(cache.len(), 10);
+    }
+
+    #[test]
+    fn test_memory_accounting_survives_mixed_operations() {
+        let mut cache = GlobalCache::default();
+        cache.configure(0, 0);
+
+        let mut names = vec![];
+        for i in 0..20 {
+            let (_, name) = cache.insert(&Parse::named("s", format!("SELECT {i:02}")));
+            names.push(name);
+        }
+
+        // A RowDescription recorded later grows the entry.
+        cache.insert_row_description(&names[0], RowDescription::new(&[Field::text("x")]));
+        // Duplicate insert of an existing statement adds nothing.
+        cache.insert(&Parse::named("s", "SELECT 00"));
+        // insert_anyway always creates a fresh entry.
+        let extra = cache.insert_anyway(&Parse::named("s", "SELECT 00"));
+
+        for name in names.iter().chain([&extra]) {
+            cache.close(name);
+        }
+        cache.close(&names[0]); // The duplicate insert above took a second hold.
+
+        assert_eq!(cache.memory_bytes(), recount(&cache));
+
+        // Evictions subtract what the entries actually cost.
+        cache.configure(5, 0);
+        assert_eq!(cache.len(), 5);
+        assert_eq!(cache.memory_bytes(), recount(&cache));
+
+        cache.reset();
+        assert_eq!(cache.memory_bytes(), 0);
+    }
 
     #[test]
     fn test_prep_stmt_cache_close() {

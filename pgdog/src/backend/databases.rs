@@ -107,6 +107,12 @@ pub fn init() -> Result<(), Error> {
     // Resize query cache
     Cache::resize(config.config.general.query_cache_limit);
 
+    // Apply prepared statements cache limits.
+    PreparedStatements::global().write().configure(
+        config.config.general.prepared_statements_limit,
+        config.config.general.prepared_statements_memory_limit,
+    );
+
     // Start two-pc manager.
     let _monitor = Manager::get();
 
@@ -147,10 +153,12 @@ pub fn reload() -> Result<(), Error> {
     // Reload TLS connectors.
     tls::reload()?;
 
-    // Remove any unused prepared statements.
-    PreparedStatements::global()
-        .write()
-        .close_unused(new_config.config.general.prepared_statements_limit);
+    // Apply prepared statements cache limits, dropping anything
+    // unused over the new caps.
+    PreparedStatements::global().write().configure(
+        new_config.config.general.prepared_statements_limit,
+        new_config.config.general.prepared_statements_memory_limit,
+    );
 
     // Resize query cache.
     Cache::resize(new_config.config.general.query_cache_limit);

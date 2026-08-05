@@ -345,6 +345,17 @@ impl Pools {
         }));
 
         metrics.push(Metric::new(PoolMetric {
+            name: "prepared_statements_memory_limit".into(),
+            measurements: vec![Measurement {
+                labels: vec![],
+                measurement: general.prepared_statements_memory_limit.into(),
+            }],
+            help: "Memory limit (bytes) for the prepared statements cache, 0 = unlimited".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
             name: "query_cache_limit".into(),
             measurements: vec![Measurement {
                 labels: vec![],
