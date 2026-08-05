@@ -143,6 +143,24 @@
           "format": "uint64",
           "minimum": 0
         },
+        "idle_timeout_primary": {
+          "description": "Idle connection timeout for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "idle_timeout_replica": {
+          "description": "Idle connection timeout for the replica databases in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "lock_timeout": {
           "description": "Lock timeout.\n\nSets the `lock_timeout` on all server connections at connection creation.\nAborts any statement that waits longer than the specified duration to acquire a lock.\nUnlike `statement_timeout`, this only counts time spent waiting for locks, not execution time.\nRecommended for replication destination connections to prevent cross-shard deadlocks\nfrom hanging indefinitely.\n\n**Note:** Nothing is preventing the user from manually changing this setting at runtime,\ne.g., by running `SET lock_timeout TO 0`;\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#lock_timeout>",
           "type": [
@@ -154,6 +172,24 @@
         },
         "min_pool_size": {
           "description": "Overrides [`min_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#min_pool_size) for this user. Opens at least this many connections on pooler startup and keeps them open despite [`idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#idle_timeout).\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#min_pool_size>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "min_pool_size_primary": {
+          "description": "Minimum pool size for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "min_pool_size_replica": {
+          "description": "Minimum pool size for the replica databases in the cluster.",
           "type": [
             "integer",
             "null"
@@ -189,6 +225,24 @@
         },
         "pool_size": {
           "description": "Overrides [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/) for this user. No more than this many server connections will be open at any given time to serve requests for this connection pool.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#pool_size>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pool_size_primary": {
+          "description": "Maximum pool size for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pool_size_replica": {
+          "description": "Maximum pool size for the replica databases in the cluster.",
           "type": [
             "integer",
             "null"

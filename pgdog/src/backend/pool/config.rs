@@ -31,70 +31,6 @@ impl DerefMut for Config {
 }
 
 impl Config {
-    /// Connect timeout duration.
-    pub fn connect_timeout(&self) -> Duration {
-        self.connect_timeout
-    }
-
-    /// Checkout timeout duration.
-    pub fn checkout_timeout(&self) -> Duration {
-        self.checkout_timeout
-    }
-
-    /// DNS TTL duration.
-    pub fn dns_ttl(&self) -> Duration {
-        self.dns_ttl
-    }
-
-    /// Idle timeout duration.
-    pub fn idle_timeout(&self) -> Duration {
-        self.idle_timeout
-    }
-
-    /// Max age duration.
-    pub fn max_age(&self) -> Duration {
-        self.max_age
-    }
-
-    /// Healthcheck timeout.
-    pub fn healthcheck_timeout(&self) -> Duration {
-        self.healthcheck_timeout
-    }
-
-    /// How long to wait between healtchecks.
-    pub fn healthcheck_interval(&self) -> Duration {
-        self.healthcheck_interval
-    }
-
-    /// Idle healtcheck interval.
-    pub fn idle_healthcheck_interval(&self) -> Duration {
-        self.idle_healthcheck_interval
-    }
-
-    /// Idle healtcheck delay.
-    pub fn idle_healthcheck_delay(&self) -> Duration {
-        self.idle_healthcheck_delay
-    }
-
-    /// Ban timeout.
-    pub fn ban_timeout(&self) -> Duration {
-        self.ban_timeout
-    }
-
-    /// Rollback timeout.
-    pub fn rollback_timeout(&self) -> Duration {
-        self.rollback_timeout
-    }
-
-    /// Read timeout.
-    pub fn read_timeout(&self) -> Duration {
-        self.read_timeout
-    }
-
-    pub fn query_timeout(&self) -> Duration {
-        self.query_timeout
-    }
-
     /// Create from database/user configuration.
     pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
         Self {
@@ -102,9 +38,29 @@ impl Config {
                 min: user
                     .min_pool_size
                     .unwrap_or(database.min_pool_size.unwrap_or(general.min_pool_size)),
+                min_primary: if let Some(user_setting) = user.role_config.min_pool_size_primary {
+                    Some(user_setting)
+                } else {
+                    database.role_config.min_pool_size_primary
+                },
+                min_replica: if let Some(user_setting) = user.role_config.min_pool_size_replica {
+                    Some(user_setting)
+                } else {
+                    database.role_config.min_pool_size_replica
+                },
                 max: user
                     .pool_size
                     .unwrap_or(database.pool_size.unwrap_or(general.default_pool_size)),
+                max_primary: if let Some(user_setting) = user.role_config.pool_size_primary {
+                    Some(user_setting)
+                } else {
+                    database.role_config.pool_size_primary
+                },
+                max_replica: if let Some(user_setting) = user.role_config.pool_size_replica {
+                    Some(user_setting)
+                } else {
+                    database.role_config.pool_size_replica
+                },
                 max_age: Duration::from_millis(
                     user.server_lifetime
                         .unwrap_or(database.server_lifetime.unwrap_or(general.server_lifetime)),
@@ -143,6 +99,26 @@ impl Config {
                     user.idle_timeout
                         .unwrap_or(database.idle_timeout.unwrap_or(general.idle_timeout)),
                 ),
+                idle_timeout_primary: if let Some(user_setting) =
+                    user.role_config.idle_timeout_primary
+                {
+                    Some(Duration::from_millis(user_setting))
+                } else {
+                    database
+                        .role_config
+                        .idle_timeout_primary
+                        .map(Duration::from_millis)
+                },
+                idle_timeout_replica: if let Some(user_setting) =
+                    user.role_config.idle_timeout_replica
+                {
+                    Some(Duration::from_millis(user_setting))
+                } else {
+                    database
+                        .role_config
+                        .idle_timeout_replica
+                        .map(Duration::from_millis)
+                },
                 read_only: user
                     .read_only
                     .unwrap_or(database.read_only.unwrap_or_default()),
@@ -229,6 +205,27 @@ mod test {
         assert_eq!(PoolerMode::Session, config.pooler_mode);
         assert_eq!(Duration::from_millis(5), config.idle_timeout);
         assert!(config.read_only);
+    }
+
+    #[test]
+    fn test_role_specific_pool_config_user_takes_precedence_over_database() {
+        let general = General::default();
+        let mut user = User::default();
+        user.role_config.min_pool_size_primary = Some(2);
+        user.role_config.idle_timeout_primary = Some(20);
+
+        let mut database = Database::default();
+        database.role_config.min_pool_size_primary = Some(3);
+        database.role_config.min_pool_size_replica = Some(4);
+        database.role_config.idle_timeout_primary = Some(30);
+        database.role_config.idle_timeout_replica = Some(40);
+
+        let config = Config::new(&general, &database, &user, false);
+
+        assert_eq!(config.min_primary, Some(2));
+        assert_eq!(config.min_replica, Some(4));
+        assert_eq!(config.idle_timeout_primary, Some(Duration::from_millis(20)));
+        assert_eq!(config.idle_timeout_replica, Some(Duration::from_millis(40)));
     }
 
     #[test]

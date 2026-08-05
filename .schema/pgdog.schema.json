@@ -419,6 +419,24 @@
           "format": "uint64",
           "minimum": 0
         },
+        "idle_timeout_primary": {
+          "description": "Idle connection timeout for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "idle_timeout_replica": {
+          "description": "Idle connection timeout for the replica databases in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "lb_weight": {
           "description": "Used for weighted load balancing.",
           "type": "integer",
@@ -445,6 +463,24 @@
           "format": "uint",
           "minimum": 0
         },
+        "min_pool_size_primary": {
+          "description": "Minimum pool size for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "min_pool_size_replica": {
+          "description": "Minimum pool size for the replica databases in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
         "name": {
           "description": "Name of your database. Clients that connect to PgDog will need to use this name to refer to the database. For multiple entries that are part of the same cluster, use the same value.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#name>",
           "type": "string"
@@ -458,6 +494,24 @@
         },
         "pool_size": {
           "description": "Overrides the [`default_pool_size`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#default_pool_size) setting. All connection pools for this database will open at most this many connections to Postgres.\n\n**Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#pool_size>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pool_size_primary": {
+          "description": "Maximum pool size for the primary database in the cluster.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "pool_size_replica": {
+          "description": "Maximum pool size for the replica databases in the cluster.",
           "type": [
             "integer",
             "null"

@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicI64, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicI64, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -18,7 +18,7 @@ use crate::{
     net::Parameters,
 };
 
-use super::{Error, Guard, Oids, Pool, PoolConfig, Request};
+use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
 use crate::util::safe_timeout;
 
 pub mod ban;
@@ -38,7 +38,7 @@ mod test;
 pub struct Target {
     pub pool: Pool,
     pub ban: Ban,
-    role: Arc<AtomicU8>,
+    role: PoolRole,
     pub health: TargetHealth,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
@@ -47,9 +47,13 @@ pub struct Target {
 impl Target {
     pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
+
+        // Set pool to last known role.
+        pool.set_role(role);
+
         Self {
             ban,
-            role: Arc::new(AtomicU8::new(role.into())),
+            role: PoolRole::new(role),
             health: pool.inner().health.clone(),
             pool,
             current_weight: Arc::new(AtomicI64::new(0)),
@@ -58,15 +62,20 @@ impl Target {
 
     /// Get role.
     pub(super) fn role(&self) -> Role {
-        let role = self.role.load(Ordering::Relaxed);
-        role.try_into().expect("valid role")
+        self.role.role()
     }
 
     /// Set role.
     pub(super) fn set_role(&self, role: Role) -> bool {
-        let value = u8::from(role);
-        let old = self.role.swap(value, Ordering::Relaxed);
-        value != old
+        let lb = self.role.set_role(role);
+        let pool = self.pool.set_role(role);
+
+        debug_assert_eq!(
+            lb, pool,
+            "pool and lb role must agree: lb={lb}, pool={pool}"
+        );
+
+        lb && pool
     }
 }
 

@@ -7,6 +7,7 @@ use tracing::warn;
 
 use super::core::Config;
 use super::pooling::PoolerMode;
+use crate::RoleConfig;
 use crate::util::random_string;
 use schemars::JsonSchema;
 
@@ -390,6 +391,20 @@ pub struct User {
     /// Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).
     /// Overrides the database-level and general-level `server_lifetime_jitter` setting for this user.
     pub server_lifetime_jitter: Option<u64>,
+
+    /// Role-specific configuration settings.
+    ///
+    /// These are flattened, so they appear directly in the [[users]] entry, e.g.,
+    ///
+    /// ```toml
+    /// [[users]]
+    /// name = "pgdog"
+    /// database = "pgdog"
+    /// pool_size_primary = 10
+    /// ```
+    ///
+    #[serde(flatten, default)]
+    pub role_config: RoleConfig,
 }
 
 impl User {

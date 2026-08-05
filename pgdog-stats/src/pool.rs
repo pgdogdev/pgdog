@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};
+use pgdog_config::{PoolerMode, PreparedStatements, Role, pooling::ConnectionRecovery};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -275,14 +275,26 @@ pub struct State {
 pub struct Config {
     /// Minimum connections that should be in the pool.
     pub min: usize,
+    /// Minimum connections that should be in the pool if it's a primary.
+    pub min_primary: Option<usize>,
+    /// Minimum connections that should be in the pool if it's a replica.
+    pub min_replica: Option<usize>,
     /// Maximum connections allowed in the pool.
     pub max: usize,
+    /// Maximum connection allowed in the pool if its a primary.
+    pub max_primary: Option<usize>,
+    /// Maximum connections allowed in the pool if its a replica.
+    pub max_replica: Option<usize>,
     /// How long to wait for a connection before giving up.
     pub checkout_timeout: Duration, // ms
     /// Interval duration of DNS cache refresh.
     pub dns_ttl: Duration, // ms
     /// Close connections that have been idle for longer than this.
     pub idle_timeout: Duration, // ms
+    /// Close primary connections that have been idle for longer than this.
+    pub idle_timeout_primary: Option<Duration>, // ms
+    /// Close replica connections that have been idle for longer than this.
+    pub idle_timeout_replica: Option<Duration>, // ms
     /// How long to wait for connections to be created.
     pub connect_timeout: Duration, // ms
     /// How many times to attempt a connection before returning an error.
@@ -348,13 +360,35 @@ pub struct Config {
     pub prepared_statements_level: PreparedStatements,
 }
 
+pub struct RoleSpecificConfig<T: Copy> {
+    pub value: T,
+    pub value_primary: Option<T>,
+    pub value_replica: Option<T>,
+}
+
+impl<T: Copy> RoleSpecificConfig<T> {
+    /// Get value given role.
+    pub fn value(&self, role: Role) -> T {
+        match role {
+            Role::Auto | Role::Replica => self.value_replica.unwrap_or(self.value),
+            Role::Primary => self.value_primary.unwrap_or(self.value),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             min: 1,
+            min_primary: None,
+            min_replica: None,
             max: 10,
+            max_primary: None,
+            max_replica: None,
             checkout_timeout: Duration::from_millis(5_000),
             idle_timeout: Duration::from_millis(60_000),
+            idle_timeout_primary: None,
+            idle_timeout_replica: None,
             connect_timeout: Duration::from_millis(5_000),
             connect_attempts: 1,
             connect_attempt_delay: Duration::from_millis(10),

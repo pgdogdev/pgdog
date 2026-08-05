@@ -101,8 +101,8 @@ impl Monitor {
             let lock = pool.lock();
             let config = lock.config();
             (
-                config.idle_healthcheck_delay(),
-                config.idle_healthcheck_interval(),
+                config.idle_healthcheck_delay,
+                config.idle_healthcheck_interval,
                 config.replication_mode,
             )
         };
@@ -257,7 +257,7 @@ impl Monitor {
     ///
     /// Runs regularly and ensures the pool triggers health checks on idle connections.
     async fn healthchecks(pool: Pool) {
-        let mut tick = safe_interval(pool.lock().config().idle_healthcheck_interval());
+        let mut tick = safe_interval(pool.lock().config().idle_healthcheck_interval);
         let comms = pool.comms();
 
         debug!("health checks running [{}]", pool.addr());
