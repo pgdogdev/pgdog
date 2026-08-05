@@ -76,6 +76,7 @@ jobs:
           - { name: js,            script: integration/js/pg_tests/run.sh }
           - { name: ruby,          script: integration/ruby/run.sh }
           - { name: java,          script: integration/java/run.sh }
+          - { name: elixir,        script: integration/elixir/run.sh, needs_beam: true }
           - { name: mirror,        script: integration/mirror/run.sh }
           - { name: sql,           script: integration/sql/run.sh }
           - { name: toxi,          script: integration/toxi/run.sh }
@@ -126,6 +127,14 @@ jobs:
         run: |
           mkdir -p target/llvm-cov-target
           rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
+      # The runner image has no BEAM toolchain, and Ubuntu's `elixir` package
+      # is several years behind, so pull a pinned precompiled pair instead.
+      - name: Install Erlang/Elixir
+        if: matrix.needs_beam
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.20.3"
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
