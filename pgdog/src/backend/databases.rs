@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
+use pgdog_config::util::normalize_identifier;
 use pgdog_config::{
     QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
@@ -507,9 +508,9 @@ fn resolve_sharded_table(
 
     ShardedTable {
         database: config.database.clone(),
-        name: config.name.clone(),
-        schema: config.schema.clone(),
-        column: config.column.clone(),
+        name: config.name.as_deref().map(normalize_identifier),
+        schema: config.schema.as_deref().map(normalize_identifier),
+        column: normalize_identifier(&config.column),
         primary: config.primary,
         centroids: config.centroids.clone(),
         data_type: config.data_type,
