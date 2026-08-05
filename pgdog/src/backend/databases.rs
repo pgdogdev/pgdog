@@ -11,6 +11,7 @@ use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
 use pgdog_config::users::PasswordKind;
+use pgdog_config::util::normalize_identifier;
 use pgdog_config::{
     QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
@@ -507,9 +508,9 @@ fn resolve_sharded_table(
 
     ShardedTable {
         database: config.database.clone(),
-        name: config.name.clone(),
-        schema: config.schema.clone(),
-        column: config.column.clone(),
+        name: config.name.as_deref().map(normalize_identifier),
+        schema: config.schema.as_deref().map(normalize_identifier),
+        column: normalize_identifier(&config.column),
         primary: config.primary,
         centroids: config.centroids.clone(),
         data_type: config.data_type,
@@ -1986,5 +1987,45 @@ password = "testpass"
         assert_eq!(new_users.users.len(), 1);
         assert_eq!(new_users.users[0].name, "testuser");
         assert_eq!(new_users.users[0].database, "destination_db");
+    }
+
+    /// PostgreSQL folds unquoted identifiers to lower case, so the parser
+    /// hands the router `orders` for `FROM Orders`. Identifiers configured
+    /// in `pgdog.toml` must be folded the same way, otherwise they never
+    /// match and the table silently isn't sharded.
+    #[test]
+    fn test_unquoted_config_identifiers_are_folded() {
+        let config = ShardedTableConfig {
+            database: "pgdog".into(),
+            name: Some("Orders".into()),
+            schema: Some("Public".into()),
+            column: "Tenant_Id".into(),
+            ..Default::default()
+        };
+
+        let resolved = resolve_sharded_table(&config, &IndexMap::new(), 2);
+
+        assert_eq!(resolved.name.as_deref(), Some("orders"));
+        assert_eq!(resolved.schema.as_deref(), Some("public"));
+        assert_eq!(resolved.column, "tenant_id");
+    }
+
+    /// Quoted identifiers keep their case, and the surrounding quotes are
+    /// not part of the identifier itself.
+    #[test]
+    fn test_quoted_config_identifiers_preserve_case() {
+        let config = ShardedTableConfig {
+            database: "pgdog".into(),
+            name: Some(r#""Orders""#.into()),
+            schema: Some(r#""Public""#.into()),
+            column: r#""Tenant_Id""#.into(),
+            ..Default::default()
+        };
+
+        let resolved = resolve_sharded_table(&config, &IndexMap::new(), 2);
+
+        assert_eq!(resolved.name.as_deref(), Some("Orders"));
+        assert_eq!(resolved.schema.as_deref(), Some("Public"));
+        assert_eq!(resolved.column, "Tenant_Id");
     }
 }
