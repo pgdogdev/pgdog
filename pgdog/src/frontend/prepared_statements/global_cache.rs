@@ -300,7 +300,10 @@ impl GlobalCache {
         }
     }
 
-    /// Clear the global cache.
+    /// Clear the global cache. Test-only: rolling the name counter back
+    /// would let a server connection holding an old `__pgdog_N` name be
+    /// handed a different query under it.
+    #[cfg(test)]
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
