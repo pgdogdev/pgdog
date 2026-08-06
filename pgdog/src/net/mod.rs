@@ -14,7 +14,7 @@ pub use error::Error;
 pub use messages::*;
 pub use parameter::{Parameter, Parameters};
 pub use protocol_message::ProtocolMessage;
-pub use stream::Stream;
+pub use stream::{Liveness, Stream};
 pub use tweaks::tweak;
 
 use std::{io::Cursor, marker::Unpin};

@@ -1,6 +1,7 @@
 //! Network socket wrapper allowing us to treat secure, plain and UNIX
 //! connections the same across the code.
 use bytes::{BufMut, BytesMut};
+use futures::FutureExt;
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
@@ -22,6 +23,13 @@ enum StreamInner {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    Clean,
+    DataPending,
+    Closed,
 }
 
 /// A network socket.
@@ -170,6 +178,27 @@ impl Stream {
         };
 
         Ok(())
+    }
+
+    pub fn liveness(&mut self) -> Liveness {
+        let mut buf = [0u8; 1];
+        match &mut self.inner {
+            StreamInner::Plain(plain) => match plain.get_mut().peek(&mut buf).now_or_never() {
+                None => Liveness::Clean,
+                Some(Ok(0)) => Liveness::Closed,
+                Some(Ok(_)) => Liveness::DataPending,
+                Some(Err(_)) => Liveness::Closed,
+            },
+            StreamInner::Tls(tls) => {
+                match tls.get_mut().get_mut().0.peek(&mut buf).now_or_never() {
+                    None => Liveness::Clean,
+                    Some(Ok(0)) => Liveness::Closed,
+                    Some(Ok(_)) => Liveness::DataPending,
+                    Some(Err(_)) => Liveness::Closed,
+                }
+            }
+            StreamInner::DevNull => Liveness::Clean,
+        }
     }
 
     /// Get the current io_in_progress state.
@@ -371,6 +400,8 @@ impl std::fmt::Debug for PeerAddr {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use tokio::net::TcpListener;
 
@@ -416,5 +447,78 @@ mod tests {
 
         assert!(!stream.tls_client_certificate());
         assert_eq!(stream.tls_identity(), None);
+    }
+
+    async fn connected_pair() -> (Stream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+        let (ours, _) = listener.accept().await.unwrap();
+
+        (Stream::plain(ours, 4096), peer.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_liveness_clean_when_peer_idle() {
+        let (mut stream, _peer) = connected_pair().await;
+
+        assert_eq!(stream.liveness(), Liveness::Clean);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_liveness_does_not_block_on_idle_socket() {
+        let (mut stream, _peer) = connected_pair().await;
+
+        let checked =
+            tokio::time::timeout(Duration::from_secs(5), async { stream.liveness() }).await;
+
+        assert_eq!(
+            checked.expect("liveness() blocked on an idle socket"),
+            Liveness::Clean
+        );
+    }
+
+    #[tokio::test]
+    async fn test_liveness_reports_unsolicited_data() {
+        let (mut stream, mut peer) = connected_pair().await;
+
+        peer.write_all(b"E").await.unwrap();
+        peer.flush().await.unwrap();
+        tokio::task::yield_now().await;
+
+        assert_eq!(stream.liveness(), Liveness::DataPending);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_reports_closed_peer() {
+        let (mut stream, peer) = connected_pair().await;
+
+        drop(peer);
+        tokio::task::yield_now().await;
+
+        assert_eq!(stream.liveness(), Liveness::Closed);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_does_not_consume_pending_bytes() {
+        let (mut stream, mut peer) = connected_pair().await;
+
+        peer.write_all(b"hello").await.unwrap();
+        peer.flush().await.unwrap();
+        tokio::task::yield_now().await;
+
+        assert_eq!(stream.liveness(), Liveness::DataPending);
+        assert_eq!(stream.liveness(), Liveness::DataPending);
+
+        let mut buf = [0u8; 5];
+        stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn test_liveness_dev_null_is_clean() {
+        let mut stream = Stream::dev_null();
+
+        assert_eq!(stream.liveness(), Liveness::Clean);
     }
 }

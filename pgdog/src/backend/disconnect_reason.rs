@@ -14,6 +14,7 @@ pub enum DisconnectReason {
     Healthcheck,
     PubSub,
     CredentialsRefresh,
+    ServerClosed,
     #[default]
     Other,
 }
@@ -34,6 +35,7 @@ impl Display for DisconnectReason {
             Self::Healthcheck => "standalone healthcheck",
             Self::PubSub => "pub/sub",
             Self::CredentialsRefresh => "credentials refresh",
+            Self::ServerClosed => "server closed",
         };
 
         write!(f, "{}", reason)

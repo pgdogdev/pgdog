@@ -17,7 +17,7 @@ use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendPid, FrontendPid};
-use crate::net::{Parameter, Parameters};
+use crate::net::{Liveness, Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
@@ -193,6 +193,7 @@ impl Pool {
                 Ok(conn) => return Ok(conn),
                 // Try another connection.
                 Err(Error::HealthcheckError) => continue,
+                Err(Error::ServerClosed) => continue,
                 Err(err) => return Err(err),
             }
         }
@@ -217,6 +218,13 @@ impl Pool {
         healthcheck_interval: Duration,
         now: Instant,
     ) -> Result<Guard, Error> {
+        if conn.liveness() != Liveness::Clean {
+            conn.stats_mut().state(crate::state::State::ForceClose);
+            conn.disconnect_reason(DisconnectReason::ServerClosed);
+            drop(conn);
+            return Err(Error::ServerClosed);
+        }
+
         let mut healthcheck = Healtcheck::conditional(
             &mut conn,
             self,
