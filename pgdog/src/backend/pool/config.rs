@@ -122,7 +122,12 @@ impl Config {
                 read_only: user
                     .read_only
                     .unwrap_or(database.read_only.unwrap_or_default()),
-                prepared_statements_limit: general.prepared_statements_limit,
+                prepared_statements: pgdog_stats::PreparedStatementsConfig {
+                    level: general.prepared_statements,
+                    limit: general.prepared_statements_limit,
+                    ttl: general.prepared_statements_ttl(),
+                    ttl_jitter: general.prepared_statements_ttl_jitter(),
+                },
                 stats_period: Duration::from_millis(general.stats_period),
                 bannable: !is_only_replica,
                 connection_recovery: general.connection_recovery,
@@ -132,7 +137,6 @@ impl Config {
                 role_detection: database.role == Role::Auto,
                 resharding_only: database.resharding_only,
                 lb_weight: database.lb_weight,
-                prepared_statements_level: general.prepared_statements,
                 ..Default::default()
             },
         }
@@ -163,6 +167,32 @@ mod test {
         let config = Config::new(&general, &database, &user, false);
 
         assert!(config.role_detection);
+    }
+
+    #[test]
+    fn test_prepared_statements_config_from_general() {
+        let general = General {
+            prepared_statements_ttl: 60_000,
+            prepared_statements_limit: 10,
+            ..Default::default()
+        };
+
+        let config = Config::new(
+            &general,
+            &create_database(Role::Primary),
+            &User::default(),
+            false,
+        );
+
+        assert_eq!(
+            config.prepared_statements.ttl,
+            Some(Duration::from_millis(60_000))
+        );
+        assert_eq!(config.prepared_statements.limit, 10);
+        assert_eq!(
+            config.prepared_statements.level,
+            general.prepared_statements
+        );
     }
 
     #[test]

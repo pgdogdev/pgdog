@@ -197,6 +197,22 @@ query_parser = "on"
 # Default: unlimited
 #
 prepared_statements_limit = 1_000
+# How long a prepared statement can stay prepared on a Postgres server
+# connection. Expired statements are closed and prepared again the next
+# time they are used, so execution plans don't get stale.
+#
+# Set to 0 to let statements stay prepared forever.
+#
+# Default: 300_000 (5 minutes)
+#
+prepared_statements_ttl = 300_000
+# Random spread applied to prepared_statements_ttl, per statement. Clients
+# usually prepare their whole statement set at once, so without this they
+# would all expire at the same moment, over and over.
+#
+# Default: 30_000 (30 seconds)
+#
+prepared_statements_ttl_jitter = 30_000
 # Limit on the number of queries cached in the Abstract Syntax Tree
 # cache used for query routing and sharding.
 #

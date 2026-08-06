@@ -14,7 +14,8 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     ConnectReason, DisconnectReason, Error, Oids, PreparedStatements, ServerOptions, Stats,
-    pool::Address, prepared_statements::HandleResult,
+    pool::Address,
+    prepared_statements::{HandleResult, Prepare},
 };
 use crate::{
     auth::{md5, scram::Client},
@@ -492,26 +493,30 @@ impl Server {
 
         let result = self.prepared_statements.handle(message)?;
 
-        let queue = match result {
-            HandleResult::Drop => [None, None],
-            HandleResult::Prepend(ref prepare) => [Some(prepare), Some(message)],
-            HandleResult::Forward => [Some(message), None],
-            HandleResult::Rewrite(ref message) => [Some(message), None],
-            HandleResult::PrependRewrite {
-                ref prepend,
-                ref rewrite,
-            } => [Some(prepend), Some(rewrite)],
-        };
-
-        for message in queue.iter().flatten() {
-            trace!("{:#?} >>> [{}]", message, self.addr());
-        }
-
-        for message in queue.into_iter().flatten() {
-            self.send_stream(message).await?;
+        match &result {
+            HandleResult::Drop => {}
+            HandleResult::Forward => self.send_stream(message).await?,
+            HandleResult::Rewrite(rewrite) => self.send_stream(rewrite).await?,
+            HandleResult::Prepend(prepare) => {
+                self.send_prepare(prepare).await?;
+                self.send_stream(message).await?;
+            }
+            HandleResult::PrependRewrite { prepend, rewrite } => {
+                self.send_prepare(prepend).await?;
+                self.send_stream(rewrite).await?;
+            }
         }
 
         Ok(())
+    }
+
+    /// Close a stale prepared statement, if any, then prepare the new one.
+    async fn send_prepare(&mut self, prepare: &Prepare) -> Result<(), Error> {
+        if let Some(close) = prepare.close() {
+            self.send_stream(close).await?;
+        }
+
+        self.send_stream(prepare.parse()).await
     }
 
     /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
@@ -529,6 +534,8 @@ impl Server {
     /// Send message to Postgres, checking for any errors
     /// and setting the server state accordingly.
     async fn send_stream(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+        trace!("{:#?} >>> [{}]", message, self.addr());
+
         match self.stream().send(message).await {
             Ok(sent) => self.stats.send(sent, message.code() as u8),
             Err(err) => {
@@ -1320,6 +1327,7 @@ pub mod test {
     use std::time::SystemTime;
 
     use bytes::{BufMut, BytesMut};
+    use pgdog_stats::PreparedStatementsConfig;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -2765,7 +2773,12 @@ pub mod test {
             let in_sync = server.fetch_all::<i64>("SELECT 1::bigint").await.unwrap();
             assert_eq!(in_sync[0], 1);
 
-            server.prepared_statements.set_capacity(3);
+            server
+                .prepared_statements
+                .configure(PreparedStatementsConfig {
+                    limit: 3,
+                    ..Default::default()
+                });
             assert_eq!(server.prepared_statements.capacity(), 3);
 
             server
@@ -2809,10 +2822,27 @@ pub mod test {
         }
     }
 
-    /// Names Postgres itself thinks are prepared on this connection.
-    pub(crate) async fn prepared_in_postgres(server: &mut Server) -> Vec<String> {
+    /// What Postgres itself thinks is prepared on this connection.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct PreparedInPostgres {
+        pub name: String,
+        pub prepared_at: String,
+    }
+
+    impl From<DataRow> for PreparedInPostgres {
+        fn from(value: DataRow) -> Self {
+            Self {
+                name: value.get_text(0).unwrap_or_default(),
+                prepared_at: value.get_text(1).unwrap_or_default(),
+            }
+        }
+    }
+
+    pub(crate) async fn prepared_in_postgres(server: &mut Server) -> Vec<PreparedInPostgres> {
         server
-            .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
+            .fetch_all::<PreparedInPostgres>(
+                "SELECT name, prepare_time::text FROM pg_prepared_statements ORDER BY name",
+            )
             .await
             .unwrap()
     }
@@ -2836,6 +2866,41 @@ pub mod test {
         };
 
         server.fetch_all::<i64>(request).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_prepared_statement_is_re_prepared_once_its_ttl_runs_out() {
+        use crate::backend::prepared_statements::test::prepare_expired;
+
+        let parse = Parse::named("ttl_client", "SELECT $1::bigint");
+        let (_, name) = crate::frontend::PreparedStatements::global()
+            .write()
+            .insert(&parse);
+
+        let mut server = test_server().await;
+        let statements = server.prepared_statements_mut();
+        statements.configure(PreparedStatementsConfig {
+            ttl: Some(Duration::from_secs(300)),
+            ..statements.config()
+        });
+
+        assert_eq!(execute_prepared(&mut server, &name, b"1").await, [1]);
+        let prepared = prepared_in_postgres(&mut server).await;
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].name, name);
+
+        assert_eq!(execute_prepared(&mut server, &name, b"1").await, [1]);
+        assert_eq!(prepared_in_postgres(&mut server).await, prepared);
+
+        prepare_expired(server.prepared_statements_mut(), &name);
+
+        assert_eq!(execute_prepared(&mut server, &name, b"1").await, [1]);
+        let re_prepared = prepared_in_postgres(&mut server).await;
+        assert_eq!(re_prepared.len(), 1);
+        assert_eq!(re_prepared[0].name, name);
+        assert_ne!(re_prepared, prepared);
+
+        assert!(server.done());
     }
 
     #[tokio::test]
@@ -3975,9 +4040,12 @@ pub mod test {
     /// Set a server's prepared_statements level to ExtendedAnonymous.
     fn set_extended_anonymous(server: &mut Server) {
         use pgdog_config::PreparedStatements as PSLevel;
-        server
-            .prepared_statements_mut()
-            .set_prepared_statements_level(PSLevel::ExtendedAnonymous);
+        let statements = server.prepared_statements_mut();
+        let config = statements.config();
+        statements.configure(PreparedStatementsConfig {
+            level: PSLevel::ExtendedAnonymous,
+            ..config
+        });
     }
 
     #[tokio::test]
@@ -4245,7 +4313,9 @@ pub mod test {
         use crate::net::bind::Parameter;
         let mut server = test_server().await;
         set_extended_anonymous(&mut server);
-        server.prepared_statements_mut().set_capacity(3);
+        let statements = server.prepared_statements_mut();
+        let config = statements.config();
+        statements.configure(PreparedStatementsConfig { limit: 3, ..config });
 
         // Send many different "named" statements.
         // Because they're all anonymized, no named statements are stored in Postgres,

@@ -175,10 +175,7 @@ impl Pool {
 
             server
                 .prepared_statements_mut()
-                .set_capacity(self.inner.config.prepared_statements_limit);
-            server
-                .prepared_statements_mut()
-                .set_prepared_statements_level(self.inner.config.prepared_statements_level);
+                .configure(self.inner.config.prepared_statements);
             server.set_pooler_mode(self.inner.config.pooler_mode);
 
             match self
