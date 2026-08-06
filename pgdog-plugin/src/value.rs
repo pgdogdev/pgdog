@@ -50,6 +50,7 @@ impl From<uuid::Uuid> for Value {
 pub struct ShardingKeys {
     data: *mut Value,
     len: usize,
+    drop_values: unsafe extern "C-unwind" fn(*mut (), usize),
 }
 
 impl ShardingKeys {
@@ -59,7 +60,11 @@ impl ShardingKeys {
         let len = values.len();
         let data = Box::into_raw(values).cast::<Value>();
 
-        Self { data, len }
+        Self {
+            data,
+            len,
+            drop_values,
+        }
     }
 
     /// Borrow the sharding keys as a slice.
@@ -82,6 +87,7 @@ impl Default for ShardingKeys {
         Self {
             data: ptr::NonNull::dangling().as_ptr(),
             len: 0,
+            drop_values,
         }
     }
 }
@@ -120,15 +126,24 @@ impl Drop for ShardingKeys {
             return;
         }
 
-        // SAFETY: `data` is created exclusively by `Self::new` using
-        // `Box::into_raw` for non-empty arrays. `ShardingKeys` cannot be cloned
-        // or copied, so this reconstructs and drops the boxed slice exactly
-        // once.
-        unsafe {
-            drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-                self.data, self.len,
-            )));
-        }
+        // SAFETY: The callback is installed by `Self::new` in the plugin that
+        // allocated the values. Calling back into that library ensures the
+        // boxed slice and any owned strings use the same allocator for both
+        // allocation and deallocation.
+        unsafe { (self.drop_values)(self.data.cast(), self.len) }
+    }
+}
+
+/// Release values using the allocator linked into the module that created
+/// them. This function pointer crosses the plugin ABI with the allocation.
+unsafe extern "C-unwind" fn drop_values(data: *mut (), len: usize) {
+    // SAFETY: `data` and `len` came from `Box::into_raw` in `ShardingKeys::new`,
+    // and ownership is transferred exactly once to this callback.
+    unsafe {
+        drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
+            data.cast::<Value>(),
+            len,
+        )));
     }
 }
 
@@ -156,6 +171,7 @@ mod tests {
         let keys = ShardingKeys {
             data: ptr::null_mut(),
             len: 0,
+            drop_values,
         };
 
         assert_eq!(keys.as_slice(), &[]);
