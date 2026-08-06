@@ -182,22 +182,17 @@ impl Stream {
 
     pub fn liveness(&mut self) -> Liveness {
         let mut buf = [0u8; 1];
-        match &mut self.inner {
-            StreamInner::Plain(plain) => match plain.get_mut().peek(&mut buf).now_or_never() {
-                None => Liveness::Clean,
-                Some(Ok(0)) => Liveness::Closed,
-                Some(Ok(_)) => Liveness::DataPending,
-                Some(Err(_)) => Liveness::Closed,
-            },
-            StreamInner::Tls(tls) => {
-                match tls.get_mut().get_mut().0.peek(&mut buf).now_or_never() {
-                    None => Liveness::Clean,
-                    Some(Ok(0)) => Liveness::Closed,
-                    Some(Ok(_)) => Liveness::DataPending,
-                    Some(Err(_)) => Liveness::Closed,
-                }
-            }
-            StreamInner::DevNull => Liveness::Clean,
+        let peeked = match &mut self.inner {
+            StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
+            StreamInner::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).now_or_never(),
+            StreamInner::DevNull => return Liveness::Clean,
+        };
+
+        match peeked {
+            None => Liveness::Clean,
+            Some(Ok(0)) => Liveness::Closed,
+            Some(Ok(_)) => Liveness::DataPending,
+            Some(Err(_)) => Liveness::Closed,
         }
     }
 
