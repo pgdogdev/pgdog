@@ -737,7 +737,7 @@ impl Pools {
             measurements: total_rows_inserted,
             help: "Total rows reported affected by INSERT command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -753,7 +753,7 @@ impl Pools {
             measurements: total_rows_updated,
             help: "Total rows reported affected by UPDATE command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -769,7 +769,7 @@ impl Pools {
             measurements: total_rows_deleted,
             help: "Total rows reported affected by DELETE command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
