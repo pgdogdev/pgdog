@@ -1,14 +1,14 @@
 use crate::backend::{self, databases::databases};
 use crate::util::millis;
 
-use super::{Measurement, Metric, OpenMetric};
+use super::{Measurement, Metric, OpenMetric, OpenMetricType};
 
 pub struct PoolMetric {
     pub name: String,
     pub measurements: Vec<Measurement>,
     pub help: String,
     pub unit: Option<String>,
-    pub metric_type: Option<String>,
+    pub metric_type: Option<OpenMetricType>,
 }
 
 impl OpenMetric for PoolMetric {
@@ -28,12 +28,8 @@ impl OpenMetric for PoolMetric {
         self.unit.clone()
     }
 
-    fn metric_type(&self) -> String {
-        if let Some(ref metric_type) = self.metric_type {
-            metric_type.clone()
-        } else {
-            "gauge".into()
-        }
+    fn metric_type(&self) -> OpenMetricType {
+        self.metric_type.unwrap_or(OpenMetricType::Gauge)
     }
 }
 
@@ -438,7 +434,7 @@ impl Pools {
             measurements: errors,
             help: "Errors connections in the pool have experienced.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -446,7 +442,7 @@ impl Pools {
             measurements: out_of_sync,
             help: "Connections that have been returned to the pool in a broken state.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -454,7 +450,7 @@ impl Pools {
             measurements: total_xact_count,
             help: "Total number of executed transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -462,7 +458,7 @@ impl Pools {
             measurements: total_xact_2pc_count,
             help: "Total number of executed two-phase commit transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -487,7 +483,7 @@ impl Pools {
             measurements: total_query_count,
             help: "Total number of executed queries.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -503,7 +499,7 @@ impl Pools {
             measurements: total_received,
             help: "Total number of bytes received.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -511,7 +507,7 @@ impl Pools {
             measurements: avg_received,
             help: "Average number of bytes received.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -519,7 +515,7 @@ impl Pools {
             measurements: total_sent,
             help: "Total number of bytes sent.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -535,7 +531,7 @@ impl Pools {
             measurements: total_xact_time,
             help: "Total time spent executing transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -551,7 +547,7 @@ impl Pools {
             measurements: total_idle_xact_time,
             help: "Total time spent idling inside transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -567,7 +563,7 @@ impl Pools {
             measurements: total_query_time,
             help: "Total time spent executing queries.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -583,7 +579,7 @@ impl Pools {
             measurements: total_close,
             help: "Total number of prepared statements closed because of cache evictions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -599,7 +595,7 @@ impl Pools {
             measurements: total_server_errors,
             help: "Total number of errors returned by server connections.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -616,7 +612,7 @@ impl Pools {
             help: "Total number of times server connections were cleaned from client parameters."
                 .into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -635,7 +631,7 @@ impl Pools {
                 "Total number of abandoned transactions that had to be rolled back automatically."
                     .into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -653,7 +649,7 @@ impl Pools {
             measurements: total_connect_time,
             help: "Total time spent connecting to servers.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -669,7 +665,7 @@ impl Pools {
             measurements: total_connect_count,
             help: "Total number of connections established to servers.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -685,7 +681,7 @@ impl Pools {
             measurements: total_reads,
             help: "Total number of read transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -701,7 +697,7 @@ impl Pools {
             measurements: total_writes,
             help: "Total number of write transactions.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -725,7 +721,7 @@ impl Pools {
             measurements: total_auth_attempts,
             help: "Total number of server authentication attempts.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -741,7 +737,7 @@ impl Pools {
             measurements: total_rows_inserted,
             help: "Total rows reported affected by INSERT command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -757,7 +753,7 @@ impl Pools {
             measurements: total_rows_updated,
             help: "Total rows reported affected by UPDATE command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -773,7 +769,7 @@ impl Pools {
             measurements: total_rows_deleted,
             help: "Total rows reported affected by DELETE command tags.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: Some(OpenMetricType::Counter),
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -811,7 +807,7 @@ mod tests {
             metric_type: None,
         };
 
-        assert_eq!(metric.metric_type(), "gauge");
+        assert_eq!(metric.metric_type(), OpenMetricType::Gauge);
         assert!(metric.unit().is_none());
         assert_eq!(metric.help(), Some("Waiting clients per pool".into()));
     }
@@ -831,7 +827,7 @@ mod tests {
             }],
             help: "Active servers per pool".into(),
             unit: Some("connections".into()),
-            metric_type: Some("gauge".into()),
+            metric_type: Some(OpenMetricType::Gauge),
         };
 
         let rendered = Metric::new(metric).to_string();
@@ -871,7 +867,7 @@ mod test {
                 }],
                 help: "How long clients wait.".into(),
                 unit: Some("seconds".into()),
-                metric_type: Some("counter".into()), // Not correct, just testing display.
+                metric_type: Some(OpenMetricType::Counter), // Not correct, just testing display.
             })],
         };
         let rendered = pools.to_string();

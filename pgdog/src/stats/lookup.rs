@@ -3,7 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::backend::databases::databases;
+use crate::{backend::databases::databases, stats::OpenMetricType};
 
 use super::{Measurement, Metric, OpenMetric};
 
@@ -14,13 +14,13 @@ pub struct LookupMetrics;
 struct Series {
     name: &'static str,
     help: &'static str,
-    metric_type: &'static str,
+    metric_type: OpenMetricType,
     measurements: Vec<Measurement>,
     global: u64,
 }
 
 impl Series {
-    fn new(name: &'static str, help: &'static str, metric_type: &'static str) -> Self {
+    fn new(name: &'static str, help: &'static str, metric_type: OpenMetricType) -> Self {
         Self {
             name,
             help,
@@ -47,7 +47,7 @@ impl Series {
             name: self.name.into(),
             measurements: self.measurements,
             help: self.help.into(),
-            metric_type: self.metric_type.into(),
+            metric_type: self.metric_type,
         })
     }
 }
@@ -57,13 +57,13 @@ impl Series {
 struct TimeSeries {
     name: &'static str,
     help: &'static str,
-    metric_type: &'static str,
+    metric_type: OpenMetricType,
     measurements: Vec<Measurement>,
     global: u64,
 }
 
 impl TimeSeries {
-    fn new(name: &'static str, help: &'static str, metric_type: &'static str) -> Self {
+    fn new(name: &'static str, help: &'static str, metric_type: OpenMetricType) -> Self {
         Self {
             name,
             help,
@@ -90,7 +90,7 @@ impl TimeSeries {
             name: self.name.into(),
             measurements: self.measurements,
             help: self.help.into(),
-            metric_type: self.metric_type.into(),
+            metric_type: self.metric_type,
         })
     }
 }
@@ -100,38 +100,38 @@ impl LookupMetrics {
         let mut hits = Series::new(
             "sharding_lookup_cache_hits",
             "Sharding key values translated from the lookup cache.",
-            "counter",
+            OpenMetricType::Counter,
         );
         let mut misses = Series::new(
             "sharding_lookup_cache_misses",
             "Sharding key values that missed the lookup cache.",
-            "counter",
+            OpenMetricType::Counter,
         );
         let mut evictions = Series::new(
             "sharding_lookup_cache_evictions",
             "Lookup cache entries evicted to stay within the memory bound.",
-            "counter",
+            OpenMetricType::Counter,
         );
         let mut queries = Series::new(
             "sharding_lookup_queries",
             "Lookup queries run to resolve cache misses.",
-            "counter",
+            OpenMetricType::Counter,
         );
         let mut query_time = TimeSeries::new(
             "sharding_lookup_query_time",
             "Total time spent running lookup queries, in milliseconds. \
              Divided by sharding_lookup_queries, the average lookup latency.",
-            "counter",
+            OpenMetricType::Counter,
         );
         let mut bytes = Series::new(
             "sharding_lookup_cache_bytes",
             "Approximate memory used by cached translations.",
-            "gauge",
+            OpenMetricType::Gauge,
         );
         let mut entries = Series::new(
             "sharding_lookup_cache_entries",
             "Number of cached translations.",
-            "gauge",
+            OpenMetricType::Gauge,
         );
 
         for (user, cluster) in databases().all() {
@@ -169,7 +169,7 @@ struct LookupMetric {
     name: String,
     measurements: Vec<Measurement>,
     help: String,
-    metric_type: String,
+    metric_type: OpenMetricType,
 }
 
 impl OpenMetric for LookupMetric {
@@ -185,8 +185,8 @@ impl OpenMetric for LookupMetric {
         Some(self.help.clone())
     }
 
-    fn metric_type(&self) -> String {
-        self.metric_type.clone()
+    fn metric_type(&self) -> OpenMetricType {
+        self.metric_type
     }
 }
 
