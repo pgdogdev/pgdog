@@ -122,10 +122,11 @@ impl LoadBalancer {
         let mut targets: Vec<_> = addrs
             .iter()
             .map(|config| {
-                Target::new(
-                    Pool::with_oid_mapping(config, Arc::clone(&oids)),
-                    config.address.configured_role,
-                )
+                let role = match config.address.configured_role {
+                    Role::Auto => Role::Replica,
+                    role => role,
+                };
+                Target::new(Pool::with_oid_mapping(config, Arc::clone(&oids)), role)
             })
             .collect();
 
@@ -168,7 +169,6 @@ impl LoadBalancer {
     /// return new primary (if any), and replicas.
     pub fn redetect_roles(&self) -> bool {
         let mut promoted = false;
-        let roles_detected_before = self.roles_detected();
 
         let mut targets = self
             .targets
@@ -213,7 +213,7 @@ impl LoadBalancer {
             });
         }
 
-        if promoted || (!roles_detected_before && self.roles_detected()) {
+        if promoted {
             self.role_detection.notify_one();
         }
 
@@ -285,14 +285,19 @@ impl LoadBalancer {
     }
 
     /// True if the LB has any target that can serve replica reads.
-    ///
-    /// An `Auto` target counts as a potential replica until role detection
-    /// converges, so callers may briefly route reads to a target that turns
-    /// out to be the primary.
     pub fn has_replicas(&self) -> bool {
         self.targets
             .iter()
-            .any(|target| matches!(target.role(), Role::Replica | Role::Auto))
+            .any(|target| target.role() == Role::Replica)
+    }
+
+    /// True if target roles are detected automatically.
+    pub fn role_detection_enabled(&self) -> bool {
+        !self.targets.is_empty()
+            && self
+                .targets
+                .iter()
+                .all(|target| target.pool.config().role_detection)
     }
 
     /// Cancel a query if one is running.
@@ -320,12 +325,12 @@ impl LoadBalancer {
         result
     }
 
-    /// Block until role detection has assigned every `Auto` target to
-    /// `Primary` or `Replica`. The wakeup is driven by `pick_primary`, so
-    /// if no primary is ever elected (e.g. LSN stats never populate),
-    /// callers will block until their `checkout_timeout` fires.
-    async fn wait_roles_detected(&self) -> Result<(), Error> {
-        if !self.roles_detected() {
+    /// Block until automatic role detection elects a primary.
+    ///
+    /// Static replica-only configurations return immediately. In automatic
+    /// mode, callers wait until a primary is elected or checkout times out.
+    async fn wait_primary(&self) -> Result<(), Error> {
+        if self.primary_target().is_none() && self.role_detection_enabled() {
             if safe_timeout(self.checkout_timeout, self.role_detection.notified())
                 .await
                 .is_err()
@@ -340,20 +345,12 @@ impl LoadBalancer {
         Ok(())
     }
 
-    /// True once no target is still in the `Auto` state.
-    pub fn roles_detected(&self) -> bool {
-        !self
-            .targets
-            .iter()
-            .any(|target| target.role() == Role::Auto)
-    }
-
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
         self.get_primary_internal(request).await
     }
 
     async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
-        self.wait_roles_detected().await?;
+        self.wait_primary().await?;
         self.primary_target()
             .ok_or(Error::NoPrimary)?
             .pool
@@ -380,17 +377,17 @@ impl LoadBalancer {
             // we read from the primary if we have no replicas
             ExcludePrimary => !candidates
                 .iter()
-                .any(|target| matches!(target.role(), Role::Replica | Role::Auto)),
+                .any(|target| target.role() == Role::Replica),
             // PreferPrimary makes all queries writes. If a query lands here,
             // it's because of pgdog.role=replica. Let it use the primary only if
             // no replicas are available.
-            PreferPrimary => !candidates.iter().any(|target| {
-                matches!(target.role(), Role::Replica | Role::Auto) && !target.ban.banned()
-            }),
+            PreferPrimary => !candidates
+                .iter()
+                .any(|target| target.role() == Role::Replica && !target.ban.banned()),
         };
 
         if !primary_reads {
-            candidates.retain(|target| matches!(target.role(), Role::Replica | Role::Auto));
+            candidates.retain(|target| target.role() == Role::Replica);
         }
 
         if candidates.is_empty() {
