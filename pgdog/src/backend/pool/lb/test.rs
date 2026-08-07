@@ -32,6 +32,13 @@ fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     }
 }
 
+fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
+    let mut config = create_test_pool_config(host, port);
+    config.address.configured_role = Role::Auto;
+    config.config.inner.role_detection = true;
+    config
+}
+
 fn setup_test_replicas() -> LoadBalancer {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
@@ -1260,11 +1267,8 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
 
 #[tokio::test]
 async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchanged() {
-    let mut primary_config = create_test_pool_config("127.0.0.1", 5432);
-    primary_config.address.configured_role = Role::Auto;
-
-    let mut existing_replica_config = create_test_pool_config("localhost", 5432);
-    existing_replica_config.address.configured_role = Role::Auto;
+    let primary_config = create_auto_test_pool_config("127.0.0.1", 5432);
+    let existing_replica_config = create_auto_test_pool_config("localhost", 5432);
 
     let old_primary = Pool::new(&primary_config);
     let lb_old = LoadBalancer::new(
@@ -1278,10 +1282,9 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
     set_lsn_stats(&lb_old.targets[0], true, 100);
     set_lsn_stats(&lb_old.targets[1], false, 200);
     assert!(!lb_old.redetect_roles());
-    assert!(lb_old.roles_detected());
+    assert!(lb_old.role_detection_enabled());
 
-    let mut added_replica_config = create_test_pool_config("localhost", 5433);
-    added_replica_config.address.configured_role = Role::Auto;
+    let added_replica_config = create_auto_test_pool_config("localhost", 5433);
 
     let new_primary = Pool::new(&primary_config);
     let lb_new = LoadBalancer::new(
@@ -1299,7 +1302,7 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
         .iter()
         .find(|target| target.pool.addr().port == 5433)
         .expect("newly added target should exist");
-    assert_eq!(added_target.role(), Role::Auto);
+    assert_eq!(added_target.role(), Role::Replica);
 
     set_lsn_stats(&lb_new.targets[0], true, 100);
     set_lsn_stats(&lb_new.targets[1], true, 90);
@@ -1310,16 +1313,13 @@ async fn test_redetect_roles_marks_added_auto_target_replica_when_primary_unchan
         "primary did not change, so role detector reports no promotion"
     );
     assert_eq!(added_target.role(), Role::Replica);
-    assert!(lb_new.roles_detected());
+    assert!(lb_new.role_detection_enabled());
 }
 
 #[tokio::test]
-async fn test_redetect_roles_leaves_auto_targets_pending_when_stats_are_invalid() {
-    let mut config1 = create_test_pool_config("127.0.0.1", 5432);
-    config1.address.configured_role = Role::Auto;
-
-    let mut config2 = create_test_pool_config("localhost", 5432);
-    config2.address.configured_role = Role::Auto;
+async fn test_auto_targets_remain_replicas_when_stats_are_invalid() {
+    let config1 = create_auto_test_pool_config("127.0.0.1", 5432);
+    let config2 = create_auto_test_pool_config("localhost", 5432);
 
     let lb = LoadBalancer::new(
         &None,
@@ -1329,26 +1329,30 @@ async fn test_redetect_roles_leaves_auto_targets_pending_when_stats_are_invalid(
         Default::default(),
     );
 
-    assert!(lb.targets.iter().all(|target| target.role() == Role::Auto));
-    assert!(!lb.roles_detected());
+    assert!(
+        lb.targets
+            .iter()
+            .all(|target| target.role() == Role::Replica)
+    );
+    assert!(lb.role_detection_enabled());
 
     assert!(
         !lb.redetect_roles(),
         "no valid primary was discovered, so no promotion is reported"
     );
 
-    assert!(lb.targets.iter().all(|target| target.role() == Role::Auto));
-    assert!(!lb.roles_detected());
+    assert!(
+        lb.targets
+            .iter()
+            .all(|target| target.role() == Role::Replica)
+    );
     assert!(lb.has_replicas());
 }
 
 #[tokio::test]
 async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_are_replicas() {
-    let mut config1 = create_test_pool_config("127.0.0.1", 5432);
-    config1.address.configured_role = Role::Auto;
-
-    let mut config2 = create_test_pool_config("localhost", 5432);
-    config2.address.configured_role = Role::Auto;
+    let config1 = create_auto_test_pool_config("127.0.0.1", 5432);
+    let config2 = create_auto_test_pool_config("localhost", 5432);
 
     let lb = LoadBalancer::new(
         &None,
@@ -1361,8 +1365,12 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
     set_lsn_stats(&lb.targets[0], true, 100);
     set_lsn_stats(&lb.targets[1], true, 90);
 
-    assert!(lb.targets.iter().all(|target| target.role() == Role::Auto));
-    assert!(!lb.roles_detected());
+    assert!(
+        lb.targets
+            .iter()
+            .all(|target| target.role() == Role::Replica)
+    );
+    assert!(lb.role_detection_enabled());
 
     assert!(
         !lb.redetect_roles(),
@@ -1374,8 +1382,63 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
             .iter()
             .all(|target| target.role() == Role::Replica)
     );
-    assert!(lb.roles_detected());
     assert!(lb.has_replicas());
+}
+
+#[tokio::test]
+async fn test_auto_mode_waits_for_primary_election() {
+    let mut config = create_auto_test_pool_config("127.0.0.1", 5432);
+    config.config.inner.checkout_timeout = Duration::from_millis(10);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+
+    assert_eq!(lb.wait_primary().await, Err(Error::CheckoutTimeout));
+}
+
+#[tokio::test]
+async fn test_auto_mode_primary_election_releases_writes() {
+    let config = create_auto_test_pool_config("127.0.0.1", 5432);
+    let lb = LoadBalancer::new(
+        &None,
+        &[config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    let election = lb.clone();
+
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(10)).await;
+        election.targets[0].set_role(Role::Primary);
+        election.role_detection.notify_one();
+    });
+
+    assert_eq!(lb.wait_primary().await, Ok(()));
+    assert!(lb.primary().is_some());
+}
+
+#[tokio::test]
+async fn test_static_replica_only_does_not_wait_for_primary() {
+    let config = create_test_pool_config("127.0.0.1", 5432);
+    let lb = LoadBalancer::new(
+        &None,
+        &[config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+
+    assert_eq!(lb.wait_primary().await, Ok(()));
+    assert!(matches!(
+        lb.get_primary(&Request::default()).await,
+        Err(Error::NoPrimary)
+    ));
 }
 
 #[tokio::test]

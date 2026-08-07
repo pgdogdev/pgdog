@@ -196,10 +196,7 @@ impl Shard {
 
     /// Returns true if the shard has a primary database.
     pub fn has_primary(&self) -> bool {
-        match self.lb.primary() {
-            Some(_) => true,
-            None => !self.lb.roles_detected(), // Assume there is a primary, until proven otherwise.
-        }
+        self.lb.primary().is_some() || self.lb.role_detection_enabled()
     }
 
     /// Returns true if the shard has any replica databases.
@@ -464,5 +461,34 @@ mod test {
         shard.shutdown();
 
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn test_auto_mode_is_read_ready_while_primary_election_is_pending() {
+        let replicas = &[PoolConfig {
+            address: Address {
+                configured_role: Role::Auto,
+                ..Address::new_test()
+            },
+            config: super::super::Config {
+                inner: pgdog_stats::Config {
+                    role_detection: true,
+                    ..Default::default()
+                },
+            },
+        }];
+
+        let shard = Shard::new(ShardConfig {
+            replicas,
+            identifier: Arc::new(User {
+                user: "pgdog".into(),
+                database: "pgdog".into(),
+            }),
+            ..Default::default()
+        });
+
+        assert!(shard.has_primary());
+        assert!(shard.has_replicas());
+        assert_eq!(shard.lb.targets[0].role(), Role::Replica);
     }
 }
