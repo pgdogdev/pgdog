@@ -110,7 +110,7 @@ impl Binding {
                             return Ok(message);
                         }
                         let mut read = false;
-                        for server in shards.iter_mut() {
+                        for (shard_position, server) in shards.iter_mut().enumerate() {
                             if !server.has_more_messages() {
                                 continue;
                             }
@@ -118,7 +118,7 @@ impl Binding {
                             let message = server.read().await?;
 
                             read = true;
-                            if let Some(message) = state.forward(message)? {
+                            if let Some(message) = state.forward_from(shard_position, message)? {
                                 return Ok(message);
                             }
                         }
@@ -151,11 +151,11 @@ impl Binding {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
 
-                for (position, server) in servers.iter_mut().enumerate() {
+                for (shard_position, server) in servers.iter_mut().enumerate() {
                     // Map positional index to actual shard number.
                     // When only a subset of shards is connected (Shard::Multi binding),
                     // positional indices don't match actual shard numbers.
-                    let shard = state.shard_index(position);
+                    let shard = state.shard_index(shard_position);
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
                             shards_sent = 1;
@@ -212,8 +212,8 @@ impl Binding {
             Binding::MultiShard(servers, state) => {
                 if !servers.is_empty() {
                     let mut futures = Vec::new();
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_index(position);
+                    for (shard_position, server) in servers.iter_mut().enumerate() {
+                        let shard = state.shard_index(shard_position);
                         let send = match route.shard() {
                             Shard::Direct(s) => *s == shard,
                             Shard::Multi(shards) => shards.contains(&shard),
@@ -242,8 +242,8 @@ impl Binding {
         match self {
             Binding::MultiShard(servers, state) => {
                 for row in rows {
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_index(position);
+                    for (shard_position, server) in servers.iter_mut().enumerate() {
+                        let shard = state.shard_index(shard_position);
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {
