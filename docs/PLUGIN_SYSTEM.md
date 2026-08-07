@@ -254,7 +254,6 @@ The following areas lack test coverage:
 
 #### Plugin Loading & Lifecycle
 - ❌ Rust compiler version mismatch scenarios
-- ❌ `pg_raw_parse` version verification (currently not implemented)
 - ❌ Plugin symbol resolution failures
 - ❌ Plugin with missing required functions
 - ❌ Plugin init/fini execution order
