@@ -87,6 +87,12 @@ impl Pools {
         let mut total_sv_xact_idle = vec![];
         let mut total_auth_attempts = vec![];
         let mut avg_auth_attempts = vec![];
+        let mut total_rows_inserted = vec![];
+        let mut avg_rows_inserted = vec![];
+        let mut total_rows_updated = vec![];
+        let mut avg_rows_updated = vec![];
+        let mut total_rows_deleted = vec![];
+        let mut avg_rows_deleted = vec![];
 
         let general = &crate::config::config().config.general;
 
@@ -320,6 +326,36 @@ impl Pools {
                     avg_auth_attempts.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.auth_attempts.into(),
+                    });
+
+                    total_rows_inserted.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rows_inserted.into(),
+                    });
+
+                    avg_rows_inserted.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rows_inserted.into(),
+                    });
+
+                    total_rows_updated.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rows_updated.into(),
+                    });
+
+                    avg_rows_updated.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rows_updated.into(),
+                    });
+
+                    total_rows_deleted.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rows_deleted.into(),
+                    });
+
+                    avg_rows_deleted.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rows_deleted.into(),
                     });
                 }
             }
@@ -696,6 +732,54 @@ impl Pools {
             name: "avg_auth_attempts".into(),
             measurements: avg_auth_attempts,
             help: "Average number of server authentication attempts per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rows_inserted".into(),
+            measurements: total_rows_inserted,
+            help: "Total rows reported affected by INSERT command tags.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rows_inserted".into(),
+            measurements: avg_rows_inserted,
+            help: "Average rows inserted per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rows_updated".into(),
+            measurements: total_rows_updated,
+            help: "Total rows reported affected by UPDATE command tags.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rows_updated".into(),
+            measurements: avg_rows_updated,
+            help: "Average rows updated per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rows_deleted".into(),
+            measurements: total_rows_deleted,
+            help: "Total rows reported affected by DELETE command tags.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rows_deleted".into(),
+            measurements: avg_rows_deleted,
+            help: "Average rows deleted per statistics period.".into(),
             unit: None,
             metric_type: None,
         }));

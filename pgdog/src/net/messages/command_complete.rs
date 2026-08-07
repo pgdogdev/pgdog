@@ -113,3 +113,34 @@ impl Protocol for CommandComplete {
         'C'
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn rows_and_tag_for_dml() {
+        let insert = CommandComplete::from_str("INSERT 0 5");
+        assert_eq!(insert.tag(), "INSERT");
+        assert_eq!(insert.rows().unwrap(), Some(5));
+
+        let update = CommandComplete::from_str("UPDATE 3");
+        assert_eq!(update.tag(), "UPDATE");
+        assert_eq!(update.rows().unwrap(), Some(3));
+
+        let delete = CommandComplete::from_str("DELETE 2");
+        assert_eq!(delete.tag(), "DELETE");
+        assert_eq!(delete.rows().unwrap(), Some(2));
+    }
+
+    #[test]
+    fn rows_none_for_non_dml() {
+        let begin = CommandComplete::from_str("BEGIN");
+        assert_eq!(begin.tag(), "BEGIN");
+        assert_eq!(begin.rows().unwrap(), None);
+
+        let select = CommandComplete::from_str("SELECT 10");
+        assert_eq!(select.tag(), "SELECT");
+        assert_eq!(select.rows().unwrap(), Some(10));
+    }
+}

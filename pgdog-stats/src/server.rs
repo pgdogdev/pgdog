@@ -27,6 +27,9 @@ pub struct Counts {
     pub close: usize,
     pub cleaned: usize,
     pub prepared_sync: usize,
+    pub rows_inserted: usize,
+    pub rows_updated: usize,
+    pub rows_deleted: usize,
 }
 
 impl Add<Counts> for PoolCounts {
@@ -58,6 +61,9 @@ impl Add<Counts> for PoolCounts {
             writes: self.writes,
             reads: self.reads,
             auth_attempts: self.auth_attempts,
+            rows_inserted: self.rows_inserted + rhs.rows_inserted,
+            rows_updated: self.rows_updated + rhs.rows_updated,
+            rows_deleted: self.rows_deleted + rhs.rows_deleted,
         }
     }
 }
@@ -86,6 +92,9 @@ impl Add for Counts {
             close: self.close.saturating_add(rhs.close),
             cleaned: self.cleaned.saturating_add(rhs.cleaned),
             prepared_sync: self.prepared_sync.saturating_add(rhs.prepared_sync),
+            rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
+            rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
+            rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
         }
     }
 }

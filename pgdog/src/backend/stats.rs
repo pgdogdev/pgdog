@@ -194,6 +194,25 @@ impl Stats {
         self.local.last_checkout.bind += 1;
     }
 
+    /// Record rows affected from a Postgres CommandComplete tag.
+    pub fn rows_affected(&mut self, tag: &str, rows: usize) {
+        match tag {
+            "INSERT" => {
+                self.local.total.rows_inserted += rows;
+                self.local.last_checkout.rows_inserted += rows;
+            }
+            "UPDATE" => {
+                self.local.total.rows_updated += rows;
+                self.local.last_checkout.rows_updated += rows;
+            }
+            "DELETE" => {
+                self.local.total.rows_deleted += rows;
+                self.local.last_checkout.rows_deleted += rows;
+            }
+            _ => {}
+        }
+    }
+
     /// A transaction has been completed.
     pub fn transaction(&mut self, now: Instant) {
         self.transaction_state(now, State::Idle);
