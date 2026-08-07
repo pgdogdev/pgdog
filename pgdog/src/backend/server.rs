@@ -657,6 +657,7 @@ impl Server {
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
+                self.stats.rows_affected(&cmd);
                 self.statement_executed = true;
             }
             's' => self.statement_executed = true,

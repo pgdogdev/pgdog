@@ -63,6 +63,12 @@ pub struct Counts {
     pub writes: usize,
     /// Password attempts.
     pub auth_attempts: usize,
+    /// Rows reported affected by INSERT command tags.
+    pub rows_inserted: usize,
+    /// Rows reported affected by UPDATE command tags.
+    pub rows_updated: usize,
+    /// Rows reported affected by DELETE command tags.
+    pub rows_deleted: usize,
 }
 
 impl Sub for Counts {
@@ -95,6 +101,9 @@ impl Sub for Counts {
             reads: self.reads.saturating_sub(rhs.reads),
             writes: self.writes.saturating_sub(rhs.writes),
             auth_attempts: self.auth_attempts.saturating_sub(rhs.auth_attempts),
+            rows_inserted: self.rows_inserted.saturating_sub(rhs.rows_inserted),
+            rows_updated: self.rows_updated.saturating_sub(rhs.rows_updated),
+            rows_deleted: self.rows_deleted.saturating_sub(rhs.rows_deleted),
         }
     }
 }
@@ -129,6 +138,9 @@ impl Add for Counts {
             reads: self.reads.saturating_add(rhs.reads),
             writes: self.writes.saturating_add(rhs.writes),
             auth_attempts: self.auth_attempts.saturating_add(rhs.auth_attempts),
+            rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
+            rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
+            rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
         }
     }
 }
@@ -167,6 +179,9 @@ impl Div<usize> for Counts {
             reads: self.reads.checked_div(rhs).unwrap_or(0),
             writes: self.writes.checked_div(rhs).unwrap_or(0),
             auth_attempts: self.auth_attempts.checked_div(rhs).unwrap_or(0),
+            rows_inserted: self.rows_inserted.checked_div(rhs).unwrap_or(0),
+            rows_updated: self.rows_updated.checked_div(rhs).unwrap_or(0),
+            rows_deleted: self.rows_deleted.checked_div(rhs).unwrap_or(0),
         }
     }
 }

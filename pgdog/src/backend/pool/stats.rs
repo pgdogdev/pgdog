@@ -180,6 +180,9 @@ mod tests {
             reads: 25,
             writes: 50,
             auth_attempts: 30,
+            rows_inserted: 40,
+            rows_updated: 15,
+            rows_deleted: 5,
         }
         .into();
 
@@ -207,6 +210,9 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 20,
+            rows_inserted: 10,
+            rows_updated: 5,
+            rows_deleted: 2,
         }
         .into();
 
@@ -235,6 +241,9 @@ mod tests {
         assert_eq!(result.reads, 35);
         assert_eq!(result.writes, 70);
         assert_eq!(result.auth_attempts, 50);
+        assert_eq!(result.rows_inserted, 50);
+        assert_eq!(result.rows_updated, 20);
+        assert_eq!(result.rows_deleted, 7);
     }
 
     #[test]
@@ -263,6 +272,9 @@ mod tests {
             reads: 25,
             writes: 50,
             auth_attempts: 50,
+            rows_inserted: 40,
+            rows_updated: 20,
+            rows_deleted: 10,
         }
         .into();
 
@@ -290,6 +302,9 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 30,
+            rows_inserted: 15,
+            rows_updated: 8,
+            rows_deleted: 4,
         }
         .into();
 
@@ -318,6 +333,9 @@ mod tests {
         assert_eq!(result.reads, 15);
         assert_eq!(result.writes, 30);
         assert_eq!(result.auth_attempts, 20);
+        assert_eq!(result.rows_inserted, 25);
+        assert_eq!(result.rows_updated, 12);
+        assert_eq!(result.rows_deleted, 6);
     }
 
     #[test]
@@ -368,6 +386,9 @@ mod tests {
             reads: 10,
             writes: 20,
             auth_attempts: 10,
+            rows_inserted: 20,
+            rows_updated: 8,
+            rows_deleted: 4,
         }
         .into();
 
@@ -396,6 +417,9 @@ mod tests {
         assert_eq!(result.reads, 5);
         assert_eq!(result.writes, 10);
         assert_eq!(result.auth_attempts, 5);
+        assert_eq!(result.rows_inserted, 10);
+        assert_eq!(result.rows_updated, 4);
+        assert_eq!(result.rows_deleted, 2);
     }
 
     #[test]
@@ -439,6 +463,9 @@ mod tests {
             reads: 10,
             writes: 25,
             auth_attempts: 100,
+            rows_inserted: 50,
+            rows_updated: 30,
+            rows_deleted: 10,
         }
         .into();
 
@@ -460,6 +487,9 @@ mod tests {
             close: 2,
             cleaned: 4,
             prepared_sync: 5,
+            rows_inserted: 7,
+            rows_updated: 3,
+            rows_deleted: 1,
         };
 
         let result = pool_counts.inner + backend_counts;
@@ -487,6 +517,9 @@ mod tests {
         assert_eq!(result.reads, 10);
         assert_eq!(result.writes, 25);
         assert_eq!(result.auth_attempts, 100);
+        assert_eq!(result.rows_inserted, 57);
+        assert_eq!(result.rows_updated, 33);
+        assert_eq!(result.rows_deleted, 11);
     }
 
     #[test]
