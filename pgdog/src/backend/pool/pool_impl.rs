@@ -221,7 +221,6 @@ impl Pool {
         if conn.liveness() != Liveness::Clean {
             conn.stats_mut().state(crate::state::State::ForceClose);
             conn.disconnect_reason(DisconnectReason::ServerClosed);
-            drop(conn);
             return Err(Error::ServerClosed);
         }
 
