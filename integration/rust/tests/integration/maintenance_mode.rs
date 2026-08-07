@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use crate::setup::{admin_sqlx, admin_tokio, connection_failover, connections_sqlx};
 use serial_test::serial;
-use sqlx::Executor;
+use sqlx::{Executor, Row};
 use tokio::time::sleep;
+use tokio_postgres::NoTls;
 
 #[tokio::test]
 #[serial]
@@ -48,6 +49,73 @@ async fn test_maintenance_mode_client_queries() {
     conn.execute("SELECT 3").await.unwrap();
 
     conn.close().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_maintenance_mode_drops_disconnected_client_query() {
+    // A client whose query is held by maintenance mode, then disconnects
+    // before it lifts, must not have that query executed once maintenance is
+    // turned off. We assert on a write's side effect: the row must never land.
+    let admin = admin_tokio().await;
+    let probe = connection_failover().await;
+
+    admin.simple_query("MAINTENANCE OFF").await.unwrap();
+
+    probe
+        .execute("CREATE TABLE IF NOT EXISTS maintenance_probe (id INT)")
+        .await
+        .unwrap();
+    probe.execute("TRUNCATE maintenance_probe").await.unwrap();
+
+    // Pause the database.
+    admin.simple_query("MAINTENANCE ON").await.unwrap();
+
+    // A raw connection we can kill mid-flight.
+    let (client, connection) = tokio_postgres::connect(
+        "host=127.0.0.1 user=pgdog dbname=failover password=pgdog port=6432",
+        NoTls,
+    )
+    .await
+    .unwrap();
+    let connection = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Fire the write. It blocks inside PgDog, parked on maintenance mode.
+    // Use simple_query so the INSERT travels as a single Query message and is
+    // buffered as one complete request. execute() would use the extended
+    // protocol and park on the statement-prepare round-trip instead, leaving
+    // no INSERT buffered to dispatch, so it can't tell the fix from the bug.
+    let query = tokio::spawn(async move {
+        let _ = client
+            .simple_query("INSERT INTO maintenance_probe VALUES (1)")
+            .await;
+        drop(client);
+    });
+
+    // Let PgDog buffer the query and park.
+    sleep(Duration::from_millis(100)).await;
+
+    // Disconnect abruptly while still paused: kill the driver and the query.
+    connection.abort();
+    query.abort();
+    sleep(Duration::from_millis(50)).await;
+
+    // Lift maintenance. The old code would now dispatch the buffered write.
+    admin.simple_query("MAINTENANCE OFF").await.unwrap();
+    sleep(Duration::from_millis(200)).await;
+
+    // The write from the gone client must not have run.
+    let count: i64 = probe
+        .fetch_one("SELECT count(*) FROM maintenance_probe")
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "query from a disconnected client was executed");
+
+    probe.execute("DROP TABLE maintenance_probe").await.unwrap();
+    probe.close().await;
 }
 
 #[tokio::test]
