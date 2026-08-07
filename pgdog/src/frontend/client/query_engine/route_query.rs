@@ -194,14 +194,9 @@ impl QueryEngine {
     // Make sure we don't send an omni write to a direct-to-shard route.
     // This will cause omni data inconsistency.
     fn is_omnishard_unsafe(backend: &Connection, command: &Command, cluster: &Cluster) -> bool {
-        command.route().is_omnisharded()
-            && command.route().is_write()
+        command.route().requires_full_shard_coverage()
             && backend.connected() // FIXME(lev): I wish there was a way to say >0 and <n in one shot.
             && backend.connected_servers() < cluster.shards().len()
-            // Schema-based sharding intentionally routes an omnisharded table to the
-            // single shard selected by search_path; only accidental partial routing is unsafe.
-            // FIXME(lev): Encode the required execution scope in Route instead of inferring it here.
-            && !command.route().is_search_path_driven()
     }
 
     // Caller switched shards mid-transaction and the transaction is pinned

@@ -427,11 +427,11 @@ fn test_comment_key_errors_on_omnisharded_write() {
     assert!(command.route().shard().is_direct());
 }
 
-/// A search_path route takes precedence over a comment key whose lookup
-/// missed the cache, so an omnisharded write remains pinned to the schema's
-/// shard instead of being rejected as a directive-driven write.
+/// A search_path route defers rejecting a comment key whose lookup missed the
+/// cache. The pending lookup is resolved before execution, and the second
+/// routing pass can then decide whether the comment overrides search_path.
 #[test]
-fn test_search_path_allows_omnisharded_write_with_pending_comment_key() {
+fn test_search_path_defers_omnisharded_write_with_pending_comment_key() {
     let tables = lookup_rule_tables();
     let mut test = QueryParserTest::new()
         .with_sharded_tables(tables)
@@ -446,11 +446,43 @@ fn test_search_path_allows_omnisharded_write_with_pending_comment_key() {
 
     assert!(command.route().is_omnisharded());
     assert!(command.route().is_search_path_driven());
+    assert_eq!(command.route().pending_lookups().len(), 1);
     assert_eq!(command.route().shard(), &Shard::Direct(0));
     assert_eq!(
         command.route().shard_with_priority().source(),
         &ShardSource::SearchPath("shard_0".into())
     );
+}
+
+/// Once the deferred comment lookup resolves, routing checks the omnisharded
+/// write again. The higher-priority comment now selects one shard, so the write
+/// must be rejected instead of partially updating the table.
+#[test]
+fn test_resolved_comment_key_errors_on_search_path_omnisharded_write() {
+    use crate::frontend::router::parser::Error;
+    use crate::frontend::router::sharding::{LookupTable, ResolvedLookups};
+
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    let mut resolved = ResolvedLookups::default();
+    resolved.insert(key, "org_child".into(), "org_root".into());
+
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(lookup_rule_tables())
+        .with_param("search_path", ParameterValue::String("shard_0".into()))
+        .with_resolved_lookups(resolved);
+
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
 }
 
 /// SET pgdog.sharding_key errors on omnisharded writes the same way.
