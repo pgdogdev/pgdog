@@ -130,5 +130,4 @@ impl QueryParser {
 
         Ok(value)
     }
-
 }
