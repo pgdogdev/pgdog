@@ -141,7 +141,14 @@ impl FromDataType for Interval {
                             _ => (),
                         }
                     } else {
-                        let mut value = value.split(":");
+                        // Postgres writes one sign for the whole time-of-day
+                        // group: "-01:02:03" is -(1h 2m 3s)
+                        // Parse the components as magnitudes and apply the sign
+                        // to all of them
+                        let negative = value.starts_with('-');
+                        let time = value.strip_prefix(['-', '+']).unwrap_or(value);
+
+                        let mut value = time.split(":");
                         let hours = value.next();
                         if let Some(hours) = hours {
                             result.hours = bigint(hours)?;
@@ -163,6 +170,13 @@ impl FromDataType for Interval {
                             if let Some(millis) = millis {
                                 result.micros = parse_fractional_micros(millis)?;
                             }
+                        }
+
+                        if negative {
+                            result.hours = -result.hours;
+                            result.minutes = -result.minutes;
+                            result.seconds = -result.seconds;
+                            result.micros = -result.micros;
                         }
                     }
                 }
@@ -267,6 +281,46 @@ mod test {
         assert_eq!(interval.minutes, 46);
         assert_eq!(interval.seconds, 12);
         assert_eq!(interval.years, 0);
+    }
+
+    #[test]
+    fn test_interval_decode_negative_text() {
+        // Sub-hour: the sign has no non-zero component to attach to, and
+        // "-00" parses to 0
+        let interval = Interval::decode(b"-00:45:00", Format::Text).unwrap();
+        assert_eq!(interval.hours, 0);
+        assert_eq!(interval.minutes, -45);
+        assert_eq!(interval.seconds, 0);
+
+        // With non-zero hours, the sign applies to every component, not just
+        // hours: this is -(1h 30m)
+        let interval = Interval::decode(b"-01:30:00", Format::Text).unwrap();
+        assert_eq!(interval.hours, -1);
+        assert_eq!(interval.minutes, -30);
+        assert_eq!(interval.seconds, 0);
+
+        // Fractional seconds are negated too
+        let interval = Interval::decode(b"-00:00:01.5", Format::Text).unwrap();
+        assert_eq!(interval.seconds, -1);
+        assert_eq!(interval.micros, -500_000);
+
+        // years/mons/days carry their own signs and are independent
+        let interval = Interval::decode(b"1 mon -3 days -04:05:06", Format::Text).unwrap();
+        assert_eq!(interval.months, 1);
+        assert_eq!(interval.days, -3);
+        assert_eq!(interval.hours, -4);
+        assert_eq!(interval.minutes, -5);
+        assert_eq!(interval.seconds, -6);
+
+        // Postgres marks a positive clock group explicitly when months or
+        // days are negative, since the sign is not inherited.
+        let interval = Interval::decode(b"-1 mons +02:00:00", Format::Text).unwrap();
+        assert_eq!(interval.months, -1);
+        assert_eq!(interval.hours, 2);
+
+        // Positive values are unchanged.
+        let interval = Interval::decode(b"00:45:00", Format::Text).unwrap();
+        assert_eq!(interval.minutes, 45);
     }
 
     #[test]
