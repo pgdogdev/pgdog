@@ -150,6 +150,7 @@ def test_tenant_guc_does_not_outlive_its_client(dbname, tenants):
         "SELECT pg_catalog.set_config('app.current_org_id', %s, false)", (TENANT_A,)
     )
     mine = first.execute(f"SELECT note FROM public.{tenants}").fetchall()
+    served_by = first.execute("SELECT pg_backend_pid()").fetchone()[0]
     first.close()
 
     assert mine == [("a",)], "the tenant that set the GUC sees its own row"
@@ -160,6 +161,11 @@ def test_tenant_guc_does_not_outlive_its_client(dbname, tenants):
     leaked = second.execute(
         "SELECT current_setting('app.current_org_id', true)"
     ).fetchone()[0]
+    same_server = second.execute("SELECT pg_backend_pid()").fetchone()[0]
     second.close()
 
-    assert theirs == [], f"next client read as tenant {leaked!r}"
+    # Without this the test passes whenever the pool happens to hand out a
+    # different connection, which proves nothing about what the first one left.
+    assert same_server == served_by, "clients did not share a server connection"
+    assert leaked in (None, ""), f"the tenant GUC outlived its client: {leaked!r}"
+    assert theirs == [], "next client read the previous tenant's rows"
