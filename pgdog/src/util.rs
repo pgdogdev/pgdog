@@ -146,8 +146,21 @@ pub fn instance_id() -> &'static str {
 /// <something we don't care about>-<number between 0 and 1023 inclusively>
 ///
 pub fn node_id() -> Result<u64, ParseIntError> {
-    // split always returns at least one element.
-    instance_id().split("-").last().unwrap().parse()
+    parse_node_id(instance_id())
+}
+
+/// Parse the numeric node id out of an instance id of the form
+/// `<something we don't care about>-<number>`. Kept separate from
+/// [`node_id`] so it can be tested with fixed inputs: `node_id` derives
+/// from the process-global `INSTANCE_ID`, whose random hex form parses as
+/// a valid number often enough to make direct tests flaky.
+fn parse_node_id(instance_id: &str) -> Result<u64, ParseIntError> {
+    // rsplit always yields at least one element, so next() is never None.
+    instance_id
+        .rsplit('-')
+        .next()
+        .unwrap_or(instance_id)
+        .parse()
 }
 
 static DEPLOYMENT_ID: Lazy<Option<String>> = Lazy::new(|| env::var("DEPLOYMENT_ID").ok());
@@ -528,8 +541,12 @@ mod test {
 
     #[test]
     fn test_node_id_error() {
-        let _guard = remove_env_var("NODE_ID");
-        assert!(node_id().is_err());
+        // Test the parser directly with a fixed non-numeric trailing
+        // segment. Going through node_id() would read the random global
+        // INSTANCE_ID, which parses as a valid number ~2% of the time
+        // (all-digit hex) and makes this assertion flaky.
+        assert!(parse_node_id("host-abc").is_err());
+        assert!(parse_node_id("abcdef12").is_err());
     }
 
     #[test]

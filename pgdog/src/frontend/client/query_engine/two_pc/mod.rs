@@ -46,11 +46,9 @@ impl Default for TwoPc {
 impl TwoPc {
     /// Get a unique name for the two-pc transaction.
     pub(super) fn transaction(&mut self) -> TwoPcTransaction {
-        if self.transaction.is_none() {
-            self.transaction = Some(TwoPcTransaction::new());
-        }
-
-        self.transaction.unwrap()
+        self.transaction
+            .get_or_insert_with(TwoPcTransaction::new)
+            .clone()
     }
 
     /// Start phase one of two-phase commit.

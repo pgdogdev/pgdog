@@ -308,16 +308,16 @@ impl CopySubscriber {
 
         async {
             let _guard_phase_1 = manager
-                .transaction_state(txn, &identifier, TwoPcPhase::Phase1)
+                .transaction_state(txn.clone(), &identifier, TwoPcPhase::Phase1)
                 .await?;
-            self.two_pc_on_shards(txn, TwoPcPhase::Phase1).await?;
+            self.two_pc_on_shards(&txn, TwoPcPhase::Phase1).await?;
 
             let _guard_phase_2 = manager
-                .transaction_state(txn, &identifier, TwoPcPhase::Phase2)
+                .transaction_state(txn.clone(), &identifier, TwoPcPhase::Phase2)
                 .await?;
-            self.two_pc_on_shards(txn, TwoPcPhase::Phase2).await?;
+            self.two_pc_on_shards(&txn, TwoPcPhase::Phase2).await?;
 
-            manager.done(txn).await?;
+            manager.done(txn.clone()).await?;
             Ok(())
         }
         .await
@@ -329,7 +329,7 @@ impl CopySubscriber {
 
     async fn two_pc_on_shards(
         &mut self,
-        txn: TwoPcTransaction,
+        txn: &TwoPcTransaction,
         phase: TwoPcPhase,
     ) -> Result<(), Error> {
         let mut futures = Vec::new();
