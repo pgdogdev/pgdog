@@ -109,14 +109,17 @@ impl QueryParser {
                     route.set_shard(context.shards_calculator.shard());
                 }
 
-                // A write that only touches omnisharded tables must reach
-                // every shard. A shard directive (a comment or SET) routing
-                // it to one shard would silently diverge the table, so it's
-                // an error. A pending lookup for a bare key means the same
-                // directive is present with a cold cache, so it errors
-                // without running the lookup.
-                if route.is_omnisharded()
-                    && route.is_write()
+                // Schema-based sharding.
+                let is_search_path = context.shards_calculator.is_search_path();
+                route.set_search_path_driven(is_search_path);
+
+                // A non-schema-routed write that only touches omnisharded tables
+                // must reach every shard. A shard directive (a comment or SET)
+                // routing it to one shard would silently diverge the table, so
+                // it's an error. A pending lookup for a bare key is deferred when
+                // search_path currently controls the route; after the lookup is
+                // resolved, the second routing pass performs this check again.
+                if route.requires_full_shard_coverage()
                     && (matches!(
                         route.shard_with_priority().source(),
                         ShardSource::Comment | ShardSource::Set
@@ -128,7 +131,6 @@ impl QueryParser {
                     .pending_lookups
                     .extend(std::mem::take(&mut context.bare_key_lookups));
 
-                route.set_search_path_driven(context.shards_calculator.is_search_path());
                 route.set_pending_lookups(std::mem::take(&mut context.pending_lookups));
 
                 if let Some(role) = context.router_context.sticky.role {

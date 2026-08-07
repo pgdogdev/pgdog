@@ -283,6 +283,14 @@ impl Route {
         self.search_path_driven
     }
 
+    /// Whether an omnisharded write must reach every shard to remain consistent.
+    ///
+    /// Schema-based sharding intentionally limits the write to the shard selected
+    /// by `search_path`; every other omnisharded write requires full coverage.
+    pub(crate) fn requires_full_shard_coverage(&self) -> bool {
+        self.is_omnisharded() && self.is_write() && !self.is_search_path_driven()
+    }
+
     /// Return true if this route requires result set manipulation to
     /// return correct results.
     ///
@@ -782,5 +790,15 @@ mod test {
 
         shards.push(ShardWithPriority::new_set(Shard::Direct(4)));
         assert_eq!(shards.shard().deref(), &Shard::Direct(3));
+    }
+
+    #[test]
+    fn test_omnisharded_write_coverage_exempts_search_path_routes() {
+        let mut route =
+            Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
+        assert!(route.requires_full_shard_coverage());
+
+        route.set_search_path_driven(true);
+        assert!(!route.requires_full_shard_coverage());
     }
 }
