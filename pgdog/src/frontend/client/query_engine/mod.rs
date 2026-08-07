@@ -106,6 +106,10 @@ impl QueryEngine {
         self.begin_stmt.is_none() && self.backend.done()
     }
 
+    pub fn record_client_idle_xact_timeout(&self) {
+        self.backend.record_client_idle_xact_timeout();
+    }
+
     /// Current state.
     pub fn client_state(&self) -> State {
         self.stats.state

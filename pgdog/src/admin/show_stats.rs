@@ -52,6 +52,7 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_reads", prefix)),
                         Field::numeric(&format!("{}_writes", prefix)),
                         Field::numeric(&format!("{}_auth_attempts", prefix)),
+                        Field::numeric(&format!("{}_client_idle_xact_timeouts", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -101,7 +102,8 @@ impl Command for ShowStats {
                             .add(stat.connect_count)
                             .add(stat.reads)
                             .add(stat.writes)
-                            .add(stat.auth_attempts);
+                            .add(stat.auth_attempts)
+                            .add(stat.client_idle_xact_timeouts);
                     }
 
                     messages.push(dr.message()?);

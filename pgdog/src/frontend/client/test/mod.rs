@@ -306,6 +306,45 @@ async fn test_client_idle_timeout() {
 }
 
 #[tokio::test]
+async fn test_client_idle_xact_timeout_stat() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let mut config = (*config()).clone();
+    config.config.general.client_idle_in_transaction_timeout = 100;
+    set(config).unwrap();
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    // Open a transaction and run a query so a server connection is checked out.
+    conn.write_all(&Query::new("BEGIN").to_bytes())
+        .await
+        .unwrap();
+    let _ = read!(conn, ['C', 'Z']);
+    conn.write_all(&Query::new("SELECT 1").to_bytes())
+        .await
+        .unwrap();
+    let _ = read!(conn, ['T', 'D', 'C', 'Z']);
+
+    // Go idle inside the transaction; the timeout disconnects us.
+    let start = Instant::now();
+    let err = read_one!(conn);
+    assert!(start.elapsed() >= Duration::from_millis(100));
+    let err = ErrorResponse::from_bytes(err.freeze()).unwrap();
+    assert_eq!(err.code, "57P05");
+    assert_eq!(err.message, "disconnecting idle in transaction client");
+
+    handle.await.unwrap();
+
+    // The pool recorded the event.
+    let dbs = databases();
+    let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
+    let state = cluster.shards()[0].pools()[0].state();
+    assert_eq!(state.stats.counts.client_idle_xact_timeouts, 1);
+}
+
+#[tokio::test]
 async fn test_parse_describe_flush_bind_execute_close_sync() {
     let (mut conn, mut client, _) = new_client!(false);
 
