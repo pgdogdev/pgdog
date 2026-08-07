@@ -58,9 +58,18 @@ read_only = true
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog_leak -------------------------------------------------
 # One server connection, never reaped: the next client has to get the same one.
+# Two copies of the same single-primary database, differing only in parser level,
+# so the leak tests cover both ways a statement reaches the parser.
 
 [[databases]]
 name = "pgdog_leak"
+host = "127.0.0.1"
+database_name = "pgdog"
+pool_size = 1
+min_pool_size = 1
+
+[[databases]]
+name = "pgdog_leak_auto"
 host = "127.0.0.1"
 database_name = "pgdog"
 pool_size = 1
@@ -517,4 +526,12 @@ engine = "pg_query_raw"
 [[query_parsers]]
 database = "pgdog_leak"
 level = "on"
+engine = "pg_query_raw"
+
+# The same tests at the default level. A single primary with no replicas is the
+# topology where "auto" doesn't force the parser on, so the statement has to get
+# past the regex gate on its own -- the path "on" skips.
+[[query_parsers]]
+database = "pgdog_leak_auto"
+level = "auto"
 engine = "pg_query_raw"
