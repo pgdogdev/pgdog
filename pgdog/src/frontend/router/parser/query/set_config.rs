@@ -23,7 +23,6 @@ impl QueryParser {
             )
         }
     }
-
 }
 
 /// Returns None if the arguments could not be parsed
@@ -32,18 +31,6 @@ fn parse_args(fcall: &nodes::FuncCall, bind: Option<&Bind>) -> Option<SetParam> 
     let value = parse_config_value(fcall.args().get(1)?, bind)?;
     let local = parse_is_local(fcall.args().get(2)?, bind)?;
     Some(SetParam { name, value, local })
-}
-
-cfg_select! {
-    not(feature = "new_parser") => {
-        fn parse_args(fcall: &FuncCall, bind: Option<&Bind>) -> Option<SetParam> {
-            let name = parse_config_name(fcall.args.first()?, bind)?;
-            let value = parse_config_value(fcall.args.get(1)?, bind)?;
-            let local = parse_is_local(fcall.args.get(2)?, bind)?;
-            Some(SetParam { name, value, local })
-        }
-    }
-    _ => {}
 }
 
 /// Value bound to `$number`; the inner Option is the SQL NULL.
@@ -89,8 +76,6 @@ fn parse_config_name(arg: Node<'_>, bind: Option<&Bind>) -> Option<String> {
     }
 }
 
-/// Returns None if the name could not be parsed
-
 /// Returns None if the value could not be parsed, Some(None) if the value
 /// is NULL, and Some if the value was successfully parsed
 fn parse_config_value(arg: Node<'_>, bind: Option<&Bind>) -> Option<Option<ParameterValue>> {
@@ -116,4 +101,3 @@ fn parse_is_local(arg: Node<'_>, bind: Option<&Bind>) -> Option<bool> {
         _ => None,
     }
 }
-
