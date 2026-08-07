@@ -68,6 +68,48 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
     pool
 }
 
+async fn terminate_backend(pid: i32) {
+    let mut killer = crate::backend::server::test::test_server().await;
+    killer
+        .execute(&format!("SELECT pg_terminate_backend({})", pid))
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(100)).await;
+}
+
+#[tokio::test]
+async fn test_checkout_replaces_connection_closed_by_server() {
+    crate::logger();
+
+    let pool = pool();
+    let conn = pool.get(&Request::default()).await.unwrap();
+    let killed = conn.id();
+    drop(conn);
+
+    terminate_backend(killed.pid()).await;
+
+    let conn = pool.get(&Request::default()).await.unwrap();
+
+    assert_ne!(conn.id(), killed);
+}
+
+#[tokio::test]
+async fn test_server_closed_does_not_mark_pool_unhealthy() {
+    crate::logger();
+
+    let pool = pool();
+    let conn = pool.get(&Request::default()).await.unwrap();
+    let killed = conn.id();
+    drop(conn);
+
+    terminate_backend(killed.pid()).await;
+
+    let conn = pool.get(&Request::default()).await.unwrap();
+    drop(conn);
+
+    assert!(pool.healthy());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn test_pool_checkout() {
     crate::logger();

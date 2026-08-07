@@ -22,7 +22,7 @@ use crate::{
     config::AuthType,
     frontend::ClientRequest,
     net::{
-        Close, MessageBuffer, Parameter, ProtocolMessage, Sync,
+        Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
             Authentication, BackendKeyData, BackendPid, Bind, ErrorResponse, Execute, Format,
             FromBytes, FrontendPid, Message, ParameterStatus, Password, Protocol, Query,
@@ -778,6 +778,13 @@ impl Server {
             .unwrap_or(false)
     }
 
+    pub fn liveness(&mut self) -> Liveness {
+        self.stream
+            .as_mut()
+            .map(|stream| stream.liveness())
+            .unwrap_or(Liveness::Closed)
+    }
+
     /// Server can execute a query.
     pub fn in_sync(&self) -> bool {
         matches!(
@@ -1418,6 +1425,48 @@ pub mod test {
         )
         .await
         .unwrap()
+    }
+
+    async fn server_with_peer() -> (Server, tokio::net::TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move { tokio::net::TcpStream::connect(addr).await.unwrap() });
+        let (ours, _) = listener.accept().await.unwrap();
+
+        let mut server = Server::default();
+        server.stream = Some(Stream::plain(ours, 4096));
+
+        (server, peer.await.unwrap())
+    }
+
+    #[test]
+    fn test_liveness_without_stream_is_closed() {
+        let mut server = Server::default();
+
+        assert_eq!(server.liveness(), Liveness::Closed);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_tracks_the_underlying_socket() {
+        let (mut server, peer) = server_with_peer().await;
+
+        assert_eq!(server.liveness(), Liveness::Clean);
+
+        drop(peer);
+        tokio::task::yield_now().await;
+
+        assert_eq!(server.liveness(), Liveness::Closed);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_reports_unsolicited_server_data() {
+        let (mut server, mut peer) = server_with_peer().await;
+
+        peer.write_all(b"E").await.unwrap();
+        peer.flush().await.unwrap();
+        tokio::task::yield_now().await;
+
+        assert_eq!(server.liveness(), Liveness::DataPending);
     }
 
     #[tokio::test]

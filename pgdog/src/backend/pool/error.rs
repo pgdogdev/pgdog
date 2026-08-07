@@ -35,6 +35,9 @@ pub enum Error {
     #[error("healthcheck error")]
     HealthcheckError,
 
+    #[error("server closed")]
+    ServerClosed,
+
     #[error("primary lsn query failed")]
     PrimaryLsnQueryFailed,
 
@@ -118,6 +121,7 @@ mod tests {
         assert!(Error::ServerError.is_retryable());
         assert!(Error::HealthcheckTimeout.is_retryable());
         assert!(Error::HealthcheckError.is_retryable());
+        assert!(Error::ServerClosed.is_retryable());
         assert!(Error::PrimaryLsnQueryFailed.is_retryable());
         assert!(Error::ReplicaLsnQueryFailed.is_retryable());
         assert!(Error::Offline.is_retryable());
