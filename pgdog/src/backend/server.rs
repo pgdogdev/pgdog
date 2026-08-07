@@ -657,9 +657,7 @@ impl Server {
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
-                if let Ok(Some(rows)) = cmd.rows() {
-                    self.stats.rows_affected(cmd.tag(), rows);
-                }
+                self.stats.rows_affected(&cmd);
                 self.statement_executed = true;
             }
             's' => self.statement_executed = true,

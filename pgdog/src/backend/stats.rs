@@ -14,7 +14,7 @@ use crate::{
     config::Memory,
     net::{
         Parameters,
-        messages::{BackendPid, FrontendPid},
+        messages::{BackendPid, CommandComplete, FrontendPid},
     },
     state::State,
 };
@@ -194,9 +194,12 @@ impl Stats {
         self.local.last_checkout.bind += 1;
     }
 
-    /// Record rows affected from a Postgres CommandComplete tag.
-    pub fn rows_affected(&mut self, tag: &str, rows: usize) {
-        match tag {
+    /// Record rows affected from a Postgres CommandComplete message.
+    pub fn rows_affected(&mut self, cmd: &CommandComplete) {
+        let Ok(Some(rows)) = cmd.rows() else {
+            return;
+        };
+        match cmd.tag() {
             "INSERT" => {
                 self.local.total.rows_inserted += rows;
                 self.local.last_checkout.rows_inserted += rows;
