@@ -19,7 +19,7 @@
 //!
 //! ## Dependencies
 //!
-//! PgDog is using [`pg_query`] to parse SQL. It produces an Abstract Syntax Tree (AST) which plugins can use to inspect queries
+//! PgDog is using [`pg_raw_parse`] to parse SQL. It produces an Abstract Syntax Tree (AST) which plugins can use to inspect queries
 //! and make statement routing decisions.
 //!
 //! The AST is computed by PgDog at runtime. It then passes it down to plugins, using a FFI interface. To make this safe, plugins must follow the
@@ -68,10 +68,7 @@
 //!
 //! ```no_run
 //! use pgdog_plugin::prelude::*;
-//! #[cfg(feature = "new_parser")]
 //! use pg_raw_parse::Node;
-//! #[cfg(not(feature = "new_parser"))]
-//! use pg_query::{protobuf::{Node, RawStmt}, NodeEnum};
 //!
 //! pgdog_plugin::plugin!(MyPlugin);
 //!
@@ -83,17 +80,7 @@
 //!     }
 //!
 //!     fn route(context: Context<'_>) -> Route {
-//!         #[cfg(feature = "new_parser")]
 //!         if let Some(Node::SelectStmt(_)) = context.query.stmts().next() {
-//!             return Route::new(Shard::Unknown, ReadWrite::Read);
-//!         }
-//!
-//!         #[cfg(not(feature = "new_parser"))]
-//!         if let Some(root) = context.query.stmts.first()
-//!             && let Some(ref stmt) = root.stmt
-//!             && let Some(ref node) = stmt.node
-//!             && let NodeEnum::SelectStmt(_) = node
-//!         {
 //!             return Route::new(Shard::Unknown, ReadWrite::Read);
 //!         }
 //!
@@ -188,13 +175,6 @@
 //! ```
 //!
 
-#[cfg(all(feature = "pg_query", feature = "pg_raw_parse"))]
-compile_error!("Cannot build with both the old and new parser");
-#[cfg(not(any(feature = "pg_query", feature = "pg_raw_parse")))]
-compile_error!(
-    r#"pg-plugin must be built with either default features, or features = "new_parser""#
-);
-
 mod config;
 pub mod context;
 pub mod logging;
@@ -212,9 +192,6 @@ pub use plugin::*;
 pub use string::PdStr;
 
 pub use libloading;
-
-#[cfg(feature = "pg_query")]
-pub use pg_query;
 
 pub const RUSTC_VERSION: &str = env!("RUSTC_VERSION");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

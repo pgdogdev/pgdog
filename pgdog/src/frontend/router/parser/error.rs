@@ -7,11 +7,6 @@ use crate::frontend::router::sharding;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
-    #[cfg(not(feature = "new_parser"))]
-    PgQuery(#[from] pg_query::Error),
-
-    #[cfg(feature = "new_parser")]
     #[error("Error parsing query: {0}")]
     Parse(#[from] pg_raw_parse::Error),
 

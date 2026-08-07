@@ -5,9 +5,6 @@ use crate::{
 };
 
 use super::prelude::*;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{NodeEnum, parse, protobuf::a_const};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::Node;
 use serde::de::DeserializeOwned;
 
@@ -22,7 +19,6 @@ impl Command for Set {
         "SET".into()
     }
 
-    #[cfg(feature = "new_parser")]
     fn parse(sql: &str) -> Result<Self, Error> {
         let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
         let root = stmt.stmts().next().ok_or(Error::Syntax)?;
@@ -43,44 +39,6 @@ impl Command for Set {
 
             _ => Err(Error::Syntax),
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn parse(sql: &str) -> Result<Self, Error> {
-                let stmt = parse(sql).map_err(|_| Error::Syntax)?;
-                let root = stmt.protobuf.stmts.first().cloned().ok_or(Error::Syntax)?;
-                let stmt = root.stmt.ok_or(Error::Syntax)?;
-                match stmt.node.ok_or(Error::Syntax)? {
-                    NodeEnum::VariableSetStmt(stmt) => {
-                        let name = stmt.name;
-
-                        let setting = stmt.args.first().ok_or(Error::Syntax)?;
-                        let node = setting.node.clone().ok_or(Error::Syntax)?;
-                        match node {
-                            NodeEnum::AConst(a_const) => match a_const.val {
-                                Some(a_const::Val::Ival(val)) => Ok(Self {
-                                    name,
-                                    value: val.ival.to_string(),
-                                }),
-
-                                Some(a_const::Val::Sval(sval)) => Ok(Self {
-                                    name,
-                                    value: sval.sval.to_string(),
-                                }),
-
-                                _ => Err(Error::Syntax),
-                            },
-
-                            _ => Err(Error::Syntax),
-                        }
-                    }
-
-                    _ => Err(Error::Syntax),
-                }
-            }
-        }
-        _ => {}
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {

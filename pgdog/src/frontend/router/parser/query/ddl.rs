@@ -4,8 +4,7 @@ impl QueryParser {
     /// Handle DDL, e.g. CREATE, DROP, ALTER, etc.
     pub(super) fn ddl(
         &mut self,
-        #[cfg(feature = "new_parser")] node: Node<'_>,
-        #[cfg(not(feature = "new_parser"))] node: &Option<NodeEnum>,
+        node: Node<'_>,
         context: &mut QueryParserContext<'_>,
     ) -> Result<Command, Error> {
         let command = Self::shard_ddl(
@@ -17,7 +16,6 @@ impl QueryParser {
         Ok(command)
     }
 
-    #[cfg(feature = "new_parser")]
     pub(super) fn shard_ddl(
         node: Node<'_>,
         schema: &ShardingSchema,
@@ -209,214 +207,6 @@ impl QueryParser {
         ))
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn shard_ddl(
-                node: &Option<NodeEnum>,
-                schema: &ShardingSchema,
-                calculator: &mut ShardsWithPriority,
-            ) -> Result<Command, Error> {
-                let mut shard = Shard::All;
-                let mut schema_changed = false;
-
-                match node {
-                    Some(NodeEnum::CreateStmt(stmt)) => {
-                        schema_changed = true;
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::CreateSeqStmt(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.sequence, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::DropStmt(stmt)) => match stmt.remove_type() {
-                        ObjectType::ObjectTable
-                        | ObjectType::ObjectIndex
-                        | ObjectType::ObjectView
-                        | ObjectType::ObjectSequence => {
-                            let table = Table::try_from(&stmt.objects).ok();
-                            if let Some(table) = table
-                                && let Some(schema) = schema.schemas.get(table.schema())
-                            {
-                                shard = schema.shard().into();
-                            }
-                            schema_changed = true;
-                        }
-
-                        ObjectType::ObjectSchema => {
-                            if let Some(PgNode {
-                                node: Some(NodeEnum::String(string)),
-                            }) = stmt.objects.first()
-                                && let Some(schema) = schema.schemas.get(Some(string.sval.as_str().into()))
-                            {
-                                shard = schema.shard().into();
-                            }
-                        }
-
-                        _ => (),
-                    },
-
-                    Some(NodeEnum::CreateSchemaStmt(stmt)) => {
-                        if let Some(schema) = schema.schemas.get(Some(stmt.schemaname.as_str().into())) {
-                            shard = schema.shard().into();
-                        }
-                    }
-
-                    Some(NodeEnum::IndexStmt(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::ViewStmt(stmt)) => {
-                        schema_changed = true;
-                        shard = Self::shard_ddl_table(&stmt.view, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::CreateTableAsStmt(stmt)) => {
-                        schema_changed = true;
-                        if let Some(into) = &stmt.into {
-                            shard = Self::shard_ddl_table(&into.rel, schema)?.unwrap_or(Shard::All);
-                        }
-                    }
-
-                    Some(NodeEnum::CreateFunctionStmt(stmt)) => {
-                        let table = Table::try_from(&stmt.funcname).ok();
-                        if let Some(table) = table {
-                            shard = schema
-                                .schemas
-                                .get(table.schema())
-                                .map(|schema| schema.shard().into())
-                                .unwrap_or(Shard::All);
-                        }
-                    }
-
-                    Some(NodeEnum::CreateEnumStmt(stmt)) => {
-                        let table = Table::try_from(&stmt.type_name).ok();
-                        if let Some(table) = table {
-                            shard = schema
-                                .schemas
-                                .get(table.schema())
-                                .map(|schema| schema.shard().into())
-                                .unwrap_or(Shard::All);
-                        }
-                    }
-
-                    Some(NodeEnum::AlterOwnerStmt(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::RenameStmt(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::AlterTableStmt(stmt)) => {
-                        schema_changed = true;
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::AlterSeqStmt(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.sequence, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    Some(NodeEnum::LockStmt(stmt)) => {
-                        if let Some(node) = stmt.relations.first()
-                            && let Some(NodeEnum::RangeVar(ref table)) = node.node
-                        {
-                            let table = Table::from(table);
-                            shard = schema
-                                .schemas
-                                .get(table.schema())
-                                .map(|schema| schema.shard().into())
-                                .unwrap_or(Shard::All);
-                        }
-                    }
-
-                    Some(NodeEnum::VacuumStmt(stmt)) => {
-                        for rel in &stmt.rels {
-                            if let Some(NodeEnum::VacuumRelation(ref stmt)) = rel.node {
-                                shard =
-                                    Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                            }
-                        }
-                    }
-
-                    Some(NodeEnum::VacuumRelation(stmt)) => {
-                        shard = Self::shard_ddl_table(&stmt.relation, schema)?.unwrap_or(Shard::All);
-                    }
-
-                    // DO $$ BEGIN ... END
-                    Some(NodeEnum::DoStmt(stmt)) => {
-                        if let Some(inner) = stmt.args.first()
-                            && let Some(NodeEnum::DefElem(ref elem)) = inner.node
-                            && let Some(ref arg) = elem.arg
-                            && let Some(NodeEnum::String(ref string)) = arg.node
-                        {
-                            // Parse each statement individually.
-                            // The first DDL statement to return a direct shard will be used.
-                            // TODO: handle non-DDL statements in here as well,
-                            // need a full recursive call back to QueryParser::query basically, but that requires a refactor.
-                            for stmt in string.sval.lines() {
-                                if let Ok(stmt) = pg_query::parse(stmt)
-                                    && let Some(node) = stmt
-                                        .protobuf
-                                        .stmts
-                                        .first()
-                                        .map(|stmt| &stmt.stmt)
-                                        .cloned()
-                                        .flatten()
-                                {
-                                    // Use a fresh calculator for each inner statement
-                                    // to avoid pollution from statements that don't match
-                                    // any DDL pattern (like BEGIN, END, etc.)
-                                    let mut inner_calculator = ShardsWithPriority::default();
-                                    let command =
-                                        Self::shard_ddl(&node.node, schema, &mut inner_calculator)?;
-                                    if let Command::Query(query) = command
-                                        && !query.is_cross_shard()
-                                    {
-                                        shard = query.shard().clone();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Some(NodeEnum::TruncateStmt(stmt)) => {
-                        let mut shards = HashSet::new();
-                        for relation in &stmt.relations {
-                            if let Some(NodeEnum::RangeVar(ref relation)) = relation.node {
-                                shards.insert(
-                                    Self::shard_ddl_table(&Some(relation.clone()), schema)?
-                                        .unwrap_or(Shard::All),
-                                );
-                            }
-                        }
-
-                        match shards.len() {
-                            0 => (),
-                            1 => {
-                                shard = shards.iter().next().unwrap().clone();
-                            }
-                            _ => return Err(Error::CrossShardTruncateSchemaSharding),
-                        }
-                    }
-
-                    // All others are not handled.
-                    // They are sent to all shards concurrently.
-                    _ => (),
-                };
-
-                calculator.push(ShardWithPriority::new_table(shard));
-
-                Ok(Command::Query(
-                    Route::write(calculator.shard()).with_schema_changed(schema_changed),
-                ))
-            }
-        }
-        _ => {}
-    }
-
-    #[cfg(feature = "new_parser")]
     pub(super) fn shard_ddl_table(
         range_var: Option<&nodes::RangeVar>,
         schema: &ShardingSchema,
@@ -429,25 +219,6 @@ impl QueryParser {
         }
 
         Ok(None)
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn shard_ddl_table(
-                range_var: &Option<RangeVar>,
-                schema: &ShardingSchema,
-            ) -> Result<Option<Shard>, Error> {
-                let table = range_var.as_ref().map(Table::from);
-                if let Some(table) = table
-                    && let Some(sharded_schema) = schema.schemas.get(table.schema())
-                {
-                    return Ok(Some(sharded_schema.shard().into()));
-                }
-
-                Ok(None)
-            }
-        }
-        _ => {}
     }
 }
 
@@ -476,32 +247,11 @@ mod test {
         }
     }
 
-    #[cfg(feature = "new_parser")]
     fn parse_stmt(query: &str) -> Command {
         let ast = pg_raw_parse::parse(query).unwrap();
         let root = ast.stmts().next().unwrap();
         let mut calculator = ShardsWithPriority::default();
         QueryParser::shard_ddl(root, &test_schema(), &mut calculator).unwrap()
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn parse_stmt(query: &str) -> Command {
-                let root = pg_query::parse(query)
-                    .unwrap()
-                    .protobuf
-                    .stmts
-                    .first()
-                    .unwrap()
-                    .clone()
-                    .stmt
-                    .unwrap()
-                    .node;
-                let mut calculator = ShardsWithPriority::default();
-                QueryParser::shard_ddl(&root, &test_schema(), &mut calculator).unwrap()
-            }
-        }
-        _ => {}
     }
 
     #[test]

@@ -458,13 +458,7 @@ impl Table {
 
         // Create new standalone connection for the copy.
         // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut copy_sub = CopySubscriber::new(
-            copy.statement(),
-            source_cluster,
-            dest,
-            #[cfg(not(feature = "new_parser"))]
-            self.query_parser_engine,
-        )?;
+        let mut copy_sub = CopySubscriber::new(copy.statement(), source_cluster, dest)?;
         copy_sub.connect().await?;
 
         // Create sync slot.
@@ -530,9 +524,6 @@ mod test {
         replication::logical::publisher::queries::{PublicationTableColumn, ReplicaIdentity},
         server::test::test_server,
     };
-    #[cfg(not(feature = "new_parser"))]
-    use pg_query::parse;
-    #[cfg(feature = "new_parser")]
     use pg_raw_parse::parse;
 
     use crate::config::config;

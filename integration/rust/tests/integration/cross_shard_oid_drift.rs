@@ -1,4 +1,3 @@
-#![cfg(feature = "new_parser")]
 use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::postgres::types::Oid;
 use sqlx::{Column, Executor, Row};

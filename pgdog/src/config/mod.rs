@@ -128,7 +128,6 @@ fn validate_lookup_queries(config: &ConfigAndUsers) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(feature = "new_parser")]
 fn validate_lookup_query(query: &str) -> Result<(), String> {
     use itertools::Itertools;
     use pg_raw_parse::{
@@ -156,38 +155,6 @@ fn validate_lookup_query(query: &str) -> Result<(), String> {
     .is_some();
 
     if other_param || !saw_param {
-        return Err("\"lookup_query\" must reference exactly one parameter, \"$1\"".into());
-    }
-
-    Ok(())
-}
-
-#[cfg(not(feature = "new_parser"))]
-fn validate_lookup_query(query: &str) -> Result<(), String> {
-    use std::collections::HashSet;
-
-    let ast =
-        pg_query::parse(query).map_err(|err| format!("\"lookup_query\" is invalid: {}", err))?;
-
-    if ast.protobuf.stmts.len() != 1 {
-        return Err("\"lookup_query\" must be a single statement".into());
-    }
-
-    // Best effort: `nodes()` covers the node types a lookup query
-    // realistically uses, but isn't guaranteed to visit every subtree.
-    // A parameter it misses fails loudly at runtime instead, when the
-    // lookup query runs with a single bound value.
-    let params = ast
-        .protobuf
-        .nodes()
-        .into_iter()
-        .filter_map(|(node, ..)| match node {
-            pg_query::NodeRef::ParamRef(param) => Some(param.number),
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
-
-    if params != HashSet::from([1]) {
         return Err("\"lookup_query\" must reference exactly one parameter, \"$1\"".into());
     }
 

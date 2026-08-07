@@ -1,8 +1,5 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::normalize;
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::normalize::normalize;
 use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
@@ -100,7 +97,7 @@ impl Cache {
     }
 
     /// Parse a statement by either getting it from cache
-    /// or using pg_query parser.
+    /// or parsing it.
     ///
     /// N.B. There is a race here that allows multiple threads to
     /// parse the same query. That's better imo than locking the data structure

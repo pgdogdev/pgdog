@@ -523,7 +523,6 @@ impl ShardWithPriority {
         }
     }
 
-    #[cfg(feature = "new_parser")]
     pub(crate) fn new_override_canonical_schema_info(shard: Shard) -> Self {
         Self {
             shard,

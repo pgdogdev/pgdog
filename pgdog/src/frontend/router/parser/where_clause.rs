@@ -1,11 +1,5 @@
 //! WHERE clause of a UPDATE/SELECT/DELETE query.
 
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{
-    NodeEnum,
-    protobuf::{a_const::Val, *},
-};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{ConstValue, Node, nodes};
 use std::string::String;
 
@@ -87,7 +81,6 @@ pub(crate) struct WhereClause<'a> {
 impl<'a> WhereClause<'a> {
     /// Parse the `WHERE` clause of a statement and extract
     /// all possible sharding keys.
-    #[cfg(feature = "new_parser")]
     pub(crate) fn new(source: &TablesSource<'a>, where_clause: Node<'a>) -> Option<Self> {
         if let Node::None = where_clause {
             return None;
@@ -96,24 +89,6 @@ impl<'a> WhereClause<'a> {
         let output = Self::parse(source, where_clause, false);
 
         Some(Self { output })
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(crate) fn new(
-                source: &TablesSource<'a>,
-                where_clause: &'a Option<Box<Node>>,
-            ) -> Option<WhereClause<'a>> {
-                let Some(where_clause) = where_clause else {
-                    return None;
-                };
-
-                let output = Self::parse(source, where_clause, false);
-
-                Some(Self { output })
-            }
-        }
-        _ => {}
     }
 
     pub(crate) fn keys(&self, table_name: Option<&str>, column_name: &str) -> Vec<Key> {
@@ -203,18 +178,6 @@ impl<'a> WhereClause<'a> {
         keys
     }
 
-    #[cfg(not(feature = "new_parser"))]
-    fn string(node: Option<&Node>) -> Option<&str> {
-        if let Some(node) = node
-            && let Some(NodeEnum::String(ref string)) = node.node
-        {
-            return Some(string.sval.as_str());
-        }
-
-        None
-    }
-
-    #[cfg(feature = "new_parser")]
     fn parse(source: &TablesSource<'a>, node: Node<'a>, array: bool) -> Vec<Output<'a>> {
         match node {
             // Only check for IS NULL, IS NOT NULL definitely doesn't help.
@@ -298,129 +261,10 @@ impl<'a> WhereClause<'a> {
             _ => Vec::new(),
         }
     }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn parse(source: &TablesSource<'a>, node: &'a Node, array: bool) -> Vec<Output<'a>> {
-                let mut keys = vec![];
-
-                match node.node {
-                    Some(NodeEnum::NullTest(ref null_test))
-                        // Only check for IS NULL, IS NOT NULL definitely doesn't help.
-                        if NullTestType::try_from(null_test.nulltesttype) == Ok(NullTestType::IsNull) => {
-                            let left = null_test
-                                .arg
-                                .as_ref()
-                                .and_then(|node| Self::parse(source, node, array).pop());
-
-                            if let Some(Output::Column(c)) = left {
-                                keys.push(Output::NullCheck(c));
-                            }
-                        }
-
-                    Some(NodeEnum::BoolExpr(ref expr)) => {
-                        // Only AND expressions can really be asserted.
-                        // OR needs both sides to be evaluated and either one
-                        // can direct to a shard. Most cases, this will end up on all shards.
-                        if expr.boolop() != BoolExprType::AndExpr {
-                            return keys;
-                        }
-
-                        for arg in &expr.args {
-                            keys.extend(Self::parse(source, arg, array));
-                        }
-                    }
-
-                    Some(NodeEnum::AExpr(ref expr)) => {
-                        let kind = expr.kind();
-                        if matches!(
-                            kind,
-                            AExprKind::AexprOp | AExprKind::AexprIn | AExprKind::AexprOpAny
-                        ) {
-                            let op = Self::string(expr.name.first());
-                            if let Some(op) = op
-                                && op != "=" {
-                                    return keys;
-                                }
-                        }
-                        let array = matches!(kind, AExprKind::AexprOpAny);
-                        if let Some(ref left) = expr.lexpr
-                            && let Some(ref right) = expr.rexpr {
-                                let left = Self::parse(source, left, array);
-                                let right = Self::parse(source, right, array);
-
-                                keys.push(Output::Filter(left, right));
-                            }
-                    }
-
-                    Some(NodeEnum::AConst(ref value)) => {
-                        if let Some(ref val) = value.val {
-                            match val {
-                                Val::Ival(int) => keys.push(Output::Int {
-                                    value: int.ival,
-                                    array,
-                                }),
-                                Val::Sval(sval) => keys.push(Output::Value {
-                                    value: sval.sval.clone(),
-                                    array,
-                                }),
-                                Val::Fval(fval) => keys.push(Output::Value {
-                                    value: fval.fval.clone(),
-                                    array,
-                                }),
-                                _ => (),
-                            }
-                        }
-                    }
-
-                    Some(NodeEnum::ColumnRef(ref column)) => {
-                        let name = Self::string(column.fields.last());
-                        let table = Self::string(column.fields.iter().rev().nth(1));
-                        let table = if let Some(table) = table {
-                            Some(source.resolve_alias(table))
-                        } else {
-                            source.table_name()
-                        };
-
-                        if let Some(name) = name {
-                            return vec![Output::Column(Column { name, table })];
-                        }
-                    }
-
-                    Some(NodeEnum::ParamRef(ref param)) => {
-                        keys.push(Output::Parameter {
-                            pos: param.number,
-                            array,
-                        });
-                    }
-
-                    Some(NodeEnum::List(ref list)) => {
-                        for node in &list.items {
-                            keys.extend(Self::parse(source, node, array));
-                        }
-                    }
-
-                    Some(NodeEnum::TypeCast(ref cast)) => {
-                        if let Some(ref arg) = cast.arg {
-                            keys.extend(Self::parse(source, arg, array));
-                        }
-                    }
-
-                    _ => (),
-                };
-
-                keys
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
 mod test {
-    #[cfg(not(feature = "new_parser"))]
-    use pg_query::{ParseResult, parse};
-    #[cfg(feature = "new_parser")]
     use pg_raw_parse::{ParseResult, parse};
 
     use super::*;
@@ -545,7 +389,6 @@ mod test {
         );
     }
 
-    #[cfg(feature = "new_parser")]
     fn where_clause(ast: &ParseResult) -> WhereClause<'_> {
         let Some(Node::SelectStmt(stmt)) = ast.stmts().next() else {
             panic!("Not a select");
@@ -553,20 +396,5 @@ mod test {
         let from_clause = FromClause::new(stmt.from_clause());
         let source = TablesSource::from(from_clause);
         WhereClause::new(&source, stmt.where_clause()).unwrap()
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn where_clause(ast: &ParseResult) -> WhereClause<'_> {
-                let stmt = ast.protobuf.stmts.first().as_ref().unwrap().stmt.as_ref().unwrap();
-                let Some(NodeEnum::SelectStmt(stmt)) = &stmt.node else {
-                    panic!("Not a select");
-                };
-                let from_clause = FromClause::new(&stmt.from_clause);
-                let source = TablesSource::from(from_clause);
-                WhereClause::new(&source, &stmt.where_clause).unwrap()
-            }
-        }
-        _ => {}
     }
 }

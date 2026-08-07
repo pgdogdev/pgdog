@@ -3,7 +3,6 @@
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
-#[cfg(feature = "new_parser")]
 use std::ops::ControlFlow;
 use std::panic::Location;
 use std::{env, future::Future, future::pending, num::ParseIntError, time::Duration};
@@ -376,12 +375,10 @@ impl SafeInterval {
     }
 }
 
-#[cfg(feature = "new_parser")]
 pub(crate) trait ResultControlFlowExt<T, E> {
     fn break_err<B>(self) -> ControlFlow<Result<B, E>, T>;
 }
 
-#[cfg(feature = "new_parser")]
 impl<T, E> ResultControlFlowExt<T, E> for Result<T, E> {
     fn break_err<B>(self) -> ControlFlow<Result<B, E>, T> {
         match self {

@@ -1,18 +1,10 @@
-#[cfg(feature = "new_parser")]
 use indexmap::IndexSet;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{Node, NodeEnum};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
-#[cfg(not(feature = "new_parser"))]
-use pgdog_config::QueryParserEngine;
 use pgdog_config::RewriteMode;
 
 use crate::frontend::router::Ast;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::{BufferedQuery, ClientRequest};
-#[cfg(any(test, not(feature = "new_parser")))]
-use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -22,10 +14,7 @@ pub struct InsertSplit {
     /// Parameter positions in the original Bind message
     /// that should be used to build the Bind message specific to this
     /// insert statement.
-    #[cfg(feature = "new_parser")]
     params: IndexSet<u16>,
-    #[cfg(not(feature = "new_parser"))]
-    params: Vec<u16>,
 
     /// The split up INSERT statement with parameters and/or values.
     stmt: String,
@@ -107,7 +96,6 @@ impl InsertSplit {
     }
 
     /// Extract specific parameters from a Bind message based on this split's param indices.
-    #[cfg(feature = "new_parser")]
     fn extract_bind_params(&self, bind: &Bind) -> Result<Bind, Error> {
         let mut new = Bind::new_statement(self.statement_name().unwrap_or_default());
         for param in &self.params {
@@ -118,42 +106,6 @@ impl InsertSplit {
         }
 
         Ok(new)
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn extract_bind_params(&self, bind: &Bind) -> Result<Bind, Error> {
-                let params: Vec<Parameter> = self
-                    .params
-                    .iter()
-                    .filter_map(|&idx| bind.params_raw().get(idx as usize).cloned())
-                    .collect();
-
-                let codes: Vec<Format> = if bind.format_codes_raw().len() == 1 {
-                    // Uniform format: keep it
-                    bind.format_codes_raw().clone()
-                } else if bind.format_codes_raw().len() == bind.params_raw().len() {
-                    // One-to-one mapping: extract corresponding codes
-                    self.params
-                        .iter()
-                        .filter_map(|&idx| bind.format_codes_raw().get(idx as usize).copied())
-                        .collect()
-                } else {
-                    // No codes (all text)
-                    Vec::new()
-                };
-
-                // Use the split's registered statement name if available,
-                // otherwise fall back to the original bind's statement name.
-                let statement_name = self
-                    .statement_name
-                    .as_deref()
-                    .unwrap_or_else(|| bind.statement());
-
-                Ok(Bind::new_params_codes(statement_name, &params, &codes))
-            }
-        }
-        _ => {}
     }
 }
 
@@ -185,7 +137,6 @@ impl StatementRewrite<'_> {
     /// INSERT INTO my_table (id, value) VALUES ($1, $2) -- These are copied from params $3 and $4
     /// ```
     ///
-    #[cfg(feature = "new_parser")]
     pub(super) fn split_insert(
         &mut self,
         insert: &nodes::InsertStmt,
@@ -255,84 +206,8 @@ impl StatementRewrite<'_> {
         Ok(())
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub(super) fn split_insert(&mut self, plan: &mut RewritePlan) -> Result<(), Error> {
-                // Don't rewrite INSERTs in unsharded databases.
-                if self.schema.shards == 1 || self.schema.rewrite.split_inserts != RewriteMode::Rewrite {
-                    return Ok(());
-                }
-
-                let splits: Vec<(Vec<u16>, String)> = {
-                    let values_lists = match self.get_insert_values_lists() {
-                        Some(lists) if lists.len() > 1 => lists,
-                        _ => return Ok(()),
-                    };
-
-                    values_lists
-                        .iter()
-                        .map(|values_list| self.build_single_tuple_insert(values_list))
-                        .collect::<Result<Vec<_>, _>>()?
-                };
-
-                // Now create Ast for each split (needs mutable borrow of prepared_statements)
-                let cache = Cache::get();
-                let ctx = self.ast_context();
-                for (params, stmt) in splits {
-                    let query = if self.extended {
-                        BufferedQuery::Prepared(Parse::named("", &stmt))
-                    } else {
-                        BufferedQuery::Query(Query::new(&stmt))
-                    };
-                    let ast = cache
-                        .query(&query, &ctx, self.prepared_statements)
-                        .map_err(|e| Error::Cache(e.to_string()))?;
-
-                    // If this is a named prepared statement, register the split in the global cache
-                    // and store the assigned name for use in Bind messages.
-                    let statement_name = if self.prepared {
-                        // Name will be assigned by `insert`.
-                        let mut parse = Parse::named("", &stmt);
-                        self.prepared_statements.insert(&mut parse);
-                        Some(parse.name().to_owned())
-                    } else {
-                        None
-                    };
-
-                    plan.insert_split.push(InsertSplit {
-                        params,
-                        stmt,
-                        ast,
-                        statement_name,
-                    });
-                }
-
-                Ok(())
-            }
-        }
-        _ => {}
-    }
-
-    /// Get the values_lists from an INSERT statement, if present.
-    #[cfg(not(feature = "new_parser"))]
-    fn get_insert_values_lists(&self) -> Option<&[Node]> {
-        let stmt = self.stmt.stmts.first()?;
-        let node = stmt.stmt.as_ref()?;
-
-        if let NodeEnum::InsertStmt(insert) = node.node.as_ref()? {
-            let select = insert.select_stmt.as_ref()?;
-            if let NodeEnum::SelectStmt(select_stmt) = select.node.as_ref()?
-                && !select_stmt.values_lists.is_empty()
-            {
-                return Some(&select_stmt.values_lists);
-            }
-        }
-        None
-    }
-
     /// Build a single-tuple INSERT from the original statement with just one values_list.
     /// Returns the parameter positions (0-indexed) and the SQL string.
-    #[cfg(feature = "new_parser")]
     fn build_single_tuple_select<'mem>(
         &self,
         mem: make::MemoryToken<'mem>,
@@ -352,89 +227,6 @@ impl StatementRewrite<'_> {
         select.as_mut().set_values_lists(mem.make_list(&[tuple]));
         (params, select)
     }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn build_single_tuple_insert(&self, values_list: &Node) -> Result<(Vec<u16>, String), Error> {
-                let mut ast = self.stmt.clone();
-                let mut params = Vec::new();
-
-                // Collect parameter references from this values_list
-                Self::collect_params(values_list, &mut params);
-
-                // Renumber parameters to start from $1
-                let mut new_values_list = values_list.clone();
-                Self::renumber_params(&mut new_values_list, &params);
-
-                // Replace the values_lists with just this one tuple
-                if let Some(stmt) = ast.stmts.first_mut()
-                    && let Some(node) = stmt.stmt.as_mut()
-                    && let Some(NodeEnum::InsertStmt(insert)) = node.node.as_mut()
-                    && let Some(select) = insert.select_stmt.as_mut()
-                    && let Some(NodeEnum::SelectStmt(select_stmt)) = select.node.as_mut()
-                {
-                    select_stmt.values_lists = vec![new_values_list];
-                }
-
-                let stmt = match self.schema.query_parser_engine {
-                    QueryParserEngine::PgQueryProtobuf => ast.deparse(),
-                    QueryParserEngine::PgQueryRaw => ast.deparse_raw(),
-                }?;
-
-                Ok((params, stmt))
-            }
-        }
-        _ => {}
-    }
-
-    /// Collect all parameter references from a node tree.
-    #[cfg(not(feature = "new_parser"))]
-    fn collect_params(node: &Node, params: &mut Vec<u16>) {
-        if let Some(node_enum) = &node.node {
-            match node_enum {
-                NodeEnum::ParamRef(param) if param.number > 0 => {
-                    params.push((param.number - 1) as u16);
-                }
-                NodeEnum::List(list) => {
-                    for item in &list.items {
-                        Self::collect_params(item, params);
-                    }
-                }
-                NodeEnum::TypeCast(cast) => {
-                    if let Some(arg) = &cast.arg {
-                        Self::collect_params(arg, params);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Renumber parameters in a node tree based on their position in the params list.
-    #[cfg(not(feature = "new_parser"))]
-    fn renumber_params(node: &mut Node, params: &[u16]) {
-        if let Some(node_enum) = &mut node.node {
-            match node_enum {
-                NodeEnum::ParamRef(param) if param.number > 0 => {
-                    let old_pos = (param.number - 1) as u16;
-                    if let Some(new_pos) = params.iter().position(|&p| p == old_pos) {
-                        param.number = (new_pos + 1) as i32;
-                    }
-                }
-                NodeEnum::List(list) => {
-                    for item in &mut list.items {
-                        Self::renumber_params(item, params);
-                    }
-                }
-                NodeEnum::TypeCast(cast) => {
-                    if let Some(arg) = &mut cast.arg {
-                        Self::renumber_params(arg, params);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -446,6 +238,7 @@ mod tests {
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::net::messages::bind::{Format, Parameter};
 
     fn default_db_schema() -> Schema {
         Schema::default()
@@ -464,11 +257,7 @@ mod tests {
     }
 
     fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
-        #[cfg(not(feature = "new_parser"))]
-        let mut ast = pg_query::parse(sql).unwrap().protobuf;
-        #[cfg(feature = "new_parser")]
         let root = pg_raw_parse::parse(sql).unwrap();
-        #[cfg(feature = "new_parser")]
         let insert = match root.stmts().next() {
             Some(Node::InsertStmt(insert)) => insert,
             _ => unreachable!(),
@@ -477,8 +266,6 @@ mod tests {
         let schema = default_schema();
         let db_schema = default_db_schema();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-            #[cfg(not(feature = "new_parser"))]
-            stmt: &mut ast,
             extended: false,
             prepared: false,
             prepared_statements: &mut prepared,
@@ -488,10 +275,7 @@ mod tests {
             search_path: None,
         });
         let mut plan = RewritePlan::default();
-        #[cfg(feature = "new_parser")]
         rewriter.split_insert(insert, &mut plan).unwrap();
-        #[cfg(not(feature = "new_parser"))]
-        rewriter.split_insert(&mut plan).unwrap();
         plan.insert_split
     }
 
@@ -502,20 +286,14 @@ mod tests {
         assert_eq!(splits.len(), 2);
 
         // First tuple uses params 0 and 1 (original $1, $2)
-        #[cfg(feature = "new_parser")]
         assert_eq!(splits[0].params.as_slice(), &[1, 2]);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(splits[0].params, &[0, 1]);
         assert_eq!(
             splits[0].stmt(),
             "INSERT INTO my_table (id, value) VALUES ($1, $2)"
         );
 
         // Second tuple uses params 2 and 3 (original $3, $4), renumbered to $1, $2
-        #[cfg(feature = "new_parser")]
         assert_eq!(splits[1].params.as_slice(), &[3, 4]);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(splits[1].params, &[2, 3]);
         assert_eq!(
             splits[1].stmt(),
             "INSERT INTO my_table (id, value) VALUES ($1, $2)"
@@ -557,19 +335,13 @@ mod tests {
 
         assert_eq!(splits.len(), 2);
 
-        #[cfg(feature = "new_parser")]
         assert_eq!(splits[0].params.as_slice(), &[1]);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(splits[0].params, &[0]);
         assert_eq!(
             splits[0].stmt(),
             "INSERT INTO my_table (id, value) VALUES ($1, 'a')"
         );
 
-        #[cfg(feature = "new_parser")]
         assert_eq!(splits[1].params.as_slice(), &[2]);
-        #[cfg(not(feature = "new_parser"))]
-        assert_eq!(splits[1].params, &[1]);
         assert_eq!(
             splits[1].stmt(),
             "INSERT INTO my_table (id, value) VALUES ($1, 'b')"
@@ -700,7 +472,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "new_parser")]
     fn test_extract_bind_params_incorrect_count() {
         let splits = parse_and_split("INSERT INTO t (a, b) VALUES ($1, $2), ($3, $4)");
         let bind = Bind::new_params(

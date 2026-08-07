@@ -304,7 +304,6 @@ fn test_select_for_update_in_cte() {
 }
 
 #[test]
-#[cfg_attr(not(feature = "new_parser"), should_panic)]
 fn test_select_for_update_in_subselect() {
     // FOR UPDATE buried inside a subselect should still route to the primary.
     let route =

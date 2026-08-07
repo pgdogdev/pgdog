@@ -1,8 +1,6 @@
 //! Route queries to correct shards.
 use std::{collections::HashSet, ops::Deref};
 
-#[cfg(not(feature = "new_parser"))]
-use crate::frontend::router::parser::util::{PgStr, pg_str};
 use crate::{
     backend::ShardingSchema,
     config::Role,
@@ -35,16 +33,9 @@ mod show;
 mod transaction;
 mod update;
 
-#[cfg(feature = "new_parser")]
 use itertools::*;
 use multi_tenant::MultiTenantCheck;
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::{Node, nodes};
-#[cfg(not(feature = "new_parser"))]
-use pgdog_plugin::pg_query::{
-    Node as PgNode, NodeEnum,
-    protobuf::{a_const::Val, *},
-};
 use plugins::PluginOutput;
 
 use tracing::{debug, trace};
@@ -75,7 +66,6 @@ impl QueryParser {
         self.explain_recorder.as_mut()
     }
 
-    #[cfg(feature = "new_parser")]
     fn ensure_explain_recorder(&mut self, node: Node<'_>, context: &QueryParserContext) {
         if self.explain_recorder.is_some() || !context.expanded_explain() {
             return;
@@ -84,28 +74,6 @@ impl QueryParser {
         if matches!(node, Node::ExplainStmt(_)) {
             self.explain_recorder = Some(ExplainRecorder::new());
         }
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn ensure_explain_recorder(
-                &mut self,
-                ast: &pg_query::ParseResult,
-                context: &QueryParserContext,
-            ) {
-                if self.explain_recorder.is_some() || !context.expanded_explain() {
-                    return;
-                }
-
-                if let Some(root) = ast.protobuf.stmts.first()
-                    && let Some(node) = root.stmt.as_ref().and_then(|stmt| stmt.node.as_ref())
-                    && matches!(node, NodeEnum::ExplainStmt(_))
-                {
-                    self.explain_recorder = Some(ExplainRecorder::new());
-                }
-            }
-        }
-        _ => {}
     }
 
     fn attach_explain(&mut self, command: &mut Command) {
@@ -235,7 +203,6 @@ impl QueryParser {
     ///
     /// Returns a `Command` if successful, error otherwise.
     ///
-    #[cfg(feature = "new_parser")]
     fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
         let parser_enabled = context.router_context.ast.is_some();
 
@@ -537,317 +504,7 @@ impl QueryParser {
         }
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn query(&mut self, context: &mut QueryParserContext) -> Result<Command, Error> {
-                let parser_enabled = context.router_context.ast.is_some();
-
-                debug!(
-                    "parser is {}",
-                    if parser_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                );
-
-                if !parser_enabled {
-                    // Try to figure out where we can send the query without
-                    // parsing SQL.
-                    if let Some(route) = Self::query_parser_bypass(context) {
-                        return Ok(Command::Query(route));
-                    } else {
-                        return Err(Error::QueryParserRequired);
-                    }
-                }
-
-                let statement = context
-                    .router_context
-                    .ast
-                    .clone()
-                    .ok_or(Error::EmptyQuery)?;
-
-                self.ensure_explain_recorder(statement.parse_result(), context);
-
-                // Parse hardcoded shard from a query comment.
-                if context.router_needed || context.dry_run {
-                    let mut comment_shard_set = false;
-                    match &statement.comment_shard {
-                        Some(ShardOrLookup::Shard(comment_shard)) => {
-                            context
-                                .shards_calculator
-                                .push(ShardWithPriority::new_comment(comment_shard.clone()));
-                            comment_shard_set = true;
-                        }
-                        // The sharding key in the comment missed the lookup
-                        // cache when the comment was parsed, which happens
-                        // before routing. Check again: on the second routing
-                        // pass the translation has been resolved. The pending
-                        // lookup is cloned only when it actually has to run.
-                        Some(ShardOrLookup::Lookup(pending)) => {
-                            match sharding::lookup::shard_for_pending(
-                                pending,
-                                &context.sharding_schema,
-                                &context.router_context.resolved_lookups,
-                            )? {
-                                Some(shard) => {
-                                    context
-                                        .shards_calculator
-                                        .push(ShardWithPriority::new_comment(shard));
-                                    comment_shard_set = true;
-                                }
-                                None => context.bare_key_lookups.push(pending.clone()),
-                            }
-                        }
-                        None => {}
-                    }
-
-                    let role_override = statement.comment_role;
-                    if let Some(role) = role_override {
-                        self.write_override = role == Role::Primary;
-                    }
-
-                    if comment_shard_set || role_override.is_some() {
-                        let shard = context.shards_calculator.shard();
-
-                        if let Some(recorder) = self.recorder_mut() {
-                            recorder.record_comment_override(shard.deref().clone(), role_override);
-                        }
-                    }
-                }
-
-                debug!("{}", context.query()?.query());
-                trace!("{:#?}", statement);
-
-                if let Some(multi_tenant) = context.multi_tenant() {
-                    debug!("running multi-tenant check");
-
-                    MultiTenantCheck::new(
-                        context.router_context.cluster.user(),
-                        multi_tenant,
-                        context.router_context.cluster.schema(),
-                        statement.parse_result(),
-                        context.router_context.parameter_hints.search_path,
-                    )
-                    .run()?;
-                }
-
-                let stmts = &statement.parse_result().protobuf.stmts;
-
-                // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-                if stmts.len() > 1
-                    && let Some(command) = self.try_multi_set(stmts, context)?
-                {
-                    return Ok(command);
-                }
-
-                //
-                // Get the root AST node.
-                //
-                // We don't expect clients to send multiple queries. If they do
-                // only the first one is used for routing.
-                //
-                let root = stmts.first();
-
-                let root = if let Some(root) = root {
-                    root.stmt.as_ref().ok_or(Error::EmptyQuery)?
-                } else {
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
-                            round_robin::next() % context.shards,
-                        )));
-                    // Send empty query to any shard.
-                    return Ok(Command::Query(Route::read(
-                        context.shards_calculator.shard(),
-                    )));
-                };
-
-                let mut command = match root.node {
-                    // SET statements -> return immediately.
-                    Some(NodeEnum::VariableSetStmt(ref stmt)) => {
-                        return self.set(stmt, context);
-                    }
-
-                    // SELECT set_config(...) -> treat as SET and return
-                    Some(NodeEnum::SelectStmt(ref stmt))
-                        if let Some(set_config) = extract_set_config(stmt) =>
-                    {
-                        return Ok(self.set_config(set_config, context));
-                    }
-
-                    // SHOW statements -> return immediately.
-                    Some(NodeEnum::VariableShowStmt(ref stmt)) => return self.show(stmt, context),
-                    // DEALLOCATE statements -> return immediately.
-                    Some(NodeEnum::DeallocateStmt(_)) => {
-                        return Ok(Command::Deallocate);
-                    }
-                    // SELECT statements.
-                    Some(NodeEnum::SelectStmt(ref stmt)) => self.select(
-                        &statement,
-                        stmt,
-                        context,
-                    ),
-                    // COPY statements.
-                    Some(NodeEnum::CopyStmt(ref stmt)) => Self::copy(stmt, context),
-                    // INSERT statements.
-                    Some(NodeEnum::InsertStmt(ref stmt)) => self.insert(
-                        stmt,
-                        context,
-                    ),
-                    // UPDATE statements.
-                    Some(NodeEnum::UpdateStmt(ref stmt)) => self.update(
-                        stmt,
-                        context,
-                    ),
-                    // DELETE statements.
-                    Some(NodeEnum::DeleteStmt(ref stmt)) => self.delete(
-                        stmt,
-                        context,
-                    ),
-                    // Transaction control statements,
-                    // e.g. BEGIN, COMMIT, etc.
-                    Some(NodeEnum::TransactionStmt(ref stmt)) => match self.transaction(stmt, context)? {
-                        Command::Query(query) => Ok(Command::Query(query)),
-                        command => return Ok(command),
-                    },
-
-                    // LISTEN <channel>;
-                    Some(NodeEnum::ListenStmt(ref stmt)) => {
-                        let shard = ContextBuilder::from_string(&stmt.conditionname)?
-                            .shards(context.shards)
-                            .build()?
-                            .apply()?;
-
-                        return Ok(Command::Listen {
-                            shard,
-                            channel: stmt.conditionname.clone(),
-                        });
-                    }
-
-                    Some(NodeEnum::NotifyStmt(ref stmt)) => {
-                        let shard = ContextBuilder::from_string(&stmt.conditionname)?
-                            .shards(context.shards)
-                            .build()?
-                            .apply()?;
-
-                        return Ok(Command::Notify {
-                            shard,
-                            channel: stmt.conditionname.clone(),
-                            payload: stmt.payload.clone(),
-                        });
-                    }
-
-                    Some(NodeEnum::UnlistenStmt(ref stmt)) => {
-                        return Ok(Command::Unlisten(stmt.conditionname.clone()));
-                    }
-
-                    Some(NodeEnum::ExplainStmt(ref stmt)) => self.explain(&statement, stmt, context),
-
-                    Some(NodeEnum::DiscardStmt { .. }) => {
-                        return Ok(Command::Discard {
-                            extended: !context.query()?.simple(),
-                        });
-                    }
-
-                    _ => self.ddl(&root.node, context),
-                }?;
-
-                // e.g. Parse, Describe, Flush-style flow.
-                if !context.router_context.executable
-                    && let Command::Query(ref query) = command
-                    && query.is_cross_shard()
-                    && statement.rewrite_plan.insert_split.is_empty()
-                {
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
-                            round_robin::next() % context.shards,
-                        )));
-
-                    // Since this query isn't executable and we decided
-                    // to route it to any shard, we can early return here.
-                    return Ok(Command::Query(
-                        query
-                            .clone()
-                            .with_shard(context.shards_calculator.shard().clone()),
-                    ));
-                }
-
-                // Run plugins, if any.
-                self.plugins(
-                    context,
-                    &statement,
-                    match &command {
-                        Command::Query(query) => query.is_read(),
-                        _ => false,
-                    },
-                )?;
-
-                // Set shard on route, if we're ready.
-                if let Command::Query(ref mut route) = command {
-                    let shard = context.shards_calculator.shard();
-                    if shard.is_direct() {
-                        route.set_shard(shard);
-                    }
-                }
-
-                // Set plugin-specified route, if available.
-                // Plugins override what we calculated above.
-                if let Command::Query(ref mut route) = command {
-                    if let Some(read) = self.plugin_output.read {
-                        route.set_read(read);
-                    }
-
-                    if let Some(ref shard) = self.plugin_output.shard {
-                        context
-                            .shards_calculator
-                            .push(ShardWithPriority::new_plugin(shard.clone()));
-                        route.set_shard(context.shards_calculator.shard());
-                    }
-                }
-
-                // If we only have one shard, set it.
-                //
-                // If the query parser couldn't figure it out,
-                // there is no point of doing a multi-shard query with only one shard
-                // in the set.
-                //
-                if context.shards == 1
-                    && !context.dry_run
-                    && let Command::Query(ref mut route) = command
-                {
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_override_only_one_shard(
-                            Shard::Direct(0),
-                        ));
-                    route.set_shard(context.shards_calculator.shard());
-                }
-
-                statement.update_stats(command.route());
-
-                if context.dry_run {
-                    // Record statement in cache with normalized parameters.
-                    if !statement.cached {
-                        let query = context.query()?.query();
-                        Cache::get().record_normalized(
-                            query,
-                            command.route(),
-                            context.sharding_schema.query_parser_engine,
-                        )?;
-                    }
-                    Ok(command.dry_run())
-                } else {
-                    Ok(command)
-                }
-            }
-        }
-        _ => {}
-    }
-
     /// Handle COPY command.
-    #[cfg(feature = "new_parser")]
     fn copy(stmt: &nodes::CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
         // Schema-based routing.
         //
@@ -892,66 +549,16 @@ impl QueryParser {
         }
     }
 
-    cfg_select! {
-        not(feature = "new_parser") => {
-            fn copy(stmt: &CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
-                // Schema-based routing.
-                //
-                // We do this here as well because COPY <table> TO STDOUT
-                // doesn't use the CopyParser (doesn't need to, normally),
-                // so we need to handle this case here.
-                //
-                // The CopyParser itself has handling for schema-based sharding,
-                // but that's only used for logical replication during the first
-                // phase of data-sync.
-                //
-                let table = stmt.relation.as_ref().map(Table::from);
-
-                if let Some(table) = table
-                    && let Some(schema) = context.sharding_schema.schemas.get(table.schema())
-                {
-                    let shard: Shard = schema.shard().into();
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_table(shard));
-                    if !stmt.is_from {
-                        return Ok(Command::Query(Route::read(
-                            context.shards_calculator.shard(),
-                        )));
-                    } else {
-                        return Ok(Command::Query(Route::write(
-                            context.shards_calculator.shard(),
-                        )));
-                    }
-                }
-
-                let parser = CopyParser::new(stmt, context.router_context.cluster)?;
-                if !stmt.is_from {
-                    context
-                        .shards_calculator
-                        .push(ShardWithPriority::new_table(Shard::All));
-                    Ok(Command::Query(Route::read(
-                        context.shards_calculator.shard(),
-                    )))
-                } else {
-                    Ok(Command::Copy(Box::new(parser)))
-                }
-            }
-        }
-        _ => {}
-    }
-
     /// Handle INSERT statement.
     ///
     /// # Arguments
     ///
-    /// * `stmt`: INSERT statement from pg_query.
+    /// * `stmt`: INSERT statement.
     /// * `context`: Query parser context.
     ///
     fn insert(
         &mut self,
-        #[cfg(not(feature = "new_parser"))] stmt: &InsertStmt,
-        #[cfg(feature = "new_parser")] stmt: pg_raw_parse::Node<'_>,
+        stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let schema_lookup = SchemaLookupContext {
@@ -959,10 +566,7 @@ impl QueryParser {
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
-        let mut parser = StatementParser::from_insert(
-            #[cfg(not(feature = "new_parser"))]
-            stmt,
-            #[cfg(feature = "new_parser")]
+        let mut parser = StatementParser::new(
             stmt,
             context.router_context.bind,
             &context.sharding_schema,
@@ -1008,7 +612,6 @@ impl QueryParser {
     }
 }
 
-#[cfg(feature = "new_parser")]
 fn extract_set_config(stmt: &nodes::SelectStmt) -> Option<&nodes::FuncCall> {
     static SET_CONFIG: &[&[&str]] = &[&["pg_catalog", "set_config"], &["set_config"]];
 
@@ -1031,35 +634,6 @@ fn extract_set_config(stmt: &nodes::SelectStmt) -> Option<&nodes::FuncCall> {
         })
 }
 
-cfg_select! {
-    not(feature = "new_parser") => {
-        fn extract_set_config(stmt: &SelectStmt) -> Option<&FuncCall> {
-            static SET_CONFIG: &[&[PgStr<'static>]] = &[
-                &[pg_str("pg_catalog"), pg_str("set_config")],
-                &[pg_str("set_config")],
-            ];
-            // FIXME(sage): Dear god we need some pattern macros for this
-            if let [
-                PgNode {
-                    node: Some(NodeEnum::ResTarget(r)),
-                },
-            ] = &*stmt.target_list
-                && let ResTarget { val: Some(n), .. } = &**r
-                && let PgNode {
-                    node: Some(NodeEnum::FuncCall(f)),
-                } = &**n
-                && SET_CONFIG.iter().any(|&n| n == f.funcname)
-            {
-                Some(f)
-            } else {
-                None
-            }
-        }
-    }
-    _ => {}
-}
-
-#[cfg(feature = "new_parser")]
 fn references_pg_type(stmt: &nodes::SelectStmt) -> bool {
     use pg_raw_parse::walk::{self, Recurse};
     use std::ops::ControlFlow;

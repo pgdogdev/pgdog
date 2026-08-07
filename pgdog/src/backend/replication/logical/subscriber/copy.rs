@@ -2,12 +2,7 @@
 //! between N shards.
 
 use futures::future::join_all;
-#[cfg(not(feature = "new_parser"))]
-use pg_query::{NodeEnum, parse_raw};
-#[cfg(feature = "new_parser")]
 use pg_raw_parse::Node;
-#[cfg(not(feature = "new_parser"))]
-use pgdog_config::QueryParserEngine;
 use tracing::debug;
 
 use crate::frontend::client::query_engine::TwoPcPhase;
@@ -15,7 +10,6 @@ use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
 };
 
-#[cfg(feature = "new_parser")]
 use crate::frontend::router::parser::Error as ParseError;
 use crate::{
     backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
@@ -51,7 +45,6 @@ impl CopySubscriber {
     /// 1. What kind of encoding we use.
     /// 2. Which column is used for sharding.
     ///
-    #[cfg(feature = "new_parser")]
     pub fn new(
         copy_stmt: &CopyStatement,
         source: &Cluster,
@@ -76,53 +69,6 @@ impl CopySubscriber {
             stmt: copy_stmt.clone(),
             bytes_sharded: 0,
         })
-    }
-
-    cfg_select! {
-        not(feature = "new_parser") => {
-            pub fn new(
-                copy_stmt: &CopyStatement,
-                source: &Cluster,
-                cluster: &Cluster,
-                query_parser_engine: QueryParserEngine,
-            ) -> Result<Self, Error> {
-                let stmt = match query_parser_engine {
-                    QueryParserEngine::PgQueryProtobuf => {
-                        pg_query::parse(copy_stmt.clone().copy_in().as_str())
-                    }
-                    QueryParserEngine::PgQueryRaw => parse_raw(copy_stmt.clone().copy_in().as_str()),
-                }?;
-                let stmt = stmt
-                    .protobuf
-                    .stmts
-                    .first()
-                    .ok_or(Error::MissingData)?
-                    .stmt
-                    .as_ref()
-                    .ok_or(Error::MissingData)?
-                    .node
-                    .as_ref()
-                    .ok_or(Error::MissingData)?;
-                let mut copy = if let NodeEnum::CopyStmt(stmt) = stmt {
-                    CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
-                } else {
-                    return Err(Error::MissingData);
-                };
-                // The destination's copy of the lookup table may still be
-                // syncing; the source has the complete mapping.
-                copy.set_lookup_cluster(source);
-
-                Ok(Self {
-                    copy,
-                    cluster: cluster.clone(),
-                    buffer: vec![],
-                    connections: vec![],
-                    stmt: copy_stmt.clone(),
-                    bytes_sharded: 0,
-                })
-            }
-        }
-        _ => {}
     }
 
     /// Connect to all shards. One connection per primary.
@@ -441,14 +387,7 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber = CopySubscriber::new(
-            &copy,
-            &cluster,
-            &cluster,
-            #[cfg(not(feature = "new_parser"))]
-            config().config.general.query_parser_engine,
-        )
-        .unwrap();
+        let mut subscriber = CopySubscriber::new(&copy, &cluster, &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::new().to_bytes());

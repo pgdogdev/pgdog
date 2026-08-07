@@ -37,7 +37,6 @@ pub struct PluginVtable {
     /// Configure plugin.
     config: extern "C-unwind" fn(Config<'_>) -> bool,
     /// Route query.
-    #[cfg(feature = "new_parser")]
     route: extern "C-unwind" fn(
         u64,
         bool,
@@ -45,16 +44,6 @@ pub struct PluginVtable {
         bool,
         bool,
         &pg_raw_parse::StmtList,
-        RawParameters<'_>,
-    ) -> Route,
-    #[cfg(not(feature = "new_parser"))]
-    route: extern "C-unwind" fn(
-        u64,
-        bool,
-        bool,
-        bool,
-        bool,
-        &pg_query::protobuf::ParseResult,
         RawParameters<'_>,
     ) -> Route,
     /// Logging initialization.
@@ -93,8 +82,7 @@ pub trait Plugin {
         has_primary: bool,
         in_transaction: bool,
         write_override: bool,
-        #[cfg(not(feature = "new_parser"))] query: &pg_query::protobuf::ParseResult,
-        #[cfg(feature = "new_parser")] query: &pg_raw_parse::StmtList,
+        query: &pg_raw_parse::StmtList,
         params: RawParameters<'_>,
     ) -> Route {
         let context = Context {
