@@ -15,11 +15,25 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         params: &[SetParam],
-        behave_like_select: bool,
+        is_select: bool,
     ) -> Result<(), Error> {
         // Make sure client isn't changing route mid-transaction.
         if self.route_change_check(context, params).await? {
             return Ok(());
+        }
+
+        // Take a server before touching the parameters: syncing a change the
+        // statement is about to make itself would send it twice.
+        if is_select && !self.backend.connected() {
+            let connected = if context.in_transaction() {
+                self.connect_transaction(context).await?
+            } else {
+                self.connect(context, None).await?
+            };
+
+            if !connected {
+                return Ok(());
+            }
         }
 
         let mut fake_command = "SET";
@@ -44,7 +58,11 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if context.in_transaction() {
+                    context.params.reset_transaction(&param.name);
+                } else {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -56,11 +74,12 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The server is ours, so its session changes with the client's:
+            // record it or we won't know what to undo for the next client.
+            self.backend.record_params(params, context.in_transaction());
             self.execute(context).await?;
         } else {
-            let values_to_return =
-                behave_like_select.then(|| params.iter().map(|p| p.value.as_ref()));
-            self.fake_command_response(context, fake_command, values_to_return)
+            self.fake_command_response(context, fake_command, None::<Option<_>>)
                 .await?;
         }
 
@@ -96,9 +115,14 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        context.params.reset_all();
+        if context.in_transaction() {
+            context.params.reset_all_transaction();
+        } else {
+            context.params.reset_all();
+        }
 
         if self.backend.connected() {
+            self.backend.record_reset_all(context.in_transaction());
             self.execute(context).await?;
         } else {
             self.fake_command_response(context, "RESET", None::<Option<_>>)
