@@ -29,15 +29,15 @@ fn test_mixed_set_passthrough_in_session_mode() {
 }
 
 #[test]
-fn test_mixed_set_rejected_in_transaction_mode() {
+fn test_mixed_set_routes_to_write_in_transaction_mode() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
     ]);
     assert!(
-        result.is_err(),
-        "expected error for mixed SET in transaction mode, got {result:#?}",
+        matches!(command, Command::Query(ref r) if r.is_write()),
+        "expected write Command::Query for mixed SET in transaction mode, got {command:#?}",
     );
 }
 
@@ -121,23 +121,26 @@ fn test_set_multi_statement_mixed_local() {
 }
 
 #[test]
-fn test_set_multi_statement_mixed_returns_error() {
+fn test_set_multi_statement_mixed_routes_to_write() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET statement_timeout TO 1; SELECT 1").into(),
     ]);
-    assert!(result.is_err());
+    assert!(
+        matches!(command, Command::Query(ref r) if r.is_write()),
+        "expected write Command::Query for mixed SET+SELECT, got {command:#?}",
+    );
 }
 
 #[test]
-fn test_multi_statement_no_set_falls_through() {
+fn test_multi_statement_no_set_routes_to_write() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![Query::new("SELECT 1; SELECT 2").into()]);
     assert!(
-        matches!(command, Command::Query(_)),
-        "multi-statement without SET should fall through, got {command:#?}",
+        matches!(command, Command::Query(ref r) if r.is_write()),
+        "multi-statement should route to write primary, got {command:#?}",
     );
 }
 

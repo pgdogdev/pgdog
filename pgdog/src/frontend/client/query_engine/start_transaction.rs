@@ -26,13 +26,15 @@ impl QueryEngine {
                 self.extended_transaction_reply(context, true, false)
                     .await?
             } else {
-                context
-                    .stream
-                    .send_many(&[
-                        CommandComplete::new_begin().message()?,
+                let suppress_rfq =
+                    context.simple_query_splice && context.requests_left > 0;
+                let mut msgs = vec![CommandComplete::new_begin().message()?];
+                if !suppress_rfq {
+                    msgs.push(
                         ReadyForQuery::in_transaction(context.in_transaction()).message()?,
-                    ])
-                    .await?
+                    );
+                }
+                context.stream.send_many(&msgs).await?
             };
 
             self.stats.sent(bytes_sent);

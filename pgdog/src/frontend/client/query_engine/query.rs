@@ -243,10 +243,16 @@ impl QueryEngine {
 
         trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
+        // For spliced simple queries the client sent one Q and expects one ReadyForQuery.
+        // Suppress intermediate ones; only the final statement's ReadyForQuery is forwarded.
+        let suppress_rfq = code == 'Z' && context.simple_query_splice && context.requests_left > 0;
+
+        if !suppress_rfq {
+            if flush {
+                context.stream.send_flush(&message).await?;
+            } else {
+                context.stream.send(&message).await?;
+            }
         }
 
         if code == 'Z' {

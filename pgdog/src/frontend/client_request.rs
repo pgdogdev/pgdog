@@ -7,6 +7,9 @@ use std::ops::{Deref, DerefMut};
 use lazy_static::lazy_static;
 use regex::Regex;
 
+#[cfg(feature = "new_parser")]
+use pg_raw_parse;
+
 use crate::{
     frontend::router::Ast,
     net::{
@@ -15,10 +18,37 @@ use crate::{
     },
     stats::memory::MemoryUsage,
 };
+#[cfg(feature = "new_parser")]
+use crate::net::messages::Query;
 
 use super::{PreparedStatements, router::Route};
 
 pub use super::BufferedQuery;
+
+/// Split a multi-statement simple query string into individual statement slices.
+/// Returns an empty vec if parsing fails or the query contains only one statement.
+#[cfg(feature = "new_parser")]
+fn split_statements(query: &str) -> Vec<&str> {
+    let Ok(parsed) = pg_raw_parse::parse(query) else {
+        return vec![];
+    };
+    let stmts = parsed.into_inner();
+    if stmts.len() <= 1 {
+        return vec![];
+    }
+    stmts
+        .iter()
+        .filter_map(|stmt| {
+            let loc = stmt.stmt_location as usize;
+            let end = if stmt.stmt_len == 0 {
+                query.len()
+            } else {
+                loc + stmt.stmt_len as usize
+            };
+            query.get(loc..end).map(str::trim).filter(|s| !s.is_empty())
+        })
+        .collect()
+}
 
 /// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
@@ -369,6 +399,33 @@ impl ClientRequest {
 
         Ok(requests)
     }
+
+    /// Split a multi-statement simple Query into individual single-statement requests.
+    ///
+    /// Analogous to `spliced()` for extended protocol. Returns empty vec when
+    /// the request is not a simple Query, contains only one statement, or parsing fails.
+    /// In all those cases the caller falls through to the normal query engine path.
+    #[cfg(feature = "new_parser")]
+    pub fn spliced_simple(&self) -> Vec<Self> {
+        let Some(ProtocolMessage::Query(q)) = self.messages.iter().find(|m| m.code() == 'Q')
+        else {
+            return vec![];
+        };
+        split_statements(q.query())
+            .into_iter()
+            .map(|text| Self {
+                messages: vec![ProtocolMessage::Query(Query::new(text))],
+                route: None,
+                ast: None,
+                last_parse: None,
+            })
+            .collect()
+    }
+
+    #[cfg(not(feature = "new_parser"))]
+    pub fn spliced_simple(&self) -> Vec<Self> {
+        vec![]
+    }
 }
 
 impl From<ClientRequest> for Vec<ProtocolMessage> {
@@ -407,6 +464,76 @@ mod test {
     use crate::net::{Describe, Execute, Parse, Query, Sync};
 
     use super::*;
+
+    #[cfg(not(feature = "new_parser"))]
+    #[test]
+    fn test_spliced_simple_returns_empty_without_new_parser() {
+        let req = ClientRequest::from(vec![Query::new("SELECT 1; SELECT 2").into()]);
+        assert!(req.spliced_simple().is_empty());
+    }
+
+    #[cfg(feature = "new_parser")]
+    #[test]
+    fn test_spliced_simple_two_selects() {
+        let req = ClientRequest::from(vec![Query::new("SELECT 1; SELECT 2").into()]);
+        let split = req.spliced_simple();
+        assert_eq!(split.len(), 2, "expected 2 split requests");
+        let texts: Vec<&str> = split
+            .iter()
+            .map(|r| match r.messages.first().unwrap() {
+                ProtocolMessage::Query(q) => q.query(),
+                _ => panic!("expected Query"),
+            })
+            .collect();
+        assert!(texts[0].contains("SELECT 1"), "first: {}", texts[0]);
+        assert!(texts[1].contains("SELECT 2"), "second: {}", texts[1]);
+    }
+
+    #[cfg(feature = "new_parser")]
+    #[test]
+    fn test_spliced_simple_single_statement_no_split() {
+        let req = ClientRequest::from(vec![Query::new("SELECT 1").into()]);
+        assert!(req.spliced_simple().is_empty());
+    }
+
+    #[cfg(feature = "new_parser")]
+    #[test]
+    fn test_spliced_simple_non_query_no_split() {
+        let req = ClientRequest::from(vec![
+            Parse::named("s", "SELECT $1").into(),
+            Bind::new_statement("s").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(req.spliced_simple().is_empty());
+    }
+
+    #[cfg(feature = "new_parser")]
+    #[test]
+    fn test_spliced_simple_transaction_batch() {
+        let req = ClientRequest::from(vec![
+            Query::new(
+                "BEGIN;\
+                 DELETE FROM locks WHERE ttl < CURRENT_TIMESTAMP AT TIME ZONE 'UTC';\
+                 INSERT INTO locks (key, owner, ttl) VALUES ('k', 'o', NOW() + INTERVAL '1 min') ON CONFLICT DO NOTHING;\
+                 COMMIT;"
+            ).into(),
+        ]);
+        let split = req.spliced_simple();
+        assert_eq!(
+            split.len(),
+            4,
+            "expected BEGIN/DELETE/INSERT/COMMIT as 4 requests"
+        );
+        let codes: Vec<char> = split
+            .iter()
+            .map(|r| r.messages.first().unwrap().code())
+            .collect();
+        assert!(
+            codes.iter().all(|&c| c == 'Q'),
+            "all should be simple Query messages"
+        );
+    }
 
     #[test]
     fn test_request_splice() {

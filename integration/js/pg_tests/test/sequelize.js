@@ -200,20 +200,11 @@ describe("Sequelize multi-statement SET", function () {
     await seq.close();
   });
 
-  it("mixed SET and non-SET returns error", async function () {
+  it("mixed SET and non-SET succeeds and applies SET", async function () {
     const seq = createSequelize();
 
-    try {
-      await seq.query("SET statement_timeout TO '10s'; SELECT 1");
-      assert.fail("expected error for mixed SET + SELECT");
-    } catch (err) {
-      assert.ok(
-        err.message.includes(
-          "multi-statement queries cannot mix SET with other commands",
-        ),
-        `unexpected error: ${err.message}`,
-      );
-    }
+    // Should succeed: PgDog intercepts the SET and forwards SELECT to the backend.
+    await seq.query("SET statement_timeout TO '10s'; SELECT 1");
 
     const [rows] = await seq.query("SELECT 1 AS val");
     assert.strictEqual(rows[0].val, 1);

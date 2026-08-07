@@ -43,6 +43,9 @@ pub struct QueryEngineContext<'a> {
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
+    /// Spliced simple query: suppress intermediate ReadyForQuery messages so the
+    /// client (which sent one Q) sees exactly one ReadyForQuery at the end.
+    pub(super) simple_query_splice: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -66,12 +69,24 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: client.query_log_stdout,
             query_size_limit: client.query_size_limit,
+            simple_query_splice: false,
         }
     }
 
     pub fn spliced(mut self, req: &'a mut ClientRequest, request_left: usize) -> Self {
         self.client_request = req;
         self.requests_left = request_left;
+        self
+    }
+
+    pub fn spliced_simple_query(
+        mut self,
+        req: &'a mut ClientRequest,
+        requests_left: usize,
+    ) -> Self {
+        self.client_request = req;
+        self.requests_left = requests_left;
+        self.simple_query_splice = true;
         self
     }
 
@@ -94,6 +109,7 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: false,
             query_size_limit: None,
+            simple_query_splice: false,
         }
     }
 

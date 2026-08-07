@@ -24,7 +24,10 @@ impl QueryEngine {
                 vec![]
             };
             messages.push(cmd.message()?);
-            messages.push(ReadyForQuery::idle().message()?);
+            let suppress_rfq = context.simple_query_splice && context.requests_left > 0;
+            if !suppress_rfq {
+                messages.push(ReadyForQuery::idle().message()?);
+            }
 
             context.stream.send_many(&messages).await?
         };
@@ -159,5 +162,23 @@ mod tests {
             "Transaction state should be None, but is {:?}",
             context.transaction
         );
+    }
+
+    #[tokio::test]
+    async fn test_end_not_connected_suppress_rfq() {
+        load_test();
+
+        let mut client =
+            crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
+        client.transaction = Some(TransactionType::ReadWrite);
+
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        context.simple_query_splice = true;
+        context.requests_left = 1;
+
+        let result = engine.end_not_connected(&mut context, false, false).await;
+        assert!(result.is_ok());
+        assert_eq!(context.transaction, None);
     }
 }
