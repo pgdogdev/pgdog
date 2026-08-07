@@ -2,6 +2,7 @@ GEM
   remote: https://rubygems.org/
   specs:
     diff-lcs (1.6.1)
+    erb (6.0.7)
     pg (1.5.9)
     rspec (3.13.0)
       rspec-core (~> 3.13.0)
@@ -22,6 +23,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  erb
   pg
   rspec (~> 3.4)
 

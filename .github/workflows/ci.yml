@@ -97,6 +97,9 @@ jobs:
       # All suites run against the llvm-cov instrumented debug binary so we
       # get line coverage from integration tests, not just unit tests.
       PGDOG_BIN: ${{ github.workspace }}/target/llvm-cov-target/debug/pgdog
+      # Run only the plugin suite under gdb so crashes include a full backtrace
+      # in integration/log.txt, which stop_pgdog prints on job teardown.
+      PGDOG_GDB: ${{ matrix.name == 'plugins' && '1' || '0' }}
       # NB: cargo llvm-cov report only globs profraw files at the top of
       # target/llvm-cov-target, so LLVM_PROFILE_FILE must point there.
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/${{ matrix.name }}-%p-%m.profraw

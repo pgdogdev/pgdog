@@ -21,12 +21,12 @@ use moka::sync::Cache;
 use tracing::warn;
 
 use crate::backend::{Cluster, ShardingSchema};
-use crate::frontend::router::parser::Shard;
-use crate::frontend::router::sharding::{ContextBuilder, ShardedTable};
 use crate::net::bind::Parameter;
 use crate::net::messages::ErrorResponse;
 use crate::util::safe_timeout;
 use pgdog_config::LookupResult;
+
+use super::{ContextBuilder, Shard, ShardedTable};
 
 /// How much memory the cache is allowed to use, approximately,
 /// unless configured with `sharding_lookup_cache_size`.
@@ -255,7 +255,7 @@ pub(crate) fn shard_for_bare_key(
                         schema.shards,
                     )?));
                 }
-                let ctx = ContextBuilder::infer_from_from_and_config(translated.as_ref(), schema)?
+                let ctx = ContextBuilder::infer_from_value_and_config(translated.as_ref(), schema)?
                     .shards(schema.shards)
                     .build()?;
                 return Ok(ShardOrLookup::Shard(ctx.apply()?));
@@ -270,7 +270,7 @@ pub(crate) fn shard_for_bare_key(
         }
     }
 
-    let ctx = ContextBuilder::infer_from_from_and_config(value, schema)?
+    let ctx = ContextBuilder::infer_from_value_and_config(value, schema)?
         .shards(schema.shards)
         .build()?;
     Ok(ShardOrLookup::Shard(ctx.apply()?))
@@ -307,7 +307,7 @@ pub(crate) fn shard_for_pending(
             if result == LookupResult::Shard {
                 return Ok(Some(parse_shard_index(translated.as_ref(), schema.shards)?));
             }
-            let ctx = ContextBuilder::infer_from_from_and_config(translated.as_ref(), schema)?
+            let ctx = ContextBuilder::infer_from_value_and_config(translated.as_ref(), schema)?
                 .shards(schema.shards)
                 .build()?;
             Ok(Some(ctx.apply()?))

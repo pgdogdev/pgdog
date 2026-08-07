@@ -3,6 +3,6 @@
 #[cfg(feature = "pg_query")]
 pub use crate::pg_query;
 pub use crate::{
-    Context, ParameterFormat, PdStr, Plugin, ReadWrite, Route, Shard,
+    Context, ParameterFormat, PdStr, Plugin, ReadWrite, Route, Shard, ShardingKeys, Value,
     parameters::{Parameter, ParameterValue, Parameters},
 };

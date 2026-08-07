@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
@@ -3483,6 +3483,7 @@ dependencies = [
  "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

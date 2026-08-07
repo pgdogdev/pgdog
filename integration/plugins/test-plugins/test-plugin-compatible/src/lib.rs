@@ -2,7 +2,7 @@
 //! The plugin uses the same version of pgdog-plugin as PgDog and the same rustc version,
 //! so it should be loaded and executed.
 
-use pgdog_plugin::{plugin, Context, PdStr, Plugin, Route};
+use pgdog_plugin::{plugin, Context, PdStr, Plugin, ReadWrite, Route};
 use std::sync::OnceLock;
 
 plugin!(TestPlugin);
@@ -43,6 +43,8 @@ impl Plugin for TestPlugin {
             std::fs::write(&file_path, "route method was called").unwrap();
         });
 
-        Route::unknown()
+        // Allocate a sharding key in the plugin. PgDog takes ownership of the
+        // returned route and deallocates this string with it.
+        Route::with_sharding_keys(vec!["plugin-owned-key".into()], ReadWrite::Unknown)
     }
 }

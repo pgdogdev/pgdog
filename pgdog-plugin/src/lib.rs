@@ -35,7 +35,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! pgdog-plugin = "0.2.0"
+//! pgdog-plugin = "0.6.0"
 //! ```
 //!
 //! # Required methods
@@ -100,6 +100,15 @@
 //!         Route::new(Shard::Unknown, ReadWrite::Write)
 //!     }
 //! }
+//! ```
+//!
+//! A plugin can also extract typed sharding keys and let PgDog calculate the
+//! destination shards:
+//!
+//! ```
+//! # use pgdog_plugin::prelude::*;
+//! let keys = vec![Value::Integer(42), Value::from("tenant-a")];
+//! let route = Route::with_sharding_keys(keys, ReadWrite::Read);
 //! ```
 //!
 //! ### Parsing parameters
@@ -203,6 +212,7 @@ pub mod parameters;
 pub mod plugin;
 pub mod prelude;
 pub mod string;
+pub mod value;
 
 pub use config::Config;
 pub use context::*;
@@ -210,6 +220,7 @@ pub use parameters::*;
 pub use pgdog_postgres_types::Format as ParameterFormat;
 pub use plugin::*;
 pub use string::PdStr;
+pub use value::{ShardingKeys, Value};
 
 pub use libloading;
 

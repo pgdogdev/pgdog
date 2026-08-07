@@ -76,6 +76,9 @@ jobs:
     env:
       PGDOG_BIN: ${{ github.workspace }}/target/debug/pgdog
       PGDOG_PLUGIN_FEATURES: new_parser
+      # Run only the plugin suite under gdb so crashes include a full backtrace
+      # in integration/log.txt, which stop_pgdog prints on job teardown.
+      PGDOG_GDB: ${{ matrix.name == 'plugins' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
