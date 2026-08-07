@@ -3,7 +3,8 @@ use std::ops::Deref;
 
 use crate::config::config;
 use crate::frontend::Command;
-use crate::frontend::router::parser::{Cache, Shard};
+use crate::frontend::router::parser::{Cache, Shard, route::ShardSource};
+use crate::net::parameter::ParameterValue;
 
 use super::setup::{QueryParserTest, *};
 
@@ -424,6 +425,32 @@ fn test_comment_key_errors_on_omnisharded_write() {
     ]);
     assert!(command.route().is_omnisharded());
     assert!(command.route().shard().is_direct());
+}
+
+/// A search_path route takes precedence over a comment key whose lookup
+/// missed the cache, so an omnisharded write remains pinned to the schema's
+/// shard instead of being rejected as a directive-driven write.
+#[test]
+fn test_search_path_allows_omnisharded_write_with_pending_comment_key() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .with_param("search_path", ParameterValue::String("shard_0".into()));
+
+    let command = test.execute(vec![
+        Query::new(
+            "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+
+    assert!(command.route().is_omnisharded());
+    assert!(command.route().is_search_path_driven());
+    assert_eq!(command.route().shard(), &Shard::Direct(0));
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::SearchPath("shard_0".into())
+    );
 }
 
 /// SET pgdog.sharding_key errors on omnisharded writes the same way.
