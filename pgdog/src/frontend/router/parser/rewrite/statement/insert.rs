@@ -341,12 +341,11 @@ impl StatementRewrite<'_> {
         let mut tuple = mem.make_unique(values_list);
 
         let mut params = IndexSet::new();
-        walk::walk_mut(tuple.as_mut(), |node| match node {
-            NodeMut::ParamRef(param) => {
+        walk::walk_mut(tuple.as_mut(), |node| {
+            if let NodeMut::ParamRef(param) = node {
                 params.insert(param.number as _);
                 param.set_number(params.get_index_of(&(param.number as u16)).unwrap() as i32 + 1)
             }
-            _ => (),
         });
 
         let mut select = mem.make_node::<nodes::SelectStmt>();
@@ -490,7 +489,7 @@ mod tests {
         });
         let mut plan = RewritePlan::default();
         #[cfg(feature = "new_parser")]
-        rewriter.split_insert(&insert, &mut plan).unwrap();
+        rewriter.split_insert(insert, &mut plan).unwrap();
         #[cfg(not(feature = "new_parser"))]
         rewriter.split_insert(&mut plan).unwrap();
         plan.insert_split

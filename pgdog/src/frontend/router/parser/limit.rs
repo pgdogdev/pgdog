@@ -33,12 +33,10 @@ impl<'a> LimitClause<'a> {
 
     #[cfg(feature = "new_parser")]
     pub(crate) fn limit_offset(&self) -> Result<Limit, Error> {
-        let mut limit = Limit::default();
-
-        limit.limit = self.decode(self.stmt.limit_count())?;
-        limit.offset = self.decode(self.stmt.limit_offset())?;
-
-        Ok(limit)
+        Ok(Limit {
+            limit: self.decode(self.stmt.limit_count())?,
+            offset: self.decode(self.stmt.limit_offset())?,
+        })
     }
 
     #[cfg(not(feature = "new_parser"))]

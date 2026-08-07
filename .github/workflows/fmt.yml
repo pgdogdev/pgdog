@@ -17,3 +17,5 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (new parser)
+        run: cargo clippy --all-targets --no-default-features --features new_parser -- -D warnings

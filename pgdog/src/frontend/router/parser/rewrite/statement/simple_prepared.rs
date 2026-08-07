@@ -116,7 +116,7 @@ fn rewrite_single_prepared<'a>(
             let query = pg_raw_parse::deparse(stmt.query())?;
 
             let mut parse = Parse::named(
-                &stmt.name().expect("PREPARE always has a name"),
+                stmt.name().expect("PREPARE always has a name"),
                 query.as_str(),
             );
             prepared_statements.insert_anyway(&mut parse);

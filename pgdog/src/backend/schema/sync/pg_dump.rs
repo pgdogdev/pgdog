@@ -114,7 +114,7 @@ fn should_convert_to_bigint<'a>(
 
     // Parent has bigint, check if child has integer type
     let Some(type_name) = col_type_name
-        .and_then(|n| n.names().iter().last())
+        .and_then(|n| n.names().iter().next_back())
         .and_then(|s| s.sval())
     else {
         return false;
@@ -850,7 +850,7 @@ impl PgDumpOutput {
                 if columns_to_convert.contains(&col) {
                     result.insert((table, col_def.colname().unwrap_or_default()), "int8");
                 } else if let Some(type_name) = col_def.type_name()
-                    && let Some(last_name) = type_name.names().iter().last()
+                    && let Some(last_name) = type_name.names().iter().next_back()
                 {
                     // Store original type for non-converted columns
                     let type_str = match last_name.sval() {
@@ -951,7 +951,7 @@ impl PgDumpOutput {
                 };
 
                 if let Some(type_name) = col_def.type_name()
-                    && let Some(last_name) = type_name.names().iter().last()
+                    && let Some(last_name) = type_name.names().iter().next_back()
                 {
                     result.insert(
                         ColumnTypeKey {
