@@ -105,24 +105,6 @@ impl ConfigAndUsers {
             warn!("admin password has been randomly generated");
         }
 
-        match (
-            &mut config.otel.temporality_preference,
-            &config.otel.datadog_api_key,
-        ) {
-            // Here if temporality_preference isn't present, we set it based on
-            // if datadog is present
-            (default_cumulative_temporality @ None, None) => {
-                *default_cumulative_temporality = Some(OtelTemporalityPreference::Cumulative)
-            }
-            // datadog is present so we set it to delta
-            (delta_temporality_because_of_datadog @ None, Some(_datadog_api)) => {
-                *delta_temporality_because_of_datadog = Some(OtelTemporalityPreference::Delta)
-            }
-            (Some(_), _) => {
-                // We don't have to set temporality
-            }
-        }
-
         let config_and_users = ConfigAndUsers {
             config,
             users,

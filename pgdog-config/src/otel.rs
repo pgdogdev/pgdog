@@ -78,6 +78,15 @@ pub struct Otel {
 }
 
 impl Otel {
+    pub fn effective_temporality_preference(&self) -> OtelTemporalityPreference {
+        self.temporality_preference
+            .unwrap_or(if self.datadog_api_key.is_some() {
+                OtelTemporalityPreference::Delta
+            } else {
+                OtelTemporalityPreference::Cumulative
+            })
+    }
+
     fn env_option_string(env_var: &str) -> Option<String> {
         env::var(env_var).ok().filter(|s| !s.is_empty())
     }
@@ -229,6 +238,27 @@ mod test {
         assert_eq!(
             config.otel.headers.get("Authorization").unwrap(),
             "Bearer token"
+        );
+    }
+
+    #[test]
+    fn effective_temporality_defaults_to_delta_with_datadog_key() {
+        let mut otel = Otel::default();
+        assert_eq!(
+            otel.effective_temporality_preference(),
+            OtelTemporalityPreference::Cumulative
+        );
+
+        otel.datadog_api_key = Some("abc".into());
+        assert_eq!(
+            otel.effective_temporality_preference(),
+            OtelTemporalityPreference::Delta
+        );
+
+        otel.temporality_preference = Some(OtelTemporalityPreference::Cumulative);
+        assert_eq!(
+            otel.effective_temporality_preference(),
+            OtelTemporalityPreference::Cumulative
         );
     }
 

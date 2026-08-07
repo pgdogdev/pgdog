@@ -312,10 +312,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
     let config = crate::config::config();
     let otel = &config.config.otel;
 
-    let temporality = match otel
-        .temporality_preference
-        .expect("temporality preference is filled in config::load")
-    {
+    let temporality = match otel.effective_temporality_preference() {
         OtelTemporalityPreference::Cumulative => SumAggregationTemporality::Cumulative,
         OtelTemporalityPreference::Delta | OtelTemporalityPreference::LowMemory => {
             SumAggregationTemporality::Delta
@@ -848,30 +845,5 @@ mod test {
             dp2.time_unix_nano, second_start,
             "time_unix_nano should advance while start_time_unix_nano stays put"
         );
-    }
-
-    #[test]
-    fn datadog_api_key_defaults_to_delta() {
-        let _test_lock = TEST_LOCK.lock();
-
-        use crate::config::{self, ConfigAndUsers};
-        let mut cfg = ConfigAndUsers::default();
-        cfg.config.otel.datadog_api_key = Some("abc".into());
-        config::set(cfg).expect("set config");
-
-        let metric = Metric::new(PoolMetric {
-            name: "total_query_count".into(),
-            measurements: vec![Measurement {
-                labels: vec![],
-                measurement: MeasurementType::Integer(1),
-            }],
-            help: "Total queries".into(),
-            unit: None,
-            metric_type: Some(OpenMetricType::Counter),
-        });
-
-        let request = build_request(&[&metric], &now_nanos());
-        let json = serde_json::to_string(&request).expect("serialize");
-        assert!(json.contains("\"aggregationTemporality\":1"));
     }
 }
