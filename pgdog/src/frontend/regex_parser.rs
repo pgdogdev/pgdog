@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 use pgdog_config::{General, QueryParserLevel};
-use regex::RegexSet;
+use regex::{Regex, RegexSet};
 
 use crate::frontend::ClientRequest;
 use crate::util::truncate_utf8;
@@ -31,6 +31,32 @@ fn cmd_base_patterns() -> impl Iterator<Item = String> {
     CMD_BASE
         .iter()
         .map(|cmd| format!("{}{}", COMMENT_PREFIX, cmd))
+}
+
+/// `SELECT set_config(...)` changes session state exactly like `SET`, but it is
+/// a function call inside a `SELECT`, so it matches none of the statement-start
+/// patterns above. Without it the parser never sees the statement and the
+/// interception in `QueryParser::set_config` cannot run at all.
+///
+/// It is checked in two steps rather than added to the sets above. Every
+/// pattern in `CMD_BASE` is anchored, so both sets reject a query at offset 0
+/// without reading it; an unanchored alternative would remove that and cost
+/// ~35x on every query that doesn't match. `SET_CONFIG_LEAD` keeps the anchored
+/// bail, and `SET_CONFIG_RE` only runs once the statement could plausibly be
+/// one we care about. As its own `Regex` it also keeps the literal prefilter,
+/// which a `RegexSet` gives up.
+///
+/// `SELECT`, `WITH` and a leading paren are the only things that can begin a
+/// statement `QueryParser::set_config` will act on: `extract_set_config` takes
+/// a `SelectStmt` whose target list is exactly one `set_config` call. If that
+/// ever widens to `EXPLAIN`, `PREPARE`, `CREATE TABLE AS` or the like, this
+/// list has to widen with it, or those forms are silently gated out.
+static SET_CONFIG_LEAD: Lazy<Regex> =
+    Lazy::new(|| Regex::new(&format!(r"{}[(\s]*(?:SELECT|WITH)\b", COMMENT_PREFIX)).unwrap());
+static SET_CONFIG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bset_config\b").unwrap());
+
+fn is_set_config(prefix: &str) -> bool {
+    SET_CONFIG_LEAD.is_match(prefix) && SET_CONFIG_RE.is_match(prefix)
 }
 
 static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(cmd_base_patterns()).unwrap());
@@ -68,11 +94,12 @@ impl RegexParser {
             && let Ok(Some(query)) = request.query()
         {
             let prefix = truncate_utf8(query.query(), self.limit);
-            if with_locks {
-                return CMD_RE_ADVISORY.is_match(prefix);
+            let cmds = if with_locks {
+                &*CMD_RE_ADVISORY
             } else {
-                return CMD_RE.is_match(prefix);
-            }
+                &*CMD_RE
+            };
+            return cmds.is_match(prefix) || is_set_config(prefix);
         }
 
         false
@@ -170,6 +197,88 @@ mod test {
         assert!(matches("NOTIFY test_channel, 'payload'"));
         assert!(matches("/* comment */ NOTIFY test_channel"));
         assert!(matches("-- comment\nNOTIFY test_channel, 'payload'"));
+    }
+
+    #[test]
+    fn test_set_config() {
+        // Session state changes just like SET, so it must be seen at every
+        // level that looks at session control — including the default, "auto".
+        for level in [
+            QueryParserLevel::SessionControl,
+            QueryParserLevel::SessionControlAndLocks,
+            QueryParserLevel::Auto,
+        ] {
+            assert!(matches_at(
+                "SELECT set_config('app.org', 'a', false)",
+                level
+            ));
+            assert!(matches_at("select set_config('app.org', $1, false)", level));
+            assert!(matches_at(
+                "SELECT pg_catalog.set_config('search_path', '', false)",
+                level
+            ));
+            assert!(matches_at(
+                "/* comment */ SELECT set_config('app.org', 'a', false)",
+                level
+            ));
+            assert!(matches_at(
+                "-- comment\nSELECT set_config('app.org', 'a', false)",
+                level
+            ));
+            assert!(matches_at(
+                "SELECT\n  set_config('app.org', 'a', false)",
+                level
+            ));
+            assert!(matches_at(
+                "SELECT set_config('app.org', 'a', false) AS x",
+                level
+            ));
+            // `(SELECT ...)` is a statement in its own right.
+            assert!(matches_at(
+                "(SELECT set_config('app.org', 'a', false))",
+                level
+            ));
+            assert!(matches_at(
+                "WITH x AS (SELECT 1) SELECT set_config('app.org', 'a', false)",
+                level
+            ));
+        }
+
+        // A column or table that merely contains the word doesn't get parsed.
+        assert!(!matches("SELECT offset_configuration FROM t"));
+    }
+
+    /// The `set_config` check bails on the leading keyword, so a statement that
+    /// can't begin one the parser would act on never gets scanned. These are
+    /// all declined by `extract_set_config` anyway — it wants a `SelectStmt`
+    /// whose target list is exactly one `set_config` call — so gating them out
+    /// here costs no coverage. See the note on `SET_CONFIG_LEAD`.
+    #[test]
+    fn test_set_config_anchored() {
+        assert!(!matches("EXPLAIN SELECT set_config('app.org', 'a', false)"));
+        assert!(!matches(
+            "PREPARE p AS SELECT set_config('app.org', $1, false)"
+        ));
+        assert!(!matches(
+            "CREATE TABLE t AS SELECT set_config('app.org', 'a', false)"
+        ));
+        assert!(!matches(
+            "COPY (SELECT set_config('app.org', 'a', false)) TO STDOUT"
+        ));
+        assert!(!matches(
+            "INSERT INTO t VALUES (set_config('app.org', 'a', false))"
+        ));
+        assert!(!matches(
+            "UPDATE t SET c = set_config('app.org', 'a', false)"
+        ));
+
+        // Statements that do start a SELECT are still scanned in full, however
+        // far in the call sits.
+        let padded = format!(
+            "SELECT {} set_config('app.org', 'a', false)",
+            "1, ".repeat(50)
+        );
+        assert!(matches(&padded));
     }
 
     #[test]
