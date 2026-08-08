@@ -3,17 +3,37 @@
 use bytes::{BufMut, BytesMut};
 use futures::FutureExt;
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
+use tokio::net::{TcpStream, UnixStream};
 use tracing::trace;
 
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::task::Context;
 
 use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery};
+
+fn unix_peek(stream: &UnixStream, buffer: &mut [u8]) -> Option<std::io::Result<usize>> {
+    let n = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            libc::MSG_PEEK,
+        )
+    };
+
+    if n >= 0 {
+        return Some(Ok(n as usize));
+    } else if io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
+        return None;
+    } else {
+        return Some(Err(io::Error::last_os_error()));
+    }
+}
 
 /// Inner stream types.
 #[pin_project(project = StreamInnerProjection)]
@@ -23,6 +43,7 @@ enum StreamInner {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
+    UnixSockets(#[pin] BufStream<UnixStream>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +75,7 @@ impl AsyncRead for Stream {
         match project.inner.project() {
             StreamInnerProjection::Plain(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_read(cx, buf),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
@@ -70,6 +92,7 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_write(cx, buf),
         }
     }
 
@@ -82,6 +105,7 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_flush(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_flush(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_flush(cx),
         }
     }
 
@@ -93,6 +117,7 @@ impl AsyncWrite for Stream {
         match project.inner.project() {
             StreamInnerProjection::Plain(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_shutdown(cx),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
@@ -165,6 +190,7 @@ impl Stream {
             StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
             StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
             StreamInner::DevNull => PeerAddr { addr: None },
+            StreamInner::UnixSockets(stream) => PeerAddr { addr: None },
         }
     }
 
@@ -175,6 +201,10 @@ impl Stream {
             StreamInner::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
             StreamInner::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
             StreamInner::DevNull => 0,
+            StreamInner::UnixSockets(stream) => match unix_peek(stream.get_ref(), &mut buf) {
+                None => 0,
+                Some(res) => eof(res)?,
+            },
         };
 
         Ok(())
@@ -186,6 +216,7 @@ impl Stream {
             StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
             StreamInner::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).now_or_never(),
             StreamInner::DevNull => return Liveness::Clean,
+            StreamInner::UnixSockets(stream) => unix_peek(stream.get_ref(), &mut buf),
         };
 
         match peeked {
@@ -216,6 +247,7 @@ impl Stream {
                 StreamInner::Plain(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::Tls(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::DevNull => (),
+                StreamInner::UnixSockets(stream) => eof(stream.write_all(&bytes).await)?,
             }
 
             #[cfg(debug_assertions)]
