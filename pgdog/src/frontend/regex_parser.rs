@@ -13,6 +13,12 @@ static CMD_BASE: &[&str] = &[
     "(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY",
 ];
 
+/// `SELECT set_config(...)` changes session state exactly like `SET`, but it is
+/// a function call inside a `SELECT`, so it never matches the statement-start
+/// patterns above. Without it here the parser never sees the statement, and the
+/// interception in `QueryParser::set_config` cannot run at all.
+static CMD_SET_CONFIG: &[&str] = &[r"(?i)\bset_config\b"];
+
 static CMD_ADVISORY: &[&str] = &[
     r"(?i)\bpg_advisory_lock\b",
     r"(?i)\bpg_advisory_unlock\b",
@@ -31,6 +37,7 @@ fn cmd_base_patterns() -> impl Iterator<Item = String> {
     CMD_BASE
         .iter()
         .map(|cmd| format!("{}{}", COMMENT_PREFIX, cmd))
+        .chain(CMD_SET_CONFIG.iter().map(|s| s.to_string()))
 }
 
 static CMD_RE: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(cmd_base_patterns()).unwrap());
@@ -170,6 +177,34 @@ mod test {
         assert!(matches("NOTIFY test_channel, 'payload'"));
         assert!(matches("/* comment */ NOTIFY test_channel"));
         assert!(matches("-- comment\nNOTIFY test_channel, 'payload'"));
+    }
+
+    #[test]
+    fn test_set_config() {
+        // Session state changes just like SET, so it must be seen at every
+        // level that looks at session control — including the default, "auto".
+        for level in [
+            QueryParserLevel::SessionControl,
+            QueryParserLevel::SessionControlAndLocks,
+            QueryParserLevel::Auto,
+        ] {
+            assert!(matches_at(
+                "SELECT set_config('app.org', 'a', false)",
+                level
+            ));
+            assert!(matches_at("select set_config('app.org', $1, false)", level));
+            assert!(matches_at(
+                "SELECT pg_catalog.set_config('search_path', '', false)",
+                level
+            ));
+            assert!(matches_at(
+                "/* comment */ SELECT set_config('app.org', 'a', false)",
+                level
+            ));
+        }
+
+        // A column or table that merely contains the word doesn't get parsed.
+        assert!(!matches("SELECT offset_configuration FROM t"));
     }
 
     #[test]
