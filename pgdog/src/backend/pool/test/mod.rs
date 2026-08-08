@@ -479,14 +479,14 @@ async fn test_prepared_statements_limit() {
     assert_eq!(guard.prepared_statements_mut().len(), 2);
 
     // Let's make sure Postgres agreees.
-    guard.sync_prepared_statements().await.unwrap();
+    let named: Vec<String> = guard
+        .fetch_all("SELECT name FROM pg_prepared_statements")
+        .await
+        .unwrap();
 
     // It's random!
-    assert!(
-        guard.prepared_statements_mut().contains("__pgdog_99")
-            || guard.prepared_statements_mut().contains("__pgdog_98")
-    );
-    assert_eq!(guard.prepared_statements_mut().len(), 2);
+    assert!(named.contains(&"__pgdog_99".to_string()) || named.contains(&"__pgdog_98".to_string()));
+    assert_eq!(named.len(), 2);
     assert_eq!(guard.stats().total().prepared_statements, 2); // stats are accurate.
 
     let pool = pool_with_prepared_capacity(100);
@@ -518,10 +518,13 @@ async fn test_prepared_statements_limit() {
     assert_eq!(guard.stats().total().prepared_statements, 100); // stats are accurate.
 
     // Let's make sure Postgres agreees.
-    guard.sync_prepared_statements().await.unwrap();
+    let named: Vec<String> = guard
+        .fetch_all("SELECT name FROM pg_prepared_statements")
+        .await
+        .unwrap();
 
-    assert!(guard.prepared_statements_mut().contains("__pgdog_99"));
-    assert_eq!(guard.prepared_statements_mut().len(), 100);
+    assert!(named.contains(&"__pgdog_99".to_string()));
+    assert_eq!(named.len(), 100);
     assert_eq!(guard.stats().total().prepared_statements, 100); // stats are accurate.
 }
 

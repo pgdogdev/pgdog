@@ -137,7 +137,6 @@ impl Guard {
         conn_recovery: ConnectionRecovery,
     ) -> Result<(), Error> {
         let schema_changed = server.schema_changed();
-        let sync_prepared = server.sync_prepared();
         let needs_drain = server.needs_drain();
 
         if needs_drain {
@@ -180,11 +179,9 @@ impl Guard {
                 server.stats().get_state(),
                 server.addr()
             );
+            // The cache is dropped by the DEALLOCATE ALL / DISCARD ALL
+            // response, so there is nothing to clear here.
             server.execute_batch(cleanup.queries()).await?;
-
-            if cleanup.is_deallocate() {
-                server.prepared_statements_mut().clear();
-            }
             server.cleaned();
 
             debug!(
@@ -200,15 +197,6 @@ impl Guard {
 
         if cleanup.is_reset_params() {
             server.reset_params();
-        }
-
-        if sync_prepared {
-            debug!(
-                "[cleanup] syncing prepared statements, server in \"{}\" state [{}]",
-                server.stats().get_state(),
-                server.addr()
-            );
-            server.sync_prepared_statements().await?;
         }
 
         Ok(())
@@ -762,7 +750,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_cleanup_syncs_prepared_statements() {
+    async fn test_cleanup_deallocates_client_prepared_statements() {
         crate::logger();
 
         let mut server = Guard::new(
@@ -802,9 +790,15 @@ mod test {
         );
 
         assert!(
-            server.prepared_statements_mut().contains("test_stmt"),
-            "Statement should be in local cache after sync"
+            !server.prepared_statements_mut().contains("test_stmt"),
+            "statement prepared by a client must not outlive its checkin"
         );
+
+        // The next client can use the same name, which is what pg_dump does.
+        server
+            .execute("PREPARE test_stmt AS SELECT $1::bigint")
+            .await
+            .unwrap();
 
         let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
         assert_eq!(one[0], 1);
