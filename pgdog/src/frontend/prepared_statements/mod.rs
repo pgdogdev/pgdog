@@ -194,9 +194,61 @@ pub fn run_maintenance() {
 
 #[cfg(test)]
 mod test {
+    use crate::backend::server::test::{execute_prepared, prepared_in_postgres, test_server};
     use crate::net::messages::Bind;
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_close_unused_does_not_reuse_names() {
+        let mut client = PreparedStatements::new();
+
+        let mut first = Parse::named("client_a", "SELECT $1::bigint");
+        client.insert(&mut first);
+        let first_name = first.name();
+
+        let mut server = test_server().await;
+        assert_eq!(execute_prepared(&mut server, first_name, b"1").await, [1]);
+        assert_eq!(prepared_in_postgres(&mut server).await, [first_name]);
+
+        client.close("client_a");
+        PreparedStatements::global().write().close_unused(0);
+        assert!(PreparedStatements::global().read().is_empty());
+
+        assert_eq!(prepared_in_postgres(&mut server).await, [first_name]);
+
+        let mut second = Parse::named("client_b", "SELECT $1::bigint + 100");
+        client.insert(&mut second);
+        let second_name = second.name();
+        assert_ne!(second_name, first_name);
+
+        assert_eq!(
+            execute_prepared(&mut server, second_name, b"1").await,
+            [101]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_unused_keeps_statements_clients_still_hold() {
+        let mut client = PreparedStatements::new();
+
+        let mut parse = Parse::named("client_a", "SELECT $1::bigint");
+        client.insert(&mut parse);
+        let name = parse.name();
+
+        let mut warm = test_server().await;
+        assert_eq!(execute_prepared(&mut warm, name, b"1").await, [1]);
+        assert_eq!(prepared_in_postgres(&mut warm).await, [name]);
+
+        PreparedStatements::global().write().close_unused(0);
+
+        assert_eq!(execute_prepared(&mut warm, name, b"1").await, [1]);
+
+        let mut cold = test_server().await;
+        assert!(prepared_in_postgres(&mut cold).await.is_empty());
+        assert_eq!(execute_prepared(&mut cold, name, b"1").await, [1]);
+        assert_eq!(prepared_in_postgres(&mut cold).await, [name]);
+    }
 
     #[test]
     fn test_maybe_rewrite() {
