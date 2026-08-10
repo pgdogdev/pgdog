@@ -148,12 +148,17 @@
                       "name": "query2",
                       "data_source": "metrics",
                       "query": "max:pgdog.sv_active{*} by {service,database,host}"
+                    },
+                    {
+                      "name": "query3",
+                      "data_source": "metrics",
+                      "query": "max:pgdog.sv_idle_xact{*} by {service,database,host}"
                     }
                   ],
                   "formulas": [
                     {
                       "alias": "sv_idle + sv_active + sv_idle_xact",
-                      "formula": "query1 + query2"
+                      "formula": "query1 + query2 + query3"
                     }
                   ],
                   "style": {
