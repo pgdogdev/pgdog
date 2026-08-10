@@ -232,7 +232,9 @@ impl GlobalCache {
         }
     }
 
-    /// Clear the global cache.
+    /// Clear the global cache. Test-only: rolling the name counter back
+    /// would reuse global statement names.
+    #[cfg(test)]
     pub fn reset(&mut self) {
         self.statements.clear();
         self.names.clear();
@@ -310,14 +312,10 @@ impl GlobalCache {
         }
     }
 
-    /// Close all unused statements exceeding capacity.
+    /// Close unused statements until the cache is down to `capacity` entries;
+    /// `0` removes everything not in use. Statements in use stay, and global
+    /// names are never reused.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
-        if capacity == 0 {
-            let removed = self.len();
-            self.reset();
-            return removed;
-        }
-
         let over = self.len().saturating_sub(capacity);
         let remove = self.unused.iter().take(over).copied().collect::<Vec<_>>();
 
@@ -361,6 +359,23 @@ impl GlobalCache {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_close_unused_zero_keeps_in_use_and_counter() {
+        let mut cache = GlobalCache::default();
+
+        let (_, held) = cache.insert(&Parse::named("s", "SELECT 'held'"));
+        let (_, released) = cache.insert(&Parse::named("s", "SELECT 'released'"));
+        cache.close(&released);
+
+        assert_eq!(cache.close_unused(0), 1, "only the released statement goes");
+        assert!(cache.parse(&held).is_some(), "statements in use survive");
+        assert!(cache.parse(&released).is_none());
+
+        // A reused name could hand a server connection a different query.
+        let (_, next) = cache.insert(&Parse::named("s", "SELECT 'next'"));
+        assert_eq!(next, "__pgdog_3", "global names are never reused");
+    }
 
     #[test]
     fn test_prep_stmt_cache_close() {
