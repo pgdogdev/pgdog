@@ -23,6 +23,7 @@ use super::{
 };
 mod ddl;
 mod delete;
+mod execute;
 mod explain;
 mod plugins;
 mod select;
@@ -406,6 +407,10 @@ impl QueryParser {
             }
 
             Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
+
+            Node::PrepareStmt(stmt) => Self::prepare_statement(stmt, context),
+
+            Node::ExecuteStmt(stmt) => Self::execute_prepared(stmt, context),
 
             Node::DiscardStmt { .. } => {
                 return Ok(Command::Discard {

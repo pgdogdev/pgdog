@@ -93,7 +93,8 @@ impl QueryEngine {
             context.params,
             context.transaction,
             context.sticky,
-        )?;
+        )?
+        .with_prepared_statements(context.prepared_statements);
         let mut result = self.router.query(router_context).map(|_| ());
 
         // Resolve sharding key lookups that missed the cache and route
@@ -115,7 +116,8 @@ impl QueryEngine {
                             context.transaction,
                             context.sticky,
                         )?
-                        .with_resolved_lookups(resolved);
+                        .with_resolved_lookups(resolved)
+                        .with_prepared_statements(context.prepared_statements);
                         result = self.router.query(router_context).map(|_| ());
 
                         // Defensive: can't happen unless routing stops

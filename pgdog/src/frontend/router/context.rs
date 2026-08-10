@@ -2,7 +2,7 @@ use super::{Error, ParameterHints};
 use crate::{
     backend::{Cluster, Schema},
     frontend::{
-        BufferedQuery, ClientRequest,
+        BufferedQuery, ClientRequest, PreparedStatements,
         client::{Sticky, TransactionType},
         router::Ast,
         router::sharding::ResolvedLookups,
@@ -42,6 +42,9 @@ pub struct RouterContext<'a> {
     /// reads these before the lookup cache, so a second routing pass
     /// after resolving lookups can't miss.
     pub resolved_lookups: ResolvedLookups,
+    /// Client's prepared statements, used to route `EXECUTE`
+    /// based on the statement behind the name.
+    pub prepared_statements: Option<&'a mut PreparedStatements>,
 }
 
 impl<'a> RouterContext<'a> {
@@ -71,12 +74,22 @@ impl<'a> RouterContext<'a> {
             schema: cluster.schema(),
             client_request: buffer,
             resolved_lookups: ResolvedLookups::default(),
+            prepared_statements: None,
         })
     }
 
     /// Attach sharding key translations resolved for this statement.
     pub fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
         self.resolved_lookups = resolved;
+        self
+    }
+
+    /// Give the router access to the client's prepared statements.
+    pub fn with_prepared_statements(
+        mut self,
+        prepared_statements: &'a mut PreparedStatements,
+    ) -> Self {
+        self.prepared_statements = Some(prepared_statements);
         self
     }
 
