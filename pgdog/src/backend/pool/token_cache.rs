@@ -280,6 +280,7 @@ impl TokenCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::pool::address::Transport;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -287,7 +288,7 @@ mod tests {
     /// in the global cache.
     fn addr(port: u16) -> Address {
         Address {
-            host: "token-cache-test.internal".into(),
+            host: Transport::new("token-cache-test.internal"),
             port,
             user: "test_user".into(),
             ..Default::default()

@@ -1,5 +1,4 @@
 //! Server address.
-use std::default::Default;
 use std::fmt::Display;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
@@ -65,14 +64,8 @@ impl Display for Transport {
     }
 }
 
-impl Default for Transport {
-    fn default() -> Self {
-        Transport::TCP("127.0.0.1".to_string())
-    }
-}
-
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Address {
     /// Server host.
     pub host: Transport,
@@ -100,6 +93,27 @@ pub struct Address {
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
     pub configured_role: Role,
+}
+
+impl Default for Address {
+    /// Local development defaults: `pgdog` on `127.0.0.1:5432`. `Transport`
+    /// deliberately has no `Default` — the transport decision must always be
+    /// explicit — so the TCP variant is chosen here, at this one visible site.
+    fn default() -> Self {
+        Address {
+            host: Transport::TCP("127.0.0.1".to_string()),
+            port: 5432,
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            database_name: "pgdog".into(),
+            server_auth: ServerAuth::Password,
+            server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
+            database_number: 0,
+            configured_role: Role::Primary,
+        }
+    }
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -254,25 +268,6 @@ impl Address {
             true
         }
     }
-
-    /// Test convention: `new_test()` represents a primary. Tests that need
-    /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
-    #[cfg(test)]
-    pub fn new_test() -> Self {
-        Self {
-            host: "127.0.0.1".into(),
-            port: 5432,
-            user: "pgdog".into(),
-            passwords: vec!["pgdog".into()],
-            database_name: "pgdog".into(),
-            server_auth: ServerAuth::Password,
-            server_iam_region: None,
-            vault_path: None,
-            vault_refresh_percent: None,
-            database_number: 0,
-            configured_role: Role::Primary,
-        }
-    }
 }
 
 impl std::fmt::Display for Address {
@@ -295,9 +290,9 @@ impl TryFrom<Url> for Address {
         let password = value.password().ok_or(())?.to_string();
         let database_name = value.path().replace("/", "").to_string();
 
-        // A URL says nothing about role; fall through to `Role::Auto`
-        // via the derived `Default`. The PROBE command (the only caller)
-        // never reads `configured_role` anyway.
+        // A URL says nothing about role; fall through to the explicit
+        // `Role::Auto` below. The PROBE command (the only caller) never
+        // reads `configured_role` anyway.
         Ok(Self {
             host: Transport::new(&host),
             port,
@@ -305,7 +300,11 @@ impl TryFrom<Url> for Address {
             user,
             database_name,
             server_auth: ServerAuth::Password,
-            ..Default::default()
+            server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
+            database_number: 0,
+            configured_role: Role::Auto,
         })
     }
 }
@@ -338,7 +337,7 @@ mod test {
 
         let address = Address::new(&database, &user, 0);
 
-        assert_eq!(address.host.into(), "127.0.0.1");
+        assert_eq!(address.host.to_string(), "127.0.0.1");
         assert_eq!(address.port, 6432);
         assert_eq!(address.database_name, "pgdog");
         assert_eq!(address.user, "pgdog");
@@ -419,7 +418,7 @@ mod test {
         let addr =
             Address::try_from(Url::parse("postgres://user:password@127.0.0.1:6432/pgdb").unwrap())
                 .unwrap();
-        assert_eq!(addr.host.into(), "127.0.0.1");
+        assert_eq!(addr.host.to_string(), "127.0.0.1");
         assert_eq!(addr.port, 6432);
         assert_eq!(addr.database_name, "pgdb");
         assert_eq!(addr.user, "user");
@@ -430,7 +429,7 @@ mod test {
 
     #[test]
     fn test_compatible_ignores_password_changes() {
-        let address = Address::new_test();
+        let address = Address::default();
         let mut rotated = address.clone();
         rotated.passwords = vec!["rotated".into()];
 
@@ -439,7 +438,7 @@ mod test {
 
     #[test]
     fn test_compatible_rejects_other_field_changes() {
-        let address = Address::new_test();
+        let address = Address::default();
         let mut moved = address.clone();
         moved.port += 1;
 
@@ -450,13 +449,13 @@ mod test {
 
     #[tokio::test]
     async fn test_auth_secret_password_mode() {
-        let addr = Address::new_test();
+        let addr = Address::default();
         assert_eq!(addr.auth_secrets().await.unwrap().first().unwrap(), "pgdog");
     }
 
     #[tokio::test]
     async fn test_auth_secrets_returns_valid_password_first() {
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid1: Password = "invalid1".into();
         let invalid2: Password = "invalid2".into();
         let valid: Password = "valid".into();
@@ -470,7 +469,7 @@ mod test {
         assert!(secrets.first().unwrap().is_valid());
 
         // Even if the valid password is last, it should still come first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid1: Password = "invalid1".into();
         let invalid2: Password = "invalid2".into();
         let valid: Password = "valid".into();
@@ -482,7 +481,7 @@ mod test {
         assert_eq!(secrets.first().unwrap(), "valid");
 
         // With multiple valid passwords, a valid one is still first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid: Password = "invalid".into();
         invalid.valid(false);
         addr.passwords = vec![invalid, "valid_a".into(), "valid_b".into()];
@@ -493,7 +492,7 @@ mod test {
         assert!(head == "valid_a" || head == "valid_b");
 
         // Flipping validity at runtime changes which password comes first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let first: Password = "first".into();
         let second: Password = "second".into();
         addr.passwords = vec![first.clone(), second.clone()];
@@ -536,7 +535,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_secret_rds_iam_serves_token_from_cache() {
         let addr = Address {
-            host: "auth-secrets-rds.internal".into(),
+            host: Transport::new("auth-secrets-rds.internal"),
             port: 15432,
             user: "rds_user".into(),
             server_auth: ServerAuth::RdsIam,
@@ -563,7 +562,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_secret_azure_workload_identity_serves_token_from_cache() {
         let addr = Address {
-            host: "auth-secrets-azure.internal".into(),
+            host: Transport::new("auth-secrets-azure.internal"),
             port: 15433,
             user: "azure_user".into(),
             server_auth: ServerAuth::AzureWorkloadIdentity,
@@ -591,7 +590,7 @@ mod test {
         use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
 
         let addr = Address {
-            host: "auth-secrets-vault.internal".into(),
+            host: Transport::new("auth-secrets-vault.internal"),
             port: 15435,
             user: "configured_user".into(),
             server_auth: ServerAuth::VaultDynamic,
@@ -623,7 +622,7 @@ mod test {
 
     #[tokio::test]
     async fn test_auth_credentials_password_mode_uses_configured_user() {
-        let addr = Address::new_test();
+        let addr = Address::default();
         let (user, secrets) = addr.auth_credentials().await.unwrap();
         assert_eq!(user, "pgdog");
         assert_eq!(secrets.first().unwrap(), "pgdog");
@@ -661,7 +660,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_credentials_vault_static_serves_password_from_cache() {
         let addr = Address {
-            host: "auth-secrets-vault-static.internal".into(),
+            host: Transport::new("auth-secrets-vault-static.internal"),
             port: 15436,
             user: "pgdog_static".into(),
             server_auth: ServerAuth::VaultStatic,
@@ -718,7 +717,7 @@ mod test {
         // The monitor is responsible for refreshing it; auth_secrets never
         // blocks on a refresh.
         let addr = Address {
-            host: "auth-secrets-stale.internal".into(),
+            host: Transport::new("auth-secrets-stale.internal"),
             port: 15434,
             user: "stale_user".into(),
             server_auth: ServerAuth::RdsIam,
@@ -753,9 +752,9 @@ mod test {
         cache.clear_cache_for_testing();
 
         let addr = Address {
-            host: hostname.into(),
+            host: Transport::new(&hostname),
             port: 15432,
-            ..Address::new_test()
+            ..Default::default()
         };
 
         let socket_addr = addr.addr().await.expect("resolve address");

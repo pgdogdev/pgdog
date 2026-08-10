@@ -390,14 +390,14 @@ mod test {
         crate::logger();
 
         let primary = Some(&PoolConfig {
-            address: Address::new_test(),
+            address: Address::default(),
             ..Default::default()
         });
 
         let replicas = &[PoolConfig {
             address: Address {
                 configured_role: Role::Replica,
-                ..Address::new_test()
+                ..Default::default()
             },
             ..Default::default()
         }];
@@ -430,12 +430,12 @@ mod test {
         crate::logger();
 
         let primary = Some(&PoolConfig {
-            address: Address::new_test(),
+            address: Address::default(),
             ..Default::default()
         });
 
         let replicas = &[PoolConfig {
-            address: Address::new_test(),
+            address: Address::default(),
             ..Default::default()
         }];
 
@@ -468,7 +468,7 @@ mod test {
         let replicas = &[PoolConfig {
             address: Address {
                 configured_role: Role::Auto,
-                ..Address::new_test()
+                ..Default::default()
             },
             config: super::super::Config {
                 inner: pgdog_stats::Config {

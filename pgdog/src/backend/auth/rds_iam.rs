@@ -90,12 +90,13 @@ mod tests {
     use pgdog_config::Role;
 
     use super::*;
+    use crate::backend::pool::address::Transport;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
 
     fn make_addr() -> Address {
         Address {
-            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
+            host: Transport::new("db.cluster-abc123.us-east-1.rds.amazonaws.com"),
             port: 5432,
             database_name: "postgres".into(),
             user: "db_user".into(),
@@ -170,7 +171,7 @@ mod tests {
     #[test]
     fn resolve_region_errors_when_neither_override_nor_inference() {
         let addr = Address {
-            host: "postgres.internal.example.com".into(),
+            host: Transport::new("postgres.internal.example.com"),
             port: 5432,
             user: "u".into(),
             server_iam_region: None,

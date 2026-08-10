@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
+use crate::backend::pool::{Address, Config, Error, PoolConfig, Request, address::Transport};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
@@ -13,7 +13,7 @@ use monitor::Monitor;
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     PoolConfig {
         address: Address {
-            host: host.into(),
+            host: Transport::new(&host),
             port,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -879,7 +879,7 @@ async fn test_monitor_unbans_all_when_all_unhealthy() {
 async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
     let pool_config1 = PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -898,7 +898,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
 
     let pool_config2 = PoolConfig {
         address: Address {
-            host: "localhost".into(),
+            host: Transport::new("localhost"),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1250,7 +1250,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     let new_target_for_existing = lb_new
         .targets
         .iter()
-        .find(|t| t.pool.addr().host == "127.0.0.1")
+        .find(|t| t.pool.addr().host == Transport::new("127.0.0.1"))
         .expect("should have target for 127.0.0.1");
     assert_eq!(new_target_for_existing.role(), Role::Primary);
 
@@ -1258,7 +1258,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     let new_target_for_added = lb_new
         .targets
         .iter()
-        .find(|t| t.pool.addr().host == "localhost")
+        .find(|t| t.pool.addr().host == Transport::new("localhost"))
         .expect("should have target for localhost");
     assert_eq!(new_target_for_added.role(), Role::Replica);
 
@@ -1507,7 +1507,7 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
 fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> PoolConfig {
     PoolConfig {
         address: Address {
-            host: host.into(),
+            host: Transport::new(&host),
             port,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1928,7 +1928,7 @@ fn test_ban_check_does_not_ban_single_target() {
 fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
     let pool_config1 = PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1947,7 +1947,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
 
     let pool_config2 = PoolConfig {
         address: Address {
-            host: "localhost".into(),
+            host: Transport::new("localhost"),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],

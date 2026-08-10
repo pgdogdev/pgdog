@@ -1425,7 +1425,7 @@ pub mod test {
 
     pub(crate) async fn test_server() -> Server {
         Server::connect(
-            &Address::new_test(),
+            &Address::default(),
             ServerOptions::default(),
             ConnectReason::Other,
             Default::default(),
@@ -1441,7 +1441,7 @@ pub mod test {
         Server::connect(
             &Address {
                 database_name: "pgdog1".into(),
-                ..Address::new_test()
+                ..Default::default()
             },
             ServerOptions::default(),
             ConnectReason::Other,
@@ -1453,7 +1453,7 @@ pub mod test {
 
     pub async fn test_replication_server() -> Server {
         Server::connect(
-            &Address::new_test(),
+            &Address::default(),
             ServerOptions::new_replication(),
             ConnectReason::Replication,
             Default::default(),
@@ -1546,7 +1546,7 @@ pub mod test {
             }
         });
 
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         addr.port = port;
         addr.server_auth = crate::config::ServerAuth::RdsIam;
         addr.server_iam_region = Some("us-east-1".into());
@@ -1613,7 +1613,7 @@ pub mod test {
             }
         });
 
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         addr.port = port;
         addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
         addr.passwords = vec!["wrong-password".into()];

@@ -1886,7 +1886,7 @@ mod test {
 
     #[test]
     fn test_build_pg_dump_command_sets_password_env() {
-        let addr = backend::pool::Address::new_test();
+        let addr = backend::pool::Address::default();
         let command = build_pg_dump_command("pg_dump", &addr, "secret");
 
         let env = command
@@ -1908,7 +1908,7 @@ mod test {
 
     #[test]
     fn test_build_pg_dump_command_sets_tls_for_rds_iam() {
-        let mut addr = backend::pool::Address::new_test();
+        let mut addr = backend::pool::Address::default();
         addr.server_auth = ServerAuth::RdsIam;
         let command = build_pg_dump_command("pg_dump", &addr, "token");
 
@@ -1923,7 +1923,7 @@ mod test {
 
     #[test]
     fn test_build_pg_dump_command_sets_tls_for_azure_workload_identity() {
-        let mut addr = backend::pool::Address::new_test();
+        let mut addr = backend::pool::Address::default();
         addr.server_auth = ServerAuth::AzureWorkloadIdentity;
         let command = build_pg_dump_command("pg_dump", &addr, "token");
 

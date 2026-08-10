@@ -91,6 +91,7 @@ pub(super) struct Waiter {
 mod tests {
     use super::*;
     use crate::backend::pool::Pool;
+    use crate::backend::pool::address::Transport;
     use crate::net::messages::FrontendPid;
     use tokio::time::{Duration, sleep, timeout};
 
@@ -152,12 +153,12 @@ mod tests {
 
         let pool = Pool::new(&crate::backend::pool::PoolConfig {
             address: crate::backend::pool::Address {
-                host: "127.0.0.1".into(),
+                host: Transport::new("127.0.0.1"),
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
                 passwords: vec!["pgdog".into()],
-                ..Default::default()
+                ..crate::backend::pool::Address::default()
             },
             config,
         });

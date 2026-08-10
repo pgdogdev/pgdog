@@ -44,7 +44,7 @@ mod test {
 
     use crate::backend::databases::User;
     use crate::backend::pool::lsn_monitor::LsnStats;
-    use crate::backend::pool::{Address, Config, PoolConfig};
+    use crate::backend::pool::{Address, Config, PoolConfig, address::Transport};
     use crate::backend::replication::publisher::Lsn;
     use crate::config::{ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;
@@ -55,7 +55,7 @@ mod test {
     fn create_test_pool_config(host: &str, port: u16, role_detection: bool) -> PoolConfig {
         PoolConfig {
             address: Address {
-                host: host.into(),
+                host: Transport::new(&host),
                 port,
                 user: "pgdog".into(),
                 passwords: vec!["pgdog".into()],

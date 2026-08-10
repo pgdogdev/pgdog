@@ -12,6 +12,7 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_util::task::TaskTracker;
 
 use crate::backend::ConnectReason;
+use crate::backend::pool::address::Transport;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
@@ -30,7 +31,7 @@ pub fn pool() -> Pool {
 
     let pool = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -55,7 +56,7 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
 
     let pool = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -370,7 +371,7 @@ async fn test_server_force_close_discards_connection() {
 
     let pool = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -541,7 +542,7 @@ async fn test_idle_healthcheck_loop() {
 
     let pool = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -589,7 +590,7 @@ async fn test_idle_healthcheck_loop_disabled_with_zero_interval() {
 
     let pool = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 1,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -624,7 +625,7 @@ async fn test_checkout_timeout() {
     };
 
     let pool = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     pool.launch();
@@ -653,7 +654,7 @@ async fn test_move_conns_to() {
 
     let source = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -666,7 +667,7 @@ async fn test_move_conns_to() {
 
     let destination = Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -721,13 +722,13 @@ async fn test_move_conns_all_idle() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -768,13 +769,13 @@ async fn test_move_conns_all_checked_out() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -823,13 +824,13 @@ async fn test_move_conns_destination_serves_after_launch() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -866,7 +867,7 @@ fn auth_pool(passwords: Vec<Password>) -> Pool {
 
     Pool::new(&PoolConfig {
         address: Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "pgdog".into(),
             user: "pgdog".into(),
@@ -1004,7 +1005,7 @@ async fn test_lsn_monitor() {
     };
 
     let pool = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -1050,7 +1051,7 @@ async fn test_token_refresh_loop_primes_cache_on_cold_start() {
     };
 
     let addr = Address {
-        host: "token-refresh-test.internal".into(),
+        host: Transport::new("token-refresh-test.internal"),
         port: 15500,
         user: "refresh_user".into(),
         server_auth: ServerAuth::RdsIam,
@@ -1088,7 +1089,7 @@ async fn test_token_refresh_loop_refreshes_before_expiry() {
     };
 
     let addr = Address {
-        host: "token-refresh-expiry.internal".into(),
+        host: Transport::new("token-refresh-expiry.internal"),
         port: 15501,
         user: "refresh_user".into(),
         server_auth: ServerAuth::RdsIam,
@@ -1133,7 +1134,7 @@ async fn test_token_refresh_loop_evicts_on_failed_refresh() {
     };
 
     let addr = Address {
-        host: "token-refresh-fail.internal".into(),
+        host: Transport::new("token-refresh-fail.internal"),
         port: 15502,
         user: "refresh_user".into(),
         server_auth: ServerAuth::RdsIam,
@@ -1178,7 +1179,7 @@ async fn test_token_refresh_loop_not_spawned_for_password_auth() {
     };
 
     let addr = Address {
-        host: "token-refresh-password.internal".into(),
+        host: Transport::new("token-refresh-password.internal"),
         port: 15503,
         user: "refresh_user".into(),
         server_auth: ServerAuth::Password,
@@ -1218,7 +1219,7 @@ async fn test_token_refresh_loop_stops_on_shutdown() {
     };
 
     let addr = Address {
-        host: "token-refresh-shutdown.internal".into(),
+        host: Transport::new("token-refresh-shutdown.internal"),
         port: 15504,
         user: "refresh_user".into(),
         server_auth: ServerAuth::AzureWorkloadIdentity,

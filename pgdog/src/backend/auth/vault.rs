@@ -151,6 +151,7 @@ mod tests {
 
     use super::*;
     use crate::auth::vault::{VAULT_TOKEN, VaultToken};
+    use crate::backend::pool::address::Transport;
     use crate::config::ConfigAndUsers;
 
     fn setup() {
@@ -179,7 +180,7 @@ mod tests {
 
     fn make_addr(vault_path: Option<&str>) -> Address {
         Address {
-            host: "127.0.0.1".into(),
+            host: Transport::new("127.0.0.1"),
             port: 5432,
             database_name: "testdb".into(),
             user: "testuser".into(),

@@ -9,7 +9,6 @@ use tracing::trace;
 
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::pin::Pin;

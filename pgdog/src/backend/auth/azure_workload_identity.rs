@@ -40,6 +40,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
     use super::*;
+    use crate::backend::pool::address::Transport;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
     use pgdog_config::Role;
@@ -52,7 +53,7 @@ mod tests {
         let _azure_token_file_path = set_env_var("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
 
         let addr = Address {
-            host: "my-awesome-db.postgres.database.azure.com".into(),
+            host: Transport::new("my-awesome-db.postgres.database.azure.com"),
             port: 5432,
             database_name: "postgres".into(),
             user: "db_user".into(),

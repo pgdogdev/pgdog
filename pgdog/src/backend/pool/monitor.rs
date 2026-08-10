@@ -509,7 +509,7 @@ impl Monitor {
 #[cfg(test)]
 mod test {
     use crate::backend::pool::test::pool;
-    use crate::backend::pool::{Address, Config, PoolConfig};
+    use crate::backend::pool::{Address, Config, PoolConfig, address::Transport};
 
     use super::*;
 
@@ -566,7 +566,7 @@ mod test {
 
         let pool = Pool::new(&PoolConfig {
             address: Address {
-                host: "127.0.0.1".into(),
+                host: Transport::new("127.0.0.1"),
                 port: 1,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
@@ -600,7 +600,7 @@ mod test {
 
         let pool = Pool::new(&PoolConfig {
             address: Address {
-                host: "127.0.0.1".into(),
+                host: Transport::new("127.0.0.1"),
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),

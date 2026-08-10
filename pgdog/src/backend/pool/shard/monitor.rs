@@ -250,13 +250,13 @@ mod test {
     #[test]
     fn test_update_replica_lag_assigns_primary_minus_replica_to_replica_pool() {
         let primary = Pool::new(&PoolConfig {
-            address: Address::new_test(),
+            address: Address::default(),
             config: Config::default(),
         });
         let replica = Pool::new(&PoolConfig {
             address: Address {
                 configured_role: Role::Replica,
-                ..Address::new_test()
+                ..Default::default()
             },
             config: Config::default(),
         });
@@ -282,10 +282,10 @@ mod test {
     async fn test_monitor_updates_roles_on_failover() {
         crate::logger();
 
-        let primary = Some(&pool_config(Address::new_test()));
+        let primary = Some(&pool_config(Address::default()));
         let replicas = [pool_config(Address {
             configured_role: Role::Auto,
-            ..Address::new_test()
+            ..Default::default()
         })];
 
         let shard = Shard::new(ShardConfig {
