@@ -267,8 +267,8 @@ impl Server {
 
         let tls_mode = config.config.general.tls_verify;
 
-        // Only attempt TLS if not in Disabled mode
-        if tls_mode != TlsVerifyMode::Disabled {
+        // Only attempt TLS if not in Disabled mode and its not connecting to a unix socket
+        if tls_mode != TlsVerifyMode::Disabled && addr.host.tcp().is_some() {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
                 tls_mode, addr,
@@ -1350,7 +1350,7 @@ pub mod test {
     use bytes::{BufMut, BytesMut};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, UnixListener},
     };
 
     use crate::{
@@ -1635,6 +1635,65 @@ pub mod test {
         let server = result.unwrap();
         drop(server);
         server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connect_over_unix_socket() {
+        let dir = std::env::temp_dir().join(format!("pgdog-unix-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let port = 6543;
+        let socket_path = dir.join(format!(".s.PGSQL.{}", port));
+
+        // Bind the listener at the path pgdog derives from the socket
+        // directory and port. If the derivation is wrong, connect fails.
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+
+            // TLS is skipped for Unix sockets: the first packet must be the
+            // Startup message, never an SSLRequest.
+            let startup = Startup::from_stream(&mut socket).await.unwrap();
+            assert!(
+                matches!(startup, Startup::Startup { .. }),
+                "expected Startup, got {:?}",
+                startup
+            );
+
+            // Peer/trust auth replies: no password is ever exchanged.
+            socket
+                .write_all(&Authentication::Ok.to_bytes())
+                .await
+                .unwrap();
+            socket
+                .write_all(&BackendKeyData::random_legacy().to_bytes())
+                .await
+                .unwrap();
+            socket
+                .write_all(&ReadyForQuery::idle().to_bytes())
+                .await
+                .unwrap();
+        });
+
+        let addr = Address {
+            host: Transport::new(dir.to_str().unwrap()),
+            port,
+            ..Address::default()
+        };
+
+        let server = Server::connect(
+            &addr,
+            ServerOptions::default(),
+            ConnectReason::Other,
+            Default::default(),
+        )
+        .await
+        .expect("connect over unix socket");
+
+        drop(server);
+        server_task.await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

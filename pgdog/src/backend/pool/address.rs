@@ -765,4 +765,29 @@ mod test {
             Some(socket_addr.ip())
         );
     }
+
+    #[test]
+    fn test_transport_parsing() {
+        // Absolute paths are Unix socket directories.
+        assert!(matches!(Transport::new("/tmp"), Transport::Unix(_)));
+        assert!(matches!(
+            Transport::new("/var/run/postgresql"),
+            Transport::Unix(_)
+        ));
+        // Everything else is a TCP hostname.
+        assert!(matches!(Transport::new("127.0.0.1"), Transport::TCP(_)));
+        assert!(matches!(Transport::new("localhost"), Transport::TCP(_)));
+    }
+
+    #[test]
+    fn test_unix_socket_path() {
+        let unix = Transport::new("/tmp");
+        assert_eq!(
+            unix.unix_socket_path(&5432),
+            Some(PathBuf::from("/tmp/.s.PGSQL.5432"))
+        );
+
+        let tcp = Transport::new("127.0.0.1");
+        assert_eq!(tcp.unix_socket_path(&5432), None);
+    }
 }
