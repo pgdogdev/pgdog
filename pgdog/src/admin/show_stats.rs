@@ -78,7 +78,7 @@ impl Command for ShowStats {
 
                     dr.add(user.database.as_str())
                         .add(user.user.as_str())
-                        .add(&pool.addr().host.to_string())
+                        .add(pool.addr().host.to_string())
                         .add(pool.addr().port as i64)
                         .add(shard_num)
                         .add(role.to_string());

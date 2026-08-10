@@ -38,7 +38,7 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
     }
 
     let host = addr.host.tcp().expect("Host must be a TCP address");
-    infer_region_from_rds_host(&host).ok_or_else(|| {
+    infer_region_from_rds_host(host).ok_or_else(|| {
         Error::RdsIamToken(format!(
             "unable to infer AWS region from host \"{}\"; set \"server_iam_region\"",
             addr.host

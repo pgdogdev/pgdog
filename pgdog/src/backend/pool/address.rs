@@ -242,7 +242,7 @@ impl Address {
         let host = self.host.tcp().expect("addr must be a TCP address");
 
         if dns_cache_override_enabled {
-            let ip = DnsCache::global().resolve(&host).await?;
+            let ip = DnsCache::global().resolve(host).await?;
             return Ok(SocketAddr::new(ip, self.port));
         }
 
