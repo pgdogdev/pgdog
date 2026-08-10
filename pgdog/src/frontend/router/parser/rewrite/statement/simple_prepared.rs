@@ -78,7 +78,7 @@ fn rewrite_single_prepared<'a>(
                 stmt.name().expect("PREPARE always has a name"),
                 query.as_str(),
             );
-            prepared_statements.insert_anyway(&mut parse);
+            prepared_statements.insert_prepare(&mut parse);
             stmt.set_name(Some(mem.copy_string(parse.name())));
 
             Ok(SimplePreparedRewrite::Prepared)

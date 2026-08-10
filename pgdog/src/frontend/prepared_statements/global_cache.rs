@@ -8,19 +8,20 @@ use std::{collections::hash_map::HashMap, str::from_utf8};
 
 use fnv::FnvHashSet as HashSet;
 
+/// Identity of a prepared statement inside the global cache.
+pub type Counter = usize;
+
 // Format the globally unique prepared statement
 // name based on the counter.
-fn global_name(counter: usize) -> String {
+fn global_name(counter: Counter) -> String {
     format!("__pgdog_{}", counter)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Statement {
     parse: Parse,
     rewrite: Option<Parse>,
     row_description: Option<RowDescription>,
-    #[allow(dead_code)]
-    version: usize,
     cache_key: CacheKey,
 }
 
@@ -28,7 +29,7 @@ impl MemoryUsage for Statement {
     #[inline]
     fn memory_usage(&self) -> usize {
         self.parse.len()
-            + if let Some(ref row_description) = self.row_description {
+            + if let Some(row_description) = &self.row_description {
                 row_description.memory_usage()
             } else {
                 0
@@ -49,16 +50,19 @@ impl Statement {
 
 /// Prepared statements cache key.
 ///
-/// If these match, it's effectively the same statement.
+/// If two `Extended` keys match, it's effectively the same statement.
 /// If they don't, e.g. client sent the same query but
 /// with different data types, we can't re-use it and
 /// need to plan a new one.
 ///
-#[derive(Debug, Clone, PartialEq, Hash, Eq, Default)]
-pub struct CacheKey {
-    pub query: Bytes,
-    pub data_types: Bytes,
-    pub version: usize,
+/// A `Simple` key comes from SQL `PREPARE` and matches nothing but itself.
+/// Its declared argument types are not captured, so two of those
+/// statements are never known to be the same.
+///
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub enum CacheKey {
+    Extended { query: Bytes, data_types: Bytes },
+    Simple { query: Bytes, unique: Counter },
 }
 
 impl MemoryUsage for CacheKey {
@@ -70,15 +74,24 @@ impl MemoryUsage for CacheKey {
 }
 
 impl CacheKey {
+    fn query_ref(&self) -> &Bytes {
+        match self {
+            Self::Extended { query, .. } => query,
+            Self::Simple { query, .. } => query,
+        }
+    }
+
     pub fn query(&self) -> Result<&str, crate::net::Error> {
+        let query = self.query_ref();
+
         // Postgres string.
-        Ok(from_utf8(&self.query[0..self.query.len() - 1])?)
+        Ok(from_utf8(&query[0..query.len() - 1])?)
     }
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct CachedStmt {
-    pub counter: usize,
+    pub counter: Counter,
     pub used: usize,
 }
 
@@ -101,6 +114,8 @@ impl CachedStmt {
 ///
 /// 1. Mapping between unique prepared statement identifiers (query and result data types),
 ///    and the global unique prepared statement name used in all server connections.
+///    Statements created by SQL `PREPARE` carry a key of their own, so they are
+///    never handed to a second client.
 ///
 /// 2. Mapping between the global unique names and Parse & RowDescription messages
 ///    used to prepare the statement on server connections and to decode
@@ -110,9 +125,8 @@ impl CachedStmt {
 pub struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
-    unused: HashSet<usize>,
-    counter: usize,
-    versions: usize,
+    unused: HashSet<Counter>,
+    counter: Counter,
 }
 
 impl MemoryUsage for GlobalCache {
@@ -121,7 +135,6 @@ impl MemoryUsage for GlobalCache {
         self.statements.memory_usage()
             + self.names.memory_usage()
             + self.counter.memory_usage()
-            + self.versions.memory_usage()
             + self.unused.capacity() * 1usize.memory_usage()
     }
 }
@@ -133,10 +146,9 @@ impl GlobalCache {
     /// If the statement exists, no entry is created
     /// and the global name is returned instead.
     pub fn insert(&mut self, parse: &Parse) -> (bool, String) {
-        let parse_key = CacheKey {
+        let parse_key = CacheKey::Extended {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
-            version: 0,
         };
 
         if let Some(entry) = self.statements.get_mut(&parse_key) {
@@ -144,6 +156,7 @@ impl GlobalCache {
                 self.unused.remove(&entry.counter);
             }
             entry.used += 1;
+
             (false, global_name(entry.counter))
         } else {
             self.counter += 1;
@@ -158,10 +171,9 @@ impl GlobalCache {
             // so the buffer grows monotonically.
             let parse = parse.renamed(&name);
 
-            let cache_key = CacheKey {
+            let cache_key = CacheKey::Extended {
                 query: parse.query_ref(),
                 data_types: parse.data_types_ref(),
-                version: 0,
             };
 
             self.statements.insert(
@@ -177,7 +189,8 @@ impl GlobalCache {
                 Statement {
                     parse,
                     cache_key,
-                    ..Default::default()
+                    rewrite: None,
+                    row_description: None,
                 },
             );
 
@@ -187,21 +200,29 @@ impl GlobalCache {
 
     /// Insert a prepared statement into the global cache ignoring
     /// duplicate check.
-    pub fn insert_anyway(&mut self, parse: &Parse) -> String {
+    ///
+    /// SQL `PREPARE` gets a key of its own, so it is never handed to
+    /// a second client. It is tracked and evicted like any other statement.
+    pub fn insert_prepare(&mut self, parse: &Parse) -> String {
         self.counter += 1;
-        self.versions += 1;
 
         let name = global_name(self.counter);
         let parse = parse.renamed(&name);
-
-        let key = CacheKey {
+        // insert_anyway is used for the simple query PREPARE call
+        // and here the `unique` field based on counter defines
+        // that this statement won't be reused with other clients
+        // i.e. it'll always have `used <= 1` and will be closed
+        // only by the specific client that created it.
+        // The close happens when the client re-uses the same PREPARE
+        // name, or on client disconnect in the close_all call.
+        // TODO: a direct DEALLOCATE won't close it yet.
+        let cache_key = CacheKey::Simple {
             query: parse.query_ref(),
-            data_types: parse.data_types_ref(),
-            version: self.versions,
+            unique: self.counter,
         };
 
         self.statements.insert(
-            key.clone(),
+            cache_key.clone(),
             CachedStmt {
                 counter: self.counter,
                 used: 1,
@@ -212,9 +233,9 @@ impl GlobalCache {
             name.clone(),
             Statement {
                 parse,
-                version: self.versions,
-                cache_key: key,
-                ..Default::default()
+                cache_key,
+                rewrite: None,
+                row_description: None,
             },
         );
 
@@ -231,7 +252,7 @@ impl GlobalCache {
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
     pub fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
-        if let Some(ref mut entry) = self.names.get_mut(name)
+        if let Some(entry) = self.names.get_mut(name)
             && entry.row_description.is_none()
         {
             entry.row_description = Some(row_description);
@@ -342,18 +363,6 @@ impl GlobalCache {
         }
     }
 
-    /// Decrement usage of prepared statement without removing it.
-    pub fn decrement(&mut self, name: &str) {
-        if let Some(stmt) = self.names.get(name)
-            && let Some(stmt) = self.statements.get_mut(stmt.cache_key())
-        {
-            stmt.used = stmt.used.saturating_sub(1);
-            if stmt.used == 0 {
-                self.unused.insert(stmt.counter);
-            }
-        }
-    }
-
     /// Get all prepared statements by name.
     pub fn names(&self) -> &HashMap<String, Statement> {
         &self.names
@@ -395,8 +404,8 @@ mod test {
         let map_key = cache.statements.keys().next().unwrap();
         let owned = stored.parse.query_ref();
 
-        assert_eq!(owned.as_ptr(), stored.cache_key.query.as_ptr());
-        assert_eq!(owned.as_ptr(), map_key.query.as_ptr());
+        assert_eq!(owned.as_ptr(), stored.cache_key.query_ref().as_ptr());
+        assert_eq!(owned.as_ptr(), map_key.query_ref().as_ptr());
         assert_ne!(owned.as_ptr(), source.query_ref().as_ptr());
     }
 
@@ -431,9 +440,42 @@ mod test {
         assert_eq!(entry.used, 0);
         assert!(cache.unused.contains(&1)); // __pgdog_1
 
-        let name = cache.insert_anyway(&parse);
+        let name = cache.insert_prepare(&parse);
         cache.close(&name);
         assert!(cache.unused.contains(&2)); // __pgdog_2
+    }
+
+    fn used(cache: &GlobalCache, name: &str) -> usize {
+        let statement = cache.names.get(name).unwrap();
+        cache.statements.get(statement.cache_key()).unwrap().used
+    }
+
+    #[test]
+    fn test_simple_prepared_is_never_shared() {
+        let mut cache = GlobalCache::default();
+        let parse = Parse::named("client_stmt", "SELECT $1");
+
+        let first = cache.insert_prepare(&parse);
+        let second = cache.insert_prepare(&parse);
+
+        assert_ne!(first, second);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(used(&cache, &first), 1);
+        assert_eq!(used(&cache, &second), 1);
+
+        // A Parse never re-uses a SQL PREPARE statement.
+        let (new, extended) = cache.insert(&parse);
+        assert!(new);
+        assert_ne!(extended, first);
+        assert_ne!(extended, second);
+        assert_eq!(cache.len(), 3);
+
+        // A Parse re-uses another Parse.
+        let (new_again, shared) = cache.insert(&parse);
+        assert!(!new_again);
+        assert_eq!(shared, extended);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(used(&cache, &extended), 2);
     }
 
     #[test]
@@ -533,7 +575,7 @@ mod test {
     }
 
     #[test]
-    fn test_decrement_marks_as_unused() {
+    fn test_close_marks_as_unused() {
         let mut cache = GlobalCache::default();
         let parse = Parse::named("test", "SELECT 1");
 
@@ -545,18 +587,18 @@ mod test {
         let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 3);
 
-        cache.decrement(&name);
+        cache.close(&name);
         let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 2);
         assert!(cache.unused.is_empty());
 
-        cache.decrement(&name);
-        cache.decrement(&name);
+        cache.close(&name);
+        cache.close(&name);
         let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
         assert!(cache.unused.contains(&1));
 
-        cache.decrement(&name);
+        cache.close(&name);
         let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
     }
