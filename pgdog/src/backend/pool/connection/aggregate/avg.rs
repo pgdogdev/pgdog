@@ -26,6 +26,11 @@ impl Avg {
         let total_count: i64 = self.values_and_weights.iter().map(|i| i.1).sum();
         let total_count = Decimal::from(total_count);
 
+        if total_count.is_zero() {
+            debug_assert!(self.values_and_weights.iter().all(|(v, _)| v.is_null()));
+            return Ok(Datum::Null);
+        }
+
         // Ensure we limit numeric results to the number of significant digits
         // that PG would have provided
         let numeric_scale = self
@@ -186,5 +191,12 @@ mod tests {
         state.accumulate(f64::NAN.into(), 1);
         state.accumulate(1.0.into(), 1_000_000);
         assert_eq!(state.finalize().unwrap(), Datum::from(f64::NAN));
+    }
+
+    #[test]
+    fn avg_with_only_nulls_returns_null() {
+        let mut state = Avg::new(0, 0);
+        state.accumulate(Datum::Null, 0);
+        assert_eq!(state.finalize().unwrap(), Datum::Null);
     }
 }
