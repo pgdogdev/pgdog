@@ -256,6 +256,12 @@ mod tests {
     }
 
     #[test]
+    fn parses_reset_prepared_command() {
+        let result = Parser::parse("RESET PREPARED");
+        assert!(matches!(result, Ok(ParseResult::ResetPrepared(_))));
+    }
+
+    #[test]
     fn rejects_unknown_admin_command() {
         let result = Parser::parse("FOO BAR");
         assert!(matches!(result, Err(Error::Syntax)));
