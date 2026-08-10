@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::net::messages::ErrorResponse;
+use crate::{backend::pool::transport::TransportError, net::messages::ErrorResponse};
 
 use super::databases::User;
 
@@ -146,6 +146,9 @@ pub enum Error {
 
     #[error("missing canonical oid for type {0}")]
     MissingCanonicalOid(String),
+
+    #[error(transparent)]
+    Transport(#[from] TransportError),
 }
 
 impl From<crate::frontend::Error> for Error {

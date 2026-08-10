@@ -37,7 +37,7 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
         return Ok(region.clone());
     }
 
-    let host = addr.host.tcp().expect("Host must be a TCP address");
+    let host = addr.host.tcp()?;
     infer_region_from_rds_host(host).ok_or_else(|| {
         Error::RdsIamToken(format!(
             "unable to infer AWS region from host \"{}\"; set \"server_iam_region\"",
@@ -54,7 +54,7 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
     let region = resolve_region(&addr)?;
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let host = addr.host.tcp().expect("host must be a TCP address");
+    let host = addr.host.tcp()?;
 
     let config = AuthTokenConfig::builder()
         .hostname(host)

@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    backend::pool::{address::Transport, stats::MemoryStats},
+    backend::pool::{stats::MemoryStats, transport::Transport},
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -253,10 +253,8 @@ impl Server {
                 Stream::plain(tcp, config.config.memory.net_buffer)
             }
             Transport::Unix(_) => {
-                let path = addr
-                    .host
-                    .unix_socket_path(&addr.port)
-                    .expect("unix transport");
+                let path = addr.host.unix_socket_path(&addr.port)?;
+
                 debug!("connecting to Unix socket {}", path.display());
                 Stream::unix(
                     UnixStream::connect(&path).await?,
@@ -268,7 +266,7 @@ impl Server {
         let tls_mode = config.config.general.tls_verify;
 
         // Only attempt TLS if not in Disabled mode and its not connecting to a unix socket
-        if tls_mode != TlsVerifyMode::Disabled && addr.host.tcp().is_some() {
+        if tls_mode != TlsVerifyMode::Disabled && addr.host.tcp().is_ok() {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
                 tls_mode, addr,
@@ -293,11 +291,7 @@ impl Server {
                 )?;
                 let plain = stream.take()?;
 
-                let host = addr
-                    .host
-                    .tcp()
-                    .expect("host address must be a TCP address")
-                    .to_owned();
+                let host = addr.host.tcp()?.to_owned();
                 let server_name = ServerName::try_from(host)?;
                 debug!("connecting with TLS to server name: {:?}", server_name);
 

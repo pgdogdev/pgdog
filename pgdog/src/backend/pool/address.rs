@@ -1,9 +1,6 @@
 //! Server address.
-use std::fmt::Display;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
-use std::path::Path;
-use std::path::PathBuf;
 
 use pgdog_config::Role;
 use pgdog_config::users::PasswordKind;
@@ -15,54 +12,8 @@ use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
+use crate::backend::pool::transport::Transport;
 use crate::config::{Database, ServerAuth, User, config};
-
-/// Transport enum
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum Transport {
-    TCP(String),
-    Unix(PathBuf),
-}
-
-impl Transport {
-    pub fn new(value: &str) -> Self {
-        if value.starts_with('/') {
-            Transport::Unix(value.into())
-        } else {
-            Transport::TCP(value.to_string())
-        }
-    }
-
-    pub fn unix_socket_path(&self, port: &u16) -> Option<PathBuf> {
-        match self {
-            Transport::Unix(dir) => Some(dir.join(format!(".s.PGSQL.{}", port))),
-            Transport::TCP(_) => None,
-        }
-    }
-
-    pub fn tcp(&self) -> Option<&str> {
-        match self {
-            Transport::TCP(host) => Some(host),
-            Transport::Unix(_) => None,
-        }
-    }
-
-    pub fn unix(&self) -> Option<&Path> {
-        match self {
-            Transport::TCP(_) => None,
-            Transport::Unix(path_buf) => Some(path_buf),
-        }
-    }
-}
-
-impl Display for Transport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Transport::TCP(addr) => write!(f, "{}", addr),
-            Transport::Unix(path_buf) => write!(f, "{}", path_buf.display()),
-        }
-    }
-}
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -96,9 +47,7 @@ pub struct Address {
 }
 
 impl Default for Address {
-    /// Local development defaults: `pgdog` on `127.0.0.1:5432`. `Transport`
-    /// deliberately has no `Default` — the transport decision must always be
-    /// explicit — so the TCP variant is chosen here, at this one visible site.
+    /// Local development defaults: `pgdog` on `127.0.0.1:5432`. `
     fn default() -> Self {
         Address {
             host: Transport::TCP("127.0.0.1".to_string()),
@@ -239,7 +188,7 @@ impl Address {
     ///
     pub(crate) async fn addr(&self) -> Result<SocketAddr, Error> {
         let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
-        let host = self.host.tcp().expect("addr must be a TCP address");
+        let host = self.host.tcp()?;
 
         if dns_cache_override_enabled {
             let ip = DnsCache::global().resolve(host).await?;
