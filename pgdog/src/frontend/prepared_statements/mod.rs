@@ -184,11 +184,16 @@ pub fn start_maintenance() {
     });
 }
 
-/// Check prepared statements cache for overflows
-/// and remove any unused statements exceeding the limit.
+/// Re-apply the configured cache limits, evicting anything unused over
+/// them. A safety net behind the enforcement that already runs when the
+/// cache grows or a statement is released; `0` means unlimited here the
+/// same as everywhere else.
 pub fn run_maintenance() {
-    let capacity = config().config.general.prepared_statements_limit;
-    PreparedStatements::global().write().close_unused(capacity);
+    let general = &config().config.general;
+    PreparedStatements::global().write().configure(
+        general.prepared_statements_limit,
+        general.prepared_statements_memory_limit,
+    );
 }
 
 #[cfg(test)]

@@ -75,9 +75,25 @@ impl Command for Set {
 
             "prepared_statements_limit" => {
                 config.config.general.prepared_statements_limit = self.value.parse()?;
-                PreparedStatements::global()
-                    .write()
-                    .close_unused(config.config.general.prepared_statements_limit);
+                if config.config.general.prepared_statements_limit == 0 {
+                    tracing::warn!(
+                        "prepared_statements_limit set to 0, which now means unlimited; \
+                        to clear the cache, use {}",
+                        super::reset_prepared::RESET_PREPARED,
+                    );
+                }
+                PreparedStatements::global().write().configure(
+                    config.config.general.prepared_statements_limit,
+                    config.config.general.prepared_statements_memory_limit,
+                );
+            }
+
+            "prepared_statements_memory_limit" => {
+                config.config.general.prepared_statements_memory_limit = self.value.parse()?;
+                PreparedStatements::global().write().configure(
+                    config.config.general.prepared_statements_limit,
+                    config.config.general.prepared_statements_memory_limit,
+                );
             }
 
             "prepared_statements" => {
