@@ -268,12 +268,7 @@ impl TryFrom<Url> for Address {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        path::PathBuf,
-        time::{Duration, Instant, SystemTime},
-    };
-
-    use pg_query::protobuf::Token::Path;
+    use std::time::{Duration, Instant, SystemTime};
 
     use crate::{backend::pool::transport::unix_socket_path, config};
 
@@ -743,15 +738,16 @@ mod test {
 
     #[test]
     fn test_unix_socket_path() {
-        let mut dir = PathBuf::new();
-        dir.push("/tmp");
-        let unix = Transport::new("/tmp");
+        let dir = std::path::PathBuf::from("/tmp");
         assert_eq!(
             unix_socket_path(&dir, &5432),
-            Ok(std::path::PathBuf::from("/tmp/.s.PGSQL.5432"))
+            std::path::PathBuf::from("/tmp/.s.PGSQL.5432")
         );
 
-        let tcp = Transport::new("127.0.0.1");
-        assert!(tcp.unix_socket_path(&5432).is_err());
+        // Any port formats into the socket file name.
+        assert_eq!(
+            unix_socket_path(&dir, &54321),
+            std::path::PathBuf::from("/tmp/.s.PGSQL.54321")
+        );
     }
 }
