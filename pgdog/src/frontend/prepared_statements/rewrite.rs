@@ -59,8 +59,13 @@ impl<'a> Rewrite<'a> {
     }
 
     /// Handle Close message.
+    ///
+    /// Portals have their own name space, so a portal Close can carry the
+    /// name of a prepared statement we still need.
     fn close(&mut self, close: &Close) -> Result<(), Error> {
-        self.statements.close(close.name());
+        if close.is_statement() {
+            self.statements.close(close.name());
+        }
         Ok(())
     }
 }
@@ -117,5 +122,32 @@ mod test {
 
         assert_eq!(statements.len_local(), 1);
         assert_eq!(statements.global.read().len(), 1);
+    }
+
+    /// A portal Close can carry a prepared statement's name. If it releases
+    /// the statement, the next sweep takes it while the client still needs it.
+    #[test]
+    fn test_rewrite_close_portal_keeps_statement() {
+        let mut statements = PreparedStatements::default();
+        let global = statements.global.clone();
+
+        let mut parse = ProtocolMessage::from(Parse::named("foo", "SELECT $1"));
+        statements.maybe_rewrite(&mut parse).unwrap();
+
+        let mut close = ProtocolMessage::from(Close::portal("foo"));
+        statements.maybe_rewrite(&mut close).unwrap();
+
+        assert_eq!(global.write().close_unused(0), 0);
+        assert_eq!(global.read().len(), 1);
+        assert_eq!(
+            statements.name("foo").map(|name| name.as_str()),
+            Some("__pgdog_1")
+        );
+
+        let mut close = ProtocolMessage::from(Close::named("foo"));
+        statements.maybe_rewrite(&mut close).unwrap();
+
+        assert_eq!(global.write().close_unused(0), 1);
+        assert_eq!(global.read().len(), 0);
     }
 }
