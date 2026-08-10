@@ -66,6 +66,7 @@ pub struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
+    portal_open: bool,
 }
 
 impl QueryEngine {
@@ -89,6 +90,7 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
+            portal_open: false,
         })
     }
 
@@ -152,6 +154,8 @@ impl QueryEngine {
         self.backend.mirror(context.client_request);
 
         self.pending_explain = None;
+
+        self.portal_open |= context.client_request.opens_portal();
 
         // Check if we need to lock the backend in-place.
         // This is here because ROLLBACK and COMMIT
@@ -271,7 +275,7 @@ impl QueryEngine {
         let state = if self.backend.has_more_messages() {
             State::Active
         } else {
-            match context.in_transaction() {
+            match context.in_transaction() || self.portal_open {
                 true => State::IdleInTransaction,
                 false => State::Idle,
             }

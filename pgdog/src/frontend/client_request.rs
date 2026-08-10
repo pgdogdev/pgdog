@@ -245,6 +245,15 @@ impl ClientRequest {
             .any(|m| ['E', 'Q', 'B'].contains(&m.code()))
     }
 
+    /// Portal should outlive the batch, only Sync closes.
+    pub(crate) fn opens_portal(&self) -> bool {
+        self.messages
+            .last()
+            .map(|m| m.code() == 'H')
+            .unwrap_or(false)
+            && self.messages.iter().any(|m| ['B', 'E'].contains(&m.code()))
+    }
+
     /// We split up the extended protocol exhange as soon as we see
     /// a Flush message. This means we can handle this:
     ///
@@ -837,5 +846,49 @@ mod test {
         // Flush alone is meaningless — no statement references.
         let req = ClientRequest::from(vec![Flush.into()]);
         assert!(!req.needs_parse_injection());
+    }
+
+    #[test]
+    fn opens_portal_bind_then_flush() {
+        let req = ClientRequest::from(vec![
+            Parse::new_anonymous("SELECT 1").into(),
+            Bind::new_statement("").into(),
+            Describe::new_statement("").into(),
+            Flush.into(),
+        ]);
+        assert!(req.opens_portal());
+    }
+
+    #[test]
+    fn opens_portal_parse_describe_flush_does_not() {
+        // No portal yet — existing last_parse replay covers this.
+        let req = ClientRequest::from(vec![
+            Parse::new_anonymous("SELECT 1").into(),
+            Describe::new_statement("").into(),
+            Flush.into(),
+        ]);
+        assert!(!req.opens_portal());
+    }
+
+    #[test]
+    fn opens_portal_execute_then_flush() {
+        let req = ClientRequest::from(vec![Execute::new().into(), Flush.into()]);
+        assert!(req.opens_portal());
+    }
+
+    #[test]
+    fn opens_portal_sync_terminated_does_not() {
+        let req = ClientRequest::from(vec![
+            Bind::new_statement("").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ]);
+        assert!(!req.opens_portal());
+    }
+
+    #[test]
+    fn opens_portal_sync_only_does_not() {
+        let req = ClientRequest::from(vec![Sync::new().into()]);
+        assert!(!req.opens_portal());
     }
 }

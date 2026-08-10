@@ -229,6 +229,9 @@ impl QueryEngine {
             // the router and the command state.
             self.advisory_locks
                 .merge(self.router.command().route().advisory_locks());
+
+            self.portal_open = false;
+
             self.check_lock();
 
             if !context.in_transaction() {
@@ -237,6 +240,8 @@ impl QueryEngine {
         }
 
         self.stats.sent(message.len());
+
+        self.check_lock();
 
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
