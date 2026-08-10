@@ -12,7 +12,7 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_util::task::TaskTracker;
 
 use crate::backend::ConnectReason;
-use crate::backend::pool::address::Transport;
+use crate::backend::pool::transport::Transport;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};

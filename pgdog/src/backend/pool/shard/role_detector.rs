@@ -44,7 +44,7 @@ mod test {
 
     use crate::backend::databases::User;
     use crate::backend::pool::lsn_monitor::LsnStats;
-    use crate::backend::pool::{Address, Config, PoolConfig, address::Transport};
+    use crate::backend::pool::{Address, Config, PoolConfig, transport::Transport};
     use crate::backend::replication::publisher::Lsn;
     use crate::config::{ReadWriteSplit, Role};
     use pgdog_stats::LsnStats as StatsLsnStats;

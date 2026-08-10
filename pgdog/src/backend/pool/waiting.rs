@@ -91,7 +91,7 @@ pub(super) struct Waiter {
 mod tests {
     use super::*;
     use crate::backend::pool::Pool;
-    use crate::backend::pool::address::Transport;
+    use crate::backend::pool::transport::Transport;
     use crate::net::messages::FrontendPid;
     use tokio::time::{Duration, sleep, timeout};
 

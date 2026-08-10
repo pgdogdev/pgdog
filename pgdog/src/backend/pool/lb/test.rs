@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request, address::Transport};
+use crate::backend::pool::{Address, Config, Error, PoolConfig, Request, transport::Transport};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};

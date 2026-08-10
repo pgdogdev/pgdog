@@ -40,7 +40,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
     use super::*;
-    use crate::backend::pool::address::Transport;
+    use crate::backend::pool::transport::Transport;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
     use pgdog_config::Role;

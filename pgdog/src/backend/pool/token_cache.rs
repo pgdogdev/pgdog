@@ -280,7 +280,7 @@ impl TokenCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::pool::address::Transport;
+    use crate::backend::pool::transport::Transport;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

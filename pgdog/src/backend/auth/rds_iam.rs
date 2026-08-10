@@ -90,7 +90,7 @@ mod tests {
     use pgdog_config::Role;
 
     use super::*;
-    use crate::backend::pool::address::Transport;
+    use crate::backend::pool::transport::Transport;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
 

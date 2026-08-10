@@ -733,10 +733,10 @@ mod test {
         let unix = Transport::new("/tmp");
         assert_eq!(
             unix.unix_socket_path(&5432),
-            Some(PathBuf::from("/tmp/.s.PGSQL.5432"))
+            Ok(std::path::PathBuf::from("/tmp/.s.PGSQL.5432"))
         );
 
         let tcp = Transport::new("127.0.0.1");
-        assert_eq!(tcp.unix_socket_path(&5432), None);
+        assert!(tcp.unix_socket_path(&5432).is_err());
     }
 }

@@ -509,7 +509,7 @@ impl Monitor {
 #[cfg(test)]
 mod test {
     use crate::backend::pool::test::pool;
-    use crate::backend::pool::{Address, Config, PoolConfig, address::Transport};
+    use crate::backend::pool::{Address, Config, PoolConfig, transport::Transport};
 
     use super::*;
 
