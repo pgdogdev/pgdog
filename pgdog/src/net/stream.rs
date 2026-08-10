@@ -141,6 +141,17 @@ impl Stream {
         }
     }
 
+    /// Wrap a unix socket stream.
+    pub fn unix(stream: UnixStream, capacity: usize) -> Self {
+        Self {
+            inner: StreamInner::UnixSockets(BufStream::with_capacity(capacity, capacity, stream)),
+            io_in_progress: false,
+            capacity,
+            tls_identity: None,
+            tls_client_certificate: false,
+        }
+    }
+
     /// Wrap an encrypted TCP stream.
     pub fn tls(
         stream: tokio_rustls::TlsStream<TcpStream>,

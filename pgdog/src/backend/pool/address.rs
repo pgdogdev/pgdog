@@ -34,6 +34,13 @@ impl Transport {
         }
     }
 
+    pub fn unix_socket_path(&self, port: &u16) -> Option<PathBuf> {
+        match self {
+            Transport::Unix(dir) => Some(dir.join(format!(".s.PGSQL.{}", port))),
+            Transport::TCP(_) => None,
+        }
+    }
+
     pub fn tcp(&self) -> Option<&str> {
         match self {
             Transport::TCP(host) => Some(host),

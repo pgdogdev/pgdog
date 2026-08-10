@@ -6,7 +6,7 @@ use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpStream, UnixStream},
     spawn,
     time::Instant,
 };
@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    backend::pool::stats::MemoryStats,
+    backend::pool::{address::Transport, stats::MemoryStats},
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -238,17 +238,32 @@ impl Server {
         oids: Arc<Oids>,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
+        let mut stream = match &addr.host {
+            Transport::TCP(_) => {
+                let socket = addr.addr().await?;
+                let tcp = TcpStream::connect(socket).await?;
 
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
-            warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
-            );
-        }
-
-        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+                if let Err(err) = tweak(&tcp, &config.config.tcp) {
+                    warn!(
+                        "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                        config.config.tcp, err, addr,
+                    );
+                }
+                Stream::plain(tcp, config.config.memory.net_buffer)
+            }
+            Transport::Unix(_) => {
+                let path = addr
+                    .host
+                    .unix_socket_path(&addr.port)
+                    .expect("unix transport");
+                debug!("connecting to Unix socket {}", path.display());
+                Stream::unix(
+                    UnixStream::connect(&path).await?,
+                    config.config.memory.net_buffer,
+                )
+            }
+        };
 
         let tls_mode = config.config.general.tls_verify;
 
@@ -455,7 +470,21 @@ impl Server {
 
     /// Request query cancellation for the given backend server identifier.
     pub async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr.addr().await?).await?;
+        let mut stream = match &addr.host {
+            Transport::TCP(_) => {
+                let tcp = TcpStream::connect(addr.addr().await?).await?;
+                Stream::plain(tcp, config().config.memory.net_buffer)
+            }
+            Transport::Unix(_) => {
+                let path = addr
+                    .host
+                    .unix_socket_path(&addr.port)
+                    .expect("Unix transport");
+                let unix = UnixStream::connect(&path).await?;
+                Stream::unix(unix, config().config.memory.net_buffer)
+            }
+        };
+
         stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
 
