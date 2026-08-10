@@ -217,7 +217,8 @@ impl QueryParserTest {
             self.sticky,
         )
         .unwrap()
-        .with_resolved_lookups(self.resolved_lookups.clone());
+        .with_resolved_lookups(self.resolved_lookups.clone())
+        .with_prepared_statements(&mut self.prepared);
 
         let command = self.parser.parse(router_ctx)?;
         Ok(command.clone())
