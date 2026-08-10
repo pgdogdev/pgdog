@@ -278,7 +278,12 @@ impl Server {
                 )?;
                 let plain = stream.take()?;
 
-                let server_name = ServerName::try_from(addr.host.clone())?;
+                let host = addr
+                    .host
+                    .tcp()
+                    .expect("host address must be a TCP address")
+                    .to_owned();
+                let server_name = ServerName::try_from(host)?;
                 debug!("connecting with TLS to server name: {:?}", server_name);
 
                 match connector.connect(server_name.clone(), plain).await {

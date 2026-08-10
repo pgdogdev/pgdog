@@ -43,7 +43,7 @@ impl Command for ShowServerMemory {
             row.add(server.stats.pool_id as i64)
                 .add(server.addr.database_name.as_str())
                 .add(server.addr.user.as_str())
-                .add(server.addr.host.as_str())
+                .add(server.addr.host.to_string())
                 .add(server.addr.port as i64)
                 .add(server.stats.id)
                 .add(memory.buffer.reallocs as i64)

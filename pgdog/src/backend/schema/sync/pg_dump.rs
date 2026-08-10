@@ -186,7 +186,7 @@ fn build_pg_dump_command(
     command
         .arg("--schema-only")
         .arg("-h")
-        .arg(&addr.host)
+        .arg(&addr.host.to_string())
         .arg("-p")
         .arg(addr.port.to_string())
         .arg("-U")

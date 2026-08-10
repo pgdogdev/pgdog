@@ -55,7 +55,7 @@ impl Command for ShowBans {
                     row.add(pool.id() as i64)
                         .add(user.database.as_str())
                         .add(user.user.as_str())
-                        .add(pool.addr().host.as_str())
+                        .add(pool.addr().host.to_string())
                         .add(pool.addr().port as i64)
                         .add(shard_num as i64)
                         .add(role.to_string())

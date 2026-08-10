@@ -76,7 +76,7 @@ impl From<&Address> for CacheKey {
     fn from(addr: &Address) -> Self {
         Self {
             user: addr.user.clone(),
-            host: addr.host.clone(),
+            host: addr.host.to_string(),
             port: addr.port,
         }
     }

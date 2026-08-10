@@ -4,13 +4,14 @@ use bytes::{BufMut, BytesMut};
 use futures::FutureExt;
 use pin_project::pin_project;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
-use tokio::net::{TcpStream, UnixStream};
+use tokio::net::{TcpStream, UnixStream, unix};
 use tracing::trace;
 
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Context;
 
@@ -27,11 +28,11 @@ fn unix_peek(stream: &UnixStream, buffer: &mut [u8]) -> Option<std::io::Result<u
     };
 
     if n >= 0 {
-        return Some(Ok(n as usize));
+        Some(Ok(n as usize))
     } else if io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
-        return None;
+        None
     } else {
-        return Some(Err(io::Error::last_os_error()));
+        Some(Err(io::Error::last_os_error()))
     }
 }
 
@@ -183,14 +184,14 @@ impl Stream {
         matches!(self.inner, StreamInner::Tls(_))
     }
 
-    /// Get peer address if any. We're not using UNIX sockets (yet)
+    /// Get peer address/unix socket if any.
     /// so the peer address should always be available.
     pub fn peer_addr(&self) -> PeerAddr {
         match &self.inner {
-            StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
-            StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
-            StreamInner::DevNull => PeerAddr { addr: None },
-            StreamInner::UnixSockets(stream) => PeerAddr { addr: None },
+            StreamInner::Plain(stream) => stream.get_ref().peer_addr().into(),
+            StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().into(),
+            StreamInner::DevNull => PeerAddr::Empty,
+            StreamInner::UnixSockets(stream) => stream.get_ref().peer_addr().into(),
         }
     }
 
@@ -397,30 +398,44 @@ pub fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
 
 /// Wrapper around SocketAddr
 /// to make it easier to debug.
-pub struct PeerAddr {
-    addr: Option<SocketAddr>,
+pub enum PeerAddr {
+    /// TCP peer: Ip and Port
+    TCP(SocketAddr),
+    /// Unix Socket file path
+    Unix(PathBuf),
+    /// No Identifiable Peer
+    Empty,
 }
 
-impl Deref for PeerAddr {
-    type Target = Option<SocketAddr>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.addr
+impl From<io::Result<SocketAddr>> for PeerAddr {
+    fn from(addr: io::Result<SocketAddr>) -> Self {
+        match addr {
+            Ok(addr) => PeerAddr::TCP(addr),
+            Err(_) => PeerAddr::Empty,
+        }
     }
 }
 
-impl From<Option<SocketAddr>> for PeerAddr {
-    fn from(value: Option<SocketAddr>) -> Self {
-        Self { addr: value }
+impl From<io::Result<unix::SocketAddr>> for PeerAddr {
+    fn from(addr: io::Result<unix::SocketAddr>) -> Self {
+        match addr {
+            Ok(addr) => {
+                let Some(path) = addr.as_pathname() else {
+                    return PeerAddr::Empty;
+                };
+                PeerAddr::Unix(path.into())
+            }
+            Err(_) => PeerAddr::Empty,
+        }
     }
 }
 
 impl std::fmt::Debug for PeerAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(addr) = &self.addr {
-            write!(f, "[{}]", addr)
-        } else {
-            write!(f, "")
+        match self {
+            PeerAddr::TCP(addr) => write!(f, "[{}]", addr),
+            PeerAddr::Unix(file_path) => write!(f, "{}", file_path.display()),
+            PeerAddr::Empty => write!(f, "No address"),
         }
     }
 }

@@ -90,7 +90,7 @@ impl Command for ShowServers {
                 .add("pool_id", server.stats.pool_id)
                 .add("database", server.addr.database_name)
                 .add("user", server.addr.user)
-                .add("addr", server.addr.host.as_str())
+                .add("addr", server.addr.host.to_string())
                 .add("port", server.addr.port.to_string())
                 .add("state", server.stats.state.to_string())
                 .add(

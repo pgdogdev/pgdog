@@ -1,6 +1,10 @@
 //! Server address.
+use std::default::Default;
+use std::fmt::Display;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
+use std::path::Path;
+use std::path::PathBuf;
 
 use pgdog_config::Role;
 use pgdog_config::users::PasswordKind;
@@ -14,11 +18,57 @@ use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::config::{Database, ServerAuth, User, config};
 
+/// Transport enum
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum Transport {
+    TCP(String),
+    Unix(PathBuf),
+}
+
+impl Transport {
+    pub fn new(value: &str) -> Self {
+        if value.starts_with('/') {
+            Transport::Unix(value.into())
+        } else {
+            Transport::TCP(value.to_string())
+        }
+    }
+
+    pub fn tcp(&self) -> Option<&str> {
+        match self {
+            Transport::TCP(host) => Some(host),
+            Transport::Unix(_) => None,
+        }
+    }
+
+    pub fn unix(&self) -> Option<&Path> {
+        match self {
+            Transport::TCP(_) => None,
+            Transport::Unix(path_buf) => Some(path_buf),
+        }
+    }
+}
+
+impl Display for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Transport::TCP(addr) => write!(f, "{}", addr),
+            Transport::Unix(path_buf) => write!(f, "{}", path_buf.display()),
+        }
+    }
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Transport::TCP("127.0.0.1".to_string())
+    }
+}
+
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
 pub struct Address {
     /// Server host.
-    pub host: String,
+    pub host: Transport,
     /// Server port.
     pub port: u16,
     /// PostgreSQL database name.
@@ -48,7 +98,7 @@ pub struct Address {
 impl From<Address> for pgdog_stats::Address {
     fn from(value: Address) -> Self {
         pgdog_stats::Address {
-            host: value.host,
+            host: value.host.to_string(),
             port: value.port,
             database_name: value.database_name,
             user: value.user,
@@ -66,7 +116,7 @@ impl Address {
         let server_auth = user.server_auth;
 
         Address {
-            host: database.host.clone(),
+            host: Transport::new(&database.host),
             port: database.port,
             database_name: if let Some(database_name) = database.database_name.clone() {
                 database_name
@@ -168,9 +218,10 @@ impl Address {
     ///
     pub(crate) async fn addr(&self) -> Result<SocketAddr, Error> {
         let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
+        let host = self.host.tcp().expect("addr must be a TCP address");
 
         if dns_cache_override_enabled {
-            let ip = DnsCache::global().resolve(&self.host).await?;
+            let ip = DnsCache::global().resolve(&host).await?;
             return Ok(SocketAddr::new(ip, self.port));
         }
 
@@ -179,7 +230,7 @@ impl Address {
 
         socket_addrs
             .next()
-            .ok_or(Error::DnsResolutionFailed(self.host.clone()))
+            .ok_or(Error::DnsResolutionFailed(host.to_string()))
     }
 
     /// A replacement for [`PartialEq`] which accounts for
@@ -241,7 +292,7 @@ impl TryFrom<Url> for Address {
         // via the derived `Default`. The PROBE command (the only caller)
         // never reads `configured_role` anyway.
         Ok(Self {
-            host,
+            host: Transport::new(&host),
             port,
             passwords: vec![password.into()],
             user,
@@ -280,7 +331,7 @@ mod test {
 
         let address = Address::new(&database, &user, 0);
 
-        assert_eq!(address.host, "127.0.0.1");
+        assert_eq!(address.host.into(), "127.0.0.1");
         assert_eq!(address.port, 6432);
         assert_eq!(address.database_name, "pgdog");
         assert_eq!(address.user, "pgdog");
@@ -361,7 +412,7 @@ mod test {
         let addr =
             Address::try_from(Url::parse("postgres://user:password@127.0.0.1:6432/pgdb").unwrap())
                 .unwrap();
-        assert_eq!(addr.host, "127.0.0.1");
+        assert_eq!(addr.host.into(), "127.0.0.1");
         assert_eq!(addr.port, 6432);
         assert_eq!(addr.database_name, "pgdb");
         assert_eq!(addr.user, "user");
