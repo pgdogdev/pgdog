@@ -12,7 +12,7 @@ use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::backend::pool::transport::Transport;
+use crate::backend::pool::transport::{Transport, unix_socket_path};
 use crate::config::{Database, ServerAuth, User, config};
 
 /// Server address.
@@ -221,11 +221,19 @@ impl Address {
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}@{}:{}/{}",
-            self.user, self.host, self.port, self.database_name
-        )
+        match &self.host {
+            Transport::TCP(host) => {
+                write!(
+                    f,
+                    "{}@{}:{}/{}",
+                    self.user, host, self.port, self.database_name
+                )
+            }
+            Transport::Unix(dir) => {
+                let file = unix_socket_path(dir, &self.port);
+                write!(f, "{}", file.display())
+            }
+        }
     }
 }
 
@@ -260,9 +268,14 @@ impl TryFrom<Url> for Address {
 
 #[cfg(test)]
 mod test {
-    use std::time::{Duration, Instant, SystemTime};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant, SystemTime},
+    };
 
-    use crate::config;
+    use pg_query::protobuf::Token::Path;
+
+    use crate::{backend::pool::transport::unix_socket_path, config};
 
     use super::*;
 
@@ -730,9 +743,11 @@ mod test {
 
     #[test]
     fn test_unix_socket_path() {
+        let mut dir = PathBuf::new();
+        dir.push("/tmp");
         let unix = Transport::new("/tmp");
         assert_eq!(
-            unix.unix_socket_path(&5432),
+            unix_socket_path(&dir, &5432),
             Ok(std::path::PathBuf::from("/tmp/.s.PGSQL.5432"))
         );
 

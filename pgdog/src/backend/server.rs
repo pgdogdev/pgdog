@@ -18,7 +18,10 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    backend::pool::{stats::MemoryStats, transport::Transport},
+    backend::pool::{
+        stats::MemoryStats,
+        transport::{Transport, unix_socket_path},
+    },
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -252,9 +255,8 @@ impl Server {
                 }
                 Stream::plain(tcp, config.config.memory.net_buffer)
             }
-            Transport::Unix(_) => {
-                let path = addr.host.unix_socket_path(&addr.port)?;
-
+            Transport::Unix(dir) => {
+                let path = unix_socket_path(dir, &addr.port);
                 debug!("connecting to Unix socket {}", path.display());
                 Stream::unix(
                     UnixStream::connect(&path).await?,
@@ -469,11 +471,8 @@ impl Server {
                 let tcp = TcpStream::connect(addr.addr().await?).await?;
                 Stream::plain(tcp, config().config.memory.net_buffer)
             }
-            Transport::Unix(_) => {
-                let path = addr
-                    .host
-                    .unix_socket_path(&addr.port)
-                    .expect("Unix transport");
+            Transport::Unix(dir) => {
+                let path = unix_socket_path(dir, &addr.port);
                 let unix = UnixStream::connect(&path).await?;
                 Stream::unix(unix, config().config.memory.net_buffer)
             }

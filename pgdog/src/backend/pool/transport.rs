@@ -21,19 +21,16 @@ pub enum TransportError {
     ExpectedUnix(String),
 }
 
+pub fn unix_socket_path(dir: &Path, port: &u16) -> PathBuf {
+    dir.join(format!(".s.PGSQL.{}", port))
+}
+
 impl Transport {
     pub fn new(value: &str) -> Self {
         if value.starts_with('/') {
             Transport::Unix(value.into())
         } else {
             Transport::TCP(value.to_string())
-        }
-    }
-
-    pub fn unix_socket_path(&self, port: &u16) -> Result<PathBuf, TransportError> {
-        match self {
-            Transport::TCP(host) => Err(TransportError::ExpectedUnix(host.clone())),
-            Transport::Unix(dir) => Ok(dir.join(format!(".s.PGSQL.{}", port))),
         }
     }
 
