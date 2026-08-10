@@ -2628,20 +2628,11 @@ pub mod test {
         let mut server = test_server().await;
 
         server
-            .send(
-                &vec![
-                    Query::new("PREPARE schema_stmt AS SELECT 1").into(),
-                    Sync.into(),
-                ]
-                .into(),
-            )
+            .send(&vec![Parse::named("__pgdog_1", "SELECT 1").into(), Flush.into()].into())
             .await
             .unwrap();
-        for c in ['C', 'Z'] {
-            let msg = server.read().await.unwrap();
-            assert_eq!(msg.code(), c);
-        }
-        server.prepared_statements.prepared("schema_stmt");
+        let msg = server.read().await.unwrap();
+        assert_eq!(msg.code(), '1');
         assert!(!server.prepared_statements.is_empty());
 
         // A schema change invalidates everything we cached for this connection.
