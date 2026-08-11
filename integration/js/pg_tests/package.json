@@ -14,8 +14,9 @@
   "dependencies": {
     "@prisma/client": "^6.5.0",
     "pg": "^8.14.1",
-    "postgres": "^3.4.7",
+    "pg-cursor": "^2.22.0",
     "pg-hstore": "^2.3.4",
+    "postgres": "^3.4.7",
     "sequelize": "^6.32.1"
   },
   "devDependencies": {

@@ -336,6 +336,140 @@ async fn test_parse_describe_flush_bind_execute_close_sync() {
     conn.write_all(&Terminate.to_bytes()).await.unwrap();
 
     handle.await.unwrap();
+
+    // No portal yet, so no pin: second batch takes a fresh server.
+    let dbs = databases();
+    let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
+    let shard = cluster.shards()[0].pools()[0].state();
+    assert_eq!(shard.stats.counts.server_assignment_count, 2);
+}
+
+/// https://github.com/pgdogdev/pgdog/issues/1330
+///
+/// Bind creates a portal that lives on one connection until Sync.
+#[tokio::test]
+async fn test_flush_after_bind_keeps_portal() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    // What pg-cursor opens with: no Execute in this batch.
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_statement("") },
+        { Describe::new_portal("") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'T']);
+
+    conn.write_all(&buffer!({ Execute::new() }, { Sync::new() }))
+        .await
+        .unwrap();
+
+    let _ = read!(conn, ['D', 'C', 'Z']);
+
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
+    handle.await.unwrap();
+
+    let dbs = databases();
+    let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
+    let shard = cluster.shards()[0].pools()[0].state();
+    assert_eq!(shard.stats.counts.server_assignment_count, 1);
+}
+
+/// Paging: pin survives several Flush batches, only Sync releases.
+#[tokio::test]
+async fn test_flush_portal_paging_stays_pinned() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT * FROM generate_series(1, 3)") },
+        { Bind::new_statement("") },
+        { Describe::new_portal("") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'T']);
+
+    // 's' is PortalSuspended.
+    for _ in 0..2 {
+        conn.write_all(&buffer!({ Execute::new_portal_limit("", 1) }, { Flush }))
+            .await
+            .unwrap();
+        let _ = read!(conn, ['D', 's']);
+    }
+
+    conn.write_all(&buffer!({ Execute::new() }, { Sync::new() }))
+        .await
+        .unwrap();
+    let _ = read!(conn, ['D', 'C', 'Z']);
+
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
+    handle.await.unwrap();
+
+    let dbs = databases();
+    let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
+    let shard = cluster.shards()[0].pools()[0].state();
+    assert_eq!(shard.stats.counts.server_assignment_count, 1);
+}
+
+/// Pin must not outlive the client.
+#[tokio::test]
+async fn test_flush_portal_released_on_terminate() {
+    let (mut conn, mut client, _) = new_client!(false);
+
+    let handle = tokio::spawn(async move {
+        client.run().await.unwrap();
+    });
+
+    conn.write_all(&buffer!(
+        { Parse::new_anonymous("SELECT 1") },
+        { Bind::new_statement("") },
+        { Describe::new_portal("") },
+        { Flush }
+    ))
+    .await
+    .unwrap();
+
+    let _ = read!(conn, ['1', '2', 'T']);
+
+    // Walk away, never send Sync.
+    conn.write_all(&Terminate.to_bytes()).await.unwrap();
+
+    timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("client did not shut down while holding a portal")
+        .unwrap();
+
+    let dbs = databases();
+    let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
+    let pool = &cluster.shards()[0].pools()[0];
+
+    // Check-in cleans the connection first, so it completes asynchronously.
+    timeout(Duration::from_secs(5), async {
+        while pool.state().checked_out != 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("backend leaked");
+
+    let state = pool.state();
+    assert_eq!(state.stats.counts.server_assignment_count, 1);
+    // Cleanup succeeded: the connection was reused, not discarded.
+    assert_eq!(state.force_close, 0, "cleanup failed, connection discarded");
+    assert_eq!(state.stats.counts.errors, 0);
 }
 
 #[tokio::test]

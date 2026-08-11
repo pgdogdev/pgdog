@@ -229,6 +229,7 @@ impl QueryEngine {
             // the router and the command state.
             self.advisory_locks
                 .merge(self.router.command().route().advisory_locks());
+
             self.check_lock();
 
             if !context.in_transaction() {

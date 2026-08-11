@@ -465,6 +465,12 @@ impl Server {
 
         self.stats.state(State::Active);
 
+        // A portal lives until Sync, and so does the implicit transaction
+        // Postgres opened to hold it. No ReadyForQuery will tell us about it.
+        if client_request.opens_portal() {
+            self.in_transaction = true;
+        }
+
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
