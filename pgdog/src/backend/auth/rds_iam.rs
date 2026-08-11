@@ -96,7 +96,7 @@ mod tests {
 
     fn make_addr() -> Address {
         Address {
-            host: Transport::new("db.cluster-abc123.us-east-1.rds.amazonaws.com"),
+            host: "db.cluster-abc123.us-east-1.rds.amazonaws.com".into(),
             port: 5432,
             database_name: "postgres".into(),
             user: "db_user".into(),
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn resolve_region_errors_when_neither_override_nor_inference() {
         let addr = Address {
-            host: Transport::new("postgres.internal.example.com"),
+            host: "postgres.internal.example.com".into(),
             port: 5432,
             user: "u".into(),
             server_iam_region: None,

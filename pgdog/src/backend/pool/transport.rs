@@ -57,3 +57,15 @@ impl Display for Transport {
         }
     }
 }
+
+impl From<&str> for Transport {
+    fn from(value: &str) -> Self {
+        Transport::new(value)
+    }
+}
+
+impl From<String> for Transport {
+    fn from(value: String) -> Self {
+        Transport::new(&value)
+    }
+}

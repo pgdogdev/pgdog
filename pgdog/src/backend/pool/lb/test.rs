@@ -13,7 +13,7 @@ use monitor::Monitor;
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     PoolConfig {
         address: Address {
-            host: Transport::new(&host),
+            host: host.into(),
             port,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -879,7 +879,7 @@ async fn test_monitor_unbans_all_when_all_unhealthy() {
 async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
     let pool_config1 = PoolConfig {
         address: Address {
-            host: Transport::new("127.0.0.1"),
+            host: "127.0.0.1".into(),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -898,7 +898,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
 
     let pool_config2 = PoolConfig {
         address: Address {
-            host: Transport::new("localhost"),
+            host: "localhost".into(),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1507,7 +1507,7 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
 fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> PoolConfig {
     PoolConfig {
         address: Address {
-            host: Transport::new(&host),
+            host: host.into(),
             port,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1928,7 +1928,7 @@ fn test_ban_check_does_not_ban_single_target() {
 fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
     let pool_config1 = PoolConfig {
         address: Address {
-            host: Transport::new("127.0.0.1"),
+            host: "127.0.0.1".into(),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],
@@ -1947,7 +1947,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
 
     let pool_config2 = PoolConfig {
         address: Address {
-            host: Transport::new("localhost"),
+            host: "localhost".into(),
             port: 5432,
             user: "pgdog".into(),
             passwords: vec!["pgdog".into()],

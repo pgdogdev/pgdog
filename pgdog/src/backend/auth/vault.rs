@@ -180,7 +180,7 @@ mod tests {
 
     fn make_addr(vault_path: Option<&str>) -> Address {
         Address {
-            host: Transport::new("127.0.0.1"),
+            host: "127.0.0.1".into(),
             port: 5432,
             database_name: "testdb".into(),
             user: "testuser".into(),

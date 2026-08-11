@@ -288,7 +288,7 @@ mod tests {
     /// in the global cache.
     fn addr(port: u16) -> Address {
         Address {
-            host: Transport::new("token-cache-test.internal"),
+            host: "token-cache-test.internal".into(),
             port,
             user: "test_user".into(),
             ..Default::default()

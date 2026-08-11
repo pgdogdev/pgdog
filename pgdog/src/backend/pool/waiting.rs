@@ -153,7 +153,7 @@ mod tests {
 
         let pool = Pool::new(&crate::backend::pool::PoolConfig {
             address: crate::backend::pool::Address {
-                host: Transport::new("127.0.0.1"),
+                host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),

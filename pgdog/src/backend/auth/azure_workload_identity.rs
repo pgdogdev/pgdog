@@ -53,7 +53,7 @@ mod tests {
         let _azure_token_file_path = set_env_var("AZURE_FEDERATED_TOKEN_FILE", "/tmp/example");
 
         let addr = Address {
-            host: Transport::new("my-awesome-db.postgres.database.azure.com"),
+            host: "my-awesome-db.postgres.database.azure.com".into(),
             port: 5432,
             database_name: "postgres".into(),
             user: "db_user".into(),

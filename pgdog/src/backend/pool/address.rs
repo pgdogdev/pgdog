@@ -84,9 +84,10 @@ impl Address {
     /// Create new address from config values.
     pub(crate) fn new(database: &Database, user: &User, database_number: usize) -> Self {
         let server_auth = user.server_auth;
+        let host = database.host.clone();
 
         Address {
-            host: Transport::new(&database.host),
+            host: host.into(),
             port: database.port,
             database_name: if let Some(database_name) = database.database_name.clone() {
                 database_name
@@ -251,7 +252,7 @@ impl TryFrom<Url> for Address {
         // `Role::Auto` below. The PROBE command (the only caller) never
         // reads `configured_role` anyway.
         Ok(Self {
-            host: Transport::new(&host),
+            host: host.into(),
             port,
             passwords: vec![password.into()],
             user,
@@ -492,7 +493,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_secret_rds_iam_serves_token_from_cache() {
         let addr = Address {
-            host: Transport::new("auth-secrets-rds.internal"),
+            host: "auth-secrets-rds.internal".into(),
             port: 15432,
             user: "rds_user".into(),
             server_auth: ServerAuth::RdsIam,
@@ -519,7 +520,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_secret_azure_workload_identity_serves_token_from_cache() {
         let addr = Address {
-            host: Transport::new("auth-secrets-azure.internal"),
+            host: "auth-secrets-azure.internal".into(),
             port: 15433,
             user: "azure_user".into(),
             server_auth: ServerAuth::AzureWorkloadIdentity,
@@ -547,7 +548,7 @@ mod test {
         use crate::backend::pool::token_cache::{Credentials, FetchedCredentials};
 
         let addr = Address {
-            host: Transport::new("auth-secrets-vault.internal"),
+            host: "auth-secrets-vault.internal".into(),
             port: 15435,
             user: "configured_user".into(),
             server_auth: ServerAuth::VaultDynamic,
@@ -617,7 +618,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_credentials_vault_static_serves_password_from_cache() {
         let addr = Address {
-            host: Transport::new("auth-secrets-vault-static.internal"),
+            host: "auth-secrets-vault-static.internal".into(),
             port: 15436,
             user: "pgdog_static".into(),
             server_auth: ServerAuth::VaultStatic,
@@ -674,7 +675,7 @@ mod test {
         // The monitor is responsible for refreshing it; auth_secrets never
         // blocks on a refresh.
         let addr = Address {
-            host: Transport::new("auth-secrets-stale.internal"),
+            host: "auth-secrets-stale.internal".into(),
             port: 15434,
             user: "stale_user".into(),
             server_auth: ServerAuth::RdsIam,
@@ -709,7 +710,7 @@ mod test {
         cache.clear_cache_for_testing();
 
         let addr = Address {
-            host: Transport::new(&hostname),
+            host: hostname.into(),
             port: 15432,
             ..Default::default()
         };

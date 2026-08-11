@@ -55,7 +55,7 @@ mod test {
     fn create_test_pool_config(host: &str, port: u16, role_detection: bool) -> PoolConfig {
         PoolConfig {
             address: Address {
-                host: Transport::new(&host),
+                host: host.into(),
                 port,
                 user: "pgdog".into(),
                 passwords: vec!["pgdog".into()],

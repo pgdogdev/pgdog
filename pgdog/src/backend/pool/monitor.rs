@@ -566,7 +566,7 @@ mod test {
 
         let pool = Pool::new(&PoolConfig {
             address: Address {
-                host: Transport::new("127.0.0.1"),
+                host: "127.0.0.1".into(),
                 port: 1,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
@@ -600,7 +600,7 @@ mod test {
 
         let pool = Pool::new(&PoolConfig {
             address: Address {
-                host: Transport::new("127.0.0.1"),
+                host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
