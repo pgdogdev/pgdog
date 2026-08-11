@@ -456,8 +456,7 @@ async fn test_flush_portal_released_on_terminate() {
     let cluster = dbs.cluster(("pgdog", "pgdog")).unwrap();
     let pool = &cluster.shards()[0].pools()[0];
 
-    // Pinned guards are dirty, so check-in runs the cleanup queries first
-    // and only then returns the server to the pool.
+    // Check-in cleans the connection first, so it completes asynchronously.
     timeout(Duration::from_secs(5), async {
         while pool.state().checked_out != 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -466,7 +465,11 @@ async fn test_flush_portal_released_on_terminate() {
     .await
     .expect("backend leaked");
 
-    assert_eq!(pool.state().stats.counts.server_assignment_count, 1);
+    let state = pool.state();
+    assert_eq!(state.stats.counts.server_assignment_count, 1);
+    // Cleanup succeeded: the connection was reused, not discarded.
+    assert_eq!(state.force_close, 0, "cleanup failed, connection discarded");
+    assert_eq!(state.stats.counts.errors, 0);
 }
 
 #[tokio::test]
