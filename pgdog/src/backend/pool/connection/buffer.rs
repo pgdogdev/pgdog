@@ -1,9 +1,6 @@
 //! Buffer messages to sort and aggregate them later.
 
-use std::{
-    cmp::Ordering,
-    collections::{HashSet, VecDeque},
-};
+use std::collections::{HashSet, VecDeque};
 
 use crate::{
     frontend::router::parser::{
@@ -12,13 +9,14 @@ use crate::{
     },
     net::{
         Decoder,
-        messages::{DataRow, FromBytes, Message, Protocol, ToBytes, Vector},
+        messages::{DataRow, FromBytes, Message, Protocol, ToBytes},
     },
 };
 
-use pgdog_postgres_types::Datum;
-
 use super::Aggregates;
+#[path = "order_by_merge.rs"]
+mod order_by_merge;
+use order_by_merge::{OrderByMergeState, compare_rows, normalize_order_by};
 
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug, Clone)]
@@ -26,6 +24,7 @@ pub(super) struct Buffer {
     buffer: VecDeque<DataRow>,
     full: bool,
     distinct: HashSet<DataRow>,
+    merge: Option<OrderByMergeState>,
 }
 
 impl Buffer {
@@ -44,91 +43,54 @@ impl Buffer {
         self.full = true;
     }
 
+    pub(super) fn begin_order_by_merge(
+        &mut self,
+        shards: usize,
+        columns: &[OrderBy],
+        limit: &Limit,
+        decoder: &Decoder,
+    ) {
+        self.merge = Some(OrderByMergeState::new(
+            shards,
+            normalize_order_by(columns, decoder),
+            limit,
+        ));
+    }
+
+    pub(super) fn merge_add(
+        &mut self,
+        shard: usize,
+        message: Message,
+        decoder: &Decoder,
+    ) -> Result<(), super::Error> {
+        let dr = DataRow::from_bytes(message.to_bytes())?;
+        if let Some(merge) = self.merge.as_mut() {
+            merge.push_row(shard, dr, decoder);
+        } else {
+            self.buffer.push_back(dr);
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn merge_done(&mut self, shard: usize, decoder: &Decoder) {
+        if let Some(merge) = self.merge.as_mut() {
+            merge.mark_done(shard, decoder);
+        }
+    }
+
     pub(super) fn reset(&mut self) {
         self.buffer.clear();
         self.full = false;
+        self.merge = None;
     }
 
     /// Sort the buffer.
     pub(super) fn sort(&mut self, columns: &[OrderBy], decoder: &Decoder) {
-        // Calculate column indices once, since
-        // fetching indices by name is O(number of columns).
-        let mut cols = vec![];
-        for column in columns {
-            match column {
-                OrderBy::Asc(_) => cols.push(column.clone()),
-                OrderBy::AscColumn(name) => {
-                    if let Some(index) = decoder.rd().field_index(name) {
-                        cols.push(OrderBy::Asc(index + 1));
-                    }
-                    // TODO: Error out instead of silently not sorting.
-                }
-                OrderBy::Desc(_) => cols.push(column.clone()),
-                OrderBy::DescColumn(name) => {
-                    if let Some(index) = decoder.rd().field_index(name) {
-                        cols.push(OrderBy::Desc(index + 1));
-                    }
-                    // TODO: Error out instead of silently not sorting.
-                }
-                OrderBy::AscVectorL2(_, _) => cols.push(column.clone()),
-                OrderBy::AscVectorL2Column(name, vector) => {
-                    if let Some(index) = decoder.rd().field_index(name) {
-                        cols.push(OrderBy::AscVectorL2(index + 1, vector.clone()));
-                    }
-                    // TODO: Error out instead of silently not sorting.
-                }
-            };
-        }
-
-        // Sort rows.
-        let order_by = move |a: &DataRow, b: &DataRow| -> Ordering {
-            cols.iter()
-                .filter_map(|col| {
-                    let index = col.index();
-                    let asc = col.asc();
-                    let index = index?;
-                    let left = a.get_column(index, decoder);
-                    let right = b.get_column(index, decoder);
-
-                    match (left, right) {
-                        (Ok(Some(left)), Ok(Some(right))) => {
-                            // Handle the special vector case.
-                            if let OrderBy::AscVectorL2(_, vector) = col {
-                                let left: Option<Vector> = left.value.try_into().ok();
-                                let right: Option<Vector> = right.value.try_into().ok();
-
-                                if let (Some(left), Some(right)) = (left, right) {
-                                    let left = left.distance_l2(vector);
-                                    let right = right.distance_l2(vector);
-
-                                    left.partial_cmp(&right)
-                                } else {
-                                    Some(Ordering::Equal)
-                                }
-                            } else {
-                                // FIXME(sage): We don't handle ASC NULLS FIRST or
-                                // DESC NULLS LAST we should either error or add
-                                // support rather than silently do the wrong sorting
-                                match (&left.value, &right.value, asc) {
-                                    (Datum::Null, Datum::Null, _) => Some(Ordering::Equal),
-                                    (Datum::Null, _, true) => Some(Ordering::Greater),
-                                    (_, Datum::Null, true) => Some(Ordering::Less),
-                                    (Datum::Null, _, false) => Some(Ordering::Less),
-                                    (_, Datum::Null, false) => Some(Ordering::Greater),
-                                    (a, b, true) => a.partial_cmp(b),
-                                    (a, b, false) => b.partial_cmp(a),
-                                }
-                            }
-                        }
-
-                        _ => Some(Ordering::Equal),
-                    }
-                })
-                .reduce(Ordering::then)
-                .unwrap_or(Ordering::Equal)
-        };
-
-        self.buffer.make_contiguous().sort_by(order_by);
+        let cols = normalize_order_by(columns, decoder);
+        self.buffer
+            .make_contiguous()
+            .sort_by(|a, b| compare_rows(a, b, &cols, decoder));
     }
 
     /// Execute aggregate functions.
@@ -209,6 +171,9 @@ impl Buffer {
 
     /// Take messages from buffer.
     pub(super) fn take(&mut self) -> Option<Message> {
+        if let Some(merge) = self.merge.as_mut() {
+            return merge.take_ready();
+        }
         if self.full {
             self.buffer.pop_front().and_then(|s| s.message().ok())
         } else {
@@ -227,7 +192,23 @@ impl Buffer {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.buffer.len()
+        if let Some(merge) = self.merge.as_ref() {
+            merge.ready_len()
+        } else {
+            self.buffer.len()
+        }
+    }
+
+    pub(super) fn output_rows(&self) -> usize {
+        if let Some(merge) = self.merge.as_ref() {
+            merge.output_rows()
+        } else {
+            self.buffer.len()
+        }
+    }
+
+    pub(super) fn merge_active(&self) -> bool {
+        self.merge.is_some()
     }
 
     #[allow(dead_code)]
