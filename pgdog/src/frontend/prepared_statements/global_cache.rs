@@ -22,7 +22,6 @@ pub struct Statement {
     #[allow(dead_code)]
     version: usize,
     cache_key: CacheKey,
-    evict_on_close: bool,
 }
 
 impl MemoryUsage for Statement {
@@ -35,7 +34,6 @@ impl MemoryUsage for Statement {
                 0
             }
             + self.cache_key.memory_usage()
-            + self.evict_on_close.memory_usage()
     }
 }
 
@@ -44,8 +42,8 @@ impl Statement {
         self.parse.query()
     }
 
-    fn cache_key(&self) -> CacheKey {
-        self.cache_key.clone()
+    fn cache_key(&self) -> &CacheKey {
+        &self.cache_key
     }
 }
 
@@ -66,8 +64,8 @@ pub struct CacheKey {
 impl MemoryUsage for CacheKey {
     #[inline]
     fn memory_usage(&self) -> usize {
-        // Bytes refer to memory allocated by someone else.
-        std::mem::size_of::<Bytes>() * 2 + self.version.memory_usage()
+        // The Bytes alias the Parse in Statement, which counts them via Parse::len.
+        std::mem::size_of::<Self>()
     }
 }
 
@@ -124,7 +122,7 @@ impl MemoryUsage for GlobalCache {
             + self.names.memory_usage()
             + self.counter.memory_usage()
             + self.versions.memory_usage()
-            + self.unused.len() * std::mem::size_of::<usize>()
+            + self.unused.capacity() * 1usize.memory_usage()
     }
 }
 
@@ -150,7 +148,15 @@ impl GlobalCache {
         } else {
             self.counter += 1;
             let name = global_name(self.counter);
-            let parse = parse.rename(&name);
+            // PERF: we explicitly create the new parse with renamed
+            // to reallocate the data and not to hold original buffer
+            // from pgdog/src/frontend/client/mod.rs
+            // smaller memory footprints and smaller allocations, since
+            // the client buffer is generally bigger than the query.
+            // Holding onto it would also fragment that buffer: the client
+            // keeps appending messages to it and can't free the middle,
+            // so the buffer grows monotonically.
+            let parse = parse.renamed(&name);
 
             let cache_key = CacheKey {
                 query: parse.query_ref(),
@@ -186,7 +192,7 @@ impl GlobalCache {
         self.versions += 1;
 
         let name = global_name(self.counter);
-        let parse = parse.rename(&name);
+        let parse = parse.renamed(&name);
 
         let key = CacheKey {
             query: parse.query_ref(),
@@ -301,11 +307,9 @@ impl GlobalCache {
         if let Some(statement) = self.names.get(name) {
             let key = statement.cache_key();
 
-            if let Some(entry) = self.statements.get_mut(&key) {
+            if let Some(entry) = self.statements.get_mut(key) {
                 entry.used = entry.used.saturating_sub(1);
-                if entry.used == 0 && statement.evict_on_close {
-                    self.remove(name);
-                } else if entry.used == 0 {
+                if entry.used == 0 {
                     self.unused.insert(entry.counter);
                 }
             }
@@ -317,27 +321,42 @@ impl GlobalCache {
     /// names are never reused.
     pub fn close_unused(&mut self, capacity: usize) -> usize {
         let over = self.len().saturating_sub(capacity);
-        let remove = self.unused.iter().take(over).copied().collect::<Vec<_>>();
 
-        for counter in &remove {
-            self.unused.remove(counter);
-            self.remove(&global_name(*counter));
-        }
+        // move out of unused to mutate it without borrowing the self to be able to call self.remove later
+        // this helps avoid allocations to remove only part of keys from unused
+        // PERF: the remove though removes once at a time in the loop, that could
+        // defeat this optimization actually
+        let mut unused = std::mem::take(&mut self.unused);
 
-        remove.len()
+        let removed = unused
+            .extract_if(|counter| {
+                // PERF: the global_name always allocates
+                // do we need to actually store this by String or
+                // can we use buffer
+                self.remove(&global_name(*counter));
+
+                true
+            })
+            .take(over)
+            .count();
+
+        // unused will hold the remaining elements that was not extracted above
+        self.unused = unused;
+
+        removed
     }
 
     /// Remove statement from global cache.
     fn remove(&mut self, name: &str) {
         if let Some(stmt) = self.names.remove(name) {
-            self.statements.remove(&stmt.cache_key());
+            self.statements.remove(stmt.cache_key());
         }
     }
 
     /// Decrement usage of prepared statement without removing it.
     pub fn decrement(&mut self, name: &str) {
         if let Some(stmt) = self.names.get(name)
-            && let Some(stmt) = self.statements.get_mut(&stmt.cache_key())
+            && let Some(stmt) = self.statements.get_mut(stmt.cache_key())
         {
             stmt.used = stmt.used.saturating_sub(1);
             if stmt.used == 0 {
@@ -378,6 +397,21 @@ mod test {
     }
 
     #[test]
+    fn test_cache_key_aliases_the_stored_parse() {
+        let mut cache = GlobalCache::default();
+        let source = Parse::named("client_name", "SELECT $1");
+        let (_, name) = cache.insert(&source);
+
+        let stored = cache.names.get(&name).unwrap();
+        let map_key = cache.statements.keys().next().unwrap();
+        let owned = stored.parse.query_ref();
+
+        assert_eq!(owned.as_ptr(), stored.cache_key.query.as_ptr());
+        assert_eq!(owned.as_ptr(), map_key.query.as_ptr());
+        assert_ne!(owned.as_ptr(), source.query_ref().as_ptr());
+    }
+
+    #[test]
     fn test_prep_stmt_cache_close() {
         let mut cache = GlobalCache::default();
         let parse = Parse::named("test", "SELECT $1");
@@ -391,7 +425,7 @@ mod test {
             assert_eq!(name, "__pgdog_1");
         }
         let stmt = cache.names.get("__pgdog_1").unwrap().clone();
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
 
         assert_eq!(entry.used, 26);
 
@@ -399,12 +433,12 @@ mod test {
             cache.close("__pgdog_1");
         }
 
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
         assert!(cache.unused.is_empty());
 
         cache.close("__pgdog_1");
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
         assert!(cache.unused.contains(&1)); // __pgdog_1
 
@@ -447,7 +481,7 @@ mod test {
 
         cache.close(&name);
         let stmt = cache.names.get(&name).unwrap().clone();
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
         assert!(cache.unused.contains(&1));
 
@@ -456,7 +490,7 @@ mod test {
         assert_eq!(name, name_again);
         assert!(!cache.unused.contains(&1));
 
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 1);
     }
 
@@ -519,22 +553,22 @@ mod test {
         cache.insert(&parse);
 
         let stmt = cache.names.get(&name).unwrap().clone();
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 3);
 
         cache.decrement(&name);
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 2);
         assert!(cache.unused.is_empty());
 
         cache.decrement(&name);
         cache.decrement(&name);
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
         assert!(cache.unused.contains(&1));
 
         cache.decrement(&name);
-        let entry = cache.statements.get(&stmt.cache_key()).unwrap();
+        let entry = cache.statements.get(stmt.cache_key()).unwrap();
         assert_eq!(entry.used, 0);
     }
 

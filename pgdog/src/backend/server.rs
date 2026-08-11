@@ -1792,7 +1792,7 @@ pub mod test {
             let parse = Parse::named(&name, format!("SELECT $1, 'test_{}'", name));
             let (new, new_name) = PreparedStatements::global().write().insert(&parse);
             let name = new_name;
-            let parse = parse.rename(&name);
+            let parse = parse.renamed(&name);
             assert!(new);
 
             let describe = Describe::new_statement(&name);
@@ -1866,7 +1866,7 @@ pub mod test {
         let parse = Parse::named("random_name", "SELECT $1");
         let (new, name) = global.write().insert(&parse);
         assert!(new);
-        let parse = parse.rename(&name);
+        let parse = parse.renamed(&name);
         assert_eq!(parse.name(), "__pgdog_1");
 
         let mut server = test_server().await;

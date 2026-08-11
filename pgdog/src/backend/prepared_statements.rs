@@ -458,6 +458,7 @@ impl PreparedStatements {
     /// Make sure to actually execute the close messages you receive
     /// from this method, or the statements will be out of sync with
     /// what's actually inside Postgres.
+    #[must_use]
     pub fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.capacity {

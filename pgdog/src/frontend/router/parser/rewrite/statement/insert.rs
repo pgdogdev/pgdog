@@ -56,7 +56,7 @@ impl InsertSplit {
                     new_parse.set_query(&self.stmt);
 
                     if let Some(name) = self.statement_name() {
-                        new_parse.rename_fast(name);
+                        new_parse.rename(name);
                     }
 
                     ProtocolMessage::Parse(new_parse)
@@ -87,7 +87,7 @@ impl InsertSplit {
             let mut split_parse = parse.clone();
             split_parse.set_query(&self.stmt);
             if let Some(name) = self.statement_name() {
-                split_parse.rename_fast(name);
+                split_parse.rename(name);
             }
             new_request.last_parse = Some(split_parse);
         }

@@ -24,7 +24,7 @@ impl<'a> Rewrite<'a> {
             ProtocolMessage::Bind(bind) => Ok(self.bind(bind)?),
             ProtocolMessage::Describe(describe) => Ok(self.describe(describe)?),
             ProtocolMessage::Parse(parse) => Ok(self.parse(parse)?),
-            &mut ProtocolMessage::Close(ref close) => Ok(self.close(close)?),
+            ProtocolMessage::Close(close) => Ok(self.close(close)?),
             _ => Ok(()),
         }
     }

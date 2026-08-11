@@ -31,6 +31,7 @@ fn str_mem(s: &str) -> usize {
 #[derive(Clone, Debug)]
 pub struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
+    // mapping the client statement name -> __pgdog__ name from global cache
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
     pub(super) memory_used: usize,
@@ -84,7 +85,7 @@ impl PreparedStatements {
             self.memory_used += str_mem(key) + str_mem(&name);
         }
 
-        parse.rename_fast(&name)
+        parse.rename(&name)
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
@@ -102,7 +103,7 @@ impl PreparedStatements {
             self.memory_used += str_mem(key) + str_mem(&name);
         }
 
-        parse.rename_fast(&name)
+        parse.rename(&name)
     }
 
     /// Get global statement counter.

@@ -11,6 +11,10 @@ use std::str::from_utf8_unchecked;
 use super::code;
 use super::prelude::*;
 
+fn c_string(value: &str) -> Bytes {
+    Bytes::from([value.as_bytes(), b"\0"].concat())
+}
+
 /// Parse (F) message.
 #[derive(Clone, Hash, Eq, PartialEq, Default)]
 pub struct Parse {
@@ -44,7 +48,7 @@ impl Parse {
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
-            query: Bytes::from(query.to_owned() + "\0"),
+            query: c_string(query),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -53,8 +57,8 @@ impl Parse {
     /// New prepared statement.
     pub fn named(name: impl ToString, query: impl ToString) -> Self {
         Self {
-            name: Bytes::from(name.to_string() + "\0"),
-            query: Bytes::from(query.to_string() + "\0"),
+            name: c_string(&name.to_string()),
+            query: c_string(&query.to_string()),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -81,25 +85,28 @@ impl Parse {
     }
 
     /// Rename prepared statement, re-allocating it into its own memory space.
-    pub fn rename(&self, name: &str) -> Parse {
+    pub fn renamed(&self, name: &str) -> Parse {
+        // PERF: the allocation will create new allocation for inner data, that
+        // won't pin any original buffers (allowing to modify them without new allocation)
+        // and the new allocation memory size will be just limited by the actual data, not buffers
         Parse {
-            name: Bytes::from(name.to_string() + "\0"),
-            query: Bytes::from(self.query().to_owned() + "\0"),
-            data_types: Bytes::copy_from_slice(&self.data_types[..]),
+            name: c_string(name),
+            query: Bytes::copy_from_slice(&self.query),
+            data_types: Bytes::copy_from_slice(&self.data_types),
             original: None,
         }
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename_fast(&mut self, name: &str) {
-        self.name = Bytes::from(name.to_string() + "\0");
+    pub fn rename(&mut self, name: &str) {
+        self.name = c_string(name);
         self.original = None;
     }
 
     /// Make this an anonymous Parse.
     pub fn anonymize(&mut self) {
         if !self.anonymous() {
-            self.rename_fast("");
+            self.rename("");
         }
     }
 
@@ -109,7 +116,7 @@ impl Parse {
 
     /// Update the SQL for this prepared statement.
     pub fn set_query(&mut self, query: &str) {
-        self.query = Bytes::from(query.to_string() + "\0");
+        self.query = c_string(query);
         self.original = None;
     }
 
@@ -272,5 +279,29 @@ mod test {
         let mapping = [(10_001, 10_002)].into_iter().collect();
         assert!(parse.rewrite_data_types(&mapping));
         assert!(!parse.to_bytes().is_empty());
+    }
+
+    #[test]
+    fn test_renamed_owns_exact_memory() {
+        let source = Parse::named("client_name", "SELECT $1").with_data_types(&[20, 25]);
+        let renamed = source.renamed("__pgdog_7");
+
+        assert_eq!(renamed.name(), "__pgdog_7");
+        assert_eq!(renamed.query(), "SELECT $1");
+        assert_eq!(renamed.data_types_ref(), source.data_types_ref());
+        assert_ne!(renamed.query_ref().as_ptr(), source.query_ref().as_ptr());
+        assert_ne!(
+            renamed.data_types_ref().as_ptr(),
+            source.data_types_ref().as_ptr()
+        );
+
+        let fresh = Parse::named("__pgdog_7", "SELECT $1").with_data_types(&[20, 25]);
+        assert_eq!(renamed.to_bytes(), fresh.to_bytes());
+        assert_eq!(renamed.to_bytes().len(), renamed.len());
+
+        let round_trip = Parse::from_bytes(renamed.to_bytes()).unwrap();
+        assert_eq!(round_trip.name(), renamed.name());
+        assert_eq!(round_trip.query(), renamed.query());
+        assert_eq!(round_trip.data_types_ref(), renamed.data_types_ref());
     }
 }
