@@ -122,6 +122,9 @@ impl RewritePlan {
 
     /// Apply the rewrite plan to a ClientRequest.
     pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
+        // This needs to run first!
+        self.simple_to_prepared.apply(request);
+
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepares.is_empty() {
             let prepends: Vec<ProtocolMessage> = self

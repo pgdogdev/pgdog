@@ -33,6 +33,8 @@ pub struct ClientRequest {
     pub ast: Option<Ast>,
     /// Last Parse we received.
     pub last_parse: Option<Parse>,
+    /// Simple to prepared rewrite requires us to drop some messages from the server.
+    pub(crate) simple_to_prepared_rewrite: bool,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -58,6 +60,7 @@ impl ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            simple_to_prepared_rewrite: false,
         }
     }
 
@@ -92,6 +95,7 @@ impl ClientRequest {
         self.messages.clear();
         self.route = None;
         self.ast = None;
+        self.simple_to_prepared_rewrite = false;
     }
 
     /// We received a complete request and we are ready to
@@ -215,6 +219,7 @@ impl ClientRequest {
             route: self.route.clone(),
             ast: self.ast.clone(),
             last_parse: None,
+            simple_to_prepared_rewrite: self.simple_to_prepared_rewrite,
         }
     }
 
@@ -393,6 +398,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            simple_to_prepared_rewrite: false,
         }
     }
 }

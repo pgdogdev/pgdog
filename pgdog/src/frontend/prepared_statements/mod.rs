@@ -66,8 +66,20 @@ impl PreparedStatements {
         Ok(())
     }
 
+    /// Manually map a local prepared statement to a global one.
+    ///
+    /// Warning: don't use this unless you understand the side-effects:
+    ///
+    /// 1. When client disconnects, this statement's global counter will be decreased by 1.
+    /// 2. The statement will not be removed from the global cache until the client disconnects
+    ///    because clients are not aware of this and will never close it.
+    ///
+    pub(crate) fn insert_local_mapping(&mut self, local: &str, global: &str) {
+        self.local.insert(local.to_owned(), global.to_owned());
+    }
+
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: &mut Parse) {
+    pub(crate) fn insert(&mut self, parse: &mut Parse) {
         let (_new, name) = { self.global.write().insert(parse) };
         let key = parse.name();
         let existed = self.local.insert(key.to_owned(), name.clone());

@@ -1,10 +1,9 @@
 use crate::{
     frontend::ClientRequest,
     net::{
-        Parse, ProtocolMessage,
+        Describe, Execute, Parse, ProtocolMessage, Sync,
         bind::{Bind, Parameter},
     },
-    util::random_string,
 };
 use pg_raw_parse::{
     ConstValue, NodeMut,
@@ -25,8 +24,8 @@ pub(crate) struct SimpleToPreparedPlan {
 
 #[derive(Default, Clone, Debug)]
 pub(crate) struct SimpleToPreparedPlanStepTwo {
-    pub(crate) bind: Bind,
-    pub(crate) parse: Parse,
+    pub(super) bind: Bind,
+    pub(super) parse: Parse,
 }
 
 impl SimpleToPreparedPlan {
@@ -60,7 +59,21 @@ impl SimpleToPreparedPlan {
         Ok(())
     }
 
-    pub(crate) fn apply(&self, request: &mut ClientRequest) {}
+    pub(crate) fn apply(&self, request: &mut ClientRequest) {
+        if self.params.is_empty() {
+            return;
+        }
+
+        request.simple_to_prepared_rewrite = true;
+        request.clear();
+        request.push(ProtocolMessage::Parse(self.step_two.parse.clone()));
+        request.push(ProtocolMessage::Describe(Describe::new_statement(
+            self.step_two.parse.name(),
+        )));
+        request.push(ProtocolMessage::Bind(self.step_two.bind.clone()));
+        request.push(ProtocolMessage::Execute(Execute::new()));
+        request.push(ProtocolMessage::Sync(Sync));
+    }
 }
 
 impl StatementRewrite<'_> {
