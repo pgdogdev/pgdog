@@ -15,6 +15,7 @@ pub mod insert;
 pub mod offset;
 pub mod plan;
 pub mod simple_prepared;
+pub mod simple_to_prepared;
 pub mod unique_id;
 pub mod update;
 
@@ -22,6 +23,7 @@ pub use error::Error;
 pub use insert::InsertSplit;
 pub(crate) use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
+pub(crate) use simple_to_prepared::*;
 pub(crate) use update::*;
 
 /// Statement rewrite engine context.
@@ -104,13 +106,17 @@ impl<'a> StatementRewrite<'a> {
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
+        // N.B. The simple to prepared rewriter should run first.
+        // All subsequent rewriters will act on the prepared statement.
+        self.rewrite_simple_to_prepared(stmt.stmt_mut(), mem, &mut plan)?;
+
         match stmt.stmt() {
             Node::InsertStmt(_)
             | Node::SelectStmt(_)
             | Node::UpdateStmt(_)
             | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| {
                 if let Node::ParamRef(param) = node {
-                    plan.params = plan.params.max(param.number as u16)
+                    plan.num_params = plan.num_params.max(param.number as u16)
                 }
             }),
             Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
@@ -133,14 +139,14 @@ impl<'a> StatementRewrite<'a> {
         }
 
         // Track the next parameter number to use
-        let mut next_param = plan.params as i32 + 1;
+        let mut next_param = plan.num_params as i32 + 1;
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
             &mut transform::TransformClosure::new(|node| {
                 match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
                     Ok(Some(replacement)) => {
-                        plan.unique_ids += 1;
+                        plan.num_unique_ids += 1;
                         self.rewritten = true;
                         node.replace(replacement);
                         None
@@ -163,7 +169,14 @@ impl<'a> StatementRewrite<'a> {
         }
 
         if self.rewritten {
-            plan.stmt = Some(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+            let stmt = pg_raw_parse::deparse(&*stmt)?.as_str().to_owned();
+
+            // N.B. careful with ordering. This should run before insert splits, etc.
+            // since we want to make sure the statement is registered with the global cache.
+            plan.simple_to_prepared
+                .step_two(&mut self.prepared_statements, &stmt)?;
+
+            plan.rewritten_stmt = Some(stmt);
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {

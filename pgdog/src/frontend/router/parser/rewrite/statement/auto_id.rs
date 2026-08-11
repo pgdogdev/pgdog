@@ -69,7 +69,7 @@ impl StatementRewrite<'_> {
             let replaced =
                 self.replace_set_to_default_at_positions(&mut node, mem, &present_pk_positions);
             if replaced > 0 {
-                plan.auto_id_injected += replaced as u16;
+                plan.num_auto_id_injected += replaced as u16;
                 self.rewritten = true;
             }
         }
@@ -85,7 +85,7 @@ impl StatementRewrite<'_> {
         if rewrite {
             for column in missing_columns {
                 self.inject_column_with_unique_id(&mut node, mem, column);
-                plan.auto_id_injected += 1;
+                plan.num_auto_id_injected += 1;
             }
             self.rewritten = true;
         }
@@ -311,8 +311,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 1);
-        assert_eq!(plan.unique_ids, 1); // confirms unique_id was processed
+        assert_eq!(plan.num_auto_id_injected, 1);
+        assert_eq!(plan.num_unique_ids, 1); // confirms unique_id was processed
         assert!(sql.contains("id"));
         // pgdog.unique_id() should be replaced with actual bigint value
         assert!(!sql.contains("pgdog.unique_id"));
@@ -347,7 +347,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.num_auto_id_injected, 0);
         assert!(!sql.contains("id,"));
     }
 
@@ -361,7 +361,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.num_auto_id_injected, 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -375,7 +375,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.num_auto_id_injected, 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -389,7 +389,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.num_auto_id_injected, 0);
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(plan.num_auto_id_injected, 1);
         assert!(sql.contains("id"));
     }
 
@@ -431,7 +431,7 @@ mod tests {
         // DEFAULT should be replaced with unique_id
         assert!(!sql.to_uppercase().contains("DEFAULT"));
         assert!(sql.contains("::bigint")); // value is cast to bigint
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.num_unique_ids, 1);
     }
 
     #[test]
@@ -446,7 +446,7 @@ mod tests {
 
         // Both DEFAULT values should be replaced
         assert!(!sql.to_uppercase().contains("DEFAULT"));
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.num_unique_ids, 2);
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
         .unwrap();
 
         // users is sharded, so RewriteOmni should NOT inject auto id
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.num_auto_id_injected, 0);
         assert!(!sql.contains("::bigint"));
     }
 
@@ -547,7 +547,7 @@ mod tests {
         .unwrap();
 
         // users is NOT sharded, so RewriteOmni should inject auto id
-        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(plan.num_auto_id_injected, 1);
         assert!(sql.contains("::bigint"));
     }
 }
