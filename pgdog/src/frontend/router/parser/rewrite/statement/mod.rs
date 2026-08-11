@@ -174,7 +174,7 @@ impl<'a> StatementRewrite<'a> {
             // N.B. careful with ordering. This should run before insert splits, etc.
             // since we want to make sure the statement is registered with the global cache.
             plan.simple_to_prepared
-                .step_two(&mut self.prepared_statements, &stmt)?;
+                .step_two(self.prepared_statements, &stmt)?;
 
             plan.rewritten_stmt = Some(stmt);
         }

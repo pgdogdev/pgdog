@@ -68,7 +68,7 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub(super) fn new(
+    fn new(
         query: &AstQuery,
         schema: &ShardingSchema,
         db_schema: &Schema,

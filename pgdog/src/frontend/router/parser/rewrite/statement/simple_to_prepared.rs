@@ -6,8 +6,8 @@ use crate::{
     },
 };
 use pg_raw_parse::{
-    ConstValue, NodeMut,
-    make::MemoryToken,
+    ConstValue, Node, NodeMut,
+    make::{MemoryToken, Unique},
     nodes,
     transform::{self, Assignable, Transform},
 };
@@ -19,7 +19,7 @@ pub(crate) struct SimpleToPreparedPlan {
     /// Parameters using text encoding.
     pub(crate) params: Vec<Parameter>,
 
-    pub(crate) step_two: SimpleToPreparedPlanStepTwo,
+    pub(crate) step_two: Option<SimpleToPreparedPlanStepTwo>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -54,25 +54,23 @@ impl SimpleToPreparedPlan {
         // manually close it.
         prepared_statements.insert_local_mapping(parse.name(), parse.name());
 
-        self.step_two = SimpleToPreparedPlanStepTwo { parse, bind };
+        self.step_two = Some(SimpleToPreparedPlanStepTwo { parse, bind });
 
         Ok(())
     }
 
     pub(crate) fn apply(&self, request: &mut ClientRequest) {
-        if self.params.is_empty() {
-            return;
+        if let Some(ref step_two) = self.step_two {
+            request.simple_to_prepared_rewrite = true;
+            request.clear();
+            request.push(ProtocolMessage::Parse(step_two.parse.clone()));
+            request.push(ProtocolMessage::Describe(Describe::new_statement(
+                step_two.parse.name(),
+            )));
+            request.push(ProtocolMessage::Bind(step_two.bind.clone()));
+            request.push(ProtocolMessage::Execute(Execute::new()));
+            request.push(ProtocolMessage::Sync(Sync));
         }
-
-        request.simple_to_prepared_rewrite = true;
-        request.clear();
-        request.push(ProtocolMessage::Parse(self.step_two.parse.clone()));
-        request.push(ProtocolMessage::Describe(Describe::new_statement(
-            self.step_two.parse.name(),
-        )));
-        request.push(ProtocolMessage::Bind(self.step_two.bind.clone()));
-        request.push(ProtocolMessage::Execute(Execute::new()));
-        request.push(ProtocolMessage::Sync(Sync));
     }
 }
 
@@ -109,7 +107,7 @@ impl StatementRewrite<'_> {
         plan: &mut RewritePlan,
     ) -> Result<(), Error> {
         // Only rewrite simple statements.
-        if self.extended || self.prepared {
+        if self.extended || self.prepared || !self.schema.rewrite.simple_to_prepared {
             return Ok(());
         }
 
@@ -157,37 +155,87 @@ struct LiteralRewriter<'mem> {
     next_param: i32,
 }
 
-impl LiteralRewriter<'_> {
-    fn parameter(value: Option<ConstValue<'_>>) -> Option<Parameter> {
+impl<'mem> LiteralRewriter<'mem> {
+    fn parameter(value: Option<ConstValue<'_>>) -> Option<(Parameter, &'static str)> {
         match value {
-            None => Some(Parameter::new_null()),
-            Some(ConstValue::Integer(value)) => {
-                Some(Parameter::new(itoa::Buffer::new().format(value).as_bytes()))
-            }
-            Some(ConstValue::Float(value))
-            | Some(ConstValue::String(value))
-            | Some(ConstValue::BitString(value)) => Some(Parameter::new(value.as_bytes())),
-            Some(ConstValue::Boolean(value)) => {
-                Some(Parameter::new(if value { b"true" } else { b"false" }))
-            }
+            // An untyped NULL gets its type from the surrounding expression.
+            // Casting it to an arbitrary type can make otherwise valid
+            // expressions fail (for example, `integer IS DISTINCT FROM NULL`).
+            None => None,
+            Some(ConstValue::Integer(value)) => Some((
+                Parameter::new(itoa::Buffer::new().format(value).as_bytes()),
+                "int8",
+            )),
+            Some(ConstValue::Float(value)) => Some((
+                Parameter::new(value.as_bytes()),
+                if value.parse::<i64>().is_ok() {
+                    "int8"
+                } else {
+                    "numeric"
+                },
+            )),
+            Some(ConstValue::String(value)) => Some((Parameter::new(value.as_bytes()), "text")),
+            Some(ConstValue::BitString(value)) => Some((Parameter::new(value.as_bytes()), "bit")),
+            Some(ConstValue::Boolean(value)) => Some((
+                Parameter::new(if value { b"true" } else { b"false" }),
+                "bool",
+            )),
             Some(_) => None,
         }
+    }
+
+    fn replacement(
+        &mut self,
+        value: Option<ConstValue<'_>>,
+        explicit_type: bool,
+    ) -> Option<Unique<'mem, Node<'mem>>> {
+        let (parameter, parameter_type) = Self::parameter(value)?;
+
+        self.params.push(parameter);
+        let parameter = self.mem.make_param_ref(self.next_param).uncast();
+        let replacement = if explicit_type {
+            parameter
+        } else {
+            let type_name = if parameter_type == "text" {
+                self.mem
+                    .make_list(&[self.mem.make_string(Some(parameter_type))])
+            } else {
+                self.mem.make_list(&[
+                    self.mem.make_string(Some("pg_catalog")),
+                    self.mem.make_string(Some(parameter_type)),
+                ])
+            };
+            self.mem.make_type_cast(parameter, type_name).uncast()
+        };
+        self.next_param += 1;
+        Some(replacement)
     }
 }
 
 impl<'mem> Transform<'mem> for LiteralRewriter<'mem> {
     fn transform_node<'mutref>(&mut self, node: Assignable<'mem, 'mutref>) {
-        let parameter = match &*node {
-            NodeMut::A_Const(constant) => Self::parameter(constant.val()),
+        let replacement = match &*node {
+            NodeMut::A_Const(constant) => self.replacement(constant.val(), false),
             _ => None,
         };
 
-        if let Some(parameter) = parameter {
-            self.params.push(parameter);
-            node.replace(self.mem.make_param_ref(self.next_param).uncast());
-            self.next_param += 1;
+        if let Some(replacement) = replacement {
+            node.replace(replacement);
         } else {
             transform::transform_node(node.into_inner(), self);
+        }
+    }
+
+    fn transform_type_cast<'mutref>(&mut self, mut node: nodes::TypeCastMut<'mem, 'mutref>) {
+        let replacement = match node.arg() {
+            Node::A_Const(constant) => self.replacement(constant.val(), true),
+            _ => None,
+        };
+
+        if let Some(replacement) = replacement {
+            node.set_arg(replacement);
+        } else {
+            transform::transform_type_cast(node, self);
         }
     }
 
@@ -226,13 +274,24 @@ mod tests {
     fn rewrites_constants_in_parameter_order() {
         let (sql, params) = rewrite("SELECT 42, 'hello', true, NULL, 1.25");
 
-        assert_eq!(sql, "SELECT $1, $2, $3, $4, $5");
-        assert_eq!(params.len(), 5);
+        assert_eq!(
+            sql,
+            "SELECT $1::bigint, $2::text, $3::boolean, NULL, $4::numeric"
+        );
+        assert_eq!(params.len(), 4);
         assert_eq!(params[0].data.as_ref(), b"42");
         assert_eq!(params[1].data.as_ref(), b"hello");
         assert_eq!(params[2].data.as_ref(), b"true");
-        assert_eq!(params[3].len, -1);
-        assert_eq!(params[4].data.as_ref(), b"1.25");
+        assert_eq!(params[3].data.as_ref(), b"1.25");
+    }
+
+    #[test]
+    fn leaves_untyped_nulls_in_place() {
+        let (sql, params) = rewrite("SELECT 1 IS DISTINCT FROM NULL, NULL::integer");
+
+        assert_eq!(sql, "SELECT $1::bigint IS DISTINCT FROM NULL, NULL::int");
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].data.as_ref(), b"1");
     }
 
     #[test]
@@ -252,7 +311,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "SELECT * FROM users WHERE id = $1 AND name IN ($2, $3) LIMIT $5 OFFSET $4"
+            "SELECT * FROM users WHERE id = $1::bigint AND name IN ($2::text, $3::text) LIMIT $5::bigint OFFSET $4::bigint"
         );
         let params: Vec<_> = params
             .iter()

@@ -88,6 +88,10 @@ pub struct Rewrite {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>
     #[serde(default = "Rewrite::default_primary_key")]
     pub primary_key: RewriteMode,
+
+    /// Rewrite simple queries to prepared statements.
+    #[serde(default)]
+    pub simple_to_prepared: bool,
 }
 
 impl Default for Rewrite {
@@ -97,6 +101,7 @@ impl Default for Rewrite {
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
+            simple_to_prepared: bool::default(),
         }
     }
 }
