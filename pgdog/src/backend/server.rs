@@ -268,7 +268,7 @@ impl Server {
         let tls_mode = config.config.general.tls_verify;
 
         // Only attempt TLS if not in Disabled mode and its not connecting to a unix socket
-        if tls_mode != TlsVerifyMode::Disabled && addr.host.tcp().is_ok() {
+        if tls_mode != TlsVerifyMode::Disabled && matches!(addr.host, Transport::TCP(_)) {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
                 tls_mode, addr,
