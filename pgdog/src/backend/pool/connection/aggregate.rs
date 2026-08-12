@@ -222,10 +222,19 @@ struct HelperColumns {
     sumsq: Option<usize>,
 }
 
+// Provides everything needed (plus Grouping struct) to re-build a singular output row.
+#[derive(Debug)]
+struct GroupState<'a> {
+    // Aggregate functions.
+    accumulators: Vec<Accumulator<'a>>,
+    // Columns that Postgres permits only when functionally dependent on grouping.
+    passthrough: Vec<(usize, Datum)>,
+}
+
 #[derive(Debug)]
 pub(super) struct Aggregates<'a> {
     rows: &'a VecDeque<DataRow>,
-    mappings: HashMap<Grouping, Vec<Accumulator<'a>>>,
+    mappings: HashMap<Grouping, GroupState<'a>>,
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
     helper_columns: HashMap<usize, HelperColumns>,
@@ -304,23 +313,50 @@ impl<'a> Aggregates<'a> {
     }
 
     pub(super) fn aggregate(mut self) -> Result<VecDeque<DataRow>, Error> {
+        // Determine which columns don't belong to GROUP BY or an aggregate function.
+        let num_cols = self.decoder.rd().fields.len();
+        let mut covered_indices = vec![false; num_cols];
+
+        for idx in self.aggregate.group_by() {
+            covered_indices[*idx] = true;
+        }
+        for target in self.aggregate.targets() {
+            covered_indices[target.column()] = true;
+        }
+
+        let passthrough_indices: Vec<usize> =
+            (0..num_cols).filter(|idx| !covered_indices[*idx]).collect();
+
         for row in self.rows {
             let grouping = Grouping::new(row, self.aggregate.group_by(), self.decoder)?;
             let entry = match self.mappings.entry(grouping) {
                 Entry::Occupied(o) => o.into_mut(),
-                Entry::Vacant(v) => v.insert(Accumulator::from_aggregate(
-                    self.aggregate,
-                    &self.helper_columns,
-                )?),
+                Entry::Vacant(v) => {
+                    let accumulators =
+                        Accumulator::from_aggregate(self.aggregate, &self.helper_columns)?;
+
+                    // Gather all col vals corresponding to list of passthrough indices.
+                    let mut passthrough = Vec::new();
+                    for idx in &passthrough_indices {
+                        if let Some(column) = row.get_column(*idx, self.decoder)? {
+                            passthrough.push((*idx, column.value));
+                        }
+                    }
+
+                    v.insert(GroupState {
+                        accumulators,
+                        passthrough,
+                    })
+                }
             };
 
-            for aggregate in entry {
+            for aggregate in &mut entry.accumulators {
                 aggregate.accumulate(row, self.decoder)?;
             }
         }
 
         let mut rows = VecDeque::new();
-        for (grouping, accumulator) in self.mappings {
+        for (grouping, state) in self.mappings {
             //
             // Aggregate rules in Postgres dictate that the only
             // columns present in the row are either:
@@ -329,7 +365,12 @@ impl<'a> Aggregates<'a> {
             //    stored in the grouping
             // 2. are aggregate functions, which means they
             //    are stored in the accumulator
-            //
+            // 3. "when the ungrouped column is functionally dependent on the grouped columns"
+            //    Postgres recognizes such a case ONLY when the primary key is grouped,
+            //    thus every row in the group would carry the same value.
+            //    This is because each group would have exactly one row.
+
+            // Handle #1
             let mut row = DataRow::new();
             for (idx, datum) in grouping.columns {
                 row.insert(
@@ -338,7 +379,9 @@ impl<'a> Aggregates<'a> {
                     datum.is_null(),
                 );
             }
-            for acc in accumulator {
+
+            // Handle #2
+            for acc in state.accumulators {
                 let target_column = acc.target.column();
                 let datum = acc.finalize()?;
                 row.insert(
@@ -347,6 +390,20 @@ impl<'a> Aggregates<'a> {
                     datum.is_null(),
                 );
             }
+
+            // Handle #3
+            // Why do we add every single passthrough column, instead of just func. dependent ones?
+            // Postgres will error-out if a projected ungrouped column isn't covered by a grouped primary key.
+            // Therefore, we will not get to this portion of code that aggregates results,
+            // as we have a guarantee that we will receive valid data in that aspect.
+            for (target_column, datum) in state.passthrough {
+                row.insert(
+                    target_column,
+                    datum.encode(self.decoder.format(target_column))?,
+                    datum.is_null(),
+                );
+            }
+
             rows.push_back(row);
         }
 
