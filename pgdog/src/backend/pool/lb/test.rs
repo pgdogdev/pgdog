@@ -277,7 +277,7 @@ async fn test_unban_if_expired_checks_pool_health() {
     ban.ban(Error::ServerError, Duration::from_millis(50));
     assert!(ban.banned());
 
-    pool.inner().health().toggle(false);
+    pool.inner().health.toggle(false);
 
     sleep(Duration::from_millis(60)).await;
 
