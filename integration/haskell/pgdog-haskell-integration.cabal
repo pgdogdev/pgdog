@@ -1,0 +1,18 @@
+cabal-version:      3.0
+name:               pgdog-haskell-integration
+version:            0.1.0.0
+build-type:         Simple
+
+test-suite persistent-integration
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   test
+    default-language: GHC2021
+    ghc-options:      -Wall
+    build-depends:
+        base >=4.18 && <5,
+        hspec >=2.11 && <3,
+        monad-logger >=0.3 && <0.4,
+        persistent >=2.18.1 && <2.19,
+        persistent-postgresql >=2.14.3 && <2.15,
+        text >=1.2 && <3

@@ -77,6 +77,7 @@ jobs:
           - { name: ruby,          script: integration/ruby/run.sh }
           - { name: java,          script: integration/java/run.sh }
           - { name: elixir,        script: integration/elixir/run.sh, needs_beam: true }
+          - { name: haskell,       script: integration/haskell/run.sh, needs_haskell: true }
           - { name: mirror,        script: integration/mirror/run.sh }
           - { name: sql,           script: integration/sql/run.sh }
           - { name: toxi,          script: integration/toxi/run.sh }
@@ -135,6 +136,21 @@ jobs:
         with:
           otp-version: "28"
           elixir-version: "1.20.3"
+      - name: Install GHC/Cabal
+        if: matrix.needs_haskell
+        id: setup-haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.4"
+          cabal-version: "latest"
+      - name: Cache Cabal dependencies
+        if: matrix.needs_haskell
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.setup-haskell.outputs.cabal-store }}
+          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run ${{ matrix.name }}
