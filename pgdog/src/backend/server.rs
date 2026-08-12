@@ -2809,6 +2809,35 @@ pub mod test {
         }
     }
 
+    /// Names Postgres itself thinks are prepared on this connection.
+    pub(crate) async fn prepared_in_postgres(server: &mut Server) -> Vec<String> {
+        server
+            .fetch_all::<String>("SELECT name FROM pg_prepared_statements")
+            .await
+            .unwrap()
+    }
+
+    /// Run a named statement the way a client would, leaving it to the
+    /// connection to prepare it first if it isn't already.
+    pub(crate) async fn execute_prepared(
+        server: &mut Server,
+        name: &str,
+        param: &[u8],
+    ) -> Vec<i64> {
+        use crate::net::bind::Parameter;
+
+        let request = ServerRequest {
+            messages: vec![
+                Bind::new_params(name, &[Parameter::new(param)]).into(),
+                Execute::new().into(),
+                Sync::new().into(),
+            ],
+            expected: 1,
+        };
+
+        server.fetch_all::<i64>(request).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_deallocate_all_clears_cache() {
         let mut server = test_server().await;

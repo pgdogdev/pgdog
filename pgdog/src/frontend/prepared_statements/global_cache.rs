@@ -238,17 +238,6 @@ impl GlobalCache {
         }
     }
 
-    /// Clear the global cache. Test-only: rolling the name counter back
-    /// would reuse global statement names.
-    #[cfg(test)]
-    pub fn reset(&mut self) {
-        self.statements.clear();
-        self.names.clear();
-        self.unused.clear();
-        self.counter = 0;
-        self.versions = 0;
-    }
-
     /// Get the query string stored in the global cache
     /// for the given globally unique prepared statement name.
     #[inline]
