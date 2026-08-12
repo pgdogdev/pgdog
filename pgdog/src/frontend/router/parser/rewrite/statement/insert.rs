@@ -273,6 +273,7 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            multiple_statements: false,
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(insert, &mut plan).unwrap();

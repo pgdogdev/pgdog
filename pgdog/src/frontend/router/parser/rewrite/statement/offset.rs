@@ -248,6 +248,7 @@ mod tests {
             db_schema: &db_schema,
             user: "test",
             search_path: None,
+            multiple_statements: false,
         });
         let mut plan = RewritePlan::default();
         rewrite.limit_offset(

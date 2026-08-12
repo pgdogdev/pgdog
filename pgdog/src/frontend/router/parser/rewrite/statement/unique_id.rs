@@ -288,6 +288,7 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            multiple_statements: false,
         });
         let mut plan = Default::default();
         let ast = make::owned(|mem| {

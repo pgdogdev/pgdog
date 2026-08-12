@@ -44,6 +44,8 @@ pub struct StatementRewriteContext<'a> {
     pub user: &'a str,
     /// Search path for table lookups.
     pub search_path: Option<&'a ParameterValue>,
+    /// Whether the query contains more than one SQL statement.
+    pub multiple_statements: bool,
 }
 
 #[derive(Debug)]
@@ -67,6 +69,8 @@ pub struct StatementRewrite<'a> {
     user: &'a str,
     /// Search path for table lookups.
     search_path: Option<&'a ParameterValue>,
+    /// Whether the query contains more than one SQL statement.
+    multiple_statements: bool,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -84,6 +88,7 @@ impl<'a> StatementRewrite<'a> {
             db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
+            multiple_statements: ctx.multiple_statements,
         }
     }
 
@@ -166,6 +171,10 @@ impl<'a> StatementRewrite<'a> {
         if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
             self.limit_offset(&select, &mut plan);
+        }
+
+        if self.rewritten && self.multiple_statements {
+            return Err(Error::MultiStatementRewrite);
         }
 
         if self.rewritten {

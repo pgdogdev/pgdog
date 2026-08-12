@@ -500,6 +500,7 @@ mod tests {
             db_schema,
             user: "",
             search_path: None,
+            multiple_statements: false,
         });
         let mut plan = Default::default();
         let ast = make::try_owned(|mem| {

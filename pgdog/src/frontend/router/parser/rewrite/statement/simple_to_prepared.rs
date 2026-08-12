@@ -29,6 +29,10 @@ pub(crate) struct SimpleToPreparedPlanStepTwo {
 }
 
 impl SimpleToPreparedPlan {
+    /// This step runs after all other rewriters are done.
+    ///
+    /// This is to ensure we cache the prepared statement after all rewrites are complete.
+    ///
     pub(super) fn step_two(
         &mut self,
         prepared_statements: &mut PreparedStatements,
@@ -40,6 +44,8 @@ impl SimpleToPreparedPlan {
 
         let mut parse = Parse::new_anonymous(stmt);
 
+        // This is what QueryEngine::rewrite_extended does,
+        // with a small change, see insert_local_mapping below.
         let (_, name) = PreparedStatements::global().write().insert(&parse);
         parse.rename(&name);
 
@@ -59,6 +65,11 @@ impl SimpleToPreparedPlan {
         Ok(())
     }
 
+    /// Rewrite the request from simple protocol to prepared.
+    ///
+    /// INVARIANT: the request contains one single [`crate::net::Query`] message.
+    /// This is enforced by [`crate::frontend::client::Client::buffer`] and [`ClientRequest::is_complete`].
+    ///
     pub(crate) fn apply(&self, request: &mut ClientRequest) {
         if let Some(ref step_two) = self.step_two {
             request.simple_to_prepared_rewrite = true;
