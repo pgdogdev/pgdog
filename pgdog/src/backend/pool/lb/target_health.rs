@@ -6,25 +6,22 @@ use std::sync::{
 };
 
 #[derive(Clone, Debug)]
-pub struct TargetHealth {
-    #[allow(dead_code)]
-    pub(super) id: u64,
+pub(crate) struct TargetHealth {
     pub(super) healthy: Arc<AtomicBool>,
 }
 
 impl TargetHealth {
-    pub fn new(id: u64) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            id,
             healthy: Arc::new(AtomicBool::new(true)),
         }
     }
 
-    pub fn toggle(&self, healthy: bool) {
+    pub(crate) fn toggle(&self, healthy: bool) {
         self.healthy.swap(healthy, Ordering::SeqCst);
     }
 
-    pub fn healthy(&self) -> bool {
+    pub(crate) fn healthy(&self) -> bool {
         self.healthy.load(Ordering::Relaxed)
     }
 }
