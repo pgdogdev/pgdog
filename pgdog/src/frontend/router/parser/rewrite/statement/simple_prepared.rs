@@ -145,7 +145,7 @@ mod tests {
     use super::*;
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
-    use crate::config::PreparedStatements as PreparedStatementsLevel;
+    use crate::config::PreparedStatementsLevel;
     use crate::test_utils::set_env_var;
     use pg_raw_parse::Node;
     use pgdog_config::Rewrite;

@@ -18,7 +18,7 @@ use crate::{
 use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
-use super::pooling::{PoolerMode, PreparedStatements};
+use super::pooling::{PoolerMode, PreparedStatementsLevel};
 
 /// Format to use for PgDog application logs.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
@@ -368,7 +368,7 @@ pub struct General {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
     #[serde(default)]
-    pub prepared_statements: PreparedStatements,
+    pub prepared_statements: PreparedStatementsLevel,
 
     /// Deprecated: use [`query_parser`](General::query_parser) set to `"on"` instead.
     ///
@@ -1312,7 +1312,7 @@ impl General {
         Self::env_enum_or_default("PGDOG_READ_WRITE_SPLIT")
     }
 
-    fn prepared_statements() -> PreparedStatements {
+    fn prepared_statements() -> PreparedStatementsLevel {
         Self::env_enum_or_default("PGDOG_PREPARED_STATEMENTS")
     }
 
@@ -1881,9 +1881,15 @@ mod tests {
 
         // Test prepared statements
         let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS", "full");
-        assert_eq!(General::prepared_statements(), PreparedStatements::Full);
+        assert_eq!(
+            General::prepared_statements(),
+            PreparedStatementsLevel::Full
+        );
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS");
-        assert_eq!(General::prepared_statements(), PreparedStatements::Extended);
+        assert_eq!(
+            General::prepared_statements(),
+            PreparedStatementsLevel::Extended
+        );
 
         // Test auth type
         let _guard = set_env_var("PGDOG_AUTH_TYPE", "md5");

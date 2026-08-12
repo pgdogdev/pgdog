@@ -1306,7 +1306,7 @@ pub(crate) mod test {
     use std::time::SystemTime;
 
     use bytes::{BufMut, Bytes, BytesMut};
-    use pgdog_stats::PreparedStatementsConfig;
+    use pgdog_config::prepared_statements::PreparedStatementsConfig;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -3973,7 +3973,7 @@ pub(crate) mod test {
 
     /// Set a server's prepared_statements level to ExtendedAnonymous.
     fn set_extended_anonymous(server: &mut Server) {
-        use pgdog_config::PreparedStatements as PSLevel;
+        use pgdog_config::PreparedStatementsLevel as PSLevel;
         let statements = server.prepared_statements_mut();
         let config = statements.config();
         statements.configure(PreparedStatementsConfig {

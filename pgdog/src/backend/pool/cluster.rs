@@ -3,7 +3,7 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParser, QueryParserLevel, Rewrite, RewriteMode,
+    LoadSchema, PreparedStatementsLevel, QueryParser, QueryParserLevel, Rewrite, RewriteMode,
     users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
@@ -63,7 +63,7 @@ pub(crate) struct Cluster {
     two_phase_commit_auto: bool,
     readiness: Arc<Readiness>,
     rewrite: Rewrite,
-    prepared_statements: PreparedStatements,
+    prepared_statements: PreparedStatementsLevel,
     dry_run: bool,
     expanded_explain: bool,
     query_parser: QueryParserLevel,
@@ -198,7 +198,7 @@ pub(crate) struct ClusterConfig<'a> {
     two_pc_auto: bool,
     sharded_schemas: ShardedSchemas,
     rewrite: &'a Rewrite,
-    prepared_statements: &'a PreparedStatements,
+    prepared_statements: &'a PreparedStatementsLevel,
     dry_run: bool,
     expanded_explain: bool,
     query_parser: QueryParserLevel,
@@ -514,7 +514,7 @@ impl Cluster {
         self.query_parser
     }
 
-    pub(crate) fn prepared_statements(&self) -> &PreparedStatements {
+    pub(crate) fn prepared_statements(&self) -> &PreparedStatementsLevel {
         &self.prepared_statements
     }
 
@@ -589,7 +589,7 @@ impl Cluster {
                 self.multi_tenant().is_some()
                     || self.router_needed()
                     || self.dry_run()
-                    || self.prepared_statements() == &PreparedStatements::Full
+                    || self.prepared_statements() == &PreparedStatementsLevel::Full
                     || self.regex_parser.use_parser(request)
             }
         }

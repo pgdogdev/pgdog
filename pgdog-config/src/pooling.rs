@@ -7,7 +7,7 @@ use std::str::FromStr;
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum PreparedStatements {
+pub enum PreparedStatementsLevel {
     /// Prepared statements are disabled.
     Disabled,
     /// Handles prepared statements sent normally using the extended protocol (default).
@@ -19,30 +19,30 @@ pub enum PreparedStatements {
     Full,
 }
 
-impl PreparedStatements {
+impl PreparedStatementsLevel {
     pub fn full(&self) -> bool {
-        matches!(self, PreparedStatements::Full)
+        matches!(self, PreparedStatementsLevel::Full)
     }
 
     pub fn enabled(&self) -> bool {
-        !matches!(self, PreparedStatements::Disabled)
+        !matches!(self, PreparedStatementsLevel::Disabled)
     }
 
     pub fn rewrite_anonymous(&self) -> bool {
-        matches!(self, PreparedStatements::ExtendedAnonymous)
+        matches!(self, PreparedStatementsLevel::ExtendedAnonymous)
     }
 
     pub fn handles_extended(&self) -> bool {
         matches!(
             self,
-            PreparedStatements::Extended
-                | PreparedStatements::ExtendedAnonymous
-                | PreparedStatements::Full
+            PreparedStatementsLevel::Extended
+                | PreparedStatementsLevel::ExtendedAnonymous
+                | PreparedStatementsLevel::Full
         )
     }
 }
 
-impl FromStr for PreparedStatements {
+impl FromStr for PreparedStatementsLevel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

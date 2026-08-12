@@ -40,7 +40,7 @@ impl State {
                 total: guard.total(),
                 online: guard.online,
                 empty: guard.idle() == 0,
-                config: *guard.config,
+                config: guard.config,
                 paused: guard.paused,
                 waiting: guard.waiting.len(),
                 errors: guard.errors,

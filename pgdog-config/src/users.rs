@@ -128,8 +128,8 @@ impl Users {
 
             if !user.database.is_empty() && !user.databases.is_empty() {
                 warn!(
-                    r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{}""#,
-                    user.name, user.database, user.databases, user.database,
+                    r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{:?}""#,
+                    user.name, user.database, user.databases, user.databases,
                 );
             }
 
@@ -447,6 +447,16 @@ impl User {
 
     pub fn is_external_identity(&self) -> bool {
         self.server_auth.is_external_identity()
+    }
+
+    pub fn has_database(&self, name: &str) -> bool {
+        if self.all_databases {
+            true
+        } else if !self.databases.is_empty() {
+            self.databases.iter().any(|database| database == name)
+        } else {
+            self.database == name
+        }
     }
 }
 

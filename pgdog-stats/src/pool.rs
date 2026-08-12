@@ -3,9 +3,11 @@ use std::{
     time::Duration,
 };
 
-use pgdog_config::{PoolerMode, PreparedStatements, Role, pooling::ConnectionRecovery};
+use pgdog_config::PoolerMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+pub use pgdog_config::pool::{PoolConfig, RoleSpecificConfig};
 
 use crate::{LsnStats, ReplicaLag};
 
@@ -258,7 +260,7 @@ pub struct State {
     pub empty: bool,
     /// Pool configuration.
     #[serde(skip)]
-    pub config: Config,
+    pub config: PoolConfig,
     /// The pool is paused.
     pub paused: bool,
     /// Number of clients waiting for a connection.
@@ -283,183 +285,4 @@ pub struct State {
     pub force_close: usize,
     // LSN stats.
     pub lsn_stats: LsnStats,
-}
-
-/// How a server connection handles prepared statements.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub struct PreparedStatementsConfig {
-    /// Which statements PgDog keeps prepared on the connection.
-    pub level: PreparedStatements,
-    /// Maximum prepared statements per connection.
-    pub limit: usize,
-    /// How long a statement can keep a cached plan. `None` never expires.
-    pub ttl: Option<Duration>,
-    /// Random spread applied to `ttl`, per statement.
-    pub ttl_jitter: Duration,
-}
-
-impl Default for PreparedStatementsConfig {
-    fn default() -> Self {
-        Self {
-            level: PreparedStatements::default(),
-            limit: usize::MAX,
-            ttl: None,
-            ttl_jitter: Duration::ZERO,
-        }
-    }
-}
-
-/// Pool configuration.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub struct Config {
-    /// Minimum connections that should be in the pool.
-    pub min: usize,
-    /// Minimum connections that should be in the pool if it's a primary.
-    pub min_primary: Option<usize>,
-    /// Minimum connections that should be in the pool if it's a replica.
-    pub min_replica: Option<usize>,
-    /// Maximum connections allowed in the pool.
-    pub max: usize,
-    /// Maximum connection allowed in the pool if its a primary.
-    pub max_primary: Option<usize>,
-    /// Maximum connections allowed in the pool if its a replica.
-    pub max_replica: Option<usize>,
-    /// How long to wait for a connection before giving up.
-    pub checkout_timeout: Duration, // ms
-    /// Interval duration of DNS cache refresh.
-    pub dns_ttl: Duration, // ms
-    /// Close connections that have been idle for longer than this.
-    pub idle_timeout: Duration, // ms
-    /// Close primary connections that have been idle for longer than this.
-    pub idle_timeout_primary: Option<Duration>, // ms
-    /// Close replica connections that have been idle for longer than this.
-    pub idle_timeout_replica: Option<Duration>, // ms
-    /// How long to wait for connections to be created.
-    pub connect_timeout: Duration, // ms
-    /// How many times to attempt a connection before returning an error.
-    pub connect_attempts: u64,
-    /// How long to wait between connection attempts.
-    pub connect_attempt_delay: Duration,
-    /// How long a connection can be open.
-    pub max_age: Duration,
-    /// Maximum random adjustment applied to `max_age` per connection.
-    /// Each connection samples a per-connection offset uniformly from
-    /// `[-max_age_jitter, +max_age_jitter]` once at creation, breaking
-    /// up synchronized retirement of cohorts that connect together.
-    pub max_age_jitter: Duration,
-    /// Can this pool be banned from serving traffic?
-    pub bannable: bool,
-    /// Healtheck timeout.
-    pub healthcheck_timeout: Duration, // ms
-    /// Healtcheck interval.
-    pub healthcheck_interval: Duration, // ms
-    /// Idle healthcheck interval.
-    pub idle_healthcheck_interval: Duration, // ms
-    /// Idle healthcheck delay.
-    pub idle_healthcheck_delay: Duration, // ms
-    /// Should new servers on config reload wait for a successful health
-    /// check to be added to the load balancer?
-    pub require_healthcheck_on_discovery: bool,
-    /// Read timeout (dangerous).
-    pub read_timeout: Duration, // ms
-    /// Write timeout (dangerous).
-    pub write_timeout: Duration, // ms
-    /// Query timeout (dangerous).
-    pub query_timeout: Duration, // ms
-    /// Max ban duration.
-    pub ban_timeout: Duration, // ms
-    /// Rollback timeout for dirty connections.
-    pub rollback_timeout: Duration,
-    /// Statement timeout
-    pub statement_timeout: Option<Duration>,
-    /// Lock timeout
-    pub lock_timeout: Option<Duration>,
-    /// Replication mode.
-    pub replication_mode: bool,
-    /// Pooler mode.
-    pub pooler_mode: PoolerMode,
-    /// Read only mode.
-    pub read_only: bool,
-    /// Prepared statements config.
-    pub prepared_statements: PreparedStatementsConfig,
-    /// Stats averaging period.
-    pub stats_period: Duration,
-    /// Recovery algo.
-    pub connection_recovery: ConnectionRecovery,
-    /// LSN check interval.
-    pub lsn_check_interval: Duration,
-    /// LSN check timeout.
-    pub lsn_check_timeout: Duration,
-    /// LSN check delay.
-    pub lsn_check_delay: Duration,
-    /// Automatic role detection enabled.
-    pub role_detection: bool,
-    /// Used for resharding only.
-    pub resharding_only: bool,
-    /// LB weight.
-    pub lb_weight: u8,
-}
-
-pub struct RoleSpecificConfig<T: Copy> {
-    pub value: T,
-    pub value_primary: Option<T>,
-    pub value_replica: Option<T>,
-}
-
-impl<T: Copy> RoleSpecificConfig<T> {
-    /// Get value given role.
-    pub fn value(&self, role: Role) -> T {
-        match role {
-            Role::Auto | Role::Replica => self.value_replica.unwrap_or(self.value),
-            Role::Primary => self.value_primary.unwrap_or(self.value),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            min: 1,
-            min_primary: None,
-            min_replica: None,
-            max: 10,
-            max_primary: None,
-            max_replica: None,
-            checkout_timeout: Duration::from_millis(5_000),
-            idle_timeout: Duration::from_millis(60_000),
-            idle_timeout_primary: None,
-            idle_timeout_replica: None,
-            connect_timeout: Duration::from_millis(5_000),
-            connect_attempts: 1,
-            connect_attempt_delay: Duration::from_millis(10),
-            max_age: Duration::from_millis(24 * 3600 * 1000),
-            max_age_jitter: Duration::ZERO,
-            bannable: true,
-            healthcheck_timeout: Duration::from_millis(5_000),
-            healthcheck_interval: Duration::from_millis(30_000),
-            idle_healthcheck_interval: Duration::from_millis(5_000),
-            idle_healthcheck_delay: Duration::from_millis(5_000),
-            require_healthcheck_on_discovery: false,
-            read_timeout: Duration::MAX,
-            write_timeout: Duration::MAX,
-            query_timeout: Duration::MAX,
-            ban_timeout: Duration::from_secs(300),
-            rollback_timeout: Duration::from_secs(5),
-            statement_timeout: None,
-            lock_timeout: None,
-            replication_mode: false,
-            pooler_mode: PoolerMode::default(),
-            read_only: false,
-            prepared_statements: PreparedStatementsConfig::default(),
-            stats_period: Duration::from_millis(15_000),
-            dns_ttl: Duration::from_millis(60_000),
-            connection_recovery: ConnectionRecovery::Recover,
-            lsn_check_interval: Duration::from_millis(5_000),
-            lsn_check_timeout: Duration::from_millis(5_000),
-            lsn_check_delay: Duration::from_millis(5_000),
-            role_detection: false,
-            resharding_only: false,
-            lb_weight: 255,
-        }
-    }
 }

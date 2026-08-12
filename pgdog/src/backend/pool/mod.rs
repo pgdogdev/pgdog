@@ -5,7 +5,6 @@ pub(crate) mod cleanup;
 pub(crate) mod cluster;
 pub(crate) mod cluster_metrics;
 pub(crate) mod comms;
-pub(crate) mod config;
 pub(crate) mod connection;
 pub(crate) mod dns_cache;
 pub(crate) mod ee;
@@ -30,7 +29,6 @@ pub(crate) mod waiting;
 pub(crate) use address::Address;
 pub(crate) use cluster::{Cluster, ClusterConfig, ClusterShardConfig, PoolConfig, ShardingSchema};
 pub(crate) use cluster_metrics::ClusterMetrics;
-pub(crate) use config::Config;
 pub(crate) use connection::Connection;
 pub(crate) use error::Error;
 pub(crate) use guard::Guard;
@@ -45,6 +43,8 @@ pub(crate) use role::PoolRole;
 pub(crate) use shard::{CanonicalOids, Oids, Shard};
 pub(crate) use state::State;
 pub(crate) use stats::Stats;
+
+pub use pgdog_config::pool::PoolConfig as Config;
 
 use comms::Comms;
 use inner::Inner;

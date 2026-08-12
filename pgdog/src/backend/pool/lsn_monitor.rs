@@ -427,12 +427,10 @@ mod test {
         // Single connection, short checkout timeout so the saturated checkout
         // fails fast and the fallback path runs quickly.
         let config = Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                min: 1,
-                checkout_timeout: Duration::from_millis(100),
-                ..Config::default().inner
-            },
+            max: 1,
+            min: 1,
+            checkout_timeout: Duration::from_millis(100),
+            ..Config::default()
         };
 
         let pool = Pool::new(&PoolConfig {

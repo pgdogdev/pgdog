@@ -170,7 +170,7 @@ mod test {
 
     use crate::{
         backend::pool::Request,
-        config::{self, PoolerMode, PreparedStatements as PreparedStatementsLevel},
+        config::{self, PoolerMode, PreparedStatementsLevel},
         net::{Parameter, Parameters, Query},
     };
 
