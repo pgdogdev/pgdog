@@ -128,13 +128,7 @@ impl StatementRewrite<'_> {
 /// are part of SQL syntax (such as the precision and scale in `numeric(5, 2)`)
 /// untouched.
 fn rewrite_literals<'a>(node: NodeMut<'a, '_>, mem: MemoryToken<'a>) -> SimpleToPreparedPlan {
-    if !matches!(
-        &node,
-        NodeMut::SelectStmt(_)
-            | NodeMut::InsertStmt(_)
-            | NodeMut::UpdateStmt(_)
-            | NodeMut::DeleteStmt(_)
-    ) {
+    if !matches!(&node, NodeMut::SelectStmt(_)) {
         return SimpleToPreparedPlan::default();
     }
 
@@ -352,5 +346,19 @@ mod tests {
 
         assert_eq!(sql, "EXPLAIN SELECT 5");
         assert!(params.is_empty());
+    }
+
+    #[test]
+    fn does_not_rewrite_writes() {
+        for statement in [
+            "INSERT INTO measurements (value) VALUES (5)",
+            "UPDATE measurements SET value = 5",
+            "DELETE FROM measurements WHERE value = 5",
+        ] {
+            let (sql, params) = rewrite(statement);
+
+            assert_eq!(sql, statement);
+            assert!(params.is_empty());
+        }
     }
 }
