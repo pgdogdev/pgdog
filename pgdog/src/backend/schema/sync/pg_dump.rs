@@ -770,6 +770,20 @@ impl PgDumpOutput {
                                 }
 
                                 nodes::AlterTableType::AT_AddIdentity => (),
+
+                                // REPLICA IDENTITY USING INDEX references an
+                                // index, which is created in the post-data
+                                // step. In pre-data it fails, and a restore
+                                // that ignores errors silently leaves the
+                                // table with its default identity. FULL,
+                                // NOTHING and DEFAULT ride along: the table
+                                // exists either way.
+                                nodes::AlterTableType::AT_ReplicaIdentity => {
+                                    if state == SyncState::PostData {
+                                        result.push(original.into());
+                                    }
+                                }
+
                                 // AlterTableType::AtChangeOwner => {
                                 //     continue; // Don't change owners, for now.
                                 // }
@@ -1400,6 +1414,55 @@ ALTER TABLE ONLY parent ATTACH PARTITION parent_2024 FOR VALUES FROM ('2024-01-0
 
         // No statements in post-data for table partitions
         assert!(post_data.is_empty());
+    }
+
+    #[test]
+    fn test_replica_identity_runs_after_indexes() {
+        // pg_dump emits REPLICA IDENTITY USING INDEX right after the
+        // index it references, which is created in the post-data step.
+        // Running it in pre-data fails, and a restore that ignores
+        // errors silently leaves the table with its default identity.
+        let output = parse(
+            r#"
+CREATE TABLE commands (id BIGINT NOT NULL, organization_id BIGINT NOT NULL);
+CREATE UNIQUE INDEX commands_org_idx ON commands (id, organization_id);
+ALTER TABLE ONLY commands REPLICA IDENTITY USING INDEX commands_org_idx;
+CREATE TABLE events (id BIGINT NOT NULL);
+ALTER TABLE ONLY events REPLICA IDENTITY FULL;"#,
+        );
+
+        let pre_data = output.statements(SyncState::PreData).unwrap();
+        let post_data = output.statements(SyncState::PostData).unwrap();
+
+        assert!(
+            pre_data
+                .iter()
+                .all(|stmt| !stmt.deref().contains("REPLICA IDENTITY")),
+            "replica identity must not run before its index exists"
+        );
+
+        let identities: Vec<_> = post_data
+            .iter()
+            .filter(|stmt| (*stmt).deref().contains("REPLICA IDENTITY"))
+            .collect();
+        assert_eq!(identities.len(), 2);
+        assert!(
+            identities[0]
+                .deref()
+                .contains("REPLICA IDENTITY USING INDEX commands_org_idx")
+        );
+        assert!(identities[1].deref().contains("REPLICA IDENTITY FULL"));
+
+        // The index it references is created earlier in the same step.
+        let index_position = post_data
+            .iter()
+            .position(|stmt| stmt.deref().contains("CREATE UNIQUE INDEX"))
+            .expect("the index restores in post-data");
+        let identity_position = post_data
+            .iter()
+            .position(|stmt| stmt.deref().contains("REPLICA IDENTITY USING INDEX"))
+            .expect("the identity restores in post-data");
+        assert!(index_position < identity_position);
     }
 
     #[test]
