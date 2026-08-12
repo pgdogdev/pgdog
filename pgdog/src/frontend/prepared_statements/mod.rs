@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use bytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use tracing::debug;
@@ -34,6 +35,7 @@ pub struct PreparedStatements {
     // mapping the client statement name -> __pgdog__ name from global cache
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
+    rewritten_simple_to_prepared: HashMap<Bytes, String>,
     pub(super) memory_used: usize,
 }
 
@@ -43,6 +45,7 @@ impl Default for PreparedStatements {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
+            rewritten_simple_to_prepared: HashMap::new(),
             memory_used: 0,
         }
     }
@@ -74,8 +77,14 @@ impl PreparedStatements {
     /// 2. The statement will not be removed from the global cache until the client disconnects
     ///    because clients are not aware of this and will never close it.
     ///
-    pub(crate) fn insert_local_mapping(&mut self, local: &str, global: &str) {
-        self.local.insert(local.to_owned(), global.to_owned());
+    pub(crate) fn insert_rewritten_simple_to_prepared(&mut self, parse: &Parse) -> String {
+        if let Some(name) = self.rewritten_simple_to_prepared.get(&parse.query_ref()) {
+            name.to_owned()
+        } else {
+            let (_new, name) = { self.global.write().insert(parse) };
+            self.local.insert(name.to_owned(), name.to_owned());
+            name
+        }
     }
 
     /// Register prepared statement with the global cache.

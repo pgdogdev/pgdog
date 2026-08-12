@@ -437,10 +437,6 @@ impl PreparedStatements {
         &self.state
     }
 
-    pub(crate) fn ignore_message(&mut self, code: impl Into<ExecutionCode>) {
-        self.state.add_ignore(code);
-    }
-
     /// Get mutable reference to protocol state.
     pub fn state_mut(&mut self) -> &mut ProtocolState {
         &mut self.state

@@ -43,22 +43,11 @@ impl SimpleToPreparedPlan {
         }
 
         let mut parse = Parse::new_anonymous(stmt);
-
-        // This is what QueryEngine::rewrite_extended does,
-        // with a small change, see insert_local_mapping below.
-        let (_, name) = PreparedStatements::global().write().insert(&parse);
+        let name = prepared_statements.insert_rewritten_simple_to_prepared(&parse);
         parse.rename(&name);
 
         let parse = Parse::named(&name, stmt);
         let bind = Bind::new_params(&name, &self.params);
-
-        // This will ensure the global counter for this prepared statement
-        // is correctly decreased when this client disconnects.
-        //
-        // We are using the global name for the local cache because
-        // the client doesn't know it's using prepared statements and will never
-        // manually close it.
-        prepared_statements.insert_local_mapping(parse.name(), parse.name());
 
         self.step_two = Some(SimpleToPreparedPlanStepTwo { parse, bind });
 
@@ -72,7 +61,6 @@ impl SimpleToPreparedPlan {
     ///
     pub(crate) fn apply(&self, request: &mut ClientRequest) {
         if let Some(ref step_two) = self.step_two {
-            request.simple_to_prepared_rewrite = true;
             request.clear();
             request.push(ProtocolMessage::Parse(step_two.parse.clone()));
             request.push(ProtocolMessage::Describe(Describe::new_statement(
@@ -81,6 +69,7 @@ impl SimpleToPreparedPlan {
             request.push(ProtocolMessage::Bind(step_two.bind.clone()));
             request.push(ProtocolMessage::Execute(Execute::new()));
             request.push(ProtocolMessage::Sync(Sync));
+            request.simple_to_prepared_rewrite = true;
         }
     }
 }

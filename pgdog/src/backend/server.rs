@@ -476,12 +476,6 @@ impl Server {
         }
         self.flush().await?;
 
-        if client_request.simple_to_prepared_rewrite {
-            self.prepared_statements.ignore_message('1');
-            self.prepared_statements.ignore_message('2');
-            self.prepared_statements.ignore_message('t');
-        }
-
         // The whole request is now in server's hands.
         // We can recover the connection from this point on.
         self.sending_request = false;
