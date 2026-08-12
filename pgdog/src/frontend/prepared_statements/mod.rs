@@ -83,6 +83,8 @@ impl PreparedStatements {
         } else {
             let (_new, name) = { self.global.write().insert(parse) };
             self.local.insert(name.to_owned(), name.to_owned());
+            self.rewritten_simple_to_prepared
+                .insert(parse.query_ref(), name.clone());
             name
         }
     }

@@ -59,7 +59,7 @@ impl SimpleToPreparedPlan {
     /// INVARIANT: the request contains one single [`crate::net::Query`] message.
     /// This is enforced by [`crate::frontend::client::Client::buffer`] and [`ClientRequest::is_complete`].
     ///
-    pub(crate) fn apply(&self, request: &mut ClientRequest) {
+    pub(crate) fn apply(&self, request: &mut ClientRequest) -> bool {
         if let Some(ref step_two) = self.step_two {
             request.clear();
             request.push(ProtocolMessage::Parse(step_two.parse.clone()));
@@ -69,7 +69,9 @@ impl SimpleToPreparedPlan {
             request.push(ProtocolMessage::Bind(step_two.bind.clone()));
             request.push(ProtocolMessage::Execute(Execute::new()));
             request.push(ProtocolMessage::Sync(Sync));
-            request.simple_to_prepared_rewrite = true;
+            true
+        } else {
+            false
         }
     }
 }
@@ -174,7 +176,14 @@ impl<'mem> LiteralRewriter<'mem> {
                     "numeric"
                 },
             )),
-            Some(ConstValue::String(value)) => Some((Parameter::new(value.as_bytes()), "text")),
+            Some(ConstValue::String(value)) => Some((
+                Parameter::new(value.as_bytes()),
+                if value.parse::<uuid::Uuid>().is_ok() {
+                    "uuid"
+                } else {
+                    "text"
+                },
+            )),
             Some(ConstValue::BitString(value)) => Some((Parameter::new(value.as_bytes()), "bit")),
             Some(ConstValue::Boolean(value)) => Some((
                 Parameter::new(if value { b"true" } else { b"false" }),

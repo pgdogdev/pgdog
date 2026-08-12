@@ -1,6 +1,6 @@
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{Bind, Message, Parse, Protocol, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
@@ -55,9 +55,30 @@ pub struct RewritePlan {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RewriteResult {
-    InPlace { offset: Option<OffsetPlan> },
+    InPlace {
+        offset: Option<OffsetPlan>,
+        simple_to_prepared: bool,
+    },
     InsertSplit(Vec<ClientRequest>),
     ShardingKeyUpdate(ShardingKeyUpdate),
+}
+
+/// Action to be taken by the query engine
+/// given the state of the rewrite and the message
+/// received from Postgres.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum AfterExecutionAction {
+    /// Forward message as-is to the client.
+    Forward,
+    /// Drop the message.
+    Drop,
+}
+
+impl AfterExecutionAction {
+    /// Forward the message to the client.
+    pub(crate) fn forward(&self) -> bool {
+        self == &Self::Forward
+    }
 }
 
 impl RewriteResult {
@@ -65,9 +86,31 @@ impl RewriteResult {
         match self {
             Self::InPlace {
                 offset: Some(offset),
+                ..
             } => offset.apply_after_parser(request),
             _ => Ok(()),
         }
+    }
+
+    /// Apply any filtering/rewriting rules to messages received from Postgres
+    /// given the rewrite performed by the rewrite engine.
+    ///
+    /// # Arguments
+    ///
+    /// - `message`: Message received from a Postgres server.
+    ///
+    pub(crate) fn apply_after_execution(&self, message: &Message) -> AfterExecutionAction {
+        if let Self::InPlace {
+            simple_to_prepared: true,
+            ..
+        } = self
+        {
+            if matches!(message.code(), '1' | '2' | 't' | 'n') {
+                return AfterExecutionAction::Drop;
+            }
+        }
+
+        AfterExecutionAction::Forward
     }
 }
 
@@ -123,7 +166,7 @@ impl RewritePlan {
     /// Apply the rewrite plan to a ClientRequest.
     pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // This needs to run first!
-        self.simple_to_prepared.apply(request);
+        let simple_to_prepared = self.simple_to_prepared.apply(request);
 
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepares.is_empty() {
@@ -165,6 +208,7 @@ impl RewritePlan {
 
         Ok(RewriteResult::InPlace {
             offset: self.offset.clone(),
+            simple_to_prepared,
         })
     }
 }

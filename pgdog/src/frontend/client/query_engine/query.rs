@@ -242,10 +242,13 @@ impl QueryEngine {
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
 
-        let drop_simple_to_prepared = context.client_request.simple_to_prepared_rewrite
-            && matches!(message.code(), '1' | '2' | 't');
+        let forward_to_client = context
+            .rewrite_result
+            .as_ref()
+            .map(|rewrite| rewrite.apply_after_execution(&message).forward())
+            .unwrap_or(true);
 
-        if !drop_simple_to_prepared {
+        if forward_to_client {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
             if flush {
