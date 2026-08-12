@@ -19,16 +19,16 @@ pub struct RewritePlan {
     /// the original statement. This is calculated first,
     /// and $params+n parameters are added to the statement to
     /// substitute values we are rewriting.
-    pub(crate) num_params: u16,
+    pub(crate) params: u16,
 
     /// Number of unique IDs to append to the Bind message.
-    pub(crate) num_unique_ids: u16,
+    pub(crate) unique_ids: u16,
 
     /// Number of auto-injected primary key columns with pgdog.unique_id().
-    pub(crate) num_auto_id_injected: u16,
+    pub(crate) auto_id_injected: u16,
 
     /// Rewritten SQL statement.
-    pub(crate) rewritten_stmt: Option<String>,
+    pub(crate) stmt: Option<String>,
 
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
@@ -119,9 +119,9 @@ impl RewritePlan {
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
     pub(crate) fn is_empty(&self) -> bool {
-        self.num_unique_ids == 0
-            && self.num_auto_id_injected == 0
-            && self.rewritten_stmt.is_none()
+        self.unique_ids == 0
+            && self.auto_id_injected == 0
+            && self.stmt.is_none()
             && self.prepares.is_empty()
             && self.insert_split.is_empty()
             && self.aggregates.is_noop()
@@ -133,7 +133,7 @@ impl RewritePlan {
     pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
         let format = bind.default_param_format();
 
-        for _ in 0..self.num_unique_ids {
+        for _ in 0..self.unique_ids {
             let generator = UniqueId::generator()?;
             let id = generator.next_id();
             let param = match format {
@@ -148,7 +148,7 @@ impl RewritePlan {
 
     /// Apply the rewrite plan to a Parse message by updating the SQL.
     pub(crate) fn apply_parse(&self, parse: &mut Parse) {
-        if let Some(ref stmt) = self.rewritten_stmt {
+        if let Some(ref stmt) = self.stmt {
             parse.set_query(stmt);
             if !parse.anonymous() {
                 PreparedStatements::global().write().rewrite(parse);
@@ -158,7 +158,7 @@ impl RewritePlan {
 
     /// Apply the rewrite plan to a Query message by updating the SQL.
     pub(crate) fn apply_query(&self, query: &mut Query) {
-        if let Some(ref stmt) = self.rewritten_stmt {
+        if let Some(ref stmt) = self.stmt {
             query.set_query(stmt);
         }
     }
@@ -232,7 +232,7 @@ mod tests {
     fn test_apply_bind_text_format() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            num_unique_ids: 1,
+            unique_ids: 1,
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -252,8 +252,8 @@ mod tests {
     fn test_apply_bind_binary_format_uniform() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            num_params: 1,
-            num_unique_ids: 1,
+            params: 1,
+            unique_ids: 1,
             ..Default::default()
         };
         // Create bind with uniform binary format (1 code applies to all)
@@ -277,8 +277,8 @@ mod tests {
     fn test_apply_bind_binary_format_one_to_one() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            num_params: 2,
-            num_unique_ids: 1,
+            params: 2,
+            unique_ids: 1,
             ..Default::default()
         };
         // Create bind with one-to-one format codes
@@ -304,7 +304,7 @@ mod tests {
     fn test_apply_bind_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            num_unique_ids: 3,
+            unique_ids: 3,
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -324,8 +324,8 @@ mod tests {
     fn test_apply_bind_appends_to_existing_params() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            num_params: 2,
-            num_unique_ids: 2,
+            params: 2,
+            unique_ids: 2,
             ..Default::default()
         };
         let mut bind = Bind::new_params(

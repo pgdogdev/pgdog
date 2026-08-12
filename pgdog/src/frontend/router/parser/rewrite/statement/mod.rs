@@ -121,7 +121,7 @@ impl<'a> StatementRewrite<'a> {
             | Node::UpdateStmt(_)
             | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| {
                 if let Node::ParamRef(param) = node {
-                    plan.num_params = plan.num_params.max(param.number as u16)
+                    plan.params = plan.params.max(param.number as u16)
                 }
             }),
             Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
@@ -144,14 +144,14 @@ impl<'a> StatementRewrite<'a> {
         }
 
         // Track the next parameter number to use
-        let mut next_param = plan.num_params as i32 + 1;
+        let mut next_param = plan.params as i32 + 1;
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
             &mut transform::TransformClosure::new(|node| {
                 match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
                     Ok(Some(replacement)) => {
-                        plan.num_unique_ids += 1;
+                        plan.unique_ids += 1;
                         self.rewritten = true;
                         node.replace(replacement);
                         None
@@ -185,7 +185,7 @@ impl<'a> StatementRewrite<'a> {
             plan.simple_to_prepared
                 .step_two(self.prepared_statements, &stmt)?;
 
-            plan.rewritten_stmt = Some(stmt);
+            plan.stmt = Some(stmt);
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {

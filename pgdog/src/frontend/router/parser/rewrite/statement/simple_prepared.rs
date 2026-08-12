@@ -175,7 +175,7 @@ mod tests {
             "original name should be replaced: {sql}"
         );
         assert!(plan.prepares.is_empty());
-        assert!(plan.rewritten_stmt.is_some());
+        assert!(plan.stmt.is_some());
     }
 
     #[test]
@@ -226,6 +226,6 @@ mod tests {
 
         assert_eq!(sql, "SELECT 1, 2, 3");
         assert!(plan.prepares.is_empty());
-        assert!(plan.rewritten_stmt.is_none());
+        assert!(plan.stmt.is_none());
     }
 }
