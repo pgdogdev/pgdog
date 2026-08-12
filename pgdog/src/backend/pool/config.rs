@@ -172,7 +172,7 @@ mod test {
     #[test]
     fn test_prepared_statements_config_from_general() {
         let general = General {
-            prepared_statements_ttl: 60_000,
+            prepared_statements_ttl: Some(60_000),
             prepared_statements_limit: 10,
             ..Default::default()
         };

@@ -201,9 +201,9 @@ prepared_statements_limit = 1_000
 # connection. Expired statements are closed and prepared again the next
 # time they are used, so execution plans don't get stale.
 #
-# Set to 0 to let statements stay prepared forever.
+# Omit or set to 0 to let statements stay prepared forever.
 #
-# Default: 300_000 (5 minutes)
+# Default: none (disabled)
 #
 prepared_statements_ttl = 300_000
 # Random spread applied to prepared_statements_ttl, per statement. Clients

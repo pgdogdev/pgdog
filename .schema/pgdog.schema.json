@@ -83,7 +83,7 @@
         "port": 6432,
         "prepared_statements": "extended",
         "prepared_statements_limit": 9223372036854775807,
-        "prepared_statements_ttl": 300000,
+        "prepared_statements_ttl": null,
         "prepared_statements_ttl_jitter": 30000,
         "pub_sub_channel_size": 0,
         "query_cache_limit": 1000,
@@ -1031,10 +1031,13 @@
           "minimum": 0
         },
         "prepared_statements_ttl": {
-          "description": "How long a prepared statement is allowed to stay prepared on a server connection, in milliseconds.\n\n**Note:** Expired statements are closed and prepared again the next time they are used. This stops stale execution plans from staying in Postgres. Set to `0` to let statements stay prepared forever.\n\n_Default:_ `300000` (5 minutes)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_ttl>",
-          "type": "integer",
+          "description": "How long a prepared statement is allowed to stay prepared on a server connection, in milliseconds.\n\n**Note:** Expired statements are closed and prepared again the next time they are used. This stops stale execution plans from staying in Postgres. Omit or set to `0` to let statements stay prepared forever.\n\n_Default:_ `None` (disabled)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_ttl>",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 300000,
+          "default": null,
           "minimum": 0
         },
         "prepared_statements_ttl_jitter": {

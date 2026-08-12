@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 /// together don't all expire on the same tick.
 ///
 /// Jitter has millisecond granularity: anything smaller is treated as zero.
-pub fn jitter_duration(base: Duration, jitter: Duration) -> Duration {
+pub(crate) fn jitter_duration(base: Duration, jitter: Duration) -> Duration {
     if jitter.is_zero() {
         return base;
     }
@@ -34,7 +34,7 @@ pub fn jitter_duration(base: Duration, jitter: Duration) -> Duration {
 ///
 /// Panics on a `ttl` big enough to overflow the clock. Config caps it
 /// long before that.
-pub fn deadline(ttl: Duration, jitter: Duration) -> Instant {
+pub(crate) fn deadline(ttl: Duration, jitter: Duration) -> Instant {
     Instant::now() + jitter_duration(ttl, jitter)
 }
 

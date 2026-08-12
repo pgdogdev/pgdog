@@ -32,7 +32,7 @@ fn entry_mem(s: &str) -> usize {
 
 /// A statement info prepared on this connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalStatement {
+struct LocalStatement {
     /// When this statement should be replanned
     deadline: Option<Instant>,
 }
@@ -44,22 +44,18 @@ impl LocalStatement {
         }
     }
 
-    pub fn deadline(&self) -> Option<Instant> {
-        self.deadline
-    }
-
     /// Check for expired
     ///
     /// If the check is called and deadline is not set then it's marked as expired
     /// to cover the case when the TTL was set after the statement creation
-    pub fn expired(&self, now: Instant) -> bool {
+    fn expired(&self, now: Instant) -> bool {
         self.deadline.is_none_or(|deadline| deadline <= now)
     }
 }
 
 /// A statement that has to be run before client messages
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prepare {
+pub(super) struct Prepare {
     /// Some if statement was prepared previously, but has expired since
     close: Option<ProtocolMessage>,
     parse: ProtocolMessage,
@@ -67,11 +63,11 @@ pub struct Prepare {
 
 impl Prepare {
     /// The stale statement to close first, if the name is taken.
-    pub fn close(&self) -> Option<&ProtocolMessage> {
+    pub(super) fn close(&self) -> Option<&ProtocolMessage> {
         self.close.as_ref()
     }
 
-    pub fn parse(&self) -> &ProtocolMessage {
+    pub(super) fn parse(&self) -> &ProtocolMessage {
         &self.parse
     }
 
@@ -81,7 +77,7 @@ impl Prepare {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum HandleResult {
+pub(super) enum HandleResult {
     Drop,
     Forward,
     Rewrite(ProtocolMessage),
@@ -165,7 +161,7 @@ impl PreparedStatements {
     }
 
     /// Handle extended protocol message.
-    pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
+    pub(super) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
@@ -740,7 +736,7 @@ pub(crate) mod test {
         ps.prepared(&name);
 
         assert_eq!(ps.config().ttl, None);
-        assert_eq!(ps.statement(&name).unwrap().deadline(), None);
+        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
 
         ps.configure(PreparedStatementsConfig {
             ttl: Some(TTL),

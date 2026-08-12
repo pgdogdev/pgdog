@@ -2825,8 +2825,8 @@ pub mod test {
     /// What Postgres itself thinks is prepared on this connection.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) struct PreparedInPostgres {
-        pub name: String,
-        pub prepared_at: String,
+        pub(crate) name: String,
+        pub(crate) prepared_at: String,
     }
 
     impl From<DataRow> for PreparedInPostgres {
