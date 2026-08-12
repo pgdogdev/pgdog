@@ -799,8 +799,8 @@ mod test {
         cache.rewrite(&rewrite);
         cache.rewrite(&rewrite); // replacing a rewrite must not double-count
         let rd = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
-        cache.insert_row_description("__pgdog_2", &rd);
-        cache.insert_row_description("__pgdog_2", &rd); // second call is a no-op
+        cache.insert_row_description("__pgdog_2", rd.clone());
+        cache.insert_row_description("__pgdog_2", rd); // second call is a no-op
         assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
 
         for i in 1..=500 {
