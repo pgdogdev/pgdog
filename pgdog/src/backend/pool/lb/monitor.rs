@@ -89,7 +89,7 @@ impl Monitor {
         let targets = &self.replicas.targets;
 
         for (i, target) in targets.iter().enumerate() {
-            let healthy = target.health.healthy();
+            let healthy = target.health().healthy();
             let replica_lag_bad = target
                 .pool
                 .replica_lag()

@@ -28,7 +28,7 @@ pub mod target_health;
 use ban::Ban;
 pub use ban::UnbanReason;
 use monitor::*;
-pub use target_health::*;
+pub(crate) use target_health::*;
 
 #[cfg(test)]
 mod test;
@@ -39,7 +39,6 @@ pub struct Target {
     pub pool: Pool,
     pub ban: Ban,
     role: PoolRole,
-    pub health: TargetHealth,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
 }
@@ -54,7 +53,6 @@ impl Target {
         Self {
             ban,
             role: PoolRole::new(role),
-            health: pool.inner().health.clone(),
             pool,
             current_weight: Arc::new(AtomicI64::new(0)),
         }
@@ -76,6 +74,10 @@ impl Target {
         );
 
         lb && pool
+    }
+
+    pub(super) fn health(&self) -> &TargetHealth {
+        &self.pool.inner().health
     }
 }
 

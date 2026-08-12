@@ -76,7 +76,7 @@ impl Pool {
                 inner: Mutex::new(Inner::new(config.config, id)),
                 id,
                 config: config.config,
-                health: TargetHealth::new(id),
+                health: TargetHealth::new(),
                 params: OnceCell::new(),
                 lsn_stats: RwLock::new(LsnStats::default()),
                 lsn_role_change: Notify::new(),
