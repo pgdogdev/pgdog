@@ -172,7 +172,7 @@ impl MultiShard {
                             )
                             .map_err(Error::from)?;
 
-                        self.buffer.sort(self.route.order_by(), &self.decoder);
+                        self.buffer.sort(self.route.order_by(), &self.decoder)?;
                         self.buffer.distinct(self.route.distinct(), &self.decoder);
                         self.buffer.limit(self.route.limit());
                     }
