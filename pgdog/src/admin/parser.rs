@@ -203,9 +203,13 @@ impl Parser {
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
             "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
-            // These are not coevered by the show handler above
+            // These are not covered by the show handler above
             // because they are not valid SQL syntax.
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                // These two are duplicated because they support selecting columns from their output.
+                "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
+                "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
+
                 "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
                     "memory" => ParseResult::ShowServerMemory(ShowServerMemory::parse(&sql)?),
                     command => {
@@ -317,6 +321,18 @@ mod tests {
         assert_parses!("SHOW SERVER MEMORY", ParseResult::ShowServerMemory(_));
         assert_parses!("SHOW CLIENT MEMORY", ParseResult::ShowClientMemory(_));
         assert_parses!("SHOW server_version", ParseResult::Guc(_));
+    }
+
+    #[test]
+    fn parses_show_commands_with_selected_columns() {
+        assert_parses!(
+            "SHOW CLIENTS prepared_statements, application_name",
+            ParseResult::ShowClients(_)
+        );
+        assert_parses!(
+            "SHOW SERVERS remote_pid, application_name",
+            ParseResult::ShowServers(_)
+        );
     }
 
     #[test]

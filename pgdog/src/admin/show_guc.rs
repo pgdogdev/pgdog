@@ -28,7 +28,7 @@ impl Command for ShowGuc {
     }
 
     fn parse(_sql: &str) -> Result<Self, Error> {
-        unreachable!("ShowGuc is initialized manually")
+        unreachable!("ShowGuc must be initialized manually")
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
