@@ -220,6 +220,7 @@
         "enabled": false,
         "primary_key": "ignore",
         "shard_key": "error",
+        "simple_to_prepared": false,
         "split_inserts": "error"
       }
     },
@@ -1869,6 +1870,11 @@
           "description": "Behavior for `UPDATE` statements changing sharding keys: `error` rejects, `rewrite` migrates rows between shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#shard_key>",
           "$ref": "#/$defs/RewriteMode",
           "default": "error"
+        },
+        "simple_to_prepared": {
+          "description": "Rewrite simple queries to prepared statements.",
+          "type": "boolean",
+          "default": false
         },
         "split_inserts": {
           "description": "Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts>",

@@ -359,3 +359,28 @@ fn test_truncated_query_non_ascii_char_boundary() {
     let ast_query = AstQuery::from_query(&buffered);
     assert_eq!(ast_query.truncated_query(9), "SELECT '€");
 }
+
+#[test]
+fn rejects_rewritten_multi_statement_queries() {
+    let mut ctx = test_context();
+    ctx.sharding_schema.rewrite.simple_to_prepared = true;
+    let mut prepared_statements = PreparedStatements::default();
+
+    let unchanged =
+        BufferedQuery::Query(Query::new("SELECT current_user; SELECT current_database()"));
+    Cache::get()
+        .query(&unchanged, &ctx, &mut prepared_statements)
+        .expect("multi-statement query without rewrites should parse");
+
+    let rewritten = BufferedQuery::Query(Query::new("SELECT 1; SELECT 2"));
+    let error = Cache::get()
+        .query(&rewritten, &ctx, &mut prepared_statements)
+        .expect_err("rewritten multi-statement query should be rejected");
+
+    assert!(matches!(
+        error,
+        crate::frontend::router::parser::Error::Rewrite(
+            crate::frontend::router::parser::rewrite::statement::Error::MultiStatementRewrite
+        )
+    ));
+}

@@ -148,6 +148,7 @@ mod tests {
                 db_schema: &self.db_schema,
                 user: "",
                 search_path: None,
+                multiple_statements: false,
             });
             let mut plan = Default::default();
             let ast = pg_raw_parse::make::try_owned(|mem| {

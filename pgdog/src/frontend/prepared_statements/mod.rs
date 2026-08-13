@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use bytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use tracing::debug;
@@ -34,6 +35,7 @@ pub struct PreparedStatements {
     // mapping the client statement name -> __pgdog__ name from global cache
     pub(super) local: HashMap<String, String>,
     pub(super) level: PreparedStatementsLevel,
+    rewritten_simple_to_prepared: HashMap<Bytes, String>,
     pub(super) memory_used: usize,
 }
 
@@ -43,6 +45,7 @@ impl Default for PreparedStatements {
             global: Arc::new(RwLock::new(GlobalCache::default())),
             local: HashMap::default(),
             level: PreparedStatementsLevel::Extended,
+            rewritten_simple_to_prepared: HashMap::new(),
             memory_used: 0,
         }
     }
@@ -66,8 +69,28 @@ impl PreparedStatements {
         Ok(())
     }
 
+    /// Manually map a local prepared statement to a global one.
+    ///
+    /// Warning: don't use this unless you understand the side-effects:
+    ///
+    /// 1. When client disconnects, this statement's global counter will be decreased by 1.
+    /// 2. The statement will not be removed from the global cache until the client disconnects
+    ///    because clients are not aware of this and will never close it.
+    ///
+    pub(crate) fn insert_rewritten_simple_to_prepared(&mut self, parse: &Parse) -> String {
+        if let Some(name) = self.rewritten_simple_to_prepared.get(&parse.query_ref()) {
+            name.to_owned()
+        } else {
+            let (_new, name) = { self.global.write().insert(parse) };
+            self.local.insert(name.to_owned(), name.to_owned());
+            self.rewritten_simple_to_prepared
+                .insert(parse.query_ref(), name.clone());
+            name
+        }
+    }
+
     /// Register prepared statement with the global cache.
-    pub fn insert(&mut self, parse: &mut Parse) {
+    pub(crate) fn insert(&mut self, parse: &mut Parse) {
         let (_new, name) = { self.global.write().insert(parse) };
         let key = parse.name();
         let existed = self.local.insert(key.to_owned(), name.clone());

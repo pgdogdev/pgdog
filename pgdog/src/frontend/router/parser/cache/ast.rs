@@ -68,7 +68,7 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub(super) fn new(
+    fn new(
         query: &AstQuery,
         schema: &ShardingSchema,
         db_schema: &Schema,
@@ -78,6 +78,7 @@ impl Ast {
     ) -> Result<Self, Error> {
         let now = Instant::now();
         let ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
+        let multiple_statements = ast.stmts().count() > 1;
 
         // Run the rewrite unconditionally. Even when a shard comment will
         // route the query to a specific shard, we need to know whether the
@@ -91,6 +92,7 @@ impl Ast {
             db_schema,
             user,
             search_path,
+            multiple_statements,
         });
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {

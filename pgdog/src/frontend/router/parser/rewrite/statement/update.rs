@@ -471,6 +471,7 @@ mod test {
             prepared_statements: &mut stmts,
             user: "",
             search_path: None,
+            multiple_statements: false,
         };
         let mut plan = RewritePlan::default();
         StatementRewrite::new(ctx).sharding_key_update(

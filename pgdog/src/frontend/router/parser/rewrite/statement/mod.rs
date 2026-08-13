@@ -15,6 +15,7 @@ pub mod insert;
 pub mod offset;
 pub mod plan;
 pub mod simple_prepared;
+pub mod simple_to_prepared;
 pub mod unique_id;
 pub mod update;
 
@@ -22,6 +23,7 @@ pub use error::Error;
 pub use insert::InsertSplit;
 pub(crate) use plan::RewritePlan;
 pub use simple_prepared::SimplePreparedResult;
+pub(crate) use simple_to_prepared::*;
 pub(crate) use update::*;
 
 /// Statement rewrite engine context.
@@ -42,6 +44,8 @@ pub struct StatementRewriteContext<'a> {
     pub user: &'a str,
     /// Search path for table lookups.
     pub search_path: Option<&'a ParameterValue>,
+    /// Whether the query contains more than one SQL statement.
+    pub multiple_statements: bool,
 }
 
 #[derive(Debug)]
@@ -65,6 +69,8 @@ pub struct StatementRewrite<'a> {
     user: &'a str,
     /// Search path for table lookups.
     search_path: Option<&'a ParameterValue>,
+    /// Whether the query contains more than one SQL statement.
+    multiple_statements: bool,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -82,6 +88,7 @@ impl<'a> StatementRewrite<'a> {
             db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
+            multiple_statements: ctx.multiple_statements,
         }
     }
 
@@ -103,6 +110,10 @@ impl<'a> StatementRewrite<'a> {
         mem: make::MemoryToken<'mem>,
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
+
+        // N.B. The simple to prepared rewriter should run first.
+        // All subsequent rewriters will act on the prepared statement.
+        self.rewrite_simple_to_prepared(stmt.stmt_mut(), mem, &mut plan)?;
 
         match stmt.stmt() {
             Node::InsertStmt(_)
@@ -162,8 +173,19 @@ impl<'a> StatementRewrite<'a> {
             self.limit_offset(&select, &mut plan);
         }
 
+        if self.rewritten && self.multiple_statements {
+            return Err(Error::MultiStatementRewrite);
+        }
+
         if self.rewritten {
-            plan.stmt = Some(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+            let stmt = pg_raw_parse::deparse(&*stmt)?.as_str().to_owned();
+
+            // N.B. careful with ordering. This should run before insert splits, etc.
+            // since we want to make sure the statement is registered with the global cache.
+            plan.simple_to_prepared
+                .step_two(self.prepared_statements, &stmt)?;
+
+            plan.stmt = Some(stmt);
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {

@@ -40,4 +40,10 @@ pub enum Error {
 
     #[error("prepared statement '{0}' does not exist")]
     ExecuteMissingPrepare(String),
+
+    #[error("prepared statement: {0}")]
+    PreparedStmt(#[from] crate::frontend::prepared_statements::Error),
+
+    #[error("cannot rewrite a multi-statement query")]
+    MultiStatementRewrite,
 }

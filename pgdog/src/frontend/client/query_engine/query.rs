@@ -242,12 +242,20 @@ impl QueryEngine {
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
 
-        trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
+        let forward_to_client = context
+            .rewrite_result
+            .as_ref()
+            .map(|rewrite| rewrite.apply_after_execution(&message).forward())
+            .unwrap_or(true);
 
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
+        if forward_to_client {
+            trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
+
+            if flush {
+                context.stream.send_flush(&message).await?;
+            } else {
+                context.stream.send(&message).await?;
+            }
         }
 
         if code == 'Z' {

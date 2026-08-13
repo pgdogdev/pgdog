@@ -1,0 +1,11 @@
+[general]
+idle_healthcheck_delay = 1000000000
+query_parser = "on"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+
+[rewrite]
+simple_to_prepared = false
