@@ -14,8 +14,6 @@ fi
 run_pgdog
 wait_for_pgdog
 
-pushd "${SCRIPT_DIR}"
-cabal test --test-show-details=direct
-popd
+bash ${SCRIPT_DIR}/dev.sh
 
 stop_pgdog

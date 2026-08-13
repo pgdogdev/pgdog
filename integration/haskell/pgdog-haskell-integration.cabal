@@ -15,4 +15,5 @@ test-suite persistent-integration
         monad-logger >=0.3 && <0.4,
         persistent >=2.18.1 && <2.19,
         persistent-postgresql >=2.14.3 && <2.15,
-        text >=1.2 && <3
+        text >=1.2 && <3,
+        transformers >=0.5 && <0.7

@@ -13,6 +13,17 @@ pub struct Set {
     value: String,
 }
 
+pub(super) fn is_set_statement(sql: &str) -> bool {
+    is_set_or_error(sql).unwrap_or_default()
+}
+
+fn is_set_or_error(sql: &str) -> Result<bool, Error> {
+    let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
+    let root = stmt.stmts().next().ok_or(Error::Syntax)?;
+
+    Ok(matches!(root, Node::VariableSetStmt(_)))
+}
+
 #[async_trait]
 impl Command for Set {
     fn name(&self) -> String {

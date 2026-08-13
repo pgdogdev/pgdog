@@ -27,6 +27,7 @@ reload_schema_on_ddl = false
 unique_id_function = "standard"
 auth_type = "scram"
 workers = 4
+query_log_stdout = true
 # log_dedup_window = 30_000
 # log_dedup_threshold =
 

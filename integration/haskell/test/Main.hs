@@ -13,8 +13,10 @@
 
 module Main (main) where
 
+import Control.Exception (bracket_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (runNoLoggingT)
+import Control.Monad.Trans.Reader (runReaderT)
 import Data.Text (Text)
 import Database.Persist
 import Database.Persist.Postgresql
@@ -32,8 +34,23 @@ PersistentThing sql=haskell_persistent
 connectionString :: ConnectionString
 connectionString = "host=127.0.0.1 port=6432 user=pgdog password=pgdog dbname=pgdog sslmode=disable"
 
+adminConnectionString :: ConnectionString
+adminConnectionString = "host=127.0.0.1 port=6432 user=admin password=pgdog dbname=admin sslmode=disable"
+
 main :: IO ()
-main = runNoLoggingT $
+main =
+    bracket_
+        (runAdminCommand "SET read_write_strategy TO 'conservative'")
+        (runAdminCommand "RELOAD")
+        runTests
+
+runAdminCommand :: Text -> IO ()
+runAdminCommand command = runNoLoggingT $
+    withPostgresqlConn adminConnectionString $
+        runReaderT (rawExecute command [])
+
+runTests :: IO ()
+runTests = runNoLoggingT $
     withPostgresqlPool connectionString 2 $ \pool ->
         liftIO $ do
             runSqlPool (runMigration migrateAll) pool
