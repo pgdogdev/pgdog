@@ -120,7 +120,7 @@ pub struct Gauge {
 // little serde trick to let us serialize directly as the integer representation
 #[derive(serde_repr::Serialize_repr, Clone, Copy)]
 #[repr(u8)]
-pub enum SumAggregationTemporality {
+pub enum AggregationTemporality {
     Delta = 1,
     Cumulative = 2,
 }
@@ -128,7 +128,7 @@ pub enum SumAggregationTemporality {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sum {
-    pub aggregation_temporality: SumAggregationTemporality,
+    pub aggregation_temporality: AggregationTemporality,
     pub is_monotonic: bool,
     pub data_points: Vec<NumberDataPoint>,
 }
@@ -246,7 +246,7 @@ fn value_for_data_point(
     metric_name: &str,
     measurement: &Measurement,
     metric_type: OpenMetricType,
-    temporality: SumAggregationTemporality,
+    temporality: AggregationTemporality,
     now: &str,
 ) -> Option<(f64, Option<String>)> {
     let cumulative = measurement_to_f64(&measurement.measurement);
@@ -260,8 +260,8 @@ fn value_for_data_point(
             };
             let start = state.start_time(&key, now);
             let value = match temporality {
-                SumAggregationTemporality::Cumulative => cumulative,
-                SumAggregationTemporality::Delta => state.delta(&key, cumulative)?,
+                AggregationTemporality::Cumulative => cumulative,
+                AggregationTemporality::Delta => state.delta(&key, cumulative)?,
             };
             Some((value, Some(start)))
         }
@@ -272,7 +272,7 @@ fn value_for_data_point(
 /// the source metric type: `Gauge` for gauges, `Sum` (monotonic) for counters.
 fn wrap_data_points(
     metric_type: OpenMetricType,
-    temporality: SumAggregationTemporality,
+    temporality: AggregationTemporality,
     data_points: Vec<NumberDataPoint>,
 ) -> (Option<Gauge>, Option<Sum>) {
     match metric_type {
@@ -313,9 +313,9 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
     let otel = &config.config.otel;
 
     let temporality = match otel.effective_temporality_preference() {
-        OtelTemporalityPreference::Cumulative => SumAggregationTemporality::Cumulative,
+        OtelTemporalityPreference::Cumulative => AggregationTemporality::Cumulative,
         OtelTemporalityPreference::Delta | OtelTemporalityPreference::LowMemory => {
-            SumAggregationTemporality::Delta
+            AggregationTemporality::Delta
         }
     };
 
@@ -329,7 +329,7 @@ pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequ
 /// without touching global config or the process-wide static.
 fn build_request_with_state(
     state: &CounterState,
-    temporality: SumAggregationTemporality,
+    temporality: AggregationTemporality,
     namespace: Option<&str>,
     now: &str,
     metrics: &[&Metric],
@@ -680,7 +680,7 @@ mod test {
         let m1 = counter("total_queries", vec![], 10);
         let r1 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m1],
@@ -690,7 +690,7 @@ mod test {
         let m2 = counter("total_queries", vec![], 25);
         let r2 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m2],
@@ -705,7 +705,7 @@ mod test {
         let m1 = counter("total_queries", vec![], 10);
         let _ = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m1],
@@ -714,7 +714,7 @@ mod test {
         let m2 = counter("total_queries", vec![], 3);
         let r2 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m2],
@@ -760,7 +760,7 @@ mod test {
         let m1 = build(10, 100);
         let _ = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m1],
@@ -770,7 +770,7 @@ mod test {
         let m2 = build(15, 100);
         let r2 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Delta,
+            AggregationTemporality::Delta,
             None,
             &now_nanos(),
             &[&m2],
@@ -804,7 +804,7 @@ mod test {
         let m1 = counter("total_queries", vec![], 1);
         let r1 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Cumulative,
+            AggregationTemporality::Cumulative,
             None,
             &now_nanos(),
             &[&m1],
@@ -826,7 +826,7 @@ mod test {
         let m2 = counter("total_queries", vec![], 2);
         let r2 = build_request_with_state(
             &state,
-            SumAggregationTemporality::Cumulative,
+            AggregationTemporality::Cumulative,
             None,
             &now_nanos(),
             &[&m2],
