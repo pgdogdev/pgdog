@@ -14,7 +14,9 @@ use serde::Serialize;
 
 use crate::util::hostname;
 
-use super::open_metric::{Measurement, MeasurementType, Metric, OpenMetricType};
+use super::open_metric::{
+    HistogramMeasurement, Measurement, MeasurementType, Metric, OpenMetricType,
+};
 
 static RESOURCE_ATTRIBUTES: Lazy<Vec<KeyValue>> = Lazy::new(resource_attributes);
 
@@ -34,6 +36,7 @@ struct CounterKey {
 #[derive(Default)]
 struct CounterState {
     prev_values: Mutex<HashMap<CounterKey, f64>>,
+    prev_histograms: Mutex<HashMap<CounterKey, HistogramState>>,
     start_times: Mutex<HashMap<CounterKey, String>>,
 }
 
@@ -55,9 +58,62 @@ impl CounterState {
         prev.insert(key.clone(), cumulative);
         (delta >= 0.0).then_some(delta)
     }
+
+    /// Delta since the previously recorded cumulative distribution. Updates
+    /// the stored value as a side effect.
+    ///
+    /// Deliberately stricter than [`CounterState::delta`] on first sight: a
+    /// counter reports its lifetime total as the first delta, which is a
+    /// legitimate interval value, whereas a histogram's lifetime bucket
+    /// distribution reported as a single interval would skew per-interval
+    /// percentiles. So the first export only latches state and returns `None`.
+    ///
+    /// Also returns `None` after a reset — pool recreated, or bucket layout
+    /// changed — so one interval is skipped rather than emitting negative
+    /// counts.
+    fn histogram_delta(
+        &self,
+        key: &CounterKey,
+        cumulative: HistogramState,
+    ) -> Option<HistogramState> {
+        let previous = self
+            .prev_histograms
+            .lock()
+            .insert(key.clone(), cumulative.clone())?;
+
+        if cumulative.count < previous.count
+            || cumulative.sum < previous.sum
+            || cumulative.buckets.len() != previous.buckets.len()
+        {
+            return None;
+        }
+
+        Some(HistogramState {
+            buckets: cumulative
+                .buckets
+                .iter()
+                .zip(previous.buckets.iter())
+                .map(|(cumulative, previous)| cumulative.saturating_sub(*previous))
+                .collect(),
+            sum: cumulative.sum - previous.sum,
+            count: cumulative.count - previous.count,
+        })
+    }
 }
 
 static COUNTER_STATE: Lazy<CounterState> = Lazy::new(CounterState::default);
+
+/// Bucket counts, sum and observation count for one histogram data point.
+///
+/// Holds either a cumulative snapshot or a per-interval delta, depending on
+/// where it came from. Bucket counts are per-bucket, as OTLP expects, not the
+/// cumulative `le` counts the OpenMetrics endpoint renders.
+#[derive(Clone, Default)]
+struct HistogramState {
+    buckets: Vec<u64>,
+    sum: f64,
+    count: u64,
+}
 
 pub fn now_nanos() -> String {
     SystemTime::now()
@@ -109,6 +165,8 @@ pub struct OtelMetric {
     pub gauge: Option<Gauge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sum: Option<Sum>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub histogram: Option<Histogram>,
 }
 
 #[derive(Serialize)]
@@ -118,7 +176,7 @@ pub struct Gauge {
 }
 
 // little serde trick to let us serialize directly as the integer representation
-#[derive(serde_repr::Serialize_repr, Clone, Copy)]
+#[derive(serde_repr::Serialize_repr, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AggregationTemporality {
     Delta = 1,
@@ -131,6 +189,48 @@ pub struct Sum {
     pub aggregation_temporality: AggregationTemporality,
     pub is_monotonic: bool,
     pub data_points: Vec<NumberDataPoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Histogram {
+    // Same OTLP enum as `Sum` carries: the temporality choice is resolved once
+    // per export, so sums and histograms in a batch always agree.
+    pub aggregation_temporality: AggregationTemporality,
+    pub data_points: Vec<HistogramDataPoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistogramDataPoint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time_unix_nano: Option<String>,
+    pub time_unix_nano: String,
+    #[serde(serialize_with = "u64_to_string")]
+    pub count: u64,
+    pub sum: f64,
+    /// Per-bucket counts; one longer than `explicit_bounds`.
+    #[serde(serialize_with = "u64s_to_strings")]
+    pub bucket_counts: Vec<u64>,
+    /// Upper bounds, excluding the implicit `+Inf` bucket.
+    pub explicit_bounds: Vec<f64>,
+    pub attributes: Vec<KeyValue>,
+}
+
+/// OTLP/JSON (protojson) encodes 64-bit integers as decimal strings.
+fn u64_to_string<S: serde::Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(value)
+}
+
+/// Same, for a sequence of 64-bit integers.
+fn u64s_to_strings<S: serde::Serializer>(values: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+
+    let mut seq = serializer.serialize_seq(Some(values.len()))?;
+    for value in values {
+        seq.serialize_element(&value.to_string())?;
+    }
+    seq.end()
 }
 
 #[derive(Serialize)]
@@ -234,9 +334,8 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
         MeasurementType::Float(f) => *f,
         MeasurementType::Integer(i) => *i as f64,
         MeasurementType::Millis(ms) => *ms as f64,
-        // A distribution has no single scalar value. The OTLP exporter grows a
-        // dedicated histogram data point in the next commit; until then this
-        // arm exists only to keep the match exhaustive.
+        // Histograms are exported as their own data point type, never as a
+        // single number.
         MeasurementType::Histogram(_) => 0.0,
     }
 }
@@ -270,7 +369,8 @@ fn value_for_data_point(
             Some((value, Some(start)))
         }
         // A distribution has no scalar value, so it cannot become a
-        // `NumberDataPoint`. Its own data point type lands in the next commit.
+        // `NumberDataPoint`. Callers fork to `histogram_data_point` before
+        // reaching here.
         OpenMetricType::Histogram => None,
     }
 }
@@ -292,8 +392,8 @@ fn wrap_data_points(
                 data_points,
             }),
         ),
-        // Neither container fits a distribution; the next commit adds the
-        // `Histogram` container and returns it from here.
+        // Neither container fits a distribution; the `Histogram` container is
+        // built directly by the caller, which never routes one here.
         OpenMetricType::Histogram => (None, None),
     }
 }
@@ -312,6 +412,61 @@ fn build_attributes(labels: &[(String, String)], common_attrs: &[KeyValue]) -> V
         .collect();
     attributes.extend(common_attrs.iter().cloned());
     attributes
+}
+
+/// Build one OTLP histogram data point from a cumulative measurement.
+///
+/// Pool counts accumulate since the pool was created, so the measurement is
+/// always cumulative. Cumulative exports pass it straight through; only the
+/// Delta path needs per-export bookkeeping, and it may report nothing — see
+/// [`CounterState::histogram_delta`].
+fn histogram_data_point(
+    state: &CounterState,
+    metric_name: &str,
+    measurement: &Measurement,
+    histogram: &HistogramMeasurement,
+    temporality: AggregationTemporality,
+    now: &str,
+    attributes: Vec<KeyValue>,
+) -> Option<HistogramDataPoint> {
+    // OTLP wants per-bucket counts; the measurement carries cumulative ones.
+    let cumulative = HistogramState {
+        buckets: histogram
+            .buckets
+            .iter()
+            .scan(0u64, |prev, cumulative| {
+                let bucket = cumulative.saturating_sub(*prev);
+                *prev = *cumulative;
+                Some(bucket)
+            })
+            .collect(),
+        sum: histogram.sum,
+        count: histogram.count,
+    };
+
+    let key = CounterKey {
+        metric: metric_name.to_owned(),
+        labels: measurement.labels.clone(),
+    };
+
+    // Pin the collection-start reference before the Delta path can bail, so a
+    // series that starts reporting later still carries its original start.
+    let start_time_unix_nano = Some(state.start_time(&key, now));
+
+    let values = match temporality {
+        AggregationTemporality::Cumulative => cumulative,
+        AggregationTemporality::Delta => state.histogram_delta(&key, cumulative)?,
+    };
+
+    Some(HistogramDataPoint {
+        start_time_unix_nano,
+        time_unix_nano: now.to_owned(),
+        count: values.count,
+        sum: values.sum,
+        bucket_counts: values.buckets,
+        explicit_bounds: histogram.bounds.clone(),
+        attributes,
+    })
 }
 
 /// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects,
@@ -359,23 +514,68 @@ fn build_request_with_state(
             let name = format!("{}.{}", namespace, metric.name());
             let metric_type = metric.metric_type();
 
-            let data_points: Vec<NumberDataPoint> = metric
-                .measurements()
-                .iter()
-                .filter_map(|m| {
-                    let (as_double, start_time_unix_nano) =
-                        value_for_data_point(state, &name, m, metric_type, temporality, now)?;
+            // A distribution becomes a `HistogramDataPoint`, which shares no
+            // fields with the `NumberDataPoint` the other two shapes produce, so
+            // the paths fork before any data point is built.
+            let (gauge, sum, histogram) = match metric_type {
+                OpenMetricType::Histogram => {
+                    let data_points = metric
+                        .measurements()
+                        .iter()
+                        .filter_map(|m| {
+                            let MeasurementType::Histogram(ref histogram) = m.measurement else {
+                                return None;
+                            };
 
-                    Some(NumberDataPoint {
-                        start_time_unix_nano,
-                        time_unix_nano: now.to_owned(),
-                        as_double,
-                        attributes: build_attributes(&m.labels, common_attrs),
-                    })
-                })
-                .collect();
+                            histogram_data_point(
+                                state,
+                                &name,
+                                m,
+                                histogram,
+                                temporality,
+                                now,
+                                build_attributes(&m.labels, common_attrs),
+                            )
+                        })
+                        .collect();
 
-            let (gauge, sum) = wrap_data_points(metric_type, temporality, data_points);
+                    (
+                        None,
+                        None,
+                        Some(Histogram {
+                            aggregation_temporality: temporality,
+                            data_points,
+                        }),
+                    )
+                }
+
+                OpenMetricType::Gauge | OpenMetricType::Counter => {
+                    let data_points: Vec<NumberDataPoint> = metric
+                        .measurements()
+                        .iter()
+                        .filter_map(|m| {
+                            let (as_double, start_time_unix_nano) = value_for_data_point(
+                                state,
+                                &name,
+                                m,
+                                metric_type,
+                                temporality,
+                                now,
+                            )?;
+
+                            Some(NumberDataPoint {
+                                start_time_unix_nano,
+                                time_unix_nano: now.to_owned(),
+                                as_double,
+                                attributes: build_attributes(&m.labels, common_attrs),
+                            })
+                        })
+                        .collect();
+
+                    let (gauge, sum) = wrap_data_points(metric_type, temporality, data_points);
+                    (gauge, sum, None)
+                }
+            };
 
             OtelMetric {
                 name,
@@ -383,6 +583,7 @@ fn build_request_with_state(
                 unit: metric.unit().unwrap_or_else(|| "1".into()),
                 gauge,
                 sum,
+                histogram,
             }
         })
         .collect();
@@ -651,6 +852,222 @@ mod test {
             let svc = attrs.iter().find(|a| a.key == "service.name").unwrap();
             assert_eq!(svc.value.string_value, "from-svc-name");
         }
+    }
+
+    fn histogram_metric(sum: f64, count: u64, per_bucket: &[u64]) -> Metric {
+        Metric::new(PoolMetric {
+            name: "query_time_seconds".into(),
+            measurements: vec![Measurement {
+                labels: vec![("database".into(), "app".into())],
+                measurement: HistogramMeasurement::new(vec![0.001, 0.01], per_bucket, sum, count)
+                    .into(),
+            }],
+            help: "Query times".into(),
+            unit: Some("seconds".into()),
+            metric_type: Some(OpenMetricType::Histogram),
+        })
+    }
+
+    fn export_histogram(
+        state: &CounterState,
+        temporality: AggregationTemporality,
+        metric: &Metric,
+    ) -> ExportMetricsServiceRequest {
+        export_histogram_at(state, temporality, &now_nanos(), metric)
+    }
+
+    /// Export with a caller-supplied collection timestamp, for tests that
+    /// assert on which `now` a series records.
+    fn export_histogram_at(
+        state: &CounterState,
+        temporality: AggregationTemporality,
+        now: &str,
+        metric: &Metric,
+    ) -> ExportMetricsServiceRequest {
+        build_request_with_state(state, temporality, None, now, &[metric])
+    }
+
+    fn only_histogram(req: &ExportMetricsServiceRequest) -> &Histogram {
+        req.resource_metrics[0].scope_metrics[0].metrics[0]
+            .histogram
+            .as_ref()
+            .expect("histogram")
+    }
+
+    #[test]
+    fn cumulative_histogram_passes_counts_through() {
+        let state = CounterState::default();
+
+        // Cumulative is the default temporality, so this is the common path: the
+        // measurement is already cumulative-since-pool-creation and needs no
+        // bookkeeping, including on the very first export.
+        let metric = histogram_metric(0.5, 3, &[1, 1, 1]);
+        let request = export_histogram(&state, AggregationTemporality::Cumulative, &metric);
+        let histogram = only_histogram(&request);
+
+        assert_eq!(
+            histogram.aggregation_temporality,
+            AggregationTemporality::Cumulative
+        );
+        assert_eq!(histogram.data_points.len(), 1);
+
+        let point = &histogram.data_points[0];
+        assert_eq!(point.count, 3);
+        assert!((point.sum - 0.5).abs() < f64::EPSILON);
+        // OTLP wants per-bucket counts even though the measurement is cumulative.
+        assert_eq!(point.bucket_counts, vec![1, 1, 1]);
+        assert_eq!(point.explicit_bounds, vec![0.001, 0.01]);
+        // bucketCounts is always one longer than explicitBounds.
+        assert_eq!(point.bucket_counts.len(), point.explicit_bounds.len() + 1);
+    }
+
+    #[test]
+    fn cumulative_histogram_accumulates_across_exports() {
+        let state = CounterState::default();
+
+        let first = histogram_metric(0.5, 3, &[1, 1, 1]);
+        export_histogram(&state, AggregationTemporality::Cumulative, &first);
+
+        let second = histogram_metric(1.5, 5, &[2, 1, 2]);
+        let request = export_histogram(&state, AggregationTemporality::Cumulative, &second);
+
+        // Reported as-is, not diffed.
+        let point = &only_histogram(&request).data_points[0];
+        assert_eq!(point.count, 5);
+        assert_eq!(point.bucket_counts, vec![2, 1, 2]);
+    }
+
+    #[test]
+    fn delta_histogram_first_export_is_skipped() {
+        let state = CounterState::default();
+
+        let metric = histogram_metric(0.5, 3, &[1, 1, 1]);
+        let request = export_histogram(&state, AggregationTemporality::Delta, &metric);
+
+        let otel_metric = &request.resource_metrics[0].scope_metrics[0].metrics[0];
+
+        // No prior sample to diff against. Reporting the lifetime distribution as
+        // one interval would skew percentiles, so nothing is reported yet.
+        assert!(
+            otel_metric
+                .histogram
+                .as_ref()
+                .expect("histogram")
+                .data_points
+                .is_empty()
+        );
+        assert!(otel_metric.gauge.is_none());
+        assert!(otel_metric.sum.is_none());
+    }
+
+    #[test]
+    fn delta_histogram_exports_delta_against_previous() {
+        let state = CounterState::default();
+
+        // Prime the previous state.
+        let first = histogram_metric(0.5, 3, &[1, 1, 1]);
+        export_histogram(&state, AggregationTemporality::Delta, &first);
+
+        // Two more observations: one in the first bucket, one in +Inf.
+        let second = histogram_metric(1.5, 5, &[2, 1, 2]);
+        let request = export_histogram(&state, AggregationTemporality::Delta, &second);
+        let histogram = only_histogram(&request);
+
+        assert_eq!(
+            histogram.aggregation_temporality,
+            AggregationTemporality::Delta
+        );
+        assert_eq!(histogram.data_points.len(), 1);
+
+        let point = &histogram.data_points[0];
+        assert_eq!(point.count, 2);
+        assert!((point.sum - 1.0).abs() < f64::EPSILON);
+        assert_eq!(point.bucket_counts, vec![1, 0, 1]);
+        assert_eq!(point.explicit_bounds, vec![0.001, 0.01]);
+        assert_eq!(point.bucket_counts.len(), point.explicit_bounds.len() + 1);
+    }
+
+    #[test]
+    fn delta_histogram_skips_counter_reset() {
+        let state = CounterState::default();
+
+        let first = histogram_metric(1.5, 5, &[2, 1, 2]);
+        export_histogram(&state, AggregationTemporality::Delta, &first);
+
+        // Pool recreated: counts went backwards.
+        let reset = histogram_metric(0.1, 1, &[1, 0, 0]);
+        let request = export_histogram(&state, AggregationTemporality::Delta, &reset);
+
+        assert!(only_histogram(&request).data_points.is_empty());
+    }
+
+    #[test]
+    fn histogram_start_time_survives_a_skipped_delta() {
+        let state = CounterState::default();
+
+        // Fixed timestamps: the property is *which* `now` gets pinned, not
+        // whether the wall clock happened to advance between two exports.
+        let first_scrape = "1700000000000000000";
+        let second_scrape = "1700000015000000000";
+
+        // The first Delta export reports nothing, but must still pin the
+        // collection start so the series that follows carries its original one.
+        let first = histogram_metric(0.5, 3, &[1, 1, 1]);
+        let request =
+            export_histogram_at(&state, AggregationTemporality::Delta, first_scrape, &first);
+        assert!(only_histogram(&request).data_points.is_empty());
+
+        let second = histogram_metric(1.0, 4, &[2, 1, 1]);
+        let request = export_histogram_at(
+            &state,
+            AggregationTemporality::Delta,
+            second_scrape,
+            &second,
+        );
+
+        // The start time is the *first* scrape's, not the second's: a consumer
+        // must see one unbroken series, not one that began 15s in.
+        let point = &only_histogram(&request).data_points[0];
+        assert_eq!(point.start_time_unix_nano.as_deref(), Some(first_scrape));
+        assert_eq!(point.time_unix_nano, second_scrape);
+    }
+
+    #[test]
+    fn histogram_carries_labels_and_resource_attributes() {
+        let state = CounterState::default();
+
+        let metric = histogram_metric(0.5, 3, &[1, 1, 1]);
+        let request = export_histogram(&state, AggregationTemporality::Cumulative, &metric);
+
+        let point = &only_histogram(&request).data_points[0];
+
+        assert_eq!(point.attributes[0].key, "database");
+        assert_eq!(point.attributes[0].value.string_value, "app");
+        assert!(point.attributes.iter().any(|a| a.key == "service.name"));
+    }
+
+    #[test]
+    fn histogram_serializes_to_valid_otlp_json() {
+        let state = CounterState::default();
+
+        let first = histogram_metric(0.5, 3, &[1, 1, 1]);
+        export_histogram(&state, AggregationTemporality::Delta, &first);
+        let second = histogram_metric(1.0, 4, &[2, 1, 1]);
+        let request = export_histogram(&state, AggregationTemporality::Delta, &second);
+
+        let json = serde_json::to_string(&request).expect("serialize");
+
+        assert!(json.contains("\"histogram\""));
+        assert!(json.contains("\"bucketCounts\""));
+        assert!(json.contains("\"explicitBounds\""));
+        assert!(!json.contains("\"gauge\""));
+        assert!(!json.contains("\"sum\":null"));
+
+        // OTLP/JSON encodes 64-bit integers as decimal strings.
+        assert!(json.contains("\"count\":\"1\""));
+        assert!(json.contains("\"bucketCounts\":[\"1\",\"0\",\"0\"]"));
+
+        let _: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     }
 
     #[test]
