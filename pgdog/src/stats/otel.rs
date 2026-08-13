@@ -234,6 +234,10 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
         MeasurementType::Float(f) => *f,
         MeasurementType::Integer(i) => *i as f64,
         MeasurementType::Millis(ms) => *ms as f64,
+        // A distribution has no single scalar value. The OTLP exporter grows a
+        // dedicated histogram data point in the next commit; until then this
+        // arm exists only to keep the match exhaustive.
+        MeasurementType::Histogram(_) => 0.0,
     }
 }
 
@@ -265,6 +269,9 @@ fn value_for_data_point(
             };
             Some((value, Some(start)))
         }
+        // A distribution has no scalar value, so it cannot become a
+        // `NumberDataPoint`. Its own data point type lands in the next commit.
+        OpenMetricType::Histogram => None,
     }
 }
 
@@ -285,6 +292,9 @@ fn wrap_data_points(
                 data_points,
             }),
         ),
+        // Neither container fits a distribution; the next commit adds the
+        // `Histogram` container and returns it from here.
+        OpenMetricType::Histogram => (None, None),
     }
 }
 

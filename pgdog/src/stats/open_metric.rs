@@ -28,6 +28,9 @@ pub trait OpenMetric: Send + Sync {
 pub enum OpenMetricType {
     Gauge,
     Counter,
+    /// A distribution. Renders as several series (`_bucket`/`_sum`/`_count`)
+    /// rather than one, and carries a `MeasurementType::Histogram`.
+    Histogram,
 }
 
 impl std::fmt::Display for OpenMetricType {
@@ -35,6 +38,7 @@ impl std::fmt::Display for OpenMetricType {
         let s = match self {
             OpenMetricType::Gauge => "gauge",
             OpenMetricType::Counter => "counter",
+            OpenMetricType::Histogram => "histogram",
         };
         f.write_str(s)
     }
@@ -45,6 +49,49 @@ pub enum MeasurementType {
     Float(f64),
     Integer(i64),
     Millis(u128),
+    /// Distribution rendered as an OpenMetrics histogram.
+    Histogram(HistogramMeasurement),
+}
+
+/// A histogram observation set, in seconds.
+///
+/// Bucket counts are cumulative (`le` semantics) and `bounds` excludes the
+/// implicit `+Inf` bucket, so `buckets.len() == bounds.len() + 1`.
+#[derive(Debug, Clone)]
+pub struct HistogramMeasurement {
+    /// Upper bounds in seconds, ascending.
+    pub bounds: Vec<f64>,
+    /// Cumulative counts, with the `+Inf` bucket last.
+    pub buckets: Vec<u64>,
+    /// Sum of all observations, in seconds.
+    pub sum: f64,
+    /// Total number of observations.
+    pub count: u64,
+}
+
+impl HistogramMeasurement {
+    /// Build a measurement from per-bucket (non-cumulative) counts.
+    pub fn new(bounds: Vec<f64>, per_bucket: &[u64], sum: f64, count: u64) -> Self {
+        let mut buckets = Vec::with_capacity(per_bucket.len());
+        let mut running = 0u64;
+        for bucket in per_bucket {
+            running = running.saturating_add(*bucket);
+            buckets.push(running);
+        }
+
+        Self {
+            bounds,
+            buckets,
+            sum,
+            count,
+        }
+    }
+}
+
+impl From<HistogramMeasurement> for MeasurementType {
+    fn from(value: HistogramMeasurement) -> Self {
+        Self::Histogram(value)
+    }
 }
 
 impl From<f64> for MeasurementType {
@@ -85,26 +132,95 @@ pub struct Measurement {
 
 impl Measurement {
     pub fn render(&self, name: &str) -> String {
-        let labels = if self.labels.is_empty() {
-            "".into()
-        } else {
-            let labels = self
-                .labels
-                .iter()
-                .map(|(name, value)| format!("{}=\"{}\"", name, value))
-                .collect::<Vec<_>>();
-            format!("{{{}}}", labels.join(","))
+        let value = match &self.measurement {
+            // Histograms render as several lines, so they bypass the scalar format.
+            MeasurementType::Histogram(histogram) => return self.render_histogram(name, histogram),
+            MeasurementType::Float(f) => format!("{:.3}", f),
+            MeasurementType::Integer(i) => i.to_string(),
+            MeasurementType::Millis(i) => i.to_string(),
         };
-        format!(
-            "{}{} {}",
+
+        format!("{}{} {}", name, self.render_labels(&[]), value)
+    }
+
+    /// Render the label set, appending `extra` labels after this
+    /// measurement's own.
+    fn render_labels(&self, extra: &[(&str, String)]) -> String {
+        if self.labels.is_empty() && extra.is_empty() {
+            return String::new();
+        }
+
+        let labels = self
+            .labels
+            .iter()
+            .map(|(name, value)| format!("{}=\"{}\"", name, value))
+            .chain(
+                extra
+                    .iter()
+                    .map(|(name, value)| format!("{}=\"{}\"", name, value)),
+            )
+            .collect::<Vec<_>>();
+
+        format!("{{{}}}", labels.join(","))
+    }
+
+    /// Render `_bucket`, `_sum` and `_count` series for a histogram.
+    ///
+    /// Per the OpenMetrics spec, bucket counts are cumulative and the final
+    /// bucket must be `le="+Inf"`.
+    fn render_histogram(&self, name: &str, histogram: &HistogramMeasurement) -> String {
+        let mut lines = Vec::with_capacity(histogram.buckets.len() + 2);
+
+        // `bounds` excludes +Inf, so zip stops one short and leaves the
+        // overflow bucket for the explicit +Inf line below.
+        for (bound, count) in histogram.bounds.iter().zip(histogram.buckets.iter()) {
+            lines.push(format!(
+                "{}_bucket{} {}",
+                name,
+                self.render_labels(&[("le", format_bound(*bound))]),
+                count
+            ));
+        }
+
+        lines.push(format!(
+            "{}_bucket{} {}",
             name,
-            labels,
-            match self.measurement {
-                MeasurementType::Float(f) => format!("{:.3}", f),
-                MeasurementType::Integer(i) => i.to_string(),
-                MeasurementType::Millis(i) => i.to_string(),
-            }
-        )
+            self.render_labels(&[("le", "+Inf".into())]),
+            histogram.count
+        ));
+
+        lines.push(format!(
+            "{}_sum{} {:.6}",
+            name,
+            self.render_labels(&[]),
+            histogram.sum
+        ));
+        lines.push(format!(
+            "{}_count{} {}",
+            name,
+            self.render_labels(&[]),
+            histogram.count
+        ));
+
+        lines.join("\n")
+    }
+}
+
+/// Format a bucket bound without losing sub-millisecond precision.
+///
+/// Bounds are seconds, so a default `{}` on `0.0001` would render as
+/// `0.0001` but `1e-5` in scientific notation, which Prometheus rejects.
+/// Nine decimals preserve `Duration`'s nanosecond resolution, so two
+/// distinct bounds can never collapse to the same `le` label — duplicate
+/// series fail the entire Prometheus scrape.
+fn format_bound(bound: f64) -> String {
+    let formatted = format!("{:.9}", bound);
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+
+    if trimmed.is_empty() {
+        "0".into()
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -147,7 +263,11 @@ impl std::fmt::Display for Metric {
         }
 
         for measurement in self.measurements() {
-            writeln!(f, "{}{}", prefix, measurement.render(&name))?;
+            // A measurement can render as several lines (histograms), and each
+            // one needs the namespace prefix.
+            for line in measurement.render(&name).lines() {
+                writeln!(f, "{}{}", prefix, line)?;
+            }
         }
         Ok(())
     }
@@ -186,6 +306,48 @@ mod test {
         let render = Metric::new(TestMetric {}).to_string();
         assert_eq!(render.lines().next().unwrap(), "# TYPE pgdog.test gauge");
         assert_eq!(render.lines().last().unwrap(), "pgdog.test 5");
+
+        // A histogram renders as several lines, and every one needs the
+        // prefix. Asserted here rather than in its own test because the
+        // namespace is global state.
+        struct TestHistogram;
+
+        impl OpenMetric for TestHistogram {
+            fn name(&self) -> String {
+                "query_time_seconds".into()
+            }
+
+            fn metric_type(&self) -> OpenMetricType {
+                OpenMetricType::Histogram
+            }
+
+            fn measurements(&self) -> Vec<Measurement> {
+                vec![Measurement {
+                    labels: vec![],
+                    measurement: test_histogram().into(),
+                }]
+            }
+        }
+
+        let render = Metric::new(TestHistogram {}).to_string();
+        assert_eq!(
+            render.lines().next().unwrap(),
+            "# TYPE pgdog.query_time_seconds histogram"
+        );
+        for line in render.lines().filter(|line| !line.starts_with('#')) {
+            assert!(
+                line.starts_with("pgdog.query_time_seconds"),
+                "missing prefix: {}",
+                line
+            );
+        }
+        assert_eq!(
+            render
+                .lines()
+                .filter(|line| line.contains("_bucket"))
+                .count(),
+            4
+        );
     }
 
     #[test]
@@ -211,5 +373,112 @@ mod test {
 
         let rendered = measurement.render("query_latency_seconds");
         assert_eq!(rendered, "query_latency_seconds 1.235");
+    }
+
+    fn test_histogram() -> HistogramMeasurement {
+        // Per-bucket counts 1/2/0, plus 1 in the +Inf bucket.
+        HistogramMeasurement::new(vec![0.001, 0.01, 0.1], &[1, 2, 0, 1], 1.5, 4)
+    }
+
+    #[test]
+    fn histogram_new_accumulates_buckets() {
+        let histogram = test_histogram();
+
+        // Cumulative. The trailing entry covers +Inf and so equals `count`.
+        assert_eq!(histogram.buckets, vec![1, 3, 3, 4]);
+        assert_eq!(histogram.count, 4);
+    }
+
+    #[test]
+    fn histogram_render_emits_buckets_sum_and_count() {
+        let measurement = Measurement {
+            labels: vec![("database".into(), "app".into())],
+            measurement: test_histogram().into(),
+        };
+
+        let rendered = measurement.render("query_time_seconds");
+        let lines: Vec<&str> = rendered.lines().collect();
+
+        assert_eq!(
+            lines,
+            vec![
+                r#"query_time_seconds_bucket{database="app",le="0.001"} 1"#,
+                r#"query_time_seconds_bucket{database="app",le="0.01"} 3"#,
+                r#"query_time_seconds_bucket{database="app",le="0.1"} 3"#,
+                r#"query_time_seconds_bucket{database="app",le="+Inf"} 4"#,
+                r#"query_time_seconds_sum{database="app"} 1.500000"#,
+                r#"query_time_seconds_count{database="app"} 4"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn histogram_render_without_labels() {
+        let measurement = Measurement {
+            labels: vec![],
+            measurement: test_histogram().into(),
+        };
+
+        let rendered = measurement.render("query_time_seconds");
+        let lines: Vec<&str> = rendered.lines().collect();
+
+        assert_eq!(lines[0], r#"query_time_seconds_bucket{le="0.001"} 1"#);
+        assert_eq!(lines[3], r#"query_time_seconds_bucket{le="+Inf"} 4"#);
+        assert_eq!(lines[4], "query_time_seconds_sum 1.500000");
+        assert_eq!(lines[5], "query_time_seconds_count 4");
+    }
+
+    #[test]
+    fn histogram_bucket_counts_are_monotonic() {
+        let measurement = Measurement {
+            labels: vec![],
+            measurement: test_histogram().into(),
+        };
+
+        let counts: Vec<u64> = measurement
+            .render("query_time_seconds")
+            .lines()
+            .filter(|line| line.contains("_bucket"))
+            .map(|line| {
+                line.rsplit_once(' ')
+                    .expect("value")
+                    .1
+                    .parse()
+                    .expect("numeric")
+            })
+            .collect();
+
+        assert!(
+            counts.windows(2).all(|pair| pair[0] <= pair[1]),
+            "bucket counts must be cumulative: {:?}",
+            counts
+        );
+        assert_eq!(counts.last(), Some(&4));
+    }
+
+    #[test]
+    fn bound_formatting_avoids_scientific_notation() {
+        assert_eq!(format_bound(0.0001), "0.0001");
+        assert_eq!(format_bound(0.001), "0.001");
+        assert_eq!(format_bound(1.0), "1");
+        assert_eq!(format_bound(30.0), "30");
+    }
+
+    #[test]
+    fn bound_formatting_distinguishes_sub_microsecond_bounds() {
+        use std::time::Duration;
+
+        // Distinct Durations must never collapse to the same le label:
+        // duplicates fail the entire Prometheus scrape.
+        assert_eq!(
+            format_bound(Duration::from_nanos(100).as_secs_f64()),
+            "0.0000001"
+        );
+        assert_ne!(
+            format_bound(Duration::from_nanos(100).as_secs_f64()),
+            format_bound(Duration::from_nanos(200).as_secs_f64())
+        );
+        assert_eq!(format_bound(1.1e-6), "0.0000011");
+        assert_ne!(format_bound(1.1e-6), format_bound(1.2e-6));
     }
 }

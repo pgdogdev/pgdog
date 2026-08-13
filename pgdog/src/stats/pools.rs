@@ -1,7 +1,9 @@
+use pgdog_stats::histogram;
+
 use crate::backend::{self, databases::databases};
 use crate::util::millis;
 
-use super::{Measurement, Metric, OpenMetric, OpenMetricType};
+use super::{HistogramMeasurement, Measurement, Metric, OpenMetric, OpenMetricType};
 
 pub struct PoolMetric {
     pub name: String,
@@ -89,6 +91,9 @@ impl Pools {
         let mut avg_rows_updated = vec![];
         let mut total_rows_deleted = vec![];
         let mut avg_rows_deleted = vec![];
+        let mut query_time_histogram = vec![];
+
+        let histogram_bounds = histogram::bounds();
 
         let general = &crate::config::config().config.general;
 
@@ -352,6 +357,18 @@ impl Pools {
                     avg_rows_deleted.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rows_deleted.into(),
+                    });
+
+                    let histogram = stats.query_time_histogram;
+                    query_time_histogram.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: HistogramMeasurement::new(
+                            histogram_bounds.seconds(),
+                            &histogram.buckets(histogram_bounds),
+                            histogram.sum().as_secs_f64(),
+                            histogram.count(),
+                        )
+                        .into(),
                     });
                 }
             }
@@ -778,6 +795,14 @@ impl Pools {
             help: "Average rows deleted per statistics period.".into(),
             unit: None,
             metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "query_time_seconds".into(),
+            measurements: query_time_histogram,
+            help: "Distribution of query execution times.".into(),
+            unit: Some("seconds".into()),
+            metric_type: Some(OpenMetricType::Histogram),
         }));
 
         Pools { metrics }
