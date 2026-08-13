@@ -1,5 +1,7 @@
 //! Admin command parser.
 
+use crate::admin::show_guc::get_show_variable;
+
 use super::*;
 
 use tracing::debug;
@@ -46,6 +48,7 @@ pub enum ParseResult {
     ShowTasks(ShowTasks),
     StopTask(StopTask),
     Cutover(Cutover),
+    Guc(ShowGuc),
 }
 
 impl ParseResult {
@@ -94,6 +97,7 @@ impl ParseResult {
             ShowTasks(cmd) => cmd.execute().await,
             StopTask(cmd) => cmd.execute().await,
             Cutover(cmd) => cmd.execute().await,
+            Guc(cmd) => cmd.execute().await,
         }
     }
 
@@ -142,6 +146,7 @@ impl ParseResult {
             ShowTasks(cmd) => cmd.name(),
             StopTask(cmd) => cmd.name(),
             Cutover(cmd) => cmd.name(),
+            Guc(cmd) => cmd.name(),
         }
     }
 }
@@ -152,6 +157,42 @@ pub struct Parser;
 impl Parser {
     /// Parse the query and return a command we can execute.
     pub fn parse(sql: &str) -> Result<ParseResult, Error> {
+        // Handle SET separately because
+        // we're about to clobber valid SQL syntax below.
+        if is_set_statement(sql) {
+            return Ok(ParseResult::Set(Set::parse(sql)?));
+        }
+
+        if let Ok(show) = get_show_variable(sql) {
+            return Ok(match show.as_str() {
+                "clients" => ParseResult::ShowClients(ShowClients::parse(sql)?),
+                "pools" => ParseResult::ShowPools(ShowPools::parse(sql)?),
+                "bans" => ParseResult::ShowBans(ShowBans::parse(sql)?),
+                "config" => ParseResult::ShowConfig(ShowConfig::parse(sql)?),
+                "servers" => ParseResult::ShowServers(ShowServers::parse(sql)?),
+                "peers" => ParseResult::ShowPeers(ShowPeers::parse(sql)?),
+                "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(sql)?),
+                "stats" => ParseResult::ShowStats(ShowStats::parse(sql)?),
+                "transactions" => ParseResult::ShowTransactions(ShowTransactions::parse(sql)?),
+                "mirrors" => ParseResult::ShowMirrors(ShowMirrors::parse(sql)?),
+                "version" => ParseResult::ShowVersion(ShowVersion::parse(sql)?),
+                "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(sql)?),
+                "lists" => ParseResult::ShowLists(ShowLists::parse(sql)?),
+                "listeners" => ParseResult::ShowListeners(ShowListeners::parse(sql)?),
+                "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(sql)?),
+                "replication" => ParseResult::ShowReplication(ShowReplication::parse(sql)?),
+                "replication_slots" => {
+                    ParseResult::ShowReplicationSlots(ShowReplicationSlots::parse(sql)?)
+                }
+                "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(sql)?),
+                "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(sql)?),
+                "tasks" => ParseResult::ShowTasks(ShowTasks::parse(sql)?),
+                variable => ParseResult::Guc(ShowGuc {
+                    variable: variable.to_string(),
+                }),
+            });
+        }
+
         let sql = sql.trim().replace(";", "").to_lowercase();
         let mut iter = sql.split(" ");
 
@@ -162,12 +203,13 @@ impl Parser {
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
             "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
             "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
+            // These are not covered by the show handler above
+            // because they are not valid SQL syntax.
             "show" => match iter.next().ok_or(Error::Syntax)?.trim() {
+                // These two are duplicated because they support selecting columns from their output.
                 "clients" => ParseResult::ShowClients(ShowClients::parse(&sql)?),
-                "pools" => ParseResult::ShowPools(ShowPools::parse(&sql)?),
-                "bans" => ParseResult::ShowBans(ShowBans::parse(&sql)?),
-                "config" => ParseResult::ShowConfig(ShowConfig::parse(&sql)?),
                 "servers" => ParseResult::ShowServers(ShowServers::parse(&sql)?),
+
                 "server" => match iter.next().ok_or(Error::Syntax)?.trim() {
                     "memory" => ParseResult::ShowServerMemory(ShowServerMemory::parse(&sql)?),
                     command => {
@@ -182,23 +224,7 @@ impl Parser {
                         return Err(Error::Syntax);
                     }
                 },
-                "peers" => ParseResult::ShowPeers(ShowPeers::parse(&sql)?),
-                "query_cache" => ParseResult::ShowQueryCache(ShowQueryCache::parse(&sql)?),
-                "stats" => ParseResult::ShowStats(ShowStats::parse(&sql)?),
-                "transactions" => ParseResult::ShowTransactions(ShowTransactions::parse(&sql)?),
-                "mirrors" => ParseResult::ShowMirrors(ShowMirrors::parse(&sql)?),
-                "version" => ParseResult::ShowVersion(ShowVersion::parse(&sql)?),
-                "instance_id" => ParseResult::ShowInstanceId(ShowInstanceId::parse(&sql)?),
-                "lists" => ParseResult::ShowLists(ShowLists::parse(&sql)?),
-                "listeners" => ParseResult::ShowListeners(ShowListeners::parse(&sql)?),
-                "prepared" => ParseResult::ShowPrepared(ShowPreparedStatements::parse(&sql)?),
-                "replication" => ParseResult::ShowReplication(ShowReplication::parse(&sql)?),
-                "replication_slots" => {
-                    ParseResult::ShowReplicationSlots(ShowReplicationSlots::parse(&sql)?)
-                }
-                "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(&sql)?),
-                "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(&sql)?),
-                "tasks" => ParseResult::ShowTasks(ShowTasks::parse(&sql)?),
+
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -227,10 +253,6 @@ impl Parser {
             "cutover" => ParseResult::Cutover(Cutover::parse(&sql)?),
             "probe" => ParseResult::Probe(Probe::parse(&sql)?),
             "maintenance" => ParseResult::MaintenanceMode(MaintenanceMode::parse(&sql)?),
-            // TODO: This is not ready yet. We have a race and
-            // also the changed settings need to be propagated
-            // into the pools.
-            "set" => ParseResult::Set(Set::parse(&sql)?),
             command => {
                 debug!("unknown admin command: {}", command);
                 return Err(Error::Syntax);
@@ -242,6 +264,96 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::{Error, ParseResult, Parser};
+
+    macro_rules! assert_parses {
+        ($sql:literal, $variant:pat) => {
+            assert!(
+                matches!(Parser::parse($sql), Ok($variant)),
+                "failed to parse `{}`",
+                $sql
+            );
+        };
+    }
+
+    #[test]
+    fn parses_pool_control_commands() {
+        assert_parses!("PAUSE", ParseResult::Pause(_));
+        assert_parses!("RESUME", ParseResult::Pause(_));
+        assert_parses!("RECONNECT", ParseResult::Reconnect(_));
+        assert_parses!("RELOAD", ParseResult::Reload(_));
+        assert_parses!("SHUTDOWN", ParseResult::Shutdown(_));
+        assert_parses!("BAN", ParseResult::Ban(_));
+        assert_parses!("UNBAN", ParseResult::Ban(_));
+        assert_parses!("HEALTHCHECK", ParseResult::Healthcheck(_));
+        assert_parses!(
+            "PROBE postgres://postgres@localhost/postgres",
+            ParseResult::Probe(_)
+        );
+        assert_parses!("MAINTENANCE ON", ParseResult::MaintenanceMode(_));
+        assert_parses!("SET query_timeout TO '1000'", ParseResult::Set(_));
+    }
+
+    #[test]
+    fn parses_show_commands() {
+        assert_parses!("SHOW CLIENTS", ParseResult::ShowClients(_));
+        assert_parses!("SHOW POOLS", ParseResult::ShowPools(_));
+        assert_parses!("SHOW BANS", ParseResult::ShowBans(_));
+        assert_parses!("SHOW CONFIG", ParseResult::ShowConfig(_));
+        assert_parses!("SHOW SERVERS", ParseResult::ShowServers(_));
+        assert_parses!("SHOW PEERS", ParseResult::ShowPeers(_));
+        assert_parses!("SHOW QUERY_CACHE", ParseResult::ShowQueryCache(_));
+        assert_parses!("SHOW STATS", ParseResult::ShowStats(_));
+        assert_parses!("SHOW TRANSACTIONS", ParseResult::ShowTransactions(_));
+        assert_parses!("SHOW MIRRORS", ParseResult::ShowMirrors(_));
+        assert_parses!("SHOW VERSION", ParseResult::ShowVersion(_));
+        assert_parses!("SHOW INSTANCE_ID", ParseResult::ShowInstanceId(_));
+        assert_parses!("SHOW LISTS", ParseResult::ShowLists(_));
+        assert_parses!("SHOW LISTENERS", ParseResult::ShowListeners(_));
+        assert_parses!("SHOW PREPARED", ParseResult::ShowPrepared(_));
+        assert_parses!("SHOW REPLICATION", ParseResult::ShowReplication(_));
+        assert_parses!(
+            "SHOW REPLICATION_SLOTS",
+            ParseResult::ShowReplicationSlots(_)
+        );
+        assert_parses!("SHOW SCHEMA_SYNC", ParseResult::ShowSchemaSync(_));
+        assert_parses!("SHOW TABLE_COPIES", ParseResult::ShowTableCopies(_));
+        assert_parses!("SHOW TASKS", ParseResult::ShowTasks(_));
+        assert_parses!("SHOW SERVER MEMORY", ParseResult::ShowServerMemory(_));
+        assert_parses!("SHOW CLIENT MEMORY", ParseResult::ShowClientMemory(_));
+        assert_parses!("SHOW server_version", ParseResult::Guc(_));
+    }
+
+    #[test]
+    fn parses_show_commands_with_selected_columns() {
+        assert_parses!(
+            "SHOW CLIENTS prepared_statements, application_name",
+            ParseResult::ShowClients(_)
+        );
+        assert_parses!(
+            "SHOW SERVERS remote_pid, application_name",
+            ParseResult::ShowServers(_)
+        );
+    }
+
+    #[test]
+    fn parses_schema_and_replication_commands() {
+        assert_parses!("SETUP SCHEMA", ParseResult::SetupSchema(_));
+        assert_parses!("RESHARD source target publication", ParseResult::Reshard(_));
+        assert_parses!(
+            "SCHEMA_SYNC pre source target publication",
+            ParseResult::SchemaSync(_)
+        );
+        assert_parses!(
+            "COPY_DATA source target publication",
+            ParseResult::CopyData(_)
+        );
+        assert_parses!(
+            "REPLICATE source target publication",
+            ParseResult::Replicate(_)
+        );
+        assert_parses!("STOP_TASK 1", ParseResult::StopTask(_));
+        assert_parses!("CUTOVER", ParseResult::Cutover(_));
+    }
 
     #[test]
     fn parses_show_clients_command() {
