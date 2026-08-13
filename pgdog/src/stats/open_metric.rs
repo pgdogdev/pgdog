@@ -124,6 +124,23 @@ impl From<u128> for MeasurementType {
     }
 }
 
+impl MeasurementType {
+    /// Whether a measurement of this shape can be exported under a metric
+    /// declared as `metric_type`.
+    ///
+    /// Histograms render and encode completely differently from scalars, so
+    /// the two must agree: a `Histogram` measurement only fits a `Histogram`
+    /// metric, and scalar measurements only fit `Gauge` or `Counter`.
+    fn matches(&self, metric_type: OpenMetricType) -> bool {
+        match metric_type {
+            OpenMetricType::Histogram => matches!(self, MeasurementType::Histogram(_)),
+            OpenMetricType::Gauge | OpenMetricType::Counter => {
+                !matches!(self, MeasurementType::Histogram(_))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Measurement {
     pub labels: Vec<(String, String)>,
@@ -230,9 +247,23 @@ pub struct Metric {
 
 impl Metric {
     pub fn new(metric: impl OpenMetric + 'static) -> Self {
-        Self {
-            metric: Box::new(metric),
-        }
+        let metric: Box<dyn OpenMetric> = Box::new(metric);
+
+        // Exporters branch on `metric_type()` and then pattern-match each
+        // measurement, so a disagreement between the two fails silently:
+        // `# TYPE … gauge` followed by `_bucket` lines, a histogram exported
+        // as `0.0` over OTLP, or scalars dropped from a `Histogram` metric.
+        debug_assert!(
+            metric
+                .measurements()
+                .iter()
+                .all(|m| m.measurement.matches(metric.metric_type())),
+            "{:?} is typed {:?} but carries incompatible measurements",
+            metric.name(),
+            metric.metric_type(),
+        );
+
+        Self { metric }
     }
 }
 
@@ -480,5 +511,56 @@ mod test {
         );
         assert_eq!(format_bound(1.1e-6), "0.0000011");
         assert_ne!(format_bound(1.1e-6), format_bound(1.2e-6));
+    }
+
+    // The disagreement check lives in a debug_assert!, so these only panic
+    // when debug assertions are enabled.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "carries incompatible measurements")]
+    fn metric_new_rejects_histogram_measurement_in_gauge_metric() {
+        struct BadMetric;
+
+        impl OpenMetric for BadMetric {
+            fn name(&self) -> String {
+                "bad".into()
+            }
+
+            // metric_type() defaults to Gauge.
+            fn measurements(&self) -> Vec<Measurement> {
+                vec![Measurement {
+                    labels: vec![],
+                    measurement: test_histogram().into(),
+                }]
+            }
+        }
+
+        let _ = Metric::new(BadMetric);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "carries incompatible measurements")]
+    fn metric_new_rejects_scalar_measurement_in_histogram_metric() {
+        struct BadMetric;
+
+        impl OpenMetric for BadMetric {
+            fn name(&self) -> String {
+                "bad".into()
+            }
+
+            fn metric_type(&self) -> OpenMetricType {
+                OpenMetricType::Histogram
+            }
+
+            fn measurements(&self) -> Vec<Measurement> {
+                vec![Measurement {
+                    labels: vec![],
+                    measurement: MeasurementType::Integer(1),
+                }]
+            }
+        }
+
+        let _ = Metric::new(BadMetric);
     }
 }
