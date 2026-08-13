@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use once_cell::sync::Lazy;
@@ -212,8 +213,10 @@ pub struct HistogramDataPoint {
     /// Per-bucket counts; one longer than `explicit_bounds`.
     #[serde(serialize_with = "u64s_to_strings")]
     pub bucket_counts: Vec<u64>,
-    /// Upper bounds, excluding the implicit `+Inf` bucket.
-    pub explicit_bounds: Vec<f64>,
+    /// Upper bounds, excluding the implicit `+Inf` bucket. Shared with the
+    /// source measurement rather than copied per data point; serializes as a
+    /// plain JSON array.
+    pub explicit_bounds: Arc<[f64]>,
     pub attributes: Vec<KeyValue>,
 }
 
@@ -916,7 +919,7 @@ mod test {
         assert!((point.sum - 0.5).abs() < f64::EPSILON);
         // OTLP wants per-bucket counts even though the measurement is cumulative.
         assert_eq!(point.bucket_counts, vec![1, 1, 1]);
-        assert_eq!(point.explicit_bounds, vec![0.001, 0.01]);
+        assert_eq!(&point.explicit_bounds[..], [0.001, 0.01]);
         // bucketCounts is always one longer than explicitBounds.
         assert_eq!(point.bucket_counts.len(), point.explicit_bounds.len() + 1);
     }
@@ -983,7 +986,7 @@ mod test {
         assert_eq!(point.count, 2);
         assert!((point.sum - 1.0).abs() < f64::EPSILON);
         assert_eq!(point.bucket_counts, vec![1, 0, 1]);
-        assert_eq!(point.explicit_bounds, vec![0.001, 0.01]);
+        assert_eq!(&point.explicit_bounds[..], [0.001, 0.01]);
         assert_eq!(point.bucket_counts.len(), point.explicit_bounds.len() + 1);
     }
 

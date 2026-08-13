@@ -1,6 +1,6 @@
 //! Open metrics.
 
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
 use crate::config::config;
 
@@ -59,8 +59,10 @@ pub enum MeasurementType {
 /// implicit `+Inf` bucket, so `buckets.len() == bounds.len() + 1`.
 #[derive(Debug, Clone)]
 pub struct HistogramMeasurement {
-    /// Upper bounds in seconds, ascending.
-    pub bounds: Vec<f64>,
+    /// Upper bounds in seconds, ascending. Bounds are process-constant, so one
+    /// shared allocation backs every pool's measurement; cloning a measurement
+    /// only bumps the refcount.
+    pub bounds: Arc<[f64]>,
     /// Cumulative counts, with the `+Inf` bucket last.
     pub buckets: Vec<u64>,
     /// Sum of all observations, in seconds.
@@ -71,7 +73,7 @@ pub struct HistogramMeasurement {
 
 impl HistogramMeasurement {
     /// Build a measurement from per-bucket (non-cumulative) counts.
-    pub fn new(bounds: Vec<f64>, per_bucket: &[u64], sum: f64, count: u64) -> Self {
+    pub fn new(bounds: impl Into<Arc<[f64]>>, per_bucket: &[u64], sum: f64, count: u64) -> Self {
         let mut buckets = Vec::with_capacity(per_bucket.len());
         let mut running = 0u64;
         for bucket in per_bucket {
@@ -80,7 +82,7 @@ impl HistogramMeasurement {
         }
 
         Self {
-            bounds,
+            bounds: bounds.into(),
             buckets,
             sum,
             count,

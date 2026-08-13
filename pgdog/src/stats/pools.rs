@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pgdog_stats::histogram;
 
 use crate::backend::{self, databases::databases};
@@ -94,6 +96,9 @@ impl Pools {
         let mut query_time_histogram = vec![];
 
         let histogram_bounds = histogram::bounds();
+        // Bounds are process-constant, so convert to seconds once per scrape
+        // and share the allocation across every pool's measurement.
+        let histogram_bounds_seconds: Arc<[f64]> = histogram_bounds.seconds().into();
 
         let general = &crate::config::config().config.general;
 
@@ -363,7 +368,7 @@ impl Pools {
                     query_time_histogram.push(Measurement {
                         labels: labels.clone(),
                         measurement: HistogramMeasurement::new(
-                            histogram_bounds.seconds(),
+                            histogram_bounds_seconds.clone(),
                             &histogram.buckets(histogram_bounds),
                             histogram.sum().as_secs_f64(),
                             histogram.count(),
