@@ -48,7 +48,10 @@ pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
         inner: pgdog_stats::Config {
             max: 1,
             min: 1,
-            prepared_statements_limit: capacity,
+            prepared_statements: pgdog_stats::PreparedStatementsConfig {
+                limit: capacity,
+                ..Default::default()
+            },
             ..Config::default().inner
         },
     };

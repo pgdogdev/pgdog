@@ -1,5 +1,7 @@
 //! What's a project without a util module.
 
+pub(crate) mod time;
+
 use chrono::{DateTime, Local, Utc};
 use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};

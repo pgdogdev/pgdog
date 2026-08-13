@@ -1,6 +1,11 @@
 use lru::LruCache;
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use crate::util::time::deadline;
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -10,7 +15,7 @@ use crate::{
     },
 };
 use parking_lot::RwLock;
-use pgdog_config::PreparedStatements as PreparedStatementsLevel;
+use pgdog_stats::PreparedStatementsConfig;
 
 use super::{Error, Oids};
 use super::{
@@ -18,20 +23,67 @@ use super::{
     state::ExecutionCode,
 };
 
-/// Approximate memory used by a String.
+/// Rough size of one local cache entry. Ignores the LRU node itself,
+/// so it undercounts a little.
 #[inline]
-fn str_mem(s: &str) -> usize {
-    s.len() + std::mem::size_of::<String>()
+fn entry_mem(s: &str) -> usize {
+    s.len() + std::mem::size_of::<String>() + std::mem::size_of::<LocalStatement>()
+}
+
+/// A statement info prepared on this connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalStatement {
+    /// When this statement should be replanned
+    deadline: Option<Instant>,
+}
+
+impl LocalStatement {
+    fn new(ttl: Option<Duration>, jitter: Duration) -> Self {
+        Self {
+            deadline: ttl.map(|ttl| deadline(ttl, jitter)),
+        }
+    }
+
+    /// Check for expired
+    ///
+    /// If the check is called and deadline is not set then it's marked as expired
+    /// to cover the case when the TTL was set after the statement creation
+    fn expired(&self, now: Instant) -> bool {
+        self.deadline.is_none_or(|deadline| deadline <= now)
+    }
+}
+
+/// A statement that has to be run before client messages
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Prepare {
+    /// Some if statement was prepared previously, but has expired since
+    close: Option<ProtocolMessage>,
+    parse: ProtocolMessage,
+}
+
+impl Prepare {
+    /// The stale statement to close first, if the name is taken.
+    pub(super) fn close(&self) -> Option<&ProtocolMessage> {
+        self.close.as_ref()
+    }
+
+    pub(super) fn parse(&self) -> &ProtocolMessage {
+        &self.parse
+    }
+
+    fn anonymize(&mut self) {
+        self.parse.anonymize();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum HandleResult {
-    Forward,
+pub(super) enum HandleResult {
     Drop,
-    Prepend(ProtocolMessage),
+    Forward,
     Rewrite(ProtocolMessage),
+    Prepend(Prepare),
     PrependRewrite {
-        prepend: ProtocolMessage,
+        prepend: Prepare,
         rewrite: ProtocolMessage,
     },
 }
@@ -44,15 +96,14 @@ pub enum HandleResult {
 #[derive(Debug)]
 pub struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
-    local_cache: LruCache<String, ()>,
+    local_cache: LruCache<String, LocalStatement>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
-    capacity: usize,
+    config: PreparedStatementsConfig,
     memory_used: usize,
-    level: PreparedStatementsLevel,
     oids: Arc<Oids>,
 }
 
@@ -72,27 +123,26 @@ impl PreparedStatements {
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
-            capacity: usize::MAX,
+            config: PreparedStatementsConfig::default(),
             memory_used: 0,
-            level: PreparedStatementsLevel::default(),
             oids,
         }
     }
 
-    /// Set maximum prepared statements capacity.
+    /// Apply the pool's prepared statement settings.
     #[inline]
-    pub fn set_capacity(&mut self, capacity: usize) {
-        self.capacity = capacity;
+    pub fn configure(&mut self, config: PreparedStatementsConfig) {
+        self.config = config;
     }
 
-    #[inline]
-    pub fn set_prepared_statements_level(&mut self, level: PreparedStatementsLevel) {
-        self.level = level;
+    /// Current prepared statement settings.
+    pub fn config(&self) -> PreparedStatementsConfig {
+        self.config
     }
 
     /// Get prepared statements capacity.
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.config.limit
     }
 
     /// Force the server to ignore the response to this message.
@@ -111,17 +161,20 @@ impl PreparedStatements {
     }
 
     /// Handle extended protocol message.
-    pub fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
+    pub(super) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
                     let message = self.check_prepared(bind.statement())?;
                     match message {
                         Some(mut message) => {
+                            if message.close.is_some() {
+                                self.state.add_ignore('3');
+                            }
                             self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
                             self.state.add('2');
-                            if self.level.rewrite_anonymous() {
+                            if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
                                 let mut bind = bind.clone();
                                 bind.anonymize();
@@ -136,7 +189,7 @@ impl PreparedStatements {
 
                         None => {
                             self.state.add('2');
-                            if self.level.rewrite_anonymous() {
+                            if self.config.level.rewrite_anonymous() {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
                                 return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
@@ -153,12 +206,15 @@ impl PreparedStatements {
 
                     match message {
                         Some(mut message) => {
+                            if message.close.is_some() {
+                                self.state.add_ignore('3');
+                            }
                             self.state.add_ignore('1');
                             self.parses.push_back(describe.statement().to_string());
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
-                            if self.level.rewrite_anonymous() {
+                            if self.config.level.rewrite_anonymous() {
                                 // Save the RowDescription because
                                 // we don't actually save prepared statements in the server
                                 // anymore so they can be different every time.
@@ -181,7 +237,7 @@ impl PreparedStatements {
                             self.state.add(ExecutionCode::DescriptionOrNothing);
                             // T
                             self.describes.push_back(describe.statement().to_string());
-                            if self.level.rewrite_anonymous() {
+                            if self.config.level.rewrite_anonymous() {
                                 let mut describe = describe.clone();
                                 describe.anonymize();
                                 return Ok(HandleResult::Rewrite(ProtocolMessage::Describe(
@@ -224,7 +280,7 @@ impl PreparedStatements {
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
                     // them to anonymous to avoid storing them in Postgres.
-                    if self.level.rewrite_anonymous() {
+                    if self.config.level.rewrite_anonymous() {
                         parse.anonymize();
                         rewritten = true;
                     }
@@ -314,6 +370,18 @@ impl PreparedStatements {
                 }
             }
 
+            // The close statement that is ignored and we have the parse for
+            // means we're repreparing the statement right now, so
+            // drop from cache first and let it be readded later on ParseComplete
+            '3' if matches!(action, Action::Ignore) => {
+                // ok, pop_front -> push_front just to avoid borrowing issues
+                // and not to copy the name just to remove by name
+                if let Some(name) = self.parses.pop_front() {
+                    self.remove(&name);
+                    self.parses.push_front(name);
+                }
+            }
+
             'G' => {
                 self.state.prepend('G'); // Next thing we'll see is a CopyFail or CopyDone.
             }
@@ -332,7 +400,7 @@ impl PreparedStatements {
 
         // Reset cache, forcing all Bind/Execute, Describe, solo requests
         // to always re-prepare the statement next time it's sent.
-        if !self.has_more_messages() && self.level.rewrite_anonymous() {
+        if !self.has_more_messages() && self.config.level.rewrite_anonymous() {
             self.clear();
         }
 
@@ -363,17 +431,38 @@ impl PreparedStatements {
         self.state.out_of_sync()
     }
 
-    fn check_prepared(&mut self, name: &str) -> Result<Option<ProtocolMessage>, Error> {
-        if !self.contains(name) && !self.parses.iter().any(|s| s == name) {
-            let parse = self.parse(name);
-            if let Some(parse) = parse {
-                Ok(Some(ProtocolMessage::Parse(parse)))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
+    /// Check the prepared state to identify if we need
+    /// to run something before actual client's requests
+    fn check_prepared(&mut self, name: &str) -> Result<Option<Prepare>, Error> {
+        // Ignore if we already have a Parse in progress.
+        if self.parses.iter().any(|s| s == name) {
+            return Ok(None);
         }
+
+        let entry = self.local_cache.get(name);
+        let expired =
+            self.config.ttl.is_some() && entry.is_some_and(|entry| entry.expired(Instant::now()));
+
+        if entry.is_some() && !expired {
+            return Ok(None);
+        }
+
+        // Nothing to prepare it from, so leave whatever is there alone.
+        let Some(parse) = self.parse(name) else {
+            return Ok(None);
+        };
+
+        Ok(Some(Prepare {
+            // Postgres still has the expired statement under this name, so
+            // we need to close it first to reprepare.
+            //
+            // The entry stays in the cache until CloseComplete confirms the
+            // drop: an error earlier in the batch makes Postgres skip our
+            // Close, and dropping it here would leave us re-preparing a name
+            // it still holds.
+            close: expired.then(|| ProtocolMessage::Close(Close::named(name))),
+            parse: ProtocolMessage::Parse(parse),
+        }))
     }
 
     /// The server has prepared this statement already.
@@ -381,10 +470,19 @@ impl PreparedStatements {
         self.local_cache.promote(name)
     }
 
-    /// Indicate this statement is prepared on the connection.
+    #[cfg(test)]
+    fn statement(&self, name: &str) -> Option<&LocalStatement> {
+        self.local_cache.peek(name)
+    }
+
     pub fn prepared(&mut self, name: &str) {
-        self.memory_used += str_mem(name);
-        self.local_cache.push(name.to_owned(), ());
+        let statement = LocalStatement::new(self.config.ttl, self.config.ttl_jitter);
+
+        // Cache is unbounded, so anything handed back is the old entry
+        // for this same name, never an eviction. Only new names cost us.
+        if self.local_cache.push(name.to_owned(), statement).is_none() {
+            self.memory_used += entry_mem(name);
+        }
     }
 
     /// How much memory is used by this structure, approx.
@@ -418,7 +516,7 @@ impl PreparedStatements {
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
         if self.local_cache.pop(name).is_some() {
-            self.memory_used = self.memory_used.saturating_sub(str_mem(name));
+            self.memory_used = self.memory_used.saturating_sub(entry_mem(name));
             true
         } else {
             false
@@ -461,12 +559,12 @@ impl PreparedStatements {
     #[must_use]
     pub fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
-        while self.local_cache.len() > self.capacity {
+        while self.local_cache.len() > self.config.limit {
             let candidate = self.local_cache.pop_lru();
 
             if let Some((name, _)) = candidate {
                 close.push(Close::named(&name));
-                self.memory_used = self.memory_used.saturating_sub(str_mem(&name));
+                self.memory_used = self.memory_used.saturating_sub(entry_mem(&name));
             }
         }
 
@@ -523,27 +621,238 @@ impl PreparedStatements {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
-        Bind, Describe, Execute, Message, Parse, ProtocolMessage, Query, Sync, bind::Parameter,
-        messages::ReadyForQuery,
+        Bind, Describe, ErrorResponse, Execute, Message, Parse, ProtocolMessage, Query, Sync,
+        bind::Parameter, messages::ReadyForQuery,
     };
     use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
     fn new_extended_anonymous() -> PreparedStatements {
-        let mut ps = PreparedStatements::default();
-        ps.set_prepared_statements_level(PreparedStatementsLevel::ExtendedAnonymous);
-        ps
+        new_with_level(PreparedStatementsLevel::ExtendedAnonymous)
     }
 
     /// Build a PreparedStatements instance configured for Extended (default) mode.
     fn new_extended() -> PreparedStatements {
+        new_with_level(PreparedStatementsLevel::Extended)
+    }
+
+    fn new_with_level(level: PreparedStatementsLevel) -> PreparedStatements {
         let mut ps = PreparedStatements::default();
-        ps.set_prepared_statements_level(PreparedStatementsLevel::Extended);
+        ps.configure(PreparedStatementsConfig {
+            level,
+            ..ps.config()
+        });
         ps
+    }
+
+    const TTL: Duration = Duration::from_secs(300);
+
+    fn new_with_ttl() -> PreparedStatements {
+        let mut ps = new_extended();
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(TTL),
+            ..ps.config()
+        });
+        ps
+    }
+
+    pub(crate) fn prepare_expired(ps: &mut PreparedStatements, name: &str) {
+        let config = ps.config();
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(Duration::ZERO),
+            ttl_jitter: Duration::ZERO,
+            ..config
+        });
+        ps.prepared(name);
+        ps.configure(config);
+    }
+
+    macro_rules! assert_close_and_parse {
+        ($result:expr, $name:expr) => {
+            match $result {
+                HandleResult::Prepend(prepare) => {
+                    assert_eq!(
+                        prepare.close(),
+                        Some(&ProtocolMessage::Close(Close::named($name)))
+                    );
+                    assert!(matches!(prepare.parse(), ProtocolMessage::Parse(_)));
+                }
+                other => panic!("expected Prepend carrying a Close, got {other:?}"),
+            }
+        };
+    }
+
+    macro_rules! assert_parse_without_close {
+        ($result:expr) => {
+            match $result {
+                HandleResult::Prepend(prepare) => {
+                    assert_eq!(prepare.close(), None);
+                    assert!(matches!(prepare.parse(), ProtocolMessage::Parse(_)));
+                }
+                other => panic!("expected Prepend without a Close, got {other:?}"),
+            }
+        };
+    }
+
+    fn bind(name: &str) -> ProtocolMessage {
+        ProtocolMessage::Bind(Bind::new_statement(name))
+    }
+
+    #[test]
+    fn bind_prepares_an_unknown_statement_without_a_close() {
+        let name = insert_global("ttl_unknown", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+
+        assert_parse_without_close!(ps.handle(&bind(&name)).unwrap());
+    }
+
+    #[test]
+    fn bind_leaves_a_statement_within_its_ttl_alone() {
+        let name = insert_global("ttl_fresh", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        ps.prepared(&name);
+
+        assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
+        assert!(ps.contains(&name));
+    }
+
+    #[test]
+    fn bind_closes_a_statement_past_its_ttl() {
+        let name = insert_global("ttl_expired", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+    }
+
+    #[test]
+    fn bind_closes_a_statement_prepared_before_the_ttl_was_set() {
+        let name = insert_global("ttl_enabled_later", "SELECT $1::bigint");
+        let mut ps = new_extended();
+        ps.prepared(&name);
+
+        assert_eq!(ps.config().ttl, None);
+        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(TTL),
+            ..ps.config()
+        });
+
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+    }
+
+    #[test]
+    fn bind_leaves_an_expired_statement_alone_when_the_ttl_is_disabled() {
+        let name = insert_global("ttl_disabled", "SELECT $1::bigint");
+        let mut ps = new_extended();
+        prepare_expired(&mut ps, &name);
+
+        assert_eq!(ps.config().ttl, None);
+        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+
+        assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
+        assert!(ps.contains(&name));
+    }
+
+    #[test]
+    fn bind_leaves_an_expired_statement_alone_when_it_cannot_be_re_prepared() {
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, "not_in_global_cache");
+
+        assert_eq!(
+            ps.handle(&bind("not_in_global_cache")).unwrap(),
+            HandleResult::Forward
+        );
+        assert!(ps.contains("not_in_global_cache"));
+    }
+
+    #[test]
+    fn bind_closes_a_statement_past_its_ttl_only_once() {
+        let name = insert_global("ttl_in_flight", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+        assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
+    }
+
+    #[test]
+    fn describe_closes_a_statement_past_its_ttl() {
+        let name = insert_global("ttl_describe", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        let describe = ProtocolMessage::Describe(Describe::new_statement(&name));
+        assert_close_and_parse!(ps.handle(&describe).unwrap(), &name);
+    }
+
+    #[test]
+    fn close_confirmed_then_failed_parse_leaves_no_stale_entry() {
+        let name = insert_global("ttl_close_then_error", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        // Bind prepends Close + Parse for the expired statement.
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+
+        // Postgres closes the statement, then rejects the Parse. The client
+        // never asked for the Close, so its reply stays with us.
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+
+        let mut error = Message::new(ErrorResponse::syntax("boom").to_bytes());
+        assert!(ps.forward(&mut error).unwrap());
+
+        // The name is gone from the server, so the cache must not claim it.
+        assert!(!ps.contains(&name));
+    }
+
+    #[test]
+    fn error_before_the_close_keeps_the_entry() {
+        let name = insert_global("ttl_error_then_close", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+
+        // An earlier message failed, so Postgres skipped our Close and still
+        // holds the statement.
+        let mut error = Message::new(ErrorResponse::syntax("boom").to_bytes());
+        assert!(ps.forward(&mut error).unwrap());
+
+        assert!(ps.contains(&name));
+
+        // The next Bind must close it again before re-preparing.
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+    }
+
+    #[test]
+    fn a_portal_close_does_not_drop_a_pending_statement() {
+        let name = insert_global("ttl_portal_close", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &name);
+
+        // The client closes a portal, then binds the expired statement.
+        let portal = ProtocolMessage::Close(Close::portal("p"));
+        assert_eq!(ps.handle(&portal).unwrap(), HandleResult::Forward);
+        assert_close_and_parse!(ps.handle(&bind(&name)).unwrap(), &name);
+
+        // Postgres answers the portal Close, then a message between it and our
+        // Close fails, so our Close never runs. The client asked for this
+        // Close, so its reply goes back.
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(ps.forward(&mut close_complete).unwrap());
+
+        let mut error = Message::new(ErrorResponse::syntax("boom").to_bytes());
+        assert!(ps.forward(&mut error).unwrap());
+
+        // Postgres still holds the statement, so the cache must too.
+        assert!(ps.contains(&name));
     }
 
     /// Insert a prepared statement into the global cache so check_prepared can find it.
@@ -649,7 +958,11 @@ mod test {
         let bind = Bind::new_statement(&name);
         let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
         match result {
-            HandleResult::Prepend(ProtocolMessage::Parse(p)) => {
+            HandleResult::Prepend(prepare) => {
+                assert_eq!(prepare.close(), None);
+                let ProtocolMessage::Parse(p) = prepare.parse() else {
+                    panic!("expected prepend to be Parse");
+                };
                 assert_eq!(p.query(), "SELECT $1");
             }
             other => panic!("expected Prepend(Parse), got {:?}", other),
@@ -665,7 +978,7 @@ mod test {
         match result {
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 // The prepended Parse should be anonymized.
-                if let ProtocolMessage::Parse(p) = &prepend {
+                if let ProtocolMessage::Parse(p) = prepend.parse() {
                     assert!(p.anonymous(), "prepended Parse should be anonymous");
                     assert_eq!(p.query(), "SELECT $1");
                 } else {
@@ -707,7 +1020,7 @@ mod test {
         let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
         match result {
             HandleResult::PrependRewrite { prepend, rewrite } => {
-                if let ProtocolMessage::Parse(p) = &prepend {
+                if let ProtocolMessage::Parse(p) = prepend.parse() {
                     assert!(p.anonymous(), "prepended Parse should be anonymous");
                 } else {
                     panic!("expected prepend to be Parse");

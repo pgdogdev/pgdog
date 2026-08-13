@@ -285,6 +285,30 @@ pub struct State {
     pub lsn_stats: LsnStats,
 }
 
+/// How a server connection handles prepared statements.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct PreparedStatementsConfig {
+    /// Which statements PgDog keeps prepared on the connection.
+    pub level: PreparedStatements,
+    /// Maximum prepared statements per connection.
+    pub limit: usize,
+    /// How long a statement can keep a cached plan. `None` never expires.
+    pub ttl: Option<Duration>,
+    /// Random spread applied to `ttl`, per statement.
+    pub ttl_jitter: Duration,
+}
+
+impl Default for PreparedStatementsConfig {
+    fn default() -> Self {
+        Self {
+            level: PreparedStatements::default(),
+            limit: usize::MAX,
+            ttl: None,
+            ttl_jitter: Duration::ZERO,
+        }
+    }
+}
+
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct Config {
@@ -353,8 +377,8 @@ pub struct Config {
     pub pooler_mode: PoolerMode,
     /// Read only mode.
     pub read_only: bool,
-    /// Maximum prepared statements per connection.
-    pub prepared_statements_limit: usize,
+    /// Prepared statements config.
+    pub prepared_statements: PreparedStatementsConfig,
     /// Stats averaging period.
     pub stats_period: Duration,
     /// Recovery algo.
@@ -371,8 +395,6 @@ pub struct Config {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
-    /// Prepared statements level.
-    pub prepared_statements_level: PreparedStatements,
 }
 
 pub struct RoleSpecificConfig<T: Copy> {
@@ -424,7 +446,7 @@ impl Default for Config {
             replication_mode: false,
             pooler_mode: PoolerMode::default(),
             read_only: false,
-            prepared_statements_limit: usize::MAX,
+            prepared_statements: PreparedStatementsConfig::default(),
             stats_period: Duration::from_millis(15_000),
             dns_ttl: Duration::from_millis(60_000),
             connection_recovery: ConnectionRecovery::Recover,
@@ -434,7 +456,6 @@ impl Default for Config {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
-            prepared_statements_level: PreparedStatements::default(),
         }
     }
 }

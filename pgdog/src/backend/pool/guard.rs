@@ -240,6 +240,7 @@ mod test {
     use std::time::Duration;
 
     use pgdog_config::pooling::ConnectionRecovery;
+    use pgdog_stats::PreparedStatementsConfig;
     use tokio::time::Instant;
 
     use crate::util::{safe_sleep, safe_timeout};
@@ -391,7 +392,12 @@ mod test {
             Box::new(test_server().await),
             Instant::now(),
         );
-        server.prepared_statements_mut().set_capacity(1);
+        server
+            .prepared_statements_mut()
+            .configure(PreparedStatementsConfig {
+                limit: 1,
+                ..Default::default()
+            });
 
         for i in 0..5 {
             server
@@ -455,7 +461,12 @@ mod test {
             Box::new(test_server().await),
             Instant::now(),
         );
-        server.prepared_statements_mut().set_capacity(1);
+        server
+            .prepared_statements_mut()
+            .configure(PreparedStatementsConfig {
+                limit: 1,
+                ..Default::default()
+            });
 
         server
             .send(
@@ -503,7 +514,12 @@ mod test {
             Box::new(test_server().await),
             Instant::now(),
         );
-        server.prepared_statements_mut().set_capacity(1);
+        server
+            .prepared_statements_mut()
+            .configure(PreparedStatementsConfig {
+                limit: 1,
+                ..Default::default()
+            });
 
         server
             .send(
@@ -549,7 +565,12 @@ mod test {
             Box::new(test_server().await),
             Instant::now(),
         );
-        server.prepared_statements_mut().set_capacity(1);
+        server
+            .prepared_statements_mut()
+            .configure(PreparedStatementsConfig {
+                limit: 1,
+                ..Default::default()
+            });
 
         server
             .send(
@@ -708,7 +729,12 @@ mod test {
             Box::new(test_server().await),
             Instant::now(),
         );
-        server.prepared_statements_mut().set_capacity(1);
+        server
+            .prepared_statements_mut()
+            .configure(PreparedStatementsConfig {
+                limit: 1,
+                ..Default::default()
+            });
 
         server
             .send(

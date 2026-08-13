@@ -195,10 +195,19 @@ pub fn run_maintenance() {
 
 #[cfg(test)]
 mod test {
+    use crate::backend::Server;
     use crate::backend::server::test::{execute_prepared, prepared_in_postgres, test_server};
     use crate::net::messages::Bind;
 
     use super::*;
+
+    async fn prepared_names(server: &mut Server) -> Vec<String> {
+        prepared_in_postgres(server)
+            .await
+            .into_iter()
+            .map(|statement| statement.name)
+            .collect()
+    }
 
     #[tokio::test]
     async fn test_close_unused_does_not_reuse_names() {
@@ -210,13 +219,13 @@ mod test {
 
         let mut server = test_server().await;
         assert_eq!(execute_prepared(&mut server, first_name, b"1").await, [1]);
-        assert_eq!(prepared_in_postgres(&mut server).await, [first_name]);
+        assert_eq!(prepared_names(&mut server).await, [first_name]);
 
         client.close("client_a");
         PreparedStatements::global().write().close_unused(0);
         assert!(PreparedStatements::global().read().is_empty());
 
-        assert_eq!(prepared_in_postgres(&mut server).await, [first_name]);
+        assert_eq!(prepared_names(&mut server).await, [first_name]);
 
         let mut second = Parse::named("client_b", "SELECT $1::bigint + 100");
         client.insert(&mut second);
@@ -239,16 +248,16 @@ mod test {
 
         let mut warm = test_server().await;
         assert_eq!(execute_prepared(&mut warm, name, b"1").await, [1]);
-        assert_eq!(prepared_in_postgres(&mut warm).await, [name]);
+        assert_eq!(prepared_names(&mut warm).await, [name]);
 
         PreparedStatements::global().write().close_unused(0);
 
         assert_eq!(execute_prepared(&mut warm, name, b"1").await, [1]);
 
         let mut cold = test_server().await;
-        assert!(prepared_in_postgres(&mut cold).await.is_empty());
+        assert!(prepared_names(&mut cold).await.is_empty());
         assert_eq!(execute_prepared(&mut cold, name, b"1").await, [1]);
-        assert_eq!(prepared_in_postgres(&mut cold).await, [name]);
+        assert_eq!(prepared_names(&mut cold).await, [name]);
     }
 
     #[test]

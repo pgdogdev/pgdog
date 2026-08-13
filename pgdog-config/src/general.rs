@@ -382,6 +382,30 @@ pub struct General {
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
 
+    /// How long a prepared statement is allowed to stay prepared on a server connection, in milliseconds.
+    ///
+    /// **Note:** Expired statements are closed and prepared again the next time they are used. This stops stale execution plans from staying in Postgres. Omit or set to `0` to let statements stay prepared forever.
+    ///
+    /// _Default:_ `None` (disabled)
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_ttl>
+    #[serde(default = "General::default_prepared_statements_ttl")]
+    pub prepared_statements_ttl: Option<u64>,
+
+    /// Maximum random adjustment applied to `prepared_statements_ttl` per prepared
+    /// statement, in milliseconds. Each statement expires at a point sampled uniformly
+    /// from `[ttl - jitter, ttl + jitter]`, chosen once when the statement is prepared.
+    ///
+    /// **Note:** Clients run their whole statement set together, so a small jitter
+    /// leaves them expiring in lockstep for hours. Keep this at a meaningful fraction
+    /// of the TTL.
+    ///
+    /// _Default:_ `30000` (30 seconds)
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_ttl_jitter>
+    #[serde(default = "General::default_prepared_statements_ttl_jitter")]
+    pub prepared_statements_ttl_jitter: u64,
+
     /// Limit on the number of statements saved in the statement cache used to accelerate query parsing.
     ///
     /// _Default:_ `50000`
@@ -887,6 +911,8 @@ impl Default for General {
             regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
+            prepared_statements_ttl: Self::default_prepared_statements_ttl(),
+            prepared_statements_ttl_jitter: Self::default_prepared_statements_ttl_jitter(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
             connect_timeout: Self::default_connect_timeout(),
@@ -1142,6 +1168,28 @@ impl General {
         self.dns_ttl.map(Duration::from_millis)
     }
 
+    /// How long a statement can stay prepared on a server connection.
+    ///
+    /// `None` means statements never expire.
+    pub fn prepared_statements_ttl(&self) -> Option<Duration> {
+        self.prepared_statements_ttl
+            .filter(|ttl| *ttl > 0 && *ttl < crate::MAX_DURATION.as_millis() as u64)
+            .map(Duration::from_millis)
+    }
+
+    /// Random spread applied to [`Self::prepared_statements_ttl`].
+    ///
+    /// Clamped to just below the TTL.
+    pub fn prepared_statements_ttl_jitter(&self) -> Duration {
+        let ttl = self
+            .prepared_statements_ttl
+            .unwrap_or(0)
+            .min(crate::MAX_DURATION.as_millis() as u64)
+            .saturating_sub(1);
+
+        Duration::from_millis(self.prepared_statements_ttl_jitter.min(ttl))
+    }
+
     pub fn client_idle_timeout(&self) -> Duration {
         Duration::from_millis(self.client_idle_timeout)
     }
@@ -1381,6 +1429,17 @@ impl General {
         Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
     }
 
+    fn default_prepared_statements_ttl() -> Option<u64> {
+        Self::env_option("PGDOG_PREPARED_STATEMENTS_TTL")
+    }
+
+    pub fn default_prepared_statements_ttl_jitter() -> u64 {
+        Self::env_or_default(
+            "PGDOG_PREPARED_STATEMENTS_TTL_JITTER",
+            Duration::from_secs(30).as_millis() as u64,
+        )
+    }
+
     pub fn query_cache_limit() -> usize {
         Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
@@ -1493,6 +1552,82 @@ impl General {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn test_prepared_statements_ttl_defaults() {
+        let general = General::default();
+
+        assert_eq!(general.prepared_statements_ttl(), None);
+        assert_eq!(
+            general.prepared_statements_ttl_jitter(),
+            Duration::from_millis(0)
+        );
+    }
+
+    #[test]
+    fn test_prepared_statements_ttl_is_read_in_millis() {
+        let general = General {
+            prepared_statements_ttl: Some(3_600_000),
+            prepared_statements_ttl_jitter: 5_000,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            general.prepared_statements_ttl(),
+            Some(Duration::from_millis(3_600_000))
+        );
+        assert_eq!(
+            general.prepared_statements_ttl_jitter(),
+            Duration::from_millis(5_000)
+        );
+    }
+
+    #[test]
+    fn test_prepared_statements_ttl_disabled() {
+        for ttl in [None, Some(0), Some(crate::MAX_DURATION.as_millis() as u64)] {
+            let general = General {
+                prepared_statements_ttl: ttl,
+                ..Default::default()
+            };
+
+            assert_eq!(
+                general.prepared_statements_ttl(),
+                None,
+                "ttl {ttl:?} should disable expiration"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prepared_statements_ttl_jitter_is_clamped_below_ttl() {
+        let general = General {
+            prepared_statements_ttl: Some(10_000),
+            prepared_statements_ttl_jitter: u64::MAX,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            general.prepared_statements_ttl_jitter(),
+            Duration::from_millis(9_999)
+        );
+    }
+
+    #[test]
+    fn test_prepared_statements_ttl_jitter_never_reaches_the_ttl() {
+        for ttl in [0, 1, 2, 300_000] {
+            let general = General {
+                prepared_statements_ttl: Some(ttl),
+                prepared_statements_ttl_jitter: u64::MAX,
+                ..Default::default()
+            };
+
+            let jitter = general.prepared_statements_ttl_jitter().as_millis() as u64;
+            assert!(
+                jitter < ttl.max(1),
+                "jitter {jitter} must stay below ttl {ttl}"
+            );
+        }
+    }
 
     #[test]
     fn test_sharding_lookup_cache_size() {
@@ -1820,6 +1955,8 @@ mod tests {
         let _guard = set_env_var("PGDOG_BROADCAST_PORT", "7432");
         let _guard = set_env_var("PGDOG_OPENMETRICS_PORT", "9090");
         let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT", "1000");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_TTL", "3600000");
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_TTL_JITTER", "5000");
         let _guard = set_env_var("PGDOG_QUERY_CACHE_LIMIT", "500");
         let _guard = set_env_var("PGDOG_CONNECT_ATTEMPTS", "3");
         let _guard = set_env_var("PGDOG_MIRROR_QUEUE", "256");
@@ -1832,6 +1969,8 @@ mod tests {
         assert_eq!(General::broadcast_port(), 7432);
         assert_eq!(General::openmetrics_port(), Some(9090));
         assert_eq!(General::prepared_statements_limit(), 1000);
+        assert_eq!(General::default_prepared_statements_ttl(), Some(3600000));
+        assert_eq!(General::default_prepared_statements_ttl_jitter(), 5000);
         assert_eq!(General::query_cache_limit(), 500);
         assert_eq!(General::connect_attempts(), 3);
         assert_eq!(General::mirror_queue(), 256);
@@ -1844,6 +1983,8 @@ mod tests {
         let _guard = remove_env_var("PGDOG_BROADCAST_PORT");
         let _guard = remove_env_var("PGDOG_OPENMETRICS_PORT");
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_LIMIT");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_TTL");
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_TTL_JITTER");
         let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
         let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
@@ -1856,6 +1997,8 @@ mod tests {
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
         assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
+        assert_eq!(General::default_prepared_statements_ttl(), None);
+        assert_eq!(General::default_prepared_statements_ttl_jitter(), 30_000);
         assert_eq!(General::query_cache_limit(), 1_000);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
