@@ -259,11 +259,11 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Sync(_) => {
-                self.state.add('Z');
+                self.state.add(ExecutionCode::ReadyForQuerySync);
             }
 
             ProtocolMessage::Query(_) => {
-                self.state.add('Z');
+                self.state.add(ExecutionCode::ReadyForQuery);
             }
 
             ProtocolMessage::Parse(parse) => {
@@ -308,7 +308,9 @@ impl PreparedStatements {
                 } else {
                     self.parses.push_back(name.clone());
                     self.state.add_ignore('C');
-                    self.state.add_ignore('Z');
+
+                    // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
+                    self.state.add_ignore(ExecutionCode::ReadyForQuery);
                     return Ok(HandleResult::Forward);
                 }
             }
@@ -325,7 +327,8 @@ impl PreparedStatements {
             // Fastpath (F): backend responds with FunctionCallResponse (V) + ReadyForQuery (Z).
             // V is Untracked and passes through; register Z so the response loop runs.
             ProtocolMessage::Fastpath(_) => {
-                self.state.add('Z');
+                // If we have an extended error prior, this should be dropped.
+                self.state.add(ExecutionCode::ReadyForQuery);
             }
 
             ProtocolMessage::Other(_) => (),

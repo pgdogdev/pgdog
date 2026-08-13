@@ -14,7 +14,14 @@ pub enum Action {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ExecutionCode {
+    /// ReadyForQuery (regular, 'Z')
     ReadyForQuery,
+    /// A ReadyForQuery we expect because we forwarded a Sync.
+    /// Unlike a Query's ReadyForQuery, this one still is expected to arrive after an extended-protocol error.
+    ReadyForQuerySync,
+    /// Completion of a simple-protocol statement
+    CommandComplete,
+    /// Completion of an extended Execute
     ExecutionCompleted,
     ParseComplete,
     BindComplete,
@@ -32,17 +39,12 @@ impl MemoryUsage for ExecutionCode {
     }
 }
 
-impl ExecutionCode {
-    fn extended(&self) -> bool {
-        matches!(self, Self::ParseComplete | Self::BindComplete)
-    }
-}
-
 impl From<char> for ExecutionCode {
     fn from(value: char) -> Self {
         match value {
             'Z' => Self::ReadyForQuery,
-            'C' | 's' | 'I' => Self::ExecutionCompleted, // CommandComplete or PortalSuspended
+            'C' | 'I' => Self::CommandComplete,
+            's' => Self::ExecutionCompleted, // PortalSuspended
             '1' => Self::ParseComplete,
             '2' => Self::BindComplete,
             '3' => Self::CloseComplete,
@@ -67,29 +69,17 @@ impl MemoryUsage for ExecutionItem {
     }
 }
 
-impl ExecutionItem {
-    fn extended(&self) -> bool {
-        match self {
-            Self::Code(code) | Self::Ignore(code) => code.extended(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ProtocolState {
     queue: VecDeque<ExecutionItem>,
     simulated: VecDeque<Message>,
-    extended: bool,
     out_of_sync: bool,
 }
 
 impl MemoryUsage for ProtocolState {
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.queue.memory_usage()
-            + self.simulated.memory_usage()
-            + self.extended.memory_usage()
-            + self.out_of_sync.memory_usage()
+        self.queue.memory_usage() + self.simulated.memory_usage() + self.out_of_sync.memory_usage()
     }
 }
 
@@ -102,7 +92,6 @@ impl ProtocolState {
     ///
     pub(crate) fn add_ignore(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
-        self.extended = self.extended || code.extended();
         self.queue.push_back(ExecutionItem::Ignore(code));
     }
 
@@ -110,8 +99,7 @@ impl ProtocolState {
     /// to be returned by the server.
     pub(crate) fn add(&mut self, code: impl Into<ExecutionCode>) {
         let code = code.into();
-        self.extended = self.extended || code.extended();
-        self.queue.push_back(ExecutionItem::Code(code))
+        self.queue.push_back(ExecutionItem::Code(code));
     }
 
     /// New code we expect now to arrive first.
@@ -153,13 +141,33 @@ impl ProtocolState {
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),
             ExecutionCode::Error => {
-                if !self.extended {
+                // Replies arrive in request order.
+                // The entry at the front corresponds to the request the server was processing when it generated this error.
+                // Perform the same test Postgres uses to decide whether to skip messages until a Sync.
+                // An error inside Parse/Bind/Describe/Execute/Close sets ignore_till_sync = true
+                // An error inside a simple Query, a function call, or Sync itself does not.
+
+                let extended_error = matches!(
+                    self.queue.front(),
+                    Some(ExecutionItem::Code(code) | ExecutionItem::Ignore(code)) if matches!(
+                        code,
+                        ExecutionCode::ParseComplete
+                            | ExecutionCode::BindComplete
+                            | ExecutionCode::DescriptionOrNothing
+                            | ExecutionCode::CloseComplete
+                            | ExecutionCode::ExecutionCompleted
+                    )
+                );
+
+                if !extended_error {
                     // A simple-query error only aborts the current simple query.
                     // Keep any later pipelined simple query RFQs queued.
-                    while !self.queue.is_empty()
-                        && self.queue.front()
-                            != Some(&ExecutionItem::Code(ExecutionCode::ReadyForQuery))
-                    {
+                    while !matches!(
+                        self.queue.front(),
+                        None | Some(ExecutionItem::Code(
+                            ExecutionCode::ReadyForQuery | ExecutionCode::ReadyForQuerySync
+                        ))
+                    ) {
                         self.queue.pop_front();
                     }
                     return Ok(Action::Forward);
@@ -167,19 +175,17 @@ impl ProtocolState {
 
                 // Remove everything from the execution queue.
                 // The connection is out of sync until client re-syncs it.
-                if self.extended {
-                    self.out_of_sync = true;
-                }
-                let last = self.queue.pop_back();
-                self.queue.clear();
-                if let Some(ExecutionItem::Code(ExecutionCode::ReadyForQuery)) = last {
-                    self.queue
-                        .push_back(ExecutionItem::Code(ExecutionCode::ReadyForQuery));
+                self.out_of_sync = true;
+                while !matches!(
+                    self.queue.front(),
+                    None | Some(ExecutionItem::Code(ExecutionCode::ReadyForQuerySync))
+                ) {
+                    self.queue.pop_front();
                 }
                 return Ok(Action::Forward);
             }
 
-            ExecutionCode::ReadyForQuery => {
+            ExecutionCode::ReadyForQuery | ExecutionCode::ReadyForQuerySync => {
                 self.out_of_sync = false;
             }
             _ => (),
@@ -190,8 +196,10 @@ impl ProtocolState {
             // but it sent something else. That means the execution pipeline
             // isn't done. We are not tracking every single message, so this is expected.
             ExecutionItem::Code(in_queue_code) => {
-                if code != ExecutionCode::ReadyForQuery
-                    && in_queue_code == ExecutionCode::ReadyForQuery
+                if (code != ExecutionCode::ReadyForQuery
+                    && code != ExecutionCode::ReadyForQuerySync)
+                    && (in_queue_code == ExecutionCode::ReadyForQuery
+                        || in_queue_code == ExecutionCode::ReadyForQuerySync)
                 {
                     self.queue.push_front(in_queue);
                 }
@@ -208,10 +216,6 @@ impl ProtocolState {
                 }
             }
         }?;
-
-        if code == ExecutionCode::ReadyForQuery {
-            self.extended = self.queue.iter().any(ExecutionItem::extended);
-        }
 
         Ok(action)
     }
@@ -359,7 +363,6 @@ mod test {
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(state.is_empty());
-        assert!(!state.extended);
     }
 
     #[test]
@@ -458,9 +461,9 @@ mod test {
         // Parse fails (syntax error)
         state.add('1'); // ParseComplete (expected but won't arrive)
         state.add('2'); // BindComplete (won't be reached)
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
-        // Error clears queue except ReadyForQuery
+        // Error clears queue except the Sync-owed ReadyForQuery
         assert_eq!(state.action('E').unwrap(), Action::Forward);
         assert!(state.out_of_sync);
         assert_eq!(state.len(), 1); // Only ReadyForQuery remains
@@ -476,7 +479,7 @@ mod test {
         state.add('1'); // ParseComplete
         state.add('2'); // BindComplete (expected but won't arrive)
         state.add('C'); // CommandComplete (won't be reached)
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
         assert_eq!(state.action('E').unwrap(), Action::Forward);
@@ -492,8 +495,8 @@ mod test {
         // Parse and Bind succeed, Execute fails
         state.add('1'); // ParseComplete
         state.add('2'); // BindComplete
-        state.add('C'); // CommandComplete (expected but won't arrive)
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ExecutionCompleted); // Execute CommandComplete (expected but won't arrive)
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
         assert_eq!(state.action('2').unwrap(), Action::Forward);
@@ -510,7 +513,6 @@ mod test {
         state.add('C'); // CommandComplete (expected but won't arrive)
         state.add('Z'); // ReadyForQuery
 
-        assert!(!state.extended);
         assert_eq!(state.action('E').unwrap(), Action::Forward);
         assert!(!state.out_of_sync); // Simple query doesn't set out_of_sync
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
@@ -523,11 +525,11 @@ mod test {
         // If first Execute fails, rest of pipeline still processes
         state.add('1'); // ParseComplete #1
         state.add('2'); // BindComplete #1
-        state.add('C'); // CommandComplete #1 (won't arrive)
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #1's CommandComplete (won't arrive)
         state.add('1'); // ParseComplete #2
         state.add('2'); // BindComplete #2
-        state.add('C'); // CommandComplete #2
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #2's CommandComplete
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
         assert_eq!(state.action('2').unwrap(), Action::Forward);
@@ -537,6 +539,67 @@ mod test {
         // Server still sends remaining responses but we're waiting for ReadyForQuery
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
         assert!(!state.out_of_sync);
+    }
+
+    #[test]
+    fn test_extended_error_drops_simple_query_rfq() {
+        // Regression test for #1314.
+        //
+        // Postgrex's mode: :savepoint wraps each query in a savepoint by sending
+        // Bind, Execute and a simple Query("RELEASE SAVEPOINT postgrex_query") in one batch (with no Sync in that batch)
+        //
+        // When that Execute errors, the server discards everything until a Sync arrives,
+        // so the Query's ReadyForQuery is never produced.
+        //
+        // PgDog used to keep waiting for it and never read the Sync the client had already sent
+
+        let mut state = ProtocolState::default();
+        state.add_ignore('1'); // Injected Parse
+        state.add('2'); // BindComplete
+        state.add(ExecutionCode::ExecutionCompleted); // Execute
+        state.add(ExecutionCode::ReadyForQuery); // Simple Query's RFQ... never produced
+
+        // Server: ParseComplete (swallowed), and then the Execute fails.
+        assert_eq!(state.action('1').unwrap(), Action::Ignore);
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+        assert!(state.out_of_sync);
+
+        // Nothing left to wait for.
+        // We must go back to reading the client, which is where the Sync will come from.
+        assert!(state.is_empty());
+        assert!(!state.has_more_messages());
+
+        // The client's Sync is forwarded.
+        state.add(ExecutionCode::ReadyForQuerySync);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(!state.out_of_sync);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_extended_error_keeps_batch_pipelined_after_sync() {
+        // An extended-protocol error only invalidates expectations up to the next Sync.
+        // A second batch set to go after that Sync should be normally handled after ignore_till_sync ends.
+        let mut state = ProtocolState::default();
+        state.add('1'); // ParseComplete #1
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #1
+        state.add(ExecutionCode::ReadyForQuerySync); // Sync #1
+        state.add('1'); // ParseComplete #2
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #2
+        state.add(ExecutionCode::ReadyForQuerySync); // Sync #2
+
+        // Parse #1 fails.
+        assert_eq!(state.action('E').unwrap(), Action::Forward);
+        assert!(state.out_of_sync);
+        assert_eq!(state.len(), 4); // Sync #1's RFQ and all of batch #2 should still be here!
+
+        // Server: RFQ for Sync #1, then batch #2 runs normally.
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(!state.out_of_sync);
+        assert_eq!(state.action('1').unwrap(), Action::Forward);
+        assert_eq!(state.action('C').unwrap(), Action::Forward);
+        assert_eq!(state.action('Z').unwrap(), Action::Forward);
+        assert!(state.is_empty());
     }
 
     // ========================================
@@ -739,7 +802,7 @@ mod test {
     fn test_not_done_when_out_of_sync() {
         let mut state = ProtocolState::default();
         state.add('1'); // ParseComplete
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('E').unwrap(), Action::Forward);
         assert!(state.out_of_sync);
@@ -820,7 +883,6 @@ mod test {
         state.add('Z'); // ReadyForQuery
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
-        assert!(state.extended); // Now marked as extended
         assert_eq!(state.action('2').unwrap(), Action::Forward);
         assert_eq!(state.action('C').unwrap(), Action::Forward);
         assert_eq!(state.action('Z').unwrap(), Action::Forward);
@@ -863,9 +925,9 @@ mod test {
         state.add_ignore('1');
         state.add_ignore('2');
         state.add_ignore('3');
-        state.add('Z'); // ReadyForQuery
+        state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
-        // Error should clear both queue (except RFQ) and names
+        // Error should clear both queue (except the Sync-owed RFQ) and names
         assert_eq!(state.action('E').unwrap(), Action::Forward);
 
         // Consume the ReadyForQuery
