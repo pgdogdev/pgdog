@@ -3,6 +3,7 @@
 pub(crate) mod time;
 
 use chrono::{DateTime, Local, Utc};
+use futures::{FutureExt, future::Either};
 use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
 use std::ops::ControlFlow;
@@ -315,16 +316,22 @@ fn armable(duration: Option<Duration>) -> Option<Duration> {
 
 /// [`tokio::time::timeout`] that waits forever instead of arming a timer
 /// outside [`MAX_TIMER_DURATION`].
-pub(crate) async fn safe_timeout<F>(
+///
+/// Not an `async fn` on purpose: an async wrapper's state machine holds `F`
+/// once as its argument and again inside the [`tokio::time::Timeout`] it
+/// builds, so every call has to copy the whole future between the two slots.
+/// Some of the futures passed here are kilobytes ([`crate::backend::pool::Pool::get`]),
+/// and that copy is large enough to show up as `memcpy` in profiles.
+pub(crate) fn safe_timeout<F>(
     duration: Duration,
     future: F,
-) -> Result<F::Output, tokio::time::error::Elapsed>
+) -> impl Future<Output = Result<F::Output, tokio::time::error::Elapsed>>
 where
     F: Future,
 {
     match armable(Some(duration)) {
-        Some(duration) => tokio::time::timeout(duration, future).await,
-        None => Ok(future.await),
+        Some(duration) => Either::Left(tokio::time::timeout(duration, future)),
+        None => Either::Right(future.map(Ok)),
     }
 }
 
