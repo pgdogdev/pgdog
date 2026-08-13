@@ -93,11 +93,11 @@ impl Ast {
         });
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
-            let mut copy = mem.parse(query.query_without_comment)?;
-            if let Some(stmt) = copy.as_mut().into_iter().next() {
+            let mut ast = mem.parse(query.query_without_comment)?;
+            if let Some(stmt) = ast.as_mut().into_iter().next() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
-            Ok::<_, Error>(copy)
+            Ok::<_, Error>(ast)
         })?;
 
         let elapsed = now.elapsed();
