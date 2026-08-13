@@ -79,7 +79,7 @@ impl PreparedStatements {
             // Key already existed, only value changed.
             self.memory_used = self.memory_used.saturating_sub(str_mem(&old_value));
             self.memory_used += str_mem(&name);
-            self.global.write().decrement(&old_value);
+            self.global.write().close(&old_value);
         } else {
             // New entry.
             self.memory_used += str_mem(key) + str_mem(&name);
@@ -89,8 +89,8 @@ impl PreparedStatements {
     }
 
     /// Insert statement into the cache bypassing duplicate checks.
-    pub fn insert_anyway(&mut self, parse: &mut Parse) {
-        let name = { self.global.write().insert_anyway(parse) };
+    pub fn insert_prepare(&mut self, parse: &mut Parse) {
+        let name = { self.global.write().insert_prepare(parse) };
         let key = parse.name();
         let existed = self.local.insert(key.to_owned(), name.clone());
 
@@ -98,6 +98,7 @@ impl PreparedStatements {
             // Key already existed, only value changed.
             self.memory_used = self.memory_used.saturating_sub(str_mem(&old_value));
             self.memory_used += str_mem(&name);
+            self.global.write().close(&old_value);
         } else {
             // New entry.
             self.memory_used += str_mem(key) + str_mem(&name);
@@ -382,5 +383,21 @@ mod test {
         // The other two should have used=0.
         let unused = global.statements().values().filter(|s| s.used == 0).count();
         assert_eq!(unused, 2, "old statements should be unused");
+
+        let live = global
+            .statements()
+            .values()
+            .find(|stmt| stmt.used == 1)
+            .unwrap()
+            .name();
+        drop(global);
+
+        // Both replaced statements are evicted.
+        assert_eq!(statements.global.write().close_unused(0), 2);
+
+        // The statement the client still holds survives.
+        let global = statements.global.read();
+        assert_eq!(global.len(), 1);
+        assert!(global.names().contains_key(&live));
     }
 }

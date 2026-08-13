@@ -51,3 +51,56 @@ async fn test_rewrite_prepare() {
         "expected rewritten prepared statement"
     );
 }
+
+fn rewritten_query(messages: &[ProtocolMessage]) -> String {
+    match &messages[0] {
+        ProtocolMessage::Query(query) => query.query().to_string(),
+        other => panic!("expected Query, got {other:#?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_reprepare_releases_previous_statement() {
+    load_test();
+
+    change_config(|general| {
+        general.prepared_statements = PreparedStatements::Full;
+    });
+
+    let global = crate::frontend::PreparedStatements::global();
+    let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
+
+    assert_eq!(global.read().len(), 0);
+
+    let first = rewritten_query(
+        &run_test(
+            &mut client,
+            &[Query::new("PREPARE reused AS SELECT $1::bigint").into()],
+        )
+        .await,
+    );
+
+    // The client name is replaced, the statement is not.
+    assert!(first.starts_with("PREPARE __pgdog_"));
+    assert!(first.ends_with(" AS SELECT $1::bigint"));
+
+    assert_eq!(global.read().len(), 1);
+
+    let second = rewritten_query(
+        &run_test(
+            &mut client,
+            &[Query::new("PREPARE reused AS SELECT $1::bigint + 1").into()],
+        )
+        .await,
+    );
+
+    assert!(second.starts_with("PREPARE __pgdog_"));
+    assert!(second.ends_with(" AS SELECT $1::bigint + 1"));
+
+    // Re-PREPARE mints a new global name.
+    assert_eq!(global.read().len(), 2);
+
+    // Only the statement the client replaced is evictable.
+    assert_eq!(global.write().close_unused(0), 1);
+    assert_eq!(global.read().len(), 1);
+}
