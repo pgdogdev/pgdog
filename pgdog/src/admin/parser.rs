@@ -261,6 +261,84 @@ impl Parser {
 mod tests {
     use super::{Error, ParseResult, Parser};
 
+    macro_rules! assert_parses {
+        ($sql:literal, $variant:pat) => {
+            assert!(
+                matches!(Parser::parse($sql), Ok($variant)),
+                "failed to parse `{}`",
+                $sql
+            );
+        };
+    }
+
+    #[test]
+    fn parses_pool_control_commands() {
+        assert_parses!("PAUSE", ParseResult::Pause(_));
+        assert_parses!("RESUME", ParseResult::Pause(_));
+        assert_parses!("RECONNECT", ParseResult::Reconnect(_));
+        assert_parses!("RELOAD", ParseResult::Reload(_));
+        assert_parses!("SHUTDOWN", ParseResult::Shutdown(_));
+        assert_parses!("BAN", ParseResult::Ban(_));
+        assert_parses!("UNBAN", ParseResult::Ban(_));
+        assert_parses!("HEALTHCHECK", ParseResult::Healthcheck(_));
+        assert_parses!(
+            "PROBE postgres://postgres@localhost/postgres",
+            ParseResult::Probe(_)
+        );
+        assert_parses!("MAINTENANCE ON", ParseResult::MaintenanceMode(_));
+        assert_parses!("SET query_timeout TO '1000'", ParseResult::Set(_));
+    }
+
+    #[test]
+    fn parses_show_commands() {
+        assert_parses!("SHOW CLIENTS", ParseResult::ShowClients(_));
+        assert_parses!("SHOW POOLS", ParseResult::ShowPools(_));
+        assert_parses!("SHOW BANS", ParseResult::ShowBans(_));
+        assert_parses!("SHOW CONFIG", ParseResult::ShowConfig(_));
+        assert_parses!("SHOW SERVERS", ParseResult::ShowServers(_));
+        assert_parses!("SHOW PEERS", ParseResult::ShowPeers(_));
+        assert_parses!("SHOW QUERY_CACHE", ParseResult::ShowQueryCache(_));
+        assert_parses!("SHOW STATS", ParseResult::ShowStats(_));
+        assert_parses!("SHOW TRANSACTIONS", ParseResult::ShowTransactions(_));
+        assert_parses!("SHOW MIRRORS", ParseResult::ShowMirrors(_));
+        assert_parses!("SHOW VERSION", ParseResult::ShowVersion(_));
+        assert_parses!("SHOW INSTANCE_ID", ParseResult::ShowInstanceId(_));
+        assert_parses!("SHOW LISTS", ParseResult::ShowLists(_));
+        assert_parses!("SHOW LISTENERS", ParseResult::ShowListeners(_));
+        assert_parses!("SHOW PREPARED", ParseResult::ShowPrepared(_));
+        assert_parses!("SHOW REPLICATION", ParseResult::ShowReplication(_));
+        assert_parses!(
+            "SHOW REPLICATION_SLOTS",
+            ParseResult::ShowReplicationSlots(_)
+        );
+        assert_parses!("SHOW SCHEMA_SYNC", ParseResult::ShowSchemaSync(_));
+        assert_parses!("SHOW TABLE_COPIES", ParseResult::ShowTableCopies(_));
+        assert_parses!("SHOW TASKS", ParseResult::ShowTasks(_));
+        assert_parses!("SHOW SERVER MEMORY", ParseResult::ShowServerMemory(_));
+        assert_parses!("SHOW CLIENT MEMORY", ParseResult::ShowClientMemory(_));
+        assert_parses!("SHOW server_version", ParseResult::Guc(_));
+    }
+
+    #[test]
+    fn parses_schema_and_replication_commands() {
+        assert_parses!("SETUP SCHEMA", ParseResult::SetupSchema(_));
+        assert_parses!("RESHARD source target publication", ParseResult::Reshard(_));
+        assert_parses!(
+            "SCHEMA_SYNC pre source target publication",
+            ParseResult::SchemaSync(_)
+        );
+        assert_parses!(
+            "COPY_DATA source target publication",
+            ParseResult::CopyData(_)
+        );
+        assert_parses!(
+            "REPLICATE source target publication",
+            ParseResult::Replicate(_)
+        );
+        assert_parses!("STOP_TASK 1", ParseResult::StopTask(_));
+        assert_parses!("CUTOVER", ParseResult::Cutover(_));
+    }
+
     #[test]
     fn parses_show_clients_command() {
         let result = Parser::parse("SHOW CLIENTS;");

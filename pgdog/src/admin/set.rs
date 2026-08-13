@@ -5,7 +5,10 @@ use crate::{
 };
 
 use super::prelude::*;
-use pg_raw_parse::Node;
+use pg_raw_parse::{
+    Node,
+    raw::VariableSetKind::{VAR_RESET, VAR_RESET_ALL},
+};
 use serde::de::DeserializeOwned;
 
 pub struct Set {
@@ -21,7 +24,11 @@ fn is_set_or_error(sql: &str) -> Result<bool, Error> {
     let stmt = pg_raw_parse::parse(sql).map_err(|_| Error::Syntax)?;
     let root = stmt.stmts().next().ok_or(Error::Syntax)?;
 
-    Ok(matches!(root, Node::VariableSetStmt(_)))
+    Ok(if let Node::VariableSetStmt(stmt) = root {
+        !matches!(stmt.kind, VAR_RESET_ALL | VAR_RESET)
+    } else {
+        false
+    })
 }
 
 #[async_trait]
