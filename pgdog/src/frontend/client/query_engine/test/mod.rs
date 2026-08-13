@@ -22,6 +22,7 @@ mod lock_session;
 mod manual_lock;
 mod multi_binding;
 mod omni;
+mod pipeline_execution;
 pub mod prelude;
 mod prepared_syntax_error;
 mod replicas;
