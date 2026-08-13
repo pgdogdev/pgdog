@@ -55,7 +55,16 @@ impl<'a> Healtcheck<'a> {
             return Ok(());
         }
 
-        match safe_timeout(self.healthcheck_timeout, self.conn.healthcheck(";")).await {
+        // Boxed to keep the ~1.6 KB query future out of this state machine:
+        // it is inlined all the way up into `Pool::get`, which is built and
+        // moved on every checkout, while the query itself runs at most once
+        // per healthcheck interval.
+        match safe_timeout(
+            self.healthcheck_timeout,
+            Box::pin(self.conn.healthcheck(";")),
+        )
+        .await
+        {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => {
                 // Check if this is an administrator command termination
