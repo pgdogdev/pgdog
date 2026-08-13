@@ -77,7 +77,6 @@ impl Ast {
         search_path: Option<&ParameterValue>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
-        let ast = pg_raw_parse::parse(query.query_without_comment).map_err(Error::Parse)?;
 
         // Run the rewrite unconditionally. Even when a shard comment will
         // route the query to a specific shard, we need to know whether the
@@ -94,14 +93,11 @@ impl Ast {
         });
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
-            // FIXME(sage): We should have a parse function on mem so we don't
-            // need to parse and then copy the parsed tree just to throw the
-            // original away
-            let mut copy = mem.make_unique(&*ast.into_inner());
-            if let Some(stmt) = copy.as_mut().into_iter().next() {
+            let mut ast = mem.parse(query.query_without_comment)?;
+            if let Some(stmt) = ast.as_mut().into_iter().next() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
-            Ok::<_, Error>(copy)
+            Ok::<_, Error>(ast)
         })?;
 
         let elapsed = now.elapsed();
