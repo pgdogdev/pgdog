@@ -7,7 +7,7 @@ use pgdog_config::{PoolerMode, PreparedStatements, Role, pooling::ConnectionReco
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{LsnStats, ReplicaLag};
+use crate::{Histogram, LsnStats, ReplicaLag, server::Counts as ServerCounts};
 
 /// Pool statistics.
 ///
@@ -195,9 +195,21 @@ pub struct Stats {
     last_counts: Counts,
     // Average counts.
     pub averages: Counts,
+    /// Distribution of individual query durations, cumulative for the lifetime
+    /// of the pool. Unlike [`Stats::averages`], this is never recalculated.
+    pub query_time_histogram: Histogram,
 }
 
 impl Stats {
+    /// Fold a checked-in server's counts and latency samples into the totals.
+    ///
+    /// Counts add; the histogram merges element-wise. Both are cumulative, so
+    /// the caller is responsible for handing over each sample exactly once.
+    pub fn check_in(&mut self, counts: ServerCounts, histogram: Histogram) {
+        self.counts = self.counts + counts;
+        self.query_time_histogram += histogram;
+    }
+
     /// Calculate averages.
     pub fn calc_averages(&mut self, time: Duration) {
         let secs = time.as_secs() as usize;
@@ -436,5 +448,105 @@ impl Default for Config {
             lb_weight: 255,
             prepared_statements_level: PreparedStatements::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::histogram::Bounds;
+
+    /// Explicit bounds, so tests don't depend on the process-wide latch.
+    fn bounds() -> Bounds {
+        Bounds::from_millis(&[1.0, 10.0, 100.0])
+    }
+
+    fn samples(millis: &[u64]) -> Histogram {
+        let bounds = bounds();
+        let mut histogram = Histogram::default();
+        for ms in millis {
+            histogram.observe_with(Duration::from_millis(*ms), &bounds);
+        }
+        histogram
+    }
+
+    fn queries(count: usize, query_time: Duration) -> ServerCounts {
+        ServerCounts {
+            queries: count,
+            query_time,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn check_in_adds_counts_and_merges_samples() {
+        let mut stats = Stats::default();
+
+        stats.check_in(queries(2, Duration::from_millis(7)), samples(&[5, 2]));
+
+        assert_eq!(stats.counts.query_count, 2);
+        assert_eq!(stats.counts.query_time, Duration::from_millis(7));
+        assert_eq!(stats.query_time_histogram.count(), 2);
+        assert_eq!(stats.query_time_histogram.sum(), Duration::from_millis(7));
+    }
+
+    #[test]
+    fn check_in_accumulates_across_servers() {
+        let mut stats = Stats::default();
+
+        stats.check_in(queries(1, Duration::from_millis(5)), samples(&[5]));
+        stats.check_in(
+            queries(3, Duration::from_millis(60)),
+            samples(&[20, 20, 20]),
+        );
+
+        assert_eq!(stats.counts.query_count, 4);
+        assert_eq!(stats.query_time_histogram.count(), 4);
+        assert_eq!(stats.query_time_histogram.sum(), Duration::from_millis(65));
+    }
+
+    #[test]
+    fn check_in_preserves_the_bucket_distribution() {
+        let mut stats = Stats::default();
+
+        // Distinct counts per bucket, so a merge that mixed up slots is caught.
+        stats.check_in(ServerCounts::default(), samples(&[1]));
+        stats.check_in(ServerCounts::default(), samples(&[5, 5]));
+        stats.check_in(ServerCounts::default(), samples(&[50, 50, 50]));
+        stats.check_in(ServerCounts::default(), samples(&[500, 500, 500, 500]));
+
+        // Per-bucket, not cumulative: <=1ms, <=10ms, <=100ms, +Inf. The
+        // cumulative `le` form is derived at export time.
+        assert_eq!(
+            stats.query_time_histogram.buckets(&bounds()),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(stats.query_time_histogram.count(), 10);
+    }
+
+    #[test]
+    fn check_in_without_samples_leaves_the_histogram_alone() {
+        let mut stats = Stats::default();
+        stats.check_in(queries(1, Duration::from_millis(5)), samples(&[5]));
+
+        // A server can be checked in without having run a query.
+        stats.check_in(ServerCounts::default(), Histogram::default());
+
+        assert_eq!(stats.query_time_histogram.count(), 1);
+        assert_eq!(stats.query_time_histogram.sum(), Duration::from_millis(5));
+    }
+
+    #[test]
+    fn calc_averages_does_not_disturb_the_histogram() {
+        let mut stats = Stats::default();
+        stats.check_in(queries(2, Duration::from_millis(10)), samples(&[5, 5]));
+
+        stats.calc_averages(Duration::from_secs(1));
+
+        // The histogram is exported as a cumulative counter, so unlike
+        // `averages` it is never rescaled or reset.
+        assert_eq!(stats.query_time_histogram.count(), 2);
+        assert_eq!(stats.query_time_histogram.sum(), Duration::from_millis(10));
+        assert_eq!(stats.averages.query_count, 2);
     }
 }

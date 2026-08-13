@@ -1,5 +1,6 @@
 //! Keep track of server stats.
 
+use pgdog_stats::Histogram;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -251,6 +252,9 @@ impl Stats {
             let duration = now.duration_since(query_timer);
             self.local.total.query_time += duration;
             self.local.last_checkout.query_time += duration;
+            // The histogram is handed to the pool on check-in separately from
+            // the ordinary server counts, so it is not duplicated in `total`.
+            self.local.query_time_histogram.observe(duration);
         }
     }
 
@@ -330,10 +334,12 @@ impl Stats {
     }
 
     /// Reset last_checkout counts.
-    pub fn reset_last_checkout(&mut self) -> Counts {
+    pub fn reset_last_checkout(&mut self) -> (Counts, Histogram) {
         let counts = self.local.last_checkout;
+        let histogram = self.local.query_time_histogram;
         self.local.last_checkout = Counts::default();
-        counts
+        self.local.query_time_histogram = Histogram::default();
+        (counts, histogram)
     }
 
     // Fast accessor methods - read from local, no locking.
@@ -387,6 +393,12 @@ impl Stats {
         self.local.last_checkout
     }
 
+    /// Get query latency samples taken since the last check-in (local, no lock).
+    #[inline]
+    pub fn query_time_histogram(&self) -> Histogram {
+        self.local.query_time_histogram
+    }
+
     /// Clear client_id.
     #[inline]
     pub fn clear_client_id(&mut self) {
@@ -397,5 +409,104 @@ impl Stats {
     #[inline]
     pub fn update(&self) {
         self.sync_to_shared();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A `Stats` handle with no network connection behind it.
+    ///
+    /// `query()` takes `now` as an argument and only mutates local counters,
+    /// so the whole latency-recording path is testable without a server.
+    /// `pid` must be unique per test: `connect` registers in a global map.
+    fn stats(pid: i32) -> Stats {
+        Stats::connect(
+            BackendPid::for_test(pid),
+            &Address::default(),
+            &Parameters::default(),
+            &ServerOptions::default(),
+            &Memory::default(),
+        )
+    }
+
+    #[test]
+    fn query_records_latency_into_server_histogram() {
+        let mut stats = stats(1);
+        let start = Instant::now();
+
+        stats.set_timers(start);
+        stats.query(start + Duration::from_millis(5), false);
+
+        let histogram = stats.query_time_histogram();
+        assert_eq!(histogram.count(), 1);
+        assert_eq!(histogram.sum(), Duration::from_millis(5));
+    }
+
+    #[test]
+    fn query_time_is_recorded_as_both_a_total_and_a_sample() {
+        let mut stats = stats(2);
+        let start = Instant::now();
+
+        stats.set_timers(start);
+        stats.query(start + Duration::from_millis(5), false);
+
+        // One observation feeds two exports: the scalar `query_time` total and
+        // the histogram. The histogram is held separately from the counts and
+        // handed to the pool once, at check-in.
+        assert_eq!(stats.total().query_time, Duration::from_millis(5));
+        assert_eq!(stats.query_time_histogram().count(), 1);
+    }
+
+    #[test]
+    fn every_query_is_observed() {
+        let mut stats = stats(3);
+        let start = Instant::now();
+
+        for i in 1..=25u64 {
+            stats.set_timers(start);
+            stats.query(start + Duration::from_millis(i), false);
+
+            assert_eq!(stats.last_checkout().queries, i as usize);
+            assert_eq!(stats.query_time_histogram().count(), i);
+        }
+
+        // 1 + 2 + ... + 25 milliseconds.
+        assert_eq!(
+            stats.query_time_histogram().sum(),
+            Duration::from_millis(25 * 26 / 2)
+        );
+    }
+
+    #[test]
+    fn reset_last_checkout_hands_off_the_histogram() {
+        let mut stats = stats(4);
+        let start = Instant::now();
+
+        stats.set_timers(start);
+        stats.query(start + Duration::from_millis(5), false);
+
+        // Check-in drains the samples separately from the ordinary counts...
+        let (counts, histogram) = stats.reset_last_checkout();
+        assert_eq!(counts.queries, 1);
+        assert_eq!(histogram.count(), 1);
+
+        // ...and leaves nothing behind, so the next checkout can't re-report them.
+        assert_eq!(stats.query_time_histogram().count(), 0);
+        assert_eq!(stats.query_time_histogram().sum(), Duration::ZERO);
+    }
+
+    #[test]
+    fn query_without_a_timer_is_not_observed() {
+        let mut stats = stats(5);
+
+        // No `set_timers`: nothing to measure, so nothing is recorded.
+        stats.query(Instant::now(), false);
+
+        assert_eq!(stats.last_checkout().queries, 1);
+        assert_eq!(stats.query_time_histogram().count(), 0);
     }
 }

@@ -152,6 +152,14 @@ openmetrics_port = 9090
 #
 # Default: none
 openmetrics_namespace = "pgdog_"
+# Upper bounds, in milliseconds, of the "query_time_seconds" histogram buckets.
+#
+# Each bound emits one time series per pool, so prefer a short ladder that
+# brackets the latencies worth alerting on. Read once at startup: changing
+# this requires a restart.
+#
+# Default: [0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000]
+query_time_buckets = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0, 30000.0]
 # Log output format.
 #
 # Default: text

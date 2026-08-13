@@ -2667,7 +2667,7 @@ pub mod test {
             assert_eq!(server.stats().total().transactions, i);
         }
 
-        let counts = server.stats_mut().reset_last_checkout();
+        let (counts, _) = server.stats_mut().reset_last_checkout();
         assert_eq!(counts.queries, 25);
         assert_eq!(counts.transactions, 25);
 
@@ -2688,7 +2688,7 @@ pub mod test {
             assert_eq!(server.stats().total().transactions, 25 + i);
         }
 
-        let counts = server.stats_mut().reset_last_checkout();
+        let (counts, _) = server.stats_mut().reset_last_checkout();
         assert_eq!(counts.queries, 25 * 4);
         assert_eq!(counts.transactions, 25);
         assert_eq!(server.stats().total().queries, 25 + (25 * 4));

@@ -1,3 +1,4 @@
+use crate::Histogram;
 use crate::memory::MemoryStats;
 use crate::pool::Counts as PoolCounts;
 use crate::state::State;
@@ -106,6 +107,9 @@ pub struct Stats {
     pub created_at_time: SystemTime,
     pub total: Counts,
     pub last_checkout: Counts,
+    /// Distribution of query durations since the last check-in. Drained into
+    /// the pool's histogram when the server is checked back in.
+    pub query_time_histogram: Histogram,
     pub pool_id: u64,
     pub memory: MemoryStats,
     pub last_sent: u8,
@@ -119,6 +123,7 @@ impl Default for Stats {
             created_at_time: SystemTime::now(),
             total: Counts::default(),
             last_checkout: Counts::default(),
+            query_time_histogram: Histogram::default(),
             pool_id: 0,
             memory: MemoryStats::default(),
             last_sent: 0,

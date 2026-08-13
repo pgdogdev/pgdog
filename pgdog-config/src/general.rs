@@ -344,6 +344,24 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace>
     pub openmetrics_namespace: Option<String>,
 
+    /// Upper bounds, in milliseconds, of the `query_time_seconds` histogram buckets.
+    ///
+    /// Each bound emits one time series per pool, so prefer a short ladder that
+    /// brackets the latencies worth alerting on. Values are sorted and
+    /// deduplicated; non-positive and non-finite values are ignored. At most 20
+    /// bounds are used and an implicit `+Inf` bucket is always appended.
+    ///
+    /// **Note:** This setting cannot be changed at runtime. Restart PgDog after changing it.
+    ///
+    /// _Default:_ `[0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000]`
+    ///
+    /// Env: `PGDOG_QUERY_TIME_BUCKETS` (comma-separated milliseconds)
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_time_buckets>
+    #[serde(default = "General::query_time_buckets")]
+    #[schemars(default = "General::schema_default_query_time_buckets")]
+    pub query_time_buckets: Vec<f64>,
+
     /// Enables support for prepared statements.
     ///
     /// _Default:_ `extended`
@@ -881,6 +899,7 @@ impl Default for General {
             query_size_limit_action: Self::query_size_limit_action(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
+            query_time_buckets: Self::query_time_buckets(),
             prepared_statements: Self::prepared_statements(),
             query_parser_enabled: Self::query_parser_enabled(),
             query_parser: QueryParserLevel::default(),
@@ -954,6 +973,11 @@ impl Default for General {
 }
 
 impl General {
+    /// Default upper bounds of the `query_time_seconds` histogram, in milliseconds.
+    pub const DEFAULT_QUERY_TIME_BUCKETS: [f64; 12] = [
+        0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1_000.0, 3_000.0, 10_000.0, 30_000.0,
+    ];
+
     fn env_or_default<T: std::str::FromStr>(env_var: &str, default: T) -> T {
         env::var(env_var)
             .ok()
@@ -1310,6 +1334,35 @@ impl General {
 
     pub fn openmetrics_namespace() -> Option<String> {
         Self::env_option_string("PGDOG_OPENMETRICS_NAMESPACE")
+    }
+
+    /// Default `query_time_seconds` bucket bounds, in milliseconds.
+    ///
+    /// Exponential from 100µs to 30s. Invalid values are dropped here and the
+    /// remainder is normalized when the histogram bounds are built, so a
+    /// malformed env var degrades to the defaults instead of failing startup.
+    pub fn query_time_buckets() -> Vec<f64> {
+        let Some(raw) = Self::env_option_string("PGDOG_QUERY_TIME_BUCKETS") else {
+            return Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec();
+        };
+
+        let buckets = raw
+            .split(',')
+            .filter_map(|value| value.trim().parse::<f64>().ok())
+            .collect::<Vec<_>>();
+
+        if buckets.is_empty() {
+            Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        } else {
+            buckets
+        }
+    }
+
+    /// Schema-only default, so the generated schema documents the shipped
+    /// bounds rather than whatever `PGDOG_QUERY_TIME_BUCKETS` happened to be
+    /// set to when the schema was generated.
+    fn schema_default_query_time_buckets() -> Vec<f64> {
+        Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
     }
 
     fn default_dns_ttl() -> Option<u64> {
@@ -1926,6 +1979,47 @@ mod tests {
 
         assert_eq!(General::broadcast_address(), None);
         assert_eq!(General::openmetrics_namespace(), None);
+    }
+
+    #[test]
+    fn test_query_time_buckets() {
+        let _guard = remove_env_var("PGDOG_QUERY_TIME_BUCKETS");
+
+        let general = General::default();
+        assert_eq!(
+            general.query_time_buckets,
+            General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        );
+
+        let general: General = toml::from_str("query_time_buckets = [1.0, 10.0, 100.0]").unwrap();
+        assert_eq!(general.query_time_buckets, vec![1.0, 10.0, 100.0]);
+
+        // Omitting the setting keeps the defaults.
+        let general: General = toml::from_str("").unwrap();
+        assert_eq!(
+            general.query_time_buckets,
+            General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        );
+    }
+
+    #[test]
+    fn test_env_query_time_buckets() {
+        let _guard = set_env_var("PGDOG_QUERY_TIME_BUCKETS", "1, 5,25");
+        assert_eq!(General::query_time_buckets(), vec![1.0, 5.0, 25.0]);
+
+        // Nothing parseable falls back to the defaults rather than
+        // disabling bucketing.
+        let _guard = set_env_var("PGDOG_QUERY_TIME_BUCKETS", "nonsense");
+        assert_eq!(
+            General::query_time_buckets(),
+            General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        );
+
+        let _guard = remove_env_var("PGDOG_QUERY_TIME_BUCKETS");
+        assert_eq!(
+            General::query_time_buckets(),
+            General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        );
     }
 
     #[test]

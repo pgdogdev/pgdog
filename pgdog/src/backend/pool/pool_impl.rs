@@ -254,12 +254,12 @@ impl Pool {
             server.stats().last_used()
         };
 
-        let counts = {
+        let (counts, histogram) = {
             let stats = server.stats_mut();
             stats.clear_client_id();
-            let counts = stats.reset_last_checkout();
+            let drained = stats.reset_last_checkout();
             stats.update();
-            counts
+            drained
         };
 
         // Check everything and maybe check the connection
@@ -267,7 +267,10 @@ impl Pool {
         let CheckInResult {
             server_error,
             replenish,
-        } = { self.lock().maybe_check_in(server, now, counts, false)? };
+        } = {
+            self.lock()
+                .maybe_check_in(server, now, counts, histogram, false)?
+        };
 
         if server_error {
             error!(

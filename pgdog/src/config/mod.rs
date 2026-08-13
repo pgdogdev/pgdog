@@ -47,6 +47,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
+use pgdog_stats::histogram::{self, Bounds, Normalized};
+use tracing::warn;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
     Lazy::new(|| ArcSwap::from_pointee(ConfigAndUsers::default()));
@@ -72,8 +74,33 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
         // And also moved outside the configuration to the place of
         table.load_centroids()?;
     }
+    set_histogram_bounds(&config);
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
+}
+
+/// Latch the process-wide query latency histogram buckets.
+///
+/// Bucket bounds are fixed for the life of the process: already-recorded
+/// histograms are indexed by position, so re-bucketing at runtime would
+/// silently reinterpret every existing sample. A reload that changes them is
+/// ignored with a warning.
+fn set_histogram_bounds(config: &ConfigAndUsers) {
+    let (configured, normalized) =
+        Bounds::from_millis_checked(&config.config.general.query_time_buckets);
+    match normalized {
+        Normalized::Dropped(0) => (),
+        Normalized::Dropped(dropped) => {
+            warn!("\"query_time_buckets\" ignored {dropped} invalid, duplicate, or excess bound(s)")
+        }
+        Normalized::FellBackToDefaults => {
+            warn!("\"query_time_buckets\" has no usable bounds, using the defaults")
+        }
+    }
+
+    if !histogram::set_bounds(configured) && *histogram::bounds() != configured {
+        warn!("\"query_time_buckets\" cannot be changed at runtime, restart PgDog to apply");
+    }
 }
 
 /// Validate sharding key lookup queries with the SQL parser:

@@ -10,7 +10,7 @@ use crate::backend::{Server, stats::Counts as BackendCounts};
 use crate::net::messages::{BackendKeyData, BackendPid, FrontendPid};
 
 use pgdog_config::Role;
-use pgdog_stats::RoleSpecificConfig;
+use pgdog_stats::{Histogram, RoleSpecificConfig};
 use tokio::time::Instant;
 
 use super::{Config, Error, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
@@ -367,6 +367,7 @@ impl Inner {
         mut server: Box<Server>,
         now: Instant,
         stats: BackendCounts,
+        histogram: Histogram,
         moving: bool,
     ) -> Result<CheckInResult, Error> {
         let mut result = CheckInResult {
@@ -381,15 +382,17 @@ impl Inner {
                 server.stats_mut().set_pool_id(moved.id());
                 server.stats().update();
                 server.replace_oids(&moved.inner().oids);
-                moved.lock().maybe_check_in(server, now, stats, true)?;
+                moved
+                    .lock()
+                    .maybe_check_in(server, now, stats, histogram, true)?;
                 return Ok(result);
             }
         }
 
         self.taken.check_in(server.id())?;
 
-        // Update stats
-        self.stats.counts = self.stats.counts + stats;
+        // Update stats.
+        self.stats.check_in(stats, histogram);
 
         // Ban the pool from serving more clients.
         if server.error() {
@@ -559,6 +562,41 @@ mod test {
         assert!(!inner.paused);
     }
 
+    /// `maybe_check_in` is glue; the merge itself is covered exhaustively by
+    /// `pgdog_stats::pool::Stats::check_in`. This only proves the wire is
+    /// connected, so a drained server histogram can't silently go nowhere.
+    #[test]
+    fn check_in_hands_the_server_histogram_to_the_pool() {
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
+        let server = Box::new(Server::default());
+
+        inner
+            .taken
+            .take(FrontendPid::new(), server.id(), server.key().clone());
+
+        let mut histogram = Histogram::default();
+        histogram.observe(Duration::from_millis(5));
+
+        inner
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                histogram,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(inner.stats.query_time_histogram.count(), 1);
+        assert_eq!(
+            inner.stats.query_time_histogram.sum(),
+            Duration::from_millis(5)
+        );
+    }
+
     #[test]
     fn test_offline_pool_behavior() {
         let mut inner = Inner::default();
@@ -570,7 +608,13 @@ mod test {
             .take(FrontendPid::new(), server.id(), server.key().clone());
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
 
         assert!(!result.server_error);
@@ -593,7 +637,13 @@ mod test {
             .take(FrontendPid::new(), server.id(), server.key().clone());
 
         inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
 
         assert_eq!(inner.total(), 0); // pool paused, connection not added
@@ -614,7 +664,13 @@ mod test {
             .take(FrontendPid::new(), server.id(), server.key().clone());
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
 
         assert!(!result.server_error);
@@ -638,7 +694,13 @@ mod test {
         assert_eq!(inner.checked_out(), 1);
 
         let result = inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
         assert!(result.server_error);
 
@@ -795,7 +857,13 @@ mod test {
             .take(FrontendPid::new(), server.id(), server.key().clone());
 
         inner
-            .maybe_check_in(server, Instant::now(), BackendCounts::default(), false)
+            .maybe_check_in(
+                server,
+                Instant::now(),
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
         assert_eq!(inner.idle(), 1);
 
@@ -848,6 +916,7 @@ mod test {
                 server,
                 Instant::now() + Duration::from_secs(61), // Exceeds max age
                 BackendCounts::default(),
+                Histogram::default(),
                 false,
             )
             .unwrap();
@@ -1221,14 +1290,26 @@ mod test {
         // Check in both connections
         let now = Instant::now();
         inner
-            .maybe_check_in(conn1, now, BackendCounts::default(), false)
+            .maybe_check_in(
+                conn1,
+                now,
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
         assert_eq!(inner.idle(), 1);
         assert_eq!(inner.checked_out(), 1);
         assert_eq!(inner.total(), 2);
 
         inner
-            .maybe_check_in(conn2, now, BackendCounts::default(), false)
+            .maybe_check_in(
+                conn2,
+                now,
+                BackendCounts::default(),
+                Histogram::default(),
+                false,
+            )
             .unwrap();
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 0);
