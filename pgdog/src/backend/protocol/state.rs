@@ -19,6 +19,9 @@ pub enum ExecutionCode {
     /// A ReadyForQuery we expect because we forwarded a Sync.
     /// Unlike a Query's ReadyForQuery, this one still is expected to arrive after an extended-protocol error.
     ReadyForQuerySync,
+    /// Completion of a simple-protocol statement
+    CommandComplete,
+    /// Completion of an extended Execute
     ExecutionCompleted,
     ParseComplete,
     BindComplete,
@@ -40,7 +43,8 @@ impl From<char> for ExecutionCode {
     fn from(value: char) -> Self {
         match value {
             'Z' => Self::ReadyForQuery,
-            'C' | 's' | 'I' => Self::ExecutionCompleted, // CommandComplete or PortalSuspended
+            'C' | 'I' => Self::CommandComplete,
+            's' => Self::ExecutionCompleted, // PortalSuspended
             '1' => Self::ParseComplete,
             '2' => Self::BindComplete,
             '3' => Self::CloseComplete,
@@ -145,17 +149,13 @@ impl ProtocolState {
 
                 let extended_error = matches!(
                     self.queue.front(),
-                    Some(
-                        ExecutionItem::Code(
-                            ExecutionCode::ParseComplete
-                                | ExecutionCode::BindComplete
-                                | ExecutionCode::DescriptionOrNothing
-                                | ExecutionCode::CloseComplete
-                                | ExecutionCode::ExecutionCompleted
-                        )
-                        // Why just ParseComplete? This is a Parse that we injected (extended).
-                        // The other PREPARE ignores go as a simple query.
-                        | ExecutionItem::Ignore(ExecutionCode::ParseComplete)
+                    Some(ExecutionItem::Code(code) | ExecutionItem::Ignore(code)) if matches!(
+                        code,
+                        ExecutionCode::ParseComplete
+                            | ExecutionCode::BindComplete
+                            | ExecutionCode::DescriptionOrNothing
+                            | ExecutionCode::CloseComplete
+                            | ExecutionCode::ExecutionCompleted
                     )
                 );
 
@@ -495,7 +495,7 @@ mod test {
         // Parse and Bind succeed, Execute fails
         state.add('1'); // ParseComplete
         state.add('2'); // BindComplete
-        state.add('C'); // CommandComplete (expected but won't arrive)
+        state.add(ExecutionCode::ExecutionCompleted); // Execute CommandComplete (expected but won't arrive)
         state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
@@ -525,10 +525,10 @@ mod test {
         // If first Execute fails, rest of pipeline still processes
         state.add('1'); // ParseComplete #1
         state.add('2'); // BindComplete #1
-        state.add('C'); // CommandComplete #1 (won't arrive)
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #1's CommandComplete (won't arrive)
         state.add('1'); // ParseComplete #2
         state.add('2'); // BindComplete #2
-        state.add('C'); // CommandComplete #2
+        state.add(ExecutionCode::ExecutionCompleted); // Execute #2's CommandComplete
         state.add(ExecutionCode::ReadyForQuerySync); // ReadyForQuery owed by Sync
 
         assert_eq!(state.action('1').unwrap(), Action::Forward);
