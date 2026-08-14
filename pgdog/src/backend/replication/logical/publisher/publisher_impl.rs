@@ -382,21 +382,25 @@ impl Publisher {
         source: &Cluster,
         dest: &Cluster,
         cancel: &CancellationToken,
+        require_replica_identity: bool,
     ) -> Result<(), Error> {
         // Fetch schema and column metadata first — valid() depends on it.
         self.sync_tables(true, source, dest).await?;
 
-        // Validate all tables support replication before committing to
-        // what can be a multi-hour copy.  A table with no primary key or
-        // unique replica-identity index cannot be replicated correctly.
-        let validation_errors: Vec<_> = self
-            .tables
-            .values()
-            .flat_map(|t| t.iter())
-            .filter_map(|t| t.valid().err())
-            .collect();
+        // Validate replica identity up front, before a potentially multi-hour
+        // copy. Only streaming consumes it (to build the per-row UPDATE/DELETE
+        // filters); the initial COPY does not — so a sync-only run skips the
+        // gate and can copy tables that lack an identity.
+        if require_replica_identity {
+            let validation_errors: Vec<_> = self
+                .tables
+                .values()
+                .flat_map(|t| t.iter())
+                .filter_map(|t| t.valid().err())
+                .collect();
 
-        ensure_validation!(validation_errors);
+            ensure_validation!(validation_errors);
+        }
 
         // Create replication slots only after validation passes — a slot
         // created before valid() would be orphaned on validation errors.
@@ -646,7 +650,7 @@ mod test {
 
         // Validation must fire before the copy begins.
         let result = publisher
-            .data_sync(&source, &dest, &CancellationToken::new())
+            .data_sync(&source, &dest, &CancellationToken::new(), true)
             .await;
 
         let err = result.expect_err("data_sync must fail for a publication with no-pk tables");
@@ -671,6 +675,59 @@ mod test {
             "DROP TABLE IF EXISTS publication_test_no_pk_3",
             "DROP TABLE IF EXISTS publication_test_no_pk_2",
             "DROP TABLE IF EXISTS publication_test_no_pk",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+    }
+
+    /// A sync-only copy (`require_replica_identity = false`) must not reject a
+    /// table that lacks a replica identity.
+    ///
+    /// Asserted without running the copy: the gate runs before the first
+    /// cancellation check, so a pre-cancelled token returns `DataSyncAborted`
+    /// (aborted at slot creation, past the skipped gate) — a `TableValidation`
+    /// error here would mean the gate wrongly fired.
+    #[tokio::test]
+    async fn data_sync_skips_replica_identity_validation_when_not_required() {
+        crate::logger();
+
+        let mut server = test_replication_server().await;
+        for ddl in &[
+            "CREATE TABLE IF NOT EXISTS publication_test_sync_only_no_pk (data TEXT NOT NULL)",
+            "DROP PUBLICATION IF EXISTS publication_sync_only_no_pk",
+            "CREATE PUBLICATION publication_sync_only_no_pk FOR TABLE publication_test_sync_only_no_pk",
+        ] {
+            server.execute(*ddl).await.unwrap();
+        }
+
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let dest = Cluster::new_test(&config());
+
+        let mut publisher = Publisher::new(
+            "publication_sync_only_no_pk",
+            QueryParserEngine::default(),
+            "sync_only_no_pk_slot".into(),
+        );
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = publisher.data_sync(&source, &dest, &cancel, false).await;
+
+        assert!(
+            matches!(result, Err(Error::DataSyncAborted)),
+            "sync-only copy must skip replica-identity validation and abort at slot \
+             creation, not fail validation; got: {result:?}"
+        );
+        assert!(
+            publisher.slots.is_empty(),
+            "the cancelled token aborts before any slot is created"
+        );
+
+        source.shutdown();
+        for ddl in &[
+            "DROP PUBLICATION IF EXISTS publication_sync_only_no_pk",
+            "DROP TABLE IF EXISTS publication_test_sync_only_no_pk",
         ] {
             server.execute(*ddl).await.unwrap();
         }
@@ -704,7 +761,7 @@ mod test {
         );
 
         let result = publisher
-            .data_sync(&source, &dest, &CancellationToken::new())
+            .data_sync(&source, &dest, &CancellationToken::new(), true)
             .await;
 
         let err = result.expect_err("data_sync must fail for REPLICA IDENTITY NOTHING table");
