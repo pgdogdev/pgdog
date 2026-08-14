@@ -14,15 +14,11 @@ pub(super) struct Validator {
 }
 
 impl Validator {
-    /// Reset the validator state.
+    /// Reset the validator state, so the next statement in the exchange starts
+    /// a new comparison.
     pub(super) fn reset(&mut self) {
         self.first_row_description = None;
         self.expected_column_count = None;
-    }
-
-    /// Set the row description.
-    pub(super) fn set_row_description(&mut self, rd: &RowDescription) {
-        self.first_row_description = Some(rd.clone());
     }
 
     /// Validate a row description against the first one received.

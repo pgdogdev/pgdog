@@ -1,11 +1,11 @@
 //! Multi-shard connection state.
 
-use context::Context;
+use std::collections::VecDeque;
 
 use crate::{
-    frontend::{PreparedStatements, router::Route},
+    frontend::router::Route,
     net::{
-        BackendPid, Decoder, ReadyForQuery,
+        BackendPid, Bind, Decoder, ReadyForQuery,
         messages::{
             DataRow, FromBytes, Message, Protocol, RowDescription, ToBytes,
             command_complete::CommandComplete,
@@ -15,7 +15,6 @@ use crate::{
 
 use super::buffer::Buffer;
 
-mod context;
 mod error;
 #[cfg(test)]
 mod test;
@@ -65,6 +64,8 @@ pub struct MultiShard {
     decoder: Decoder,
     /// Row consistency validator.
     validator: Validator,
+    /// Binds waiting for their BindComplete, in the order they were sent.
+    bound_statements: VecDeque<Bind>,
 }
 
 impl MultiShard {
@@ -110,6 +111,7 @@ impl MultiShard {
         //  1. Route to keep routing decision
         //  2. Number of shards
         //  3. Decoder
+        //  4. Pending Binds, pushed before this runs
     }
 
     /// Check if the message should be sent to the client, skipped,
@@ -125,6 +127,8 @@ impl MultiShard {
                 }
 
                 forward = if self.counters.ready_for_query.is_multiple_of(self.shards) {
+                    self.bound_statements.clear();
+
                     if self.counters.transaction_error {
                         Some(ReadyForQuery::error().message()?)
                     } else {
@@ -194,16 +198,17 @@ impl MultiShard {
                 self.counters.row_description += 1;
                 let rd = RowDescription::from_bytes(message.to_bytes())?;
 
-                // Validate row description consistency
-                let is_first = self.validator.validate_row_description(&rd)?;
+                // Validate row description consistency inside the group.
+                // we reset after shards processed the group of the same RD
+                let is_first_in_group = self.validator.validate_row_description(&rd)?;
 
-                // Set row description info as soon as we have it,
-                // so it's available to the aggregator and sorter.
-                if is_first {
-                    self.decoder.row_description(&rd);
+                // Set it as soon as we have it, so the aggregator and sorter
+                // can use it.
+                if is_first_in_group {
+                    self.decoder.set_row_description(rd.clone());
                 }
 
-                if self.counters.row_description == self.shards {
+                if self.counters.row_description.is_multiple_of(self.shards) {
                     // Only send it to the client once all shards sent it,
                     // so we don't get early requests from clients.
                     let plan = self.route.aggregate_rewrite_plan();
@@ -213,6 +218,9 @@ impl MultiShard {
                         let client_rd = rd.drop_columns(plan.drop_columns());
                         forward = Some(client_rd.message()?);
                     }
+
+                    // The next statement describes a different result set.
+                    self.validator.reset();
                 }
             }
 
@@ -289,6 +297,10 @@ impl MultiShard {
 
                 if self.counters.bind_complete.is_multiple_of(self.shards) {
                     forward = Some(message);
+
+                    if let Some(bind) = self.bound_statements.pop_front() {
+                        self.decoder.bind(&bind);
+                    }
                 }
             }
 
@@ -346,25 +358,12 @@ impl MultiShard {
         }
     }
 
-    pub(super) fn set_context<'a>(&mut self, message: impl Into<Context<'a>>) {
-        let context = message.into();
-        match context {
-            Context::Bind(bind) => {
-                if self.decoder.rd().fields.is_empty()
-                    && !bind.anonymous()
-                    && let Some(rd) = PreparedStatements::global()
-                        .read()
-                        .row_description(bind.statement())
-                {
-                    self.decoder.row_description(&rd);
-                    self.validator.set_row_description(&rd);
-                }
-                self.decoder.bind(bind);
-            }
-            Context::RowDescription(rd) => {
-                self.decoder.row_description(rd);
-                self.validator.set_row_description(rd);
-            }
-        }
+    /// Sorted rows or a merged CommandComplete are waiting for the client.
+    pub(super) fn has_more_messages(&self) -> bool {
+        self.buffer.can_take() || self.counters.command_complete.is_some()
+    }
+
+    pub(super) fn set_bind_context(&mut self, bind: &Bind) {
+        self.bound_statements.push_back(bind.clone());
     }
 }

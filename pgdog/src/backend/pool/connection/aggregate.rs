@@ -515,7 +515,7 @@ mod test {
         let aggregate = parse("SELECT COUNT(*)::int FROM users");
 
         let rd = RowDescription::new(&[integer_field("count")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let mut rows = VecDeque::new();
         let mut shard0 = DataRow::new();
@@ -544,7 +544,7 @@ mod test {
         let aggregate = parse("SELECT AVG(price) FROM menu");
 
         let rd = RowDescription::new(&[Field::double("avg")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let mut rows = VecDeque::new();
         let mut shard0 = DataRow::new();
@@ -578,7 +578,7 @@ mod test {
         let aggregate = parse("SELECT price, SUM(quantity) FROM menu GROUP BY 1");
 
         let rd = RowDescription::new(&[Field::double("price"), Field::bigint("sum")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let mut rows = VecDeque::new();
         let mut shard0 = DataRow::new();
@@ -620,7 +620,7 @@ mod test {
         let aggregate = parse("SELECT matrix, COUNT(*) FROM samples GROUP BY 1");
 
         let rd = RowDescription::new(&[integer_array_field("matrix"), Field::bigint("count")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let mut rows = VecDeque::new();
 
@@ -670,7 +670,7 @@ mod test {
             interval_array_field("sample_interval_array"),
             Field::bigint("count"),
         ]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let input = Bytes::from_static(br#"{"1 year 2 mons 1 day 04:05:06.7"}"#);
 

@@ -1,6 +1,6 @@
 use crate::{
     frontend::router::parser::{Shard, ShardWithPriority},
-    net::{DataRow, Field},
+    net::{BindComplete, DataRow, Field, Format},
 };
 
 use super::*;
@@ -266,4 +266,101 @@ fn test_omni_data_rows_only_from_first_server() {
         .forward(dr3.message().unwrap().backend(backend1))
         .unwrap();
     assert!(result.is_some()); // Should be forwarded
+}
+
+/// Statements pipelined in one exchange each get their own RowDescription,
+/// and they may describe different result sets.
+#[test]
+fn test_pipelined_describe_forwards_every_group() {
+    for shards in [1, 2] {
+        let mut multi_shard = MultiShard::new(
+            (0..shards).collect(),
+            &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+        );
+
+        let id = RowDescription::new(&[Field::bigint("id")]);
+        let name = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
+        let mut forwarded = vec![];
+
+        for description in [&id, &name] {
+            for _ in 0..shards {
+                if let Some(message) = multi_shard.forward(description.message().unwrap()).unwrap()
+                {
+                    forwarded.push(message);
+                }
+            }
+        }
+
+        assert_eq!(
+            forwarded,
+            vec![id.message().unwrap(), name.message().unwrap()],
+            "{shards} shard(s)",
+        );
+    }
+}
+
+/// Each Bind in a pipelined exchange decides the wire format of its own rows,
+/// and a server RowDescription must not take that over.
+#[test]
+fn test_bind_result_formats_apply_per_statement() {
+    let mut multi_shard = MultiShard::new(
+        vec![0, 1],
+        &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+    );
+
+    let binary = Bind::new_params_codes_results("b1", &[], &[], &[1]);
+    let text = Bind::new_statement("b2");
+    let rd = RowDescription::new(&[Field::bigint("id")]);
+
+    multi_shard.set_bind_context(&binary);
+    multi_shard.set_bind_context(&text);
+
+    for _ in 0..2 {
+        multi_shard
+            .forward(BindComplete.message().unwrap())
+            .unwrap();
+    }
+    for _ in 0..2 {
+        multi_shard.forward(rd.message().unwrap()).unwrap();
+    }
+    assert_eq!(multi_shard.decoder.format(0), Format::Binary);
+
+    // The second statement asked for no formats.
+    for _ in 0..2 {
+        multi_shard
+            .forward(BindComplete.message().unwrap())
+            .unwrap();
+    }
+    for _ in 0..2 {
+        multi_shard.forward(rd.message().unwrap()).unwrap();
+    }
+    assert_eq!(multi_shard.decoder.format(0), Format::Text);
+}
+
+/// A Bind that never completed is dropped at ReadyForQuery, so the next
+/// exchange cannot pop it and type its rows after the wrong statement.
+#[test]
+fn test_ready_for_query_drops_pending_binds() {
+    let mut multi_shard = MultiShard::new(
+        vec![0, 1],
+        &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+    );
+
+    multi_shard.set_bind_context(&Bind::new_statement("b1"));
+    multi_shard.set_bind_context(&Bind::new_statement("b2"));
+
+    // Only the first statement binds. The second is abandoned.
+    for _ in 0..2 {
+        multi_shard
+            .forward(BindComplete.message().unwrap())
+            .unwrap();
+    }
+    assert_eq!(multi_shard.bound_statements.len(), 1);
+
+    for _ in 0..2 {
+        multi_shard
+            .forward(ReadyForQuery::idle().message().unwrap())
+            .unwrap();
+    }
+    assert!(multi_shard.bound_statements.is_empty());
 }

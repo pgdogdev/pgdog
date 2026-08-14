@@ -306,7 +306,7 @@ mod test {
             type_modifier: -1,
             format: 0,
         }]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         let row = DataRow::from_columns(vec![Bytes::from_static(b"{1,2,3}")]);
         let column = row.get_column(0, &decoder).unwrap().unwrap();
@@ -321,7 +321,7 @@ mod test {
     #[test]
     fn get_column_checked_returns_err_on_missing_field() {
         let rd = RowDescription::new(&[Field::bigint("stuff")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
         let row = DataRow::from_columns(vec![Bytes::from_static(b"1")]);
 
         let column = row.get_column_checked(0, &decoder);

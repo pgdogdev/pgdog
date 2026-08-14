@@ -204,6 +204,17 @@ impl Bind {
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
+    /// Format the client asked each result column to be returned in.
+    pub fn result_formats(&self) -> impl ExactSizeIterator<Item = Format> + '_ {
+        self.results.chunks_exact(2).map(|code| {
+            if i16::from_be_bytes([code[0], code[1]]) == 0 {
+                Format::Text
+            } else {
+                Format::Binary
+            }
+        })
+    }
+
     /// Format codes, if any.
     pub fn codes(&self) -> &[Format] {
         &self.codes
