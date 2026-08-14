@@ -216,6 +216,11 @@ impl Buffer {
         }
     }
 
+    /// The buffer holds rows the client can read now.
+    pub(super) fn can_take(&self) -> bool {
+        self.full && !self.is_empty()
+    }
+
     /// Execute LIMIT ... OFFSET ...
     pub(super) fn limit(&mut self, limit: &Limit) {
         let offset = limit.offset.unwrap_or(0);
@@ -230,7 +235,6 @@ impl Buffer {
         self.buffer.len()
     }
 
-    #[allow(dead_code)]
     pub(super) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -254,7 +258,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
         buf.full();
@@ -284,7 +288,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
             .unwrap();
         buf.full();
 
@@ -311,7 +315,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(&rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
             .unwrap();
         buf.full();
 
@@ -345,7 +349,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
         buf.full();
@@ -385,7 +389,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
         buf.full();
@@ -441,7 +445,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
         buf.sort(&columns, &decoder);
         buf.full();
 
@@ -485,7 +489,7 @@ mod test {
             buf.add(dr.message().unwrap()).unwrap();
         }
 
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
         buf.sort(&columns, &decoder);
         buf.full();
 
@@ -577,7 +581,7 @@ mod test {
     fn test_distinct() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("id"), Field::text("email")]);
-        let decoder = Decoder::from(&rd);
+        let decoder = Decoder::from(rd);
 
         for email in ["test@test.com", "apples@test.com", "domain@test.com"] {
             for i in 0..5 {

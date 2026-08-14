@@ -260,21 +260,25 @@ impl TestClient {
         pid
     }
 
+    /// The shard an ID lands on.
+    pub(crate) fn shard_for_id(&mut self, id: i64) -> Shard {
+        let cluster = self.engine.backend().cluster().unwrap();
+
+        ContextBuilder::new(cluster.sharded_tables().first().unwrap())
+            .data(id)
+            .shards(cluster.shards().len())
+            .build()
+            .unwrap()
+            .apply()
+            .unwrap()
+    }
+
     /// Generate a random ID for a given shard.
     pub(crate) fn random_id_for_shard(&mut self, shard: usize) -> i64 {
-        let cluster = self.engine.backend().cluster().unwrap().clone();
-
         loop {
             let id: i64 = rng().random();
-            let calc = ContextBuilder::new(cluster.sharded_tables().first().unwrap())
-                .data(id)
-                .shards(cluster.shards().len())
-                .build()
-                .unwrap()
-                .apply()
-                .unwrap();
 
-            if calc == Shard::Direct(shard) {
+            if self.shard_for_id(id) == Shard::Direct(shard) {
                 return id;
             }
         }

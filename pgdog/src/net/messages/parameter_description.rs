@@ -49,6 +49,11 @@ impl ParameterDescription {
         Self { params }
     }
 
+    /// Type OIDs of the parameters, in order.
+    pub fn params(&self) -> &[i32] {
+        &self.params
+    }
+
     pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
         for param in &mut self.params {
             if let Some(&canonical) = mapping.get(&(*param as u32)) {
