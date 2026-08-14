@@ -86,6 +86,21 @@ impl ErrorResponse {
         }
     }
 
+    // Cross-shard queries are disabled.
+    // User specified an unknown sharding key in list-based/range-based sharding,
+    // and, if not stopped, the query would be cross-shard.
+    pub fn unknown_sharding_key_in_cross_shard_disabled(sharding_key: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "58000".into(),
+            message: "unknown sharding key was specified".into(),
+            detail: Some(format!("sharding key {} is unknown", sharding_key)),
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub fn set_shard_after_connect(name: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
