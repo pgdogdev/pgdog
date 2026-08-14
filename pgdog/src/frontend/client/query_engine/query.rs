@@ -388,21 +388,11 @@ impl QueryEngine {
         // should be cross-shard (e.g. BEGIN, COMMIT) but aren't really.
         if connected_shards == 0 || connected_shards > 1 {
             let query = context.client_request.query()?;
-
-            let error = if let Some(sharding_key) = context.params.get("pgdog.sharding_key")
-                && let Some(sharding_key_value) = sharding_key.as_str()
-            {
-                // The user specified a sharding key, which was determined to be unknown.
-                // This was done in list-based/range-based sharding.
-                // If not stopped, the query would be cross-shard (due to the unknown key).
-                // Rather than give them a generic 'cross shard disabled' error,
-                // tell them the sharding key is unknown.
-                ErrorResponse::unknown_sharding_key_in_cross_shard_disabled(sharding_key_value)
-            } else {
-                ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()))
-            };
-
-            self.error_response(context, error).await?;
+            self.error_response(
+                context,
+                ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query())),
+            )
+            .await?;
 
             if self.backend.connected() && self.backend.done() {
                 self.backend.disconnect();

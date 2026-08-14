@@ -180,6 +180,17 @@ impl QueryEngine {
 
                 return Ok(false);
             }
+            Err(RouterError::Parser(ParserError::UnmappedShardKey(shard_key))) => {
+                self.error_response(
+                    context,
+                    ErrorResponse::unmapped_sharding_key_in_cross_shard_disabled(
+                        shard_key.as_str(),
+                    ),
+                )
+                .await?;
+
+                return Ok(false);
+            }
             Err(err) => {
                 self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))
                     .await?;

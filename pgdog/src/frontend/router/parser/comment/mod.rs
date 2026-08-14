@@ -18,6 +18,7 @@ pub struct QueryAndComment<'a> {
     pub comment: String,
     pub role: Option<Role>,
     pub shard: Option<ShardOrLookup>,
+    pub sharding_key: Option<String>,
 }
 
 /// Extract SQL C-style block comments from both the beginning and the end
@@ -52,17 +53,20 @@ pub fn parse_edge_comment<'a>(
 
     // Leading wins per-field: extract from leading first, then fill in any
     // fields the leading didn't provide from trailing.
-    let (mut shard, mut role) = match leading {
+    let (mut shard, mut role, mut sharding_key) = match leading {
         Some(c) => directive::shard_role_from_comment(c, schema)?,
-        None => (None, None),
+        None => (None, None, None),
     };
     if let Some(c) = trailing {
-        let (t_shard, t_role) = directive::shard_role_from_comment(c, schema)?;
+        let (t_shard, t_role, t_sharding_key) = directive::shard_role_from_comment(c, schema)?;
         if shard.is_none() {
             shard = t_shard;
         }
         if role.is_none() {
             role = t_role;
+        }
+        if sharding_key.is_none() {
+            sharding_key = t_sharding_key;
         }
     }
 
@@ -75,6 +79,7 @@ pub fn parse_edge_comment<'a>(
             (None, Some(t)) => t.to_string(),
             (None, None) => String::new(),
         },
+        sharding_key,
         shard,
         role,
     })

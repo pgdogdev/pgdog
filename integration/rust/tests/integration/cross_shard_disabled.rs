@@ -110,12 +110,25 @@ async fn test_cross_shard_disabled_with_unknown_sharding_key() {
             .await
             .err()
             .unwrap();
-        assert!(
-            err.to_string()
-                .contains("error returned from database: unknown sharding key was specified")
+        assert_eq!(
+            err.to_string(),
+            "error returned from database: unmapped sharding key was specified"
         );
 
-        conn.execute("COMMIT").await.unwrap();
+        // Clear SET parameter for prep for next test.
+        conn.execute("RESET pgdog.sharding_key").await.unwrap();
+
+        // Also verify it works for comment directives.
+        let err =
+            sqlx::query("/* pgdog_sharding_key: 25 */ SELECT * FROM test_unknown_sharding_key")
+                .fetch_one(&mut conn)
+                .await
+                .err()
+                .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "error returned from database: unmapped sharding key was specified"
+        );
     }
 
     // Reset back to normal.

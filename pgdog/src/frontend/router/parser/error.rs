@@ -108,4 +108,7 @@ pub enum Error {
 
     #[error("multi-statement queries cannot mix SET with other commands")]
     MultiStatementMixedSet,
+
+    #[error("unmapped sharding key was specified")]
+    UnmappedShardKey(String),
 }

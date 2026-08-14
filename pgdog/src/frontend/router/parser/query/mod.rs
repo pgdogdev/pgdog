@@ -144,6 +144,32 @@ impl QueryParser {
             _ => (),
         }
 
+        if let Command::Query(_) = command {
+            if context.router_context.cluster.cross_shard_disabled() {
+                if context.shards_calculator.shard().is_all() {
+                    let statement = context
+                        .router_context
+                        .ast
+                        .clone()
+                        .ok_or(Error::EmptyQuery)?;
+
+                    // The user specified a sharding key, which is un-mapped (list-based/range-based).
+                    // If not stopped, the query would be cross-shard.
+                    // Rather than give them a generic 'cross shard disabled' error,
+                    // tell them the sharding key is un-mapped.
+                    if let Some(sharding_key) =
+                        context.router_context.parameter_hints.pgdog_sharding_key
+                    {
+                        if let Some(sharding_key_value) = sharding_key.as_str() {
+                            return Err(Error::UnmappedShardKey(sharding_key_value.to_string()));
+                        }
+                    } else if let Some(sharding_key) = &statement.comment_sharding_key {
+                        return Err(Error::UnmappedShardKey(sharding_key.to_string()));
+                    }
+                }
+            }
+        }
+
         debug!("query router decision: {:#?}", command);
 
         self.attach_explain(&mut command);
