@@ -437,6 +437,10 @@ tables = ["sharded_omni"]
 # ------------------------------------------------------------------------------
 # ----- Schema-based sharding --------------------------------------------------
 
+[[omnisharded_tables]]
+database = "pgdog_schema"
+tables = ["sharded_omni"]
+
 [[databases]]
 name = "pgdog_schema"
 host = "127.0.0.1"

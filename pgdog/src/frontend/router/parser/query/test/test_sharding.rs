@@ -375,16 +375,18 @@ fn test_set_sharding_key_goes_through_lookup() {
     );
 }
 
-/// A write that only touches omnisharded tables must reach every
-/// shard: a shard directive on it is an error, with a cold cache
-/// (the key's lookup doesn't run) and with a warm one.
+/// Without schema sharding, a write that only touches omnisharded tables must
+/// reach every shard. A shard directive is an error with both a cold cache (the
+/// key's lookup doesn't run) and a warm one.
 #[test]
-fn test_comment_key_errors_on_omnisharded_write() {
+fn test_comment_key_errors_on_omnisharded_write_without_schema_sharding() {
     use crate::frontend::router::parser::Error;
 
     // Cold cache.
     let tables = lookup_rule_tables();
-    let mut test = QueryParserTest::new().with_sharded_tables(tables.clone());
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables.clone())
+        .without_sharded_schemas();
     let result = test.try_execute(vec![
         Query::new(
             "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
@@ -454,12 +456,10 @@ fn test_search_path_defers_omnisharded_write_with_pending_comment_key() {
     );
 }
 
-/// Once the deferred comment lookup resolves, routing checks the omnisharded
-/// write again. The higher-priority comment now selects one shard, so the write
-/// must be rejected instead of partially updating the table.
+/// With schema sharding configured, an omnisharded write may target the shard
+/// selected by a resolved comment key.
 #[test]
-fn test_resolved_comment_key_errors_on_search_path_omnisharded_write() {
-    use crate::frontend::router::parser::Error;
+fn test_resolved_comment_key_allowed_on_schema_sharded_omnisharded_write() {
     use crate::frontend::router::sharding::{LookupTable, ResolvedLookups};
 
     let key = LookupTable {
@@ -473,6 +473,43 @@ fn test_resolved_comment_key_errors_on_search_path_omnisharded_write() {
     let mut test = QueryParserTest::new()
         .with_sharded_tables(lookup_rule_tables())
         .with_param("search_path", ParameterValue::String("shard_0".into()))
+        .with_resolved_lookups(resolved);
+
+    let command = test.execute(vec![
+        Query::new(
+            "/* pgdog_sharding_key: 'org_child' */ INSERT INTO organizations (id, name) VALUES ('org_child', 'child')",
+        )
+        .into(),
+    ]);
+
+    assert!(command.route().is_omnisharded());
+    assert!(!command.route().is_search_path_driven());
+    assert!(command.route().pending_lookups().is_empty());
+    assert!(command.route().shard().is_direct());
+    assert_eq!(
+        command.route().shard_with_priority().source(),
+        &ShardSource::Comment
+    );
+}
+
+/// Without schema sharding, resolving a comment key must not allow an
+/// omnisharded write to target only the resolved shard.
+#[test]
+fn test_resolved_comment_key_errors_on_omnisharded_write_without_schema_sharding() {
+    use crate::frontend::router::parser::Error;
+    use crate::frontend::router::sharding::{LookupTable, ResolvedLookups};
+
+    let key = LookupTable {
+        schema: None,
+        name: None,
+        column: "organization_id".into(),
+    };
+    let mut resolved = ResolvedLookups::default();
+    resolved.insert(key, "org_child".into(), "org_root".into());
+
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(lookup_rule_tables())
+        .without_sharded_schemas()
         .with_resolved_lookups(resolved);
 
     let result = test.try_execute(vec![

@@ -18,14 +18,25 @@ use crate::{
 
 use super::prelude::*;
 
-/// Message returned by [`ErrorResponse::omni_write_with_directive`]. The
+/// Message returned by [`ErrorResponse::omni_in_direct_to_shard`]. The
 /// SQLSTATE (58000) is shared by several errors, so we match on the message
-/// instead. This parser-level check preempts the engine's
-/// omni-in-direct-to-shard guard for directive-pinned transactions; the
-/// engine guard remains as defense in depth for connections pinned some
-/// other way.
+/// instead.
+const OMNI_IN_DIRECT_TO_SHARD_MESSAGE: &str =
+    "cannot write to an omnisharded table in a direct-to-shard transaction";
+
+/// Message returned by [`ErrorResponse::omni_write_with_directive`].
 const OMNI_WRITE_WITH_DIRECTIVE_MESSAGE: &str =
     "cannot write to an omnisharded table with a shard directive";
+
+/// Assert that `err` came from the engine guard for a backend connection that
+/// is already pinned to fewer than all shards.
+fn assert_omni_in_direct_to_shard(err: &ErrorResponse) {
+    assert_eq!(
+        err.message, OMNI_IN_DIRECT_TO_SHARD_MESSAGE,
+        "unexpected error: {:?}",
+        err
+    );
+}
 
 /// Assert that `err` is the omni-write-with-directive error, returned when a
 /// shard directive (comment or SET) is present on a statement routed as a
@@ -125,7 +136,7 @@ async fn test_omni_write_blocked_in_direct_to_shard_transaction() {
         .await;
 
     let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_write_with_directive(&err);
+    assert_omni_in_direct_to_shard(&err);
     // Transaction is now in the aborted state.
     let rfq = expect_message!(client.read().await, ReadyForQuery);
     assert_eq!(rfq.status, 'E');
@@ -200,7 +211,7 @@ async fn test_omni_read_blocked_in_direct_to_shard_transaction() {
         .send_simple(Query::new("SELECT * FROM sharded_omni"))
         .await;
     let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_write_with_directive(&err);
+    assert_omni_in_direct_to_shard(&err);
     let rfq = expect_message!(client.read().await, ReadyForQuery);
     assert_eq!(rfq.status, 'E');
 

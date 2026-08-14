@@ -109,24 +109,27 @@ impl QueryParser {
                     route.set_shard(context.shards_calculator.shard());
                 }
 
-                // Schema-based sharding.
+                // Search path routing used for schema sharding.
+                // FIXME(lev): It's duplicative, since we explicitely
+                // check for presence of schema sharding below.
                 let is_search_path = context.shards_calculator.is_search_path();
                 route.set_search_path_driven(is_search_path);
 
-                // A non-schema-routed write that only touches omnisharded tables
-                // must reach every shard. A shard directive (a comment or SET)
-                // routing it to one shard would silently diverge the table, so
-                // it's an error. A pending lookup for a bare key is deferred when
-                // search_path currently controls the route; after the lookup is
-                // resolved, the second routing pass performs this check again.
-                if route.requires_full_shard_coverage()
-                    && (matches!(
-                        route.shard_with_priority().source(),
-                        ShardSource::Comment | ShardSource::Set
-                    ) || !context.bare_key_lookups.is_empty())
-                {
+                let full_shard_coverage = route.requires_full_shard_coverage();
+                let schema_sharding = !context.sharding_schema.schemas.is_empty();
+                let manual_routing = matches!(
+                    route.shard_with_priority().source(),
+                    ShardSource::Comment | ShardSource::Set
+                );
+
+                // This means we are serving the request, not just extracting
+                // which keys we need to lookup in the routing table.
+                let have_lookups = !context.bare_key_lookups.is_empty();
+
+                if full_shard_coverage && (manual_routing || have_lookups) && !schema_sharding {
                     return Err(Error::OmniWriteWithDirective);
                 }
+
                 context
                     .pending_lookups
                     .extend(std::mem::take(&mut context.bare_key_lookups));
