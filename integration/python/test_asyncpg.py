@@ -602,6 +602,38 @@ async def test_schema_sharding_default():
 
 
 @pytest.mark.asyncio
+async def test_schema_sharding_set_shard_allows_omnisharded_write():
+    conn = await schema_sharded_async()
+    row_id = random.randrange(1 << 32, 1 << 63)
+
+    try:
+        await conn.execute("SET pgdog.shard TO 1")
+        result = await conn.execute(
+            "INSERT INTO sharded_omni (id, value) VALUES ($1, $2)",
+            row_id,
+            "schema-sharded",
+        )
+        assert result == "INSERT 0 1"
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM sharded_omni WHERE id = $1", row_id)
+            == 1
+        )
+
+        await conn.execute("SET pgdog.shard TO 0")
+        assert (
+            await conn.fetchval("SELECT COUNT(*) FROM sharded_omni WHERE id = $1", row_id)
+            == 0
+        )
+    finally:
+        await conn.close()
+        cleanup = await schema_sharded_async()
+        try:
+            await cleanup.execute("DELETE FROM sharded_omni WHERE id = $1", row_id)
+        finally:
+            await cleanup.close()
+
+
+@pytest.mark.asyncio
 async def test_schema_sharding_search_path():
     admin().cursor().execute("SET cross_shard_disabled TO true")
 
