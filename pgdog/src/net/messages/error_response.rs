@@ -94,7 +94,7 @@ impl ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
             message: "unknown sharding key was specified".into(),
-            detail: Some(format!("sharding key {} is unknown", sharding_key)),
+            detail: Some(format!("sharding key '{}' is not mapped", sharding_key)),
             context: None,
             file: None,
             routine: None,
