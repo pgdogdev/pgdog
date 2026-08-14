@@ -15,6 +15,9 @@ use crate::backend::replication::logical::orchestrator::Orchestrator;
 #[display("copy_data {orchestrator}")]
 pub(crate) struct CopyDataTask {
     pub orchestrator: Orchestrator,
+    /// Require a usable replica identity per table. Only streaming needs it,
+    /// so a sync-only migration passes `false`. See `Publisher::data_sync`.
+    pub require_replica_identity: bool,
 }
 
 impl Task for CopyDataTask {
@@ -33,7 +36,9 @@ impl Task for CopyDataTask {
             return Err(Error::DataSyncAborted);
         }
 
-        orchestrator.data_sync(&token).await?;
+        orchestrator
+            .data_sync(&token, self.require_replica_identity)
+            .await?;
 
         Ok(orchestrator)
     }

@@ -147,14 +147,23 @@ impl Orchestrator {
         Ok(())
     }
 
-    pub(crate) async fn data_sync(&self, cancel: &CancellationToken) -> Result<(), Error> {
+    pub(crate) async fn data_sync(
+        &self,
+        cancel: &CancellationToken,
+        require_replica_identity: bool,
+    ) -> Result<(), Error> {
         let mut publisher = self.publisher.lock().await;
 
         orchestrator_state(OrchestratorState::DataSync);
         // Run data sync for all tables in parallel using multiple replicas,
         // if available.
         publisher
-            .data_sync(&self.source, &self.destination, cancel)
+            .data_sync(
+                &self.source,
+                &self.destination,
+                cancel,
+                require_replica_identity,
+            )
             .await?;
 
         Ok(())

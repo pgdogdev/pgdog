@@ -99,7 +99,13 @@ impl Task for ReshardTask {
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
                 orchestrator = ctx
-                    .run(CopyDataTask::builder().orchestrator(orchestrator).build())
+                    .run(
+                        CopyDataTask::builder()
+                            .orchestrator(orchestrator)
+                            // Only streaming needs replica identity, not a sync-only copy.
+                            .require_replica_identity(!self.sync_only)
+                            .build(),
+                    )
                     .await?;
             }
 
