@@ -50,24 +50,33 @@ impl GlobalCache {
     /// If the statement exists, no entry is created
     /// and the global name is returned instead.
     pub(crate) fn insert(&mut self, parse: &Parse) -> (bool, String) {
-        let name = self.next_name();
+        let cache_key = CacheKey::Extended {
+            query: parse.query_ref(),
+            data_types: parse.data_types_ref(),
+        };
 
+        if let Some(name) = self.reuse(&cache_key) {
+            return (false, name);
+        }
+
+        let name = self.next_name();
+        let parse = parse.renamed(&name);
         let cache_key = CacheKey::Extended {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
         };
         let statement = Statement {
             stmt: StatementType::Parse {
-                parse: parse.clone(),
+                parse,
                 rewrite: None,
             },
             cache_key: cache_key.clone(),
             row_description: None,
         };
 
-        let new = self.insert_internal(&name, cache_key, statement);
+        self.insert_internal(&name, cache_key, statement);
 
-        (new, name)
+        (true, name)
     }
 
     /// Insert a statement prepared using the simple protocol into the global cache.
@@ -76,13 +85,16 @@ impl GlobalCache {
         query: Bytes,
         data_types: Vec<TypeName>,
     ) -> (bool, String) {
-        let name = self.next_name();
-
         let cache_key = CacheKey::Simple {
             query: query.clone(),
             data_types: data_types.clone(),
         };
 
+        if let Some(name) = self.reuse(&cache_key) {
+            return (false, name);
+        }
+
+        let name = self.next_name();
         let statement = Statement {
             stmt: StatementType::Prepare {
                 prepare: Prepare {
@@ -95,8 +107,8 @@ impl GlobalCache {
             cache_key: cache_key.clone(),
         };
 
-        let new = self.insert_internal(&name, cache_key, statement);
-        (new, name)
+        self.insert_internal(&name, cache_key, statement);
+        (true, name)
     }
 
     /// Rewrite prepared statement in the global cache.
@@ -242,25 +254,28 @@ impl GlobalCache {
         global_name(self.counter)
     }
 
-    fn insert_internal(&mut self, name: &str, cache_key: CacheKey, statement: Statement) -> bool {
+    fn reuse(&mut self, cache_key: &CacheKey) -> Option<String> {
         if let Some(entry) = self.statements.get_mut(&cache_key) {
             if entry.used == 0 {
                 self.unused.remove(&entry.counter);
             }
             entry.used += 1;
 
-            false
+            Some(entry.name())
         } else {
-            self.statements.insert(
-                cache_key.clone(),
-                CachedStmt {
-                    counter: self.counter,
-                    used: 1,
-                },
-            );
-            self.names.insert(name.to_owned(), statement);
-            true
+            None
         }
+    }
+
+    fn insert_internal(&mut self, name: &str, cache_key: CacheKey, statement: Statement) {
+        self.statements.insert(
+            cache_key,
+            CachedStmt {
+                counter: self.counter,
+                used: 1,
+            },
+        );
+        self.names.insert(name.to_owned(), statement);
     }
 }
 
