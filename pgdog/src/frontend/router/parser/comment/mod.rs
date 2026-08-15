@@ -9,6 +9,7 @@ use crate::config::database::Role;
 use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::Error;
+use crate::frontend::router::parser::comment::directive::Directive;
 use strip::{leading_block_comment, trailing_block_comment};
 
 #[derive(Default, Debug, Clone)]
@@ -53,20 +54,24 @@ pub fn parse_edge_comment<'a>(
 
     // Leading wins per-field: extract from leading first, then fill in any
     // fields the leading didn't provide from trailing.
-    let (mut shard, mut role, mut sharding_key) = match leading {
+    let mut directive = match leading {
         Some(c) => directive::shard_role_from_comment(c, schema)?,
-        None => (None, None, None),
+        None => Directive {
+            shard_or_lookup: None,
+            role: None,
+            sharding_key: None,
+        },
     };
     if let Some(c) = trailing {
-        let (t_shard, t_role, t_sharding_key) = directive::shard_role_from_comment(c, schema)?;
-        if shard.is_none() {
-            shard = t_shard;
+        let t_directive = directive::shard_role_from_comment(c, schema)?;
+        if directive.shard_or_lookup.is_none() {
+            directive.shard_or_lookup = t_directive.shard_or_lookup;
         }
-        if role.is_none() {
-            role = t_role;
+        if directive.role.is_none() {
+            directive.role = t_directive.role;
         }
-        if sharding_key.is_none() {
-            sharding_key = t_sharding_key;
+        if directive.sharding_key.is_none() {
+            directive.sharding_key = t_directive.sharding_key;
         }
     }
 
@@ -79,8 +84,8 @@ pub fn parse_edge_comment<'a>(
             (None, Some(t)) => t.to_string(),
             (None, None) => String::new(),
         },
-        sharding_key,
-        shard,
-        role,
+        sharding_key: directive.sharding_key,
+        shard: directive.shard_or_lookup,
+        role: directive.role,
     })
 }

@@ -23,10 +23,16 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
         .map(|m| m.as_str())
 }
 
+pub struct Directive {
+    pub shard_or_lookup: Option<ShardOrLookup>,
+    pub role: Option<Role>,
+    pub sharding_key: Option<String>,
+}
+
 pub(super) fn shard_role_from_comment(
     comment: &str,
     schema: &ShardingSchema,
-) -> Result<(Option<ShardOrLookup>, Option<Role>, Option<String>), Error> {
+) -> Result<Directive, Error> {
     let mut role = None;
 
     if let Some(cap) = ROLE.captures(comment)
@@ -42,23 +48,23 @@ pub(super) fn shard_role_from_comment(
         && let Some(sharding_key) = get_matched_value(&cap)
     {
         if let Some(schema) = schema.schemas.get(Some(sharding_key.into())) {
-            return Ok((
-                Some(ShardOrLookup::Shard(schema.shard().into())),
+            return Ok(Directive {
+                shard_or_lookup: Some(ShardOrLookup::Shard(schema.shard().into())),
                 role,
-                Some(sharding_key.to_string()),
-            ));
+                sharding_key: Some(sharding_key.to_string()),
+            });
         }
-        return Ok((
-            Some(shard_for_bare_key(sharding_key, schema, None)?),
+        return Ok(Directive {
+            shard_or_lookup: Some(shard_for_bare_key(sharding_key, schema, None)?),
             role,
-            Some(sharding_key.to_string()),
-        ));
+            sharding_key: Some(sharding_key.to_string()),
+        });
     }
     if let Some(cap) = SHARD.captures(comment)
         && let Some(shard) = cap.get(1)
     {
-        return Ok((
-            Some(ShardOrLookup::Shard(
+        return Ok(Directive {
+            shard_or_lookup: Some(ShardOrLookup::Shard(
                 shard
                     .as_str()
                     .parse::<usize>()
@@ -67,9 +73,13 @@ pub(super) fn shard_role_from_comment(
                     .unwrap_or(Shard::All),
             )),
             role,
-            None,
-        ));
+            sharding_key: None,
+        });
     }
 
-    Ok((None, role, None))
+    Ok(Directive {
+        shard_or_lookup: None,
+        role,
+        sharding_key: None,
+    })
 }
