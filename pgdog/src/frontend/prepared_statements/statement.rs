@@ -1,0 +1,84 @@
+use crate::{net::Prepare, stats::memory::MemoryUsage};
+
+use super::prelude::*;
+
+#[derive(Debug, Clone)]
+pub struct Statement {
+    pub(super) stmt: StatementType,
+    pub(super) row_description: Option<RowDescription>,
+    pub(super) cache_key: CacheKey,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum StatementType {
+    Parse {
+        parse: Parse,
+        rewrite: Option<Parse>,
+    },
+
+    Prepare {
+        prepare: Prepare,
+    },
+}
+
+impl MemoryUsage for StatementType {
+    fn memory_usage(&self) -> usize {
+        0
+    }
+}
+
+impl MemoryUsage for Statement {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.stmt.memory_usage()
+            + if let Some(row_description) = &self.row_description {
+                row_description.memory_usage()
+            } else {
+                0
+            }
+            + self.cache_key.memory_usage()
+    }
+}
+
+impl Statement {
+    pub(crate) fn parse(&self) -> Option<Parse> {
+        match self.stmt {
+            StatementType::Parse { ref parse, .. } => Some(parse.clone()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn prepare(&self) -> Option<Prepare> {
+        match self.stmt {
+            StatementType::Prepare { ref prepare } => Some(prepare.clone()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn rewrite(&self) -> Option<Parse> {
+        match self.stmt {
+            StatementType::Parse { ref rewrite, .. } => rewrite.clone(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn query(&self) -> &str {
+        match self.stmt {
+            StatementType::Parse { ref parse, .. } => parse.query(),
+            StatementType::Prepare { ref prepare } => prepare.query(),
+        }
+    }
+
+    pub(super) fn cache_key(&self) -> &CacheKey {
+        &self.cache_key
+    }
+
+    pub(super) fn set_rewrite(&mut self, parse: &Parse) {
+        match self.stmt {
+            StatementType::Parse {
+                ref mut rewrite, ..
+            } => *rewrite = Some(parse.clone()),
+            _ => (),
+        }
+    }
+}

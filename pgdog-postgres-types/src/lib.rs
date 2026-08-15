@@ -16,6 +16,7 @@ pub mod smallint;
 pub mod text;
 pub mod timestamp;
 pub mod timestamptz;
+pub mod type_name;
 pub mod uuid;
 pub mod vector;
 
@@ -32,3 +33,4 @@ pub use numeric::Numeric;
 pub use oid::Oid;
 pub use timestamp::Timestamp;
 pub use timestamptz::TimestampTz;
+pub use type_name::TypeName;

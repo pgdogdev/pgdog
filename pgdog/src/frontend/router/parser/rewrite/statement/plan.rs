@@ -1,6 +1,6 @@
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{Bind, Parse, Prepare, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
@@ -30,7 +30,7 @@ pub struct RewritePlan {
 
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
-    pub(crate) prepares: Vec<(String, String)>,
+    pub(crate) prepares: Vec<Prepare>,
 
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
@@ -122,10 +122,7 @@ impl RewritePlan {
             let prepends: Vec<ProtocolMessage> = self
                 .prepares
                 .iter()
-                .map(|(name, statement)| ProtocolMessage::Prepare {
-                    name: name.clone(),
-                    statement: statement.clone(),
-                })
+                .map(|prepare| ProtocolMessage::Prepare(prepare.clone()))
                 .collect();
             request.messages.splice(0..0, prepends);
         }

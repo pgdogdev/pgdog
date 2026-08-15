@@ -1,6 +1,8 @@
 use bytes::Buf;
 use std::io::Cursor;
 
+use crate::net::Prepare;
+
 use super::{
     Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Fastpath, Flush, FromBytes,
     Message, Parse, Protocol, Query, Sync, ToBytes,
@@ -11,7 +13,7 @@ pub enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),
     Describe(Describe),
-    Prepare { name: String, statement: String },
+    Prepare(Prepare),
     Execute(Execute),
     Close(Close),
     Query(Query),
@@ -59,7 +61,7 @@ impl ProtocolMessage {
             Self::Bind(bind) => bind.len(),
             Self::Parse(parse) => parse.len(),
             Self::Describe(describe) => describe.len(),
-            Self::Prepare { statement, .. } => statement.len() + 1 + 1 + 4, // NULL + code + len
+            Self::Prepare(prepare) => prepare.len(),
             Self::Execute(execute) => execute.len(),
             Self::Close(close) => close.len(),
             Self::Query(query) => query.len(),
@@ -119,9 +121,7 @@ impl ToBytes for ProtocolMessage {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),
             Self::Describe(describe) => describe.to_bytes(),
-            Self::Prepare { statement, name } => {
-                Query::new(format!("PREPARE {} AS {}", name, statement)).to_bytes()
-            }
+            Self::Prepare(prepare) => prepare.to_bytes(),
             Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),

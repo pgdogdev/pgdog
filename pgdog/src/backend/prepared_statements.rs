@@ -302,11 +302,11 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { name, .. } => {
-                if self.contains(name) {
+            ProtocolMessage::Prepare(prepare) => {
+                if self.contains(prepare.name()) {
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(name.clone());
+                    self.parses.push_back(prepare.name().to_string());
                     self.state.add_ignore('C');
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.

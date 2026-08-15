@@ -22,7 +22,7 @@ pub use client_request::ClientRequest;
 pub use comms::{ClientComms, Comms};
 pub use connected_client::ConnectedClient;
 pub(crate) use error::Error;
-pub use prepared_statements::{PreparedStatements, Rewrite};
+pub(crate) use prepared_statements::PreparedStatements;
 #[cfg(debug_assertions)]
 pub use query_logger::QueryLogger;
 pub(crate) use regex_parser::RegexParser;

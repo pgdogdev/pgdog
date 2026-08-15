@@ -43,7 +43,7 @@ async fn test_rewrite_prepare() {
     .await;
 
     assert!(
-        matches!(messages[0].clone(), ProtocolMessage::Prepare { name, statement } if name == "__pgdog_1" && statement == "SELECT $1, $2, $3")
+        matches!(messages[0].clone(), ProtocolMessage::Prepare(prepare) if prepare.name() == "__pgdog_1" && prepare.query() == "SELECT $1, $2, $3")
     );
 
     assert!(

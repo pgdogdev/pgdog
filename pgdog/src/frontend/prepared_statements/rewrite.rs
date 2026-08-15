@@ -103,7 +103,7 @@ mod test {
         assert_eq!(describe.statement(), "__pgdog_1");
         assert_eq!(describe.kind(), 'S');
 
-        assert_eq!(statements.len_local(), 1);
+        assert_eq!(statements.num_statements(), 1);
         assert_eq!(statements.global.read().len(), 1);
     }
 
@@ -120,7 +120,7 @@ mod test {
         assert!(!parse.anonymous());
         assert_eq!(parse.query(), "SELECT * FROM users");
 
-        assert_eq!(statements.len_local(), 1);
+        assert_eq!(statements.num_statements(), 1);
         assert_eq!(statements.global.read().len(), 1);
     }
 

@@ -1,7 +1,8 @@
+use bytes::Bytes;
 use pg_raw_parse::{NodeMut, make::MemoryToken};
+use pgdog_postgres_types::TypeName;
 
-use crate::frontend::PreparedStatements;
-use crate::net::Parse;
+use crate::{frontend::PreparedStatements, net::Prepare};
 
 use super::{Error, StatementRewrite};
 
@@ -11,7 +12,7 @@ pub struct SimplePreparedResult {
     /// Whether any statement was rewritten.
     pub rewritten: bool,
     /// Prepared statements to prepend (name, statement) for EXECUTE rewrites.
-    pub prepares: Vec<(String, String)>,
+    pub prepares: Vec<Prepare>,
 }
 
 /// Result of rewriting a single PREPARE or EXECUTE SQL command.
@@ -23,7 +24,7 @@ enum SimplePreparedRewrite {
     Prepared,
     /// EXECUTE statement was rewritten. Contains the global name and statement
     /// needed to prepend a ProtocolMessage::Prepare.
-    Executed { name: String, statement: String },
+    Executed { prepare: Prepare },
 }
 
 impl StatementRewrite<'_> {
@@ -53,8 +54,8 @@ impl StatementRewrite<'_> {
             SimplePreparedRewrite::Prepared => {
                 result.rewritten = true;
             }
-            SimplePreparedRewrite::Executed { name, statement } => {
-                result.prepares.push((name, statement));
+            SimplePreparedRewrite::Executed { prepare } => {
+                result.prepares.push(prepare);
                 result.rewritten = true;
             }
             SimplePreparedRewrite::None => {}
@@ -72,30 +73,36 @@ fn rewrite_single_prepared<'a>(
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
         NodeMut::PrepareStmt(mut stmt) => {
-            let query = pg_raw_parse::deparse(stmt.query())?;
+            let query = Bytes::from(pg_raw_parse::deparse(stmt.query())?.as_str().to_owned());
+            let data_types: Vec<TypeName> = stmt
+                .argtypes()
+                .iter()
+                .map(|data_type| {
+                    data_type
+                        .names()
+                        .iter()
+                        .filter_map(|name| name.sval().map(str::to_owned))
+                        .collect()
+                })
+                .collect();
 
-            let mut parse = Parse::named(
-                stmt.name().expect("PREPARE always has a name"),
-                query.as_str(),
+            let global_name = prepared_statements.insert_prepare(
+                stmt.name().expect("prepare must have a name"),
+                query,
+                data_types,
             );
-            prepared_statements.insert_prepare(&mut parse);
-            stmt.set_name(Some(mem.copy_string(parse.name())));
+
+            stmt.set_name(Some(mem.copy_string(global_name.as_str())));
 
             Ok(SimplePreparedRewrite::Prepared)
         }
 
         NodeMut::ExecuteStmt(mut stmt) => {
             let stmt_name = stmt.name().expect("EXECUTE always has name");
-            let parse = prepared_statements.parse(stmt_name);
-            if let Some(parse) = parse {
-                let global_name = parse.name().to_string();
-                let statement = parse.query().to_string();
-                stmt.set_name(Some(mem.copy_string(&global_name)));
-
-                Ok(SimplePreparedRewrite::Executed {
-                    name: global_name,
-                    statement,
-                })
+            let prepare = prepared_statements.prepare(stmt_name);
+            if let Some(prepare) = prepare {
+                stmt.set_name(Some(mem.copy_string(prepare.name())));
+                Ok(SimplePreparedRewrite::Executed { prepare })
             } else {
                 Err(Error::ExecuteMissingPrepare(stmt_name.to_owned()))
             }
@@ -188,10 +195,11 @@ mod tests {
             "EXECUTE should use global name, got: {sql}"
         );
         assert_eq!(plan.prepares.len(), 1);
+        panic!("fix test");
 
-        let (name, statement) = &plan.prepares[0];
-        assert!(name.starts_with("__pgdog_"));
-        assert_eq!(statement, "SELECT 1");
+        // let (name, statement) = &plan.prepares[0];
+        // assert!(name.starts_with("__pgdog_"));
+        // assert_eq!(statement, "SELECT 1");
     }
 
     #[test]

@@ -280,7 +280,7 @@ impl QueryEngine {
         self.stats.state = state;
 
         self.stats
-            .prepared_statements(context.prepared_statements.len_local());
+            .prepared_statements(context.prepared_statements.num_statements());
         self.stats.memory_used(context.memory_stats);
 
         self.comms.update_stats(self.stats);

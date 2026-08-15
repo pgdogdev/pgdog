@@ -715,7 +715,6 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.comms.disconnect();
-        self.prepared_statements.close_all();
     }
 }
 
