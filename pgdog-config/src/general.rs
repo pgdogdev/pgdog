@@ -414,6 +414,24 @@ pub struct General {
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
 
+    /// Approximate memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.
+    ///
+    /// **Note:** Entry sizes are measured with jemalloc; on builds without it the budget is approximated from query text length.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_memory_limit>
+    #[serde(default = "General::query_cache_memory_limit")]
+    pub query_cache_memory_limit: usize,
+
+    /// Idle timeout (milliseconds) for query (AST) cache entries; an entry not accessed within this window is dropped by the maintenance sweep. `0` disables idle expiry.
+    ///
+    /// _Default:_ `0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_idle_timeout>
+    #[serde(default = "General::query_cache_idle_timeout")]
+    pub query_cache_idle_timeout: usize,
+
     /// Toggle automatic creation of connection pools given the user name, database and password.
     ///
     /// _Default:_ `disabled`
@@ -914,6 +932,8 @@ impl Default for General {
             prepared_statements_ttl: Self::default_prepared_statements_ttl(),
             prepared_statements_ttl_jitter: Self::default_prepared_statements_ttl_jitter(),
             query_cache_limit: Self::query_cache_limit(),
+            query_cache_memory_limit: Self::query_cache_memory_limit(),
+            query_cache_idle_timeout: Self::query_cache_idle_timeout(),
             passthrough_auth: Self::default_passthrough_auth(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
@@ -1444,6 +1464,14 @@ impl General {
         Self::env_or_default("PGDOG_QUERY_CACHE_LIMIT", 1_000)
     }
 
+    pub fn query_cache_memory_limit() -> usize {
+        Self::env_or_default("PGDOG_QUERY_CACHE_MEMORY_LIMIT", 0)
+    }
+
+    pub fn query_cache_idle_timeout() -> usize {
+        Self::env_or_default("PGDOG_QUERY_CACHE_IDLE_TIMEOUT", 0)
+    }
+
     pub fn log_format() -> LogFormat {
         Self::env_enum_or_default("PGDOG_LOG_FORMAT")
     }
@@ -1958,6 +1986,8 @@ mod tests {
         let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_TTL", "3600000");
         let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_TTL_JITTER", "5000");
         let _guard = set_env_var("PGDOG_QUERY_CACHE_LIMIT", "500");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_MEMORY_LIMIT", "1048576");
+        let _guard = set_env_var("PGDOG_QUERY_CACHE_IDLE_TIMEOUT", "600000");
         let _guard = set_env_var("PGDOG_CONNECT_ATTEMPTS", "3");
         let _guard = set_env_var("PGDOG_MIRROR_QUEUE", "256");
         let _guard = set_env_var("PGDOG_MIRROR_EXPOSURE", "0.5");
@@ -1972,6 +2002,8 @@ mod tests {
         assert_eq!(General::default_prepared_statements_ttl(), Some(3600000));
         assert_eq!(General::default_prepared_statements_ttl_jitter(), 5000);
         assert_eq!(General::query_cache_limit(), 500);
+        assert_eq!(General::query_cache_memory_limit(), 1048576);
+        assert_eq!(General::query_cache_idle_timeout(), 600000);
         assert_eq!(General::connect_attempts(), 3);
         assert_eq!(General::mirror_queue(), 256);
         assert_eq!(General::mirror_exposure(), 0.5);
@@ -1986,6 +2018,8 @@ mod tests {
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_TTL");
         let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_TTL_JITTER");
         let _guard = remove_env_var("PGDOG_QUERY_CACHE_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_MEMORY_LIMIT");
+        let _guard = remove_env_var("PGDOG_QUERY_CACHE_IDLE_TIMEOUT");
         let _guard = remove_env_var("PGDOG_CONNECT_ATTEMPTS");
         let _guard = remove_env_var("PGDOG_MIRROR_QUEUE");
         let _guard = remove_env_var("PGDOG_MIRROR_EXPOSURE");
@@ -2000,6 +2034,8 @@ mod tests {
         assert_eq!(General::default_prepared_statements_ttl(), None);
         assert_eq!(General::default_prepared_statements_ttl_jitter(), 30_000);
         assert_eq!(General::query_cache_limit(), 1_000);
+        assert_eq!(General::query_cache_memory_limit(), 0);
+        assert_eq!(General::query_cache_idle_timeout(), 0);
         assert_eq!(General::connect_attempts(), 1);
         assert_eq!(General::mirror_queue(), 128);
         assert_eq!(General::mirror_exposure(), 1.0);
