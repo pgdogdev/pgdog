@@ -32,8 +32,9 @@ async fn test_rewrite_prepare() {
     .await;
 
     assert!(
-        matches!(messages[0].clone(), ProtocolMessage::Query(query) if query.query() == "PREPARE __pgdog_1 AS SELECT $1, $2, $3"),
-        "expected rewritten prepared statement"
+        matches!(messages[0].clone(), ProtocolMessage::PrepareClient(prepare) if prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3"),
+        "expected rewritten prepared statement: {:#?}",
+        messages,
     );
 
     let messages = run_test(
@@ -43,7 +44,7 @@ async fn test_rewrite_prepare() {
     .await;
 
     assert!(
-        matches!(messages[0].clone(), ProtocolMessage::Prepare(prepare) if prepare.name() == "__pgdog_1" && prepare.query() == "SELECT $1, $2, $3")
+        matches!(messages[0].clone(), ProtocolMessage::Prepare(prepare) if prepare.name() == "__pgdog_1" && prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3")
     );
 
     assert!(
@@ -54,7 +55,7 @@ async fn test_rewrite_prepare() {
 
 fn rewritten_query(messages: &[ProtocolMessage]) -> String {
     match &messages[0] {
-        ProtocolMessage::Query(query) => query.query().to_string(),
+        ProtocolMessage::PrepareClient(prepare) => prepare.query().to_string(),
         other => panic!("expected Query, got {other:#?}"),
     }
 }
@@ -97,7 +98,7 @@ async fn test_reprepare_releases_previous_statement() {
     assert!(second.starts_with("PREPARE __pgdog_"));
     assert!(second.ends_with(" AS SELECT $1::bigint + 1"));
 
-    // Re-PREPARE mints a new global name.
+    // PREPARE-ing a different statement with the same name creates a new global name.
     assert_eq!(global.read().len(), 2);
 
     // Only the statement the client replaced is evictable.
