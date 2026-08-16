@@ -21,7 +21,7 @@ use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
     config::AuthType,
-    frontend::ClientRequest,
+    frontend::{ClientRequest, SetParam},
     net::{
         Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
@@ -141,6 +141,9 @@ pub struct Server {
     streaming: bool,
     schema_changed: bool,
     sync_prepared: bool,
+    // The change in flight is already recorded, so its CommandComplete
+    // tells us nothing new.
+    params_recorded: bool,
     in_transaction: bool,
     re_synced: bool,
     replication_mode: bool,
@@ -432,6 +435,7 @@ impl Server {
             streaming: false,
             schema_changed: false,
             sync_prepared: false,
+            params_recorded: false,
             in_transaction: false,
             statement_executed: false,
             re_synced: false,
@@ -610,6 +614,8 @@ impl Server {
 
         match message.code() {
             'Z' => {
+                self.params_recorded = false;
+
                 let now = Instant::now();
                 let rfq = ReadyForQuery::from_bytes(message.payload())?;
 
@@ -667,7 +673,9 @@ impl Server {
                         self.prepared_statements.clear();
                         self.client_params.clear();
                     }
-                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
+                    // A RESET nobody told us the contents of: we can't tell
+                    // what it touched, so drop everything.
+                    "RESET" if !self.params_recorded => self.client_params.clear(),
                     _ => (),
                 }
                 self.stats.rows_affected(&cmd);
@@ -757,6 +765,37 @@ impl Server {
         }
 
         Ok(executed)
+    }
+
+    /// Record a client's parameter change, so we know what to undo before
+    /// this connection goes to somebody else.
+    pub fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
+        for param in params {
+            match (&param.value, in_transaction) {
+                (Some(value), true) => {
+                    self.client_params
+                        .insert_transaction(&param.name, value.clone(), param.local);
+                }
+                (Some(value), false) => {
+                    self.client_params.insert(&param.name, value.clone());
+                }
+                (None, true) => self.client_params.reset_transaction(&param.name),
+                (None, false) => self.client_params.reset(&param.name),
+            }
+        }
+
+        self.params_recorded = true;
+    }
+
+    /// Record a client's `RESET ALL`.
+    pub fn record_reset_all(&mut self, in_transaction: bool) {
+        if in_transaction {
+            self.client_params.reset_all_transaction();
+        } else {
+            self.client_params.reset_all();
+        }
+
+        self.params_recorded = true;
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
@@ -1334,8 +1373,10 @@ pub mod test {
     };
 
     use crate::{
-        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
-        net::*,
+        backend::pool::token_cache::TokenCache,
+        config::Memory,
+        frontend::PreparedStatements,
+        net::{parameter::ParameterValue, *},
     };
 
     use super::{Error, *};
@@ -1379,6 +1420,7 @@ pub mod test {
                 streaming: false,
                 schema_changed: false,
                 sync_prepared: false,
+                params_recorded: false,
                 in_transaction: false,
                 re_synced: false,
                 replication_mode: false,
@@ -3194,6 +3236,155 @@ pub mod test {
             server.stats().get_state() == State::Error,
             "state should be Error after detecting desync"
         )
+    }
+
+    #[tokio::test]
+    async fn test_recorded_reset_survives_rollback() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("search_path", "");
+        server
+            .link_client(FrontendPid::new(), &params, None)
+            .await
+            .unwrap();
+
+        server.execute("BEGIN").await.unwrap();
+        server.record_params(
+            &[SetParam {
+                name: "search_path".into(),
+                value: None,
+                local: false,
+            }],
+            true,
+        );
+        server.execute("RESET search_path").await.unwrap();
+        server.execute("ROLLBACK").await.unwrap();
+        server.transaction_params_hook(true);
+
+        let queries = server
+            .client_params
+            .reset_queries(&Parameters::default())
+            .into_iter()
+            .map(|query| query.query().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(queries, vec![r#"RESET "search_path""#]);
+    }
+
+    #[tokio::test]
+    async fn test_recorded_reset_committed_is_permanent() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("search_path", "");
+        server
+            .link_client(FrontendPid::new(), &params, None)
+            .await
+            .unwrap();
+
+        server.execute("BEGIN").await.unwrap();
+        server.record_params(
+            &[SetParam {
+                name: "search_path".into(),
+                value: None,
+                local: false,
+            }],
+            true,
+        );
+        server.execute("RESET search_path").await.unwrap();
+        server.execute("COMMIT").await.unwrap();
+        server.transaction_params_hook(false);
+
+        assert!(
+            server
+                .client_params
+                .reset_queries(&Parameters::default())
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_recorded_set_is_undone_for_the_next_client() {
+        let mut server = test_server().await;
+        server
+            .link_client(FrontendPid::new(), &Parameters::default(), None)
+            .await
+            .unwrap();
+
+        server.record_params(
+            &[SetParam {
+                name: "statement_timeout".into(),
+                value: Some(ParameterValue::String("5s".into())),
+                local: false,
+            }],
+            false,
+        );
+        server
+            .execute("SET statement_timeout TO '5s'")
+            .await
+            .unwrap();
+
+        let queries = server
+            .client_params
+            .reset_queries(&Parameters::default())
+            .into_iter()
+            .map(|query| query.query().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(queries, vec![r#"RESET "statement_timeout""#]);
+    }
+
+    #[tokio::test]
+    async fn test_reset_keeps_other_recorded_params() {
+        let mut server = test_server().await;
+        server
+            .link_client(FrontendPid::new(), &Parameters::default(), None)
+            .await
+            .unwrap();
+
+        server.record_params(
+            &[SetParam {
+                name: "statement_timeout".into(),
+                value: Some(ParameterValue::String("5s".into())),
+                local: false,
+            }],
+            false,
+        );
+        server
+            .execute("SET statement_timeout TO '5s'")
+            .await
+            .unwrap();
+
+        server.record_params(
+            &[SetParam {
+                name: "search_path".into(),
+                value: None,
+                local: false,
+            }],
+            false,
+        );
+        server.execute("RESET search_path").await.unwrap();
+
+        let queries = server
+            .client_params
+            .reset_queries(&Parameters::default())
+            .into_iter()
+            .map(|query| query.query().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(queries, vec![r#"RESET "statement_timeout""#]);
+    }
+
+    #[tokio::test]
+    async fn test_untracked_reset_still_clears_client_params() {
+        let mut server = test_server().await;
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        server
+            .link_client(FrontendPid::new(), &params, None)
+            .await
+            .unwrap();
+
+        // A RESET we never recorded, as when the query parser is off.
+        server.execute("RESET search_path").await.unwrap();
+
+        assert!(server.client_params.is_empty());
     }
 
     #[tokio::test]

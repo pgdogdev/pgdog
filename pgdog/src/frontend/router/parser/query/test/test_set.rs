@@ -7,7 +7,7 @@ use crate::{
             route::{OverrideReason, ShardSource},
         },
     },
-    net::parameter::ParameterValue,
+    net::{Format, messages::Parameter, parameter::ParameterValue},
 };
 
 use super::setup::*;
@@ -66,15 +66,13 @@ fn test_set_config_null_value() {
 
     match command {
         Command::Set {
-            params,
-            behave_like_select,
-            ..
+            params, is_select, ..
         } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].name, "lock_timeout");
             assert_eq!(params[0].value, None);
             assert!(!params[0].local);
-            assert!(behave_like_select);
+            assert!(is_select);
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
     }
@@ -251,4 +249,158 @@ fn test_single_shard_set() {
         Command::Set { route, .. } => assert!(!route.is_cross_shard()),
         _ => panic!("not a set"),
     }
+}
+
+#[test]
+fn test_set_config_bound_params() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Parse::named(
+            "__test_set_config",
+            "SELECT pg_catalog.set_config($1, $2, $3)",
+        )
+        .into(),
+        Bind::new_params(
+            "__test_set_config",
+            &[
+                Parameter::new(b"search_path"),
+                Parameter::new(b""),
+                Parameter::new(b"f"),
+            ],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    match command {
+        Command::Set {
+            ref params,
+            is_select,
+            ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "search_path");
+            assert_eq!(params[0].value, Some(ParameterValue::String("".into())));
+            assert!(!params[0].local);
+            assert!(is_select);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_bound_null_value() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Parse::named("__test_set_config_null", "SELECT set_config($1, $2, false)").into(),
+        Bind::new_params(
+            "__test_set_config_null",
+            &[Parameter::new(b"lock_timeout"), Parameter::new_null()],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    match command {
+        Command::Set { ref params, .. } => {
+            assert_eq!(params[0].name, "lock_timeout");
+            assert_eq!(params[0].value, None);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_unresolvable_args_stay_a_query() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT pg_catalog.set_config($1, $2, false)").into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(_)),
+        "expected Command::Query, got {command:#?}",
+    );
+    assert!(command.route().is_write());
+}
+
+#[test]
+fn test_set_config_expression_stays_a_query() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT set_config('search_path', current_setting('search_path'), false)")
+            .into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(_)),
+        "expected Command::Query, got {command:#?}",
+    );
+    assert!(command.route().is_write());
+}
+
+#[test]
+fn test_set_config_bound_binary_is_local() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Parse::named("__test_set_config_bin", "SELECT set_config($1, $2, $3)").into(),
+        Bind::new_params_codes(
+            "__test_set_config_bin",
+            &[
+                Parameter::new(b"statement_timeout"),
+                Parameter::new(b"1000"),
+                Parameter::new(&[1]),
+            ],
+            &[Format::Text, Format::Text, Format::Binary],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    match command {
+        Command::Set { ref params, .. } => {
+            assert_eq!(params[0].name, "statement_timeout");
+            assert_eq!(params[0].value, Some(ParameterValue::String("1000".into())));
+            assert!(params[0].local, "binary true must be read as SET LOCAL");
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_set_config_bound_non_utf8_stays_a_query() {
+    let mut test = QueryParserTest::new();
+
+    // set_config() takes text; what we can't read as text we can't track.
+    let command = test.execute(vec![
+        Parse::named(
+            "__test_set_config_bytes",
+            "SELECT set_config($1, $2, false)",
+        )
+        .into(),
+        Bind::new_params(
+            "__test_set_config_bytes",
+            &[
+                Parameter::new(b"search_path"),
+                Parameter::new(&[0xff, 0xfe]),
+            ],
+        )
+        .into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+
+    assert!(
+        matches!(command, Command::Query(_)),
+        "expected Command::Query, got {command:#?}",
+    );
+    assert!(command.route().is_write());
 }
