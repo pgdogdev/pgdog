@@ -119,7 +119,7 @@ impl Manager {
 
     /// Two-pc transaction finished.
     pub(crate) async fn done(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
-        if self.remove(transaction).is_some()
+        if self.remove(transaction.clone()).is_some()
             && let Some(wal) = self.wal.load_full()
         {
             wal.add(TwoPcRecordRemove { transaction }).await?;
@@ -174,17 +174,17 @@ impl Manager {
             TwoPcPhase::Rollback,
             "rollback is derived during recovery and is never written to the WAL"
         );
-        self.set_transaction_state(transaction, identifier, phase);
+        self.set_transaction_state(transaction.clone(), identifier, phase);
 
         if let Some(wal) = self.wal.load_full() {
             if phase == TwoPcPhase::Phase1 {
                 wal.add(TwoPcRecordIdentity {
-                    transaction,
+                    transaction: transaction.clone(),
                     identifier: identifier.clone(),
                 })
                 .await?;
             } else {
-                wal.add(TwoPcRecordPhase::new(transaction)).await?;
+                wal.add(TwoPcRecordPhase::new(transaction.clone())).await?;
             }
         }
 
@@ -267,7 +267,7 @@ impl Manager {
             .contains_key(&guard.transaction);
 
         if exists {
-            self.inner.lock().queue.push_back(guard.transaction);
+            self.inner.lock().queue.push_back(guard.transaction.clone());
             self.notify.notify.notify_one();
         }
     }
@@ -302,7 +302,7 @@ impl Manager {
                     r#"[2pc] cleaning up transaction "{}""#,
                     transaction.to_string()
                 );
-                match manager.cleanup_phase(transaction).await {
+                match manager.cleanup_phase(&transaction).await {
                     Err(err) => {
                         error!(
                             r#"[2pc] error cleaning up "{}" transaction: {}"#,
@@ -338,10 +338,10 @@ impl Manager {
     }
 
     /// Reconnect to cluster if available and close the two-phase transaction.
-    async fn cleanup_phase(&self, transaction: TwoPcTransaction) -> Result<(), Error> {
+    async fn cleanup_phase(&self, transaction: &TwoPcTransaction) -> Result<(), Error> {
         let (state, in_recovery) = {
             let guard = self.inner.lock();
-            let state = guard.transactions.get(&transaction).cloned();
+            let state = guard.transactions.get(transaction).cloned();
 
             if let Some(state) = state {
                 (state, guard.in_recovery)

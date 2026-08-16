@@ -253,7 +253,7 @@ impl Error {
     /// Two-phase commit transaction that still needs manager cleanup, if any.
     pub fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
         match self {
-            Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
+            Self::TwoPcCleanupPending { transaction, .. } => Some(transaction.clone()),
             _ => None,
         }
     }

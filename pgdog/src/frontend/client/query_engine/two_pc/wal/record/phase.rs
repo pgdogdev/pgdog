@@ -26,7 +26,7 @@ impl TwoPcRecordPhase {
 impl From<TwoPcRecordPhase> for Record {
     fn from(value: TwoPcRecordPhase) -> Self {
         let mut payload = Payload::raw();
-        payload.put_u64(value.transaction.0 as u64);
+        payload.put_u64(value.transaction.id() as u64);
 
         Self {
             code: '2',
@@ -46,7 +46,7 @@ impl TryFrom<Record> for TwoPcRecordPhase {
         if value.code != '2' {
             return Err(());
         }
-        let transaction = TwoPcTransaction(value.data.get_u64() as usize);
+        let transaction = TwoPcTransaction::from_id(value.data.get_u64() as usize);
 
         Ok(Self { transaction })
     }

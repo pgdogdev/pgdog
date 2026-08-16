@@ -15,7 +15,7 @@ impl TryFrom<Record> for TwoPcRecordRemove {
         let tid = value.data.get_u64() as usize;
 
         Ok(TwoPcRecordRemove {
-            transaction: TwoPcTransaction(tid),
+            transaction: TwoPcTransaction::from_id(tid),
         })
     }
 }
@@ -23,7 +23,7 @@ impl TryFrom<Record> for TwoPcRecordRemove {
 impl From<TwoPcRecordRemove> for Record {
     fn from(value: TwoPcRecordRemove) -> Self {
         let mut payload = Payload::raw();
-        payload.put_u64(value.transaction.0 as u64);
+        payload.put_u64(value.transaction.id() as u64);
 
         Record {
             code: 'r',

@@ -21,13 +21,14 @@ impl Records {
     pub(crate) fn replay(&self, manager: &Manager) {
         match self {
             Records::Identity(identity) => {
-                manager.set_transaction_identity(identity.transaction, &identity.identifier);
+                manager
+                    .set_transaction_identity(identity.transaction.clone(), &identity.identifier);
             }
             Records::Phase(phase) => {
-                manager.set_transaction_phase(phase.transaction, TwoPcPhase::Phase2);
+                manager.set_transaction_phase(phase.transaction.clone(), TwoPcPhase::Phase2);
             }
             Records::Remove(remove) => {
-                manager.remove(remove.transaction);
+                manager.remove(remove.transaction.clone());
             }
         }
     }

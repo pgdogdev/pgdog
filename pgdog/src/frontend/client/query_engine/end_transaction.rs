@@ -111,7 +111,7 @@ impl QueryEngine {
         // If interrupted here, the transaction must be rolled back.
         let _guard_phase_1 = self.two_pc.phase_one(&identifier).await?;
         self.backend
-            .two_pc(transaction, TwoPcPhase::Phase1, false)
+            .two_pc(&transaction, TwoPcPhase::Phase1, false)
             .await?;
 
         debug!("[2pc] phase 1 complete");
@@ -119,7 +119,7 @@ impl QueryEngine {
         // If interrupted here, the transaction must be committed.
         let _guard_phase_2 = self.two_pc.phase_two(&identifier).await?;
         self.backend
-            .two_pc(transaction, TwoPcPhase::Phase2, false)
+            .two_pc(&transaction, TwoPcPhase::Phase2, false)
             .await?;
 
         debug!("[2pc] phase 2 complete");

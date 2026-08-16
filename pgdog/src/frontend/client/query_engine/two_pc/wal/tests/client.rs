@@ -41,24 +41,24 @@ impl TwoPcTestClient {
 
         let _guard = self
             .manager
-            .transaction_state(txn, &self.cluster.identifier(), TwoPcPhase::Phase1)
+            .transaction_state(txn.clone(), &self.cluster.identifier(), TwoPcPhase::Phase1)
             .await
             .unwrap();
 
         for (shard, conn) in conns.iter_mut().enumerate() {
-            conn.execute(phase_control(txn, shard, TwoPcPhase::Phase1))
+            conn.execute(phase_control(&txn, shard, TwoPcPhase::Phase1))
                 .await
                 .unwrap();
         }
 
         let _guard = self
             .manager
-            .transaction_state(txn, &self.cluster.identifier(), TwoPcPhase::Phase2)
+            .transaction_state(txn.clone(), &self.cluster.identifier(), TwoPcPhase::Phase2)
             .await
             .unwrap();
 
         for (shard, conn) in conns.iter_mut().enumerate() {
-            conn.execute(phase_control(txn, shard, TwoPcPhase::Phase2))
+            conn.execute(phase_control(&txn, shard, TwoPcPhase::Phase2))
                 .await
                 .unwrap();
         }
