@@ -105,6 +105,7 @@ pub struct PreparedStatements {
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
+    in_transaction: bool,
 }
 
 #[cfg(test)]
@@ -126,6 +127,7 @@ impl PreparedStatements {
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
+            in_transaction: false,
         }
     }
 
@@ -133,6 +135,10 @@ impl PreparedStatements {
     #[inline]
     pub fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+    }
+
+    pub(super) fn set_in_transaction(&mut self, in_transaction: bool) {
+        self.in_transaction = in_transaction;
     }
 
     /// Current prepared statement settings.
@@ -307,10 +313,12 @@ impl PreparedStatements {
                 if self.contains(prepare.name()) {
                     self.state
                         .add_simulated(CommandComplete::from_str("PREPARE").message()?);
-                    self.state
-                        .add_simulated(ReadyForQuery::in_transaction(false).message()?);
+                    self.state.add_simulated(
+                        ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                    );
                     return Ok(HandleResult::Drop);
                 } else {
+                    self.parses.push_back(prepare.name().to_owned());
                     self.state.add(ExecutionCode::ReadyForQuery);
                 }
             }
@@ -323,6 +331,7 @@ impl PreparedStatements {
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
                     self.state.add_ignore(ExecutionCode::ReadyForQuery);
+                    self.parses.push_back(prepare.name().to_owned());
                     return Ok(HandleResult::Forward);
                 }
             }

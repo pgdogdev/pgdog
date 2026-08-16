@@ -472,6 +472,9 @@ impl Server {
             self.in_transaction = true;
         }
 
+        self.prepared_statements
+            .set_in_transaction(self.in_transaction);
+
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
@@ -1334,8 +1337,10 @@ pub mod test {
     };
 
     use crate::{
-        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
-        net::*,
+        backend::pool::token_cache::TokenCache,
+        config::Memory,
+        frontend::PreparedStatements,
+        net::{Prepare, *},
     };
 
     use super::{Error, *};
@@ -4376,6 +4381,55 @@ pub mod test {
         let base = Duration::from_secs(60);
         // Stored value wins regardless of the supplied base.
         assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));
+    }
+
+    #[tokio::test]
+    async fn test_prepare_from_client() {
+        let mut server = test_server().await;
+
+        // The last 2 will be simulated
+        // and we won't receive a "prepared statement already exists" error.
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+
+        assert!(server.prepared_statements_mut().contains("__stmt_1"));
+    }
+
+    #[tokio::test]
+    async fn test_prepared_execute() {
+        let mut server = test_server().await;
+
+        for _ in 0..3 {
+            let req = vec![
+                ProtocolMessage::EnsurePrepared(Prepare::new(
+                    "__stmt_1",
+                    "PREPARE __pgdog_template_name (int) AS SELECT $1",
+                )),
+                ProtocolMessage::Query(Query::new("EXECUTE __stmt_1 (1)")),
+            ];
+
+            server.send(&req.into()).await.unwrap();
+
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
     }
 
     #[test]

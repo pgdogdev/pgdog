@@ -99,3 +99,63 @@ async fn test_omnisharded_prepared_crud() {
 
     prepared_crud(&mut client, "sharded_omni", id, 2).await;
 }
+
+#[tokio::test]
+async fn test_cross_shard_prepared() {
+    let mut client = TestClient::new_sharded(Parameters::default())
+        .await
+        .with_full_prepared_statements();
+
+    client
+        .send_simple(Query::new(
+            "PREPARE __stmt_1 AS INSERT INTO sharded (id, value) VALUES ($1, $2)",
+        ))
+        .await;
+    client.read_until('Z').await.unwrap();
+    client
+        .send_simple(Query::new(
+            "PREPARE __stmt_2 AS SELECT id, value FROM sharded ORDER BY id DESC",
+        ))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    for shard in 0..20 {
+        let id = client.random_id_for_shard(shard % 2);
+        client
+            .send_simple(Query::new(format!("EXECUTE __stmt_1({}, 'value')", id)))
+            .await;
+        client.read_until('Z').await.unwrap();
+    }
+
+    client.send_simple(Query::new("EXECUTE __stmt_2")).await;
+    let msgs = client.read_until('Z').await.unwrap();
+
+    client
+        .send_simple(Query::new("PREPARE __stmt_3 AS DELETE FROM sharded"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("EXECUTE __stmt_3")).await;
+    client.read_until('Z').await.unwrap();
+
+    assert_eq!(msgs.iter().filter(|m| m.code() == 'D').count(), 20);
+    let ids = msgs
+        .iter()
+        .filter(|m| m.code() == 'D')
+        .map(|m| {
+            DataRow::try_from(m.clone())
+                .unwrap()
+                .get_int(0, true)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut sorted = ids.clone();
+    sorted.sort();
+
+    assert_eq!(sorted.into_iter().rev().collect::<Vec<_>>(), ids);
+
+    client.send_simple(Query::new("EXECUTE __stmt_2")).await;
+    let msgs = client.read_until('Z').await.unwrap();
+
+    assert_eq!(msgs.iter().filter(|m| m.code() == 'D').count(), 0);
+}

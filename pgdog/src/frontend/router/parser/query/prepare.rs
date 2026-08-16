@@ -2,7 +2,7 @@ use pg_raw_parse::nodes::{ExecuteStmt, PrepareStmt};
 
 use crate::{
     frontend::{BufferedQuery, PreparedStatements},
-    net::Query,
+    net::{PREPARE_TEMPLATE_NAME, Query},
 };
 
 use super::*;
@@ -55,6 +55,10 @@ impl QueryParser {
             .read()
             .prepare(stmt.name().expect("execute to have a name"))
             .ok_or(Error::ExecuteRequiresFull)?;
+
+        // Make sure we never store unique statement names
+        // in the cache!
+        debug_assert!(prepare.query().contains(PREPARE_TEMPLATE_NAME));
 
         let query = BufferedQuery::Query(Query::new(prepare.query()));
         let ast = Cache::get().record(&query)?;
