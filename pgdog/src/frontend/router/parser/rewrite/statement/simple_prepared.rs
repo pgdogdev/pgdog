@@ -182,8 +182,21 @@ mod tests {
             !sql.contains("test_stmt"),
             "original name should be replaced: {sql}"
         );
-        assert!(plan.prepare_rewrites.is_empty());
+        assert_eq!(plan.prepare_rewrites.len(), 1);
         assert!(plan.stmt.is_some());
+
+        let prepare = &plan.prepare_rewrites[0];
+        match prepare {
+            PrepareExecute::Prepare(prepare) => {
+                assert!(prepare.name().starts_with("__pgdog_"));
+                assert_eq!(
+                    prepare.query(),
+                    "PREPARE __pgdog_template_name AS SELECT $1, $2"
+                );
+            }
+
+            _ => panic!("expected PrepareExecute::Prepare"),
+        }
     }
 
     #[test]
@@ -202,7 +215,7 @@ mod tests {
         match prepare {
             PrepareExecute::Execute(prepare) => {
                 assert!(prepare.name().starts_with("__pgdog_"));
-                assert_eq!(prepare.query(), "SELECT 1");
+                assert_eq!(prepare.query(), "PREPARE __pgdog_template_name AS SELECT 1");
             }
 
             _ => panic!("expected PrepareExecute::Execute"),

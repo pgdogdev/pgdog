@@ -32,7 +32,7 @@ async fn test_rewrite_prepare() {
     .await;
 
     assert!(
-        matches!(messages[0].clone(), ProtocolMessage::PrepareClient(prepare) if prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3"),
+        matches!(messages[0].clone(), ProtocolMessage::PrepareFromClient(prepare) if prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3"),
         "expected rewritten prepared statement: {:#?}",
         messages,
     );
@@ -44,7 +44,7 @@ async fn test_rewrite_prepare() {
     .await;
 
     assert!(
-        matches!(messages[0].clone(), ProtocolMessage::Prepare(prepare) if prepare.name() == "__pgdog_1" && prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3")
+        matches!(messages[0].clone(), ProtocolMessage::EnsurePrepared(prepare) if prepare.name() == "__pgdog_1" && prepare.query() == "PREPARE __pgdog_template_name AS SELECT $1, $2, $3")
     );
 
     assert!(
@@ -55,7 +55,7 @@ async fn test_rewrite_prepare() {
 
 fn rewritten_query(messages: &[ProtocolMessage]) -> String {
     match &messages[0] {
-        ProtocolMessage::PrepareClient(prepare) => prepare.query().to_string(),
+        ProtocolMessage::PrepareFromClient(prepare) => prepare.query().to_string(),
         other => panic!("expected Query, got {other:#?}"),
     }
 }

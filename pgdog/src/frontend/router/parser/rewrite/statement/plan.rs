@@ -126,12 +126,12 @@ impl RewritePlan {
                 .for_each(|prepare| match prepare {
                     PrepareExecute::Prepare(prepare) => {
                         request.messages.clear();
-                        request.push(ProtocolMessage::PrepareClient(prepare.clone()));
+                        request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
                     }
                     PrepareExecute::Execute(prepare) => {
                         request
                             .messages
-                            .splice(0..0, vec![ProtocolMessage::Prepare(prepare.clone())]);
+                            .splice(0..0, vec![ProtocolMessage::EnsurePrepared(prepare.clone())]);
                     }
                 });
         }
