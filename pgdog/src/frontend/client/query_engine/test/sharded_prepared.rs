@@ -106,6 +106,10 @@ async fn test_cross_shard_prepared() {
         .await
         .with_full_prepared_statements();
 
+    // Clean up after bad tests.
+    client.send_simple(Query::new("DELETE FROM sharded")).await;
+    client.read_until('Z').await.unwrap();
+
     client
         .send_simple(Query::new(
             "PREPARE __stmt_1 AS INSERT INTO sharded (id, value) VALUES ($1, $2)",
