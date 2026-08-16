@@ -4,44 +4,39 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
         client::{Sticky, TransactionType},
-        router::sharding::ResolvedLookups,
-        router::{Ast, parser::StatementParameters},
+        router::{Ast, parser::StatementParameters, sharding::ResolvedLookups},
     },
     net::Parameters,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RouterContext<'a> {
     /// Bound parameters to the query.
-    pub bind: Option<StatementParameters<'a>>,
+    pub(super) bind: Option<StatementParameters<'a>>,
     /// Query we're looking it.
-    pub query: Option<BufferedQuery>,
+    pub(super) query: Option<BufferedQuery>,
     /// Cluster configuration.
-    pub cluster: &'a Cluster,
+    pub(super) cluster: &'a Cluster,
     /// Client parameters, e.g. search_path.
-    pub parameter_hints: ParameterHints<'a>,
+    pub(super) parameter_hints: ParameterHints<'a>,
     /// Client inside transaction,
-    pub transaction: Option<TransactionType>,
+    pub(super) transaction: Option<TransactionType>,
     /// Currently executing COPY statement.
-    pub copy_mode: bool,
+    pub(super) copy_mode: bool,
     /// Do we have an executable buffer?
-    pub executable: bool,
+    pub(super) executable: bool,
     /// Two-pc enabled
-    pub two_pc: bool,
+    pub(super) two_pc: bool,
     /// Sticky omnisharded index.
-    pub sticky: Sticky,
-    /// Extended protocol.
-    pub extended: bool,
+    pub(super) sticky: Sticky,
     /// AST.
-    pub ast: Option<Ast>,
+    pub(super) ast: Option<Ast>,
     /// Schema.
-    pub schema: Schema,
-    /// Original client request.
-    pub client_request: &'a ClientRequest,
+    pub(super) schema: Schema,
     /// Sharding key translations resolved for this statement. Routing
     /// reads these before the lookup cache, so a second routing pass
     /// after resolving lookups can't miss.
-    pub resolved_lookups: ResolvedLookups,
+    pub(super) resolved_lookups: ResolvedLookups,
 }
 
 impl<'a> RouterContext<'a> {
@@ -65,11 +60,9 @@ impl<'a> RouterContext<'a> {
             executable: buffer.is_executable(),
             two_pc: cluster.two_pc_enabled(),
             sticky,
-            extended: matches!(query, Some(BufferedQuery::Prepared(_))) || bind.is_some(),
             query,
             ast: buffer.ast.clone(),
             schema: cluster.schema(),
-            client_request: buffer,
             resolved_lookups: ResolvedLookups::default(),
         })
     }

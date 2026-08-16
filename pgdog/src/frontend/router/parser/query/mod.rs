@@ -10,12 +10,12 @@ use crate::{
         round_robin,
         sharding::{self, Centroids, ContextBuilder, ShardOrLookup},
     },
-    net::{
-        messages::{Bind, Vector},
-        parameter::ParameterValue,
-    },
+    net::{messages::Vector, parameter::ParameterValue},
     plugin::plugins,
 };
+
+#[cfg(test)]
+use crate::net::messages::Bind;
 
 use super::{
     explain_trace::{ExplainRecorder, ExplainSummary},
@@ -524,11 +524,7 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
                 let query = context.query()?.query();
-                Cache::get().record_normalized(
-                    query,
-                    command.route(),
-                    context.sharding_schema.query_parser_engine,
-                )?;
+                Cache::get().record_normalized(query, command.route())?;
             }
             Ok(command.dry_run())
         } else {

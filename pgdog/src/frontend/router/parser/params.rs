@@ -9,13 +9,13 @@ use crate::net::{
 };
 
 #[derive(Debug)]
-pub(super) struct ExecuteParams {
+pub(crate) struct ExecuteParams {
     params: Vec<BindParameter>,
     format: Vec<Format>,
 }
 
 impl ExecuteParams {
-    fn new(stmt: &ExecuteStmt) -> Self {
+    pub(crate) fn new(stmt: &ExecuteStmt) -> Self {
         let mut params = vec![];
 
         for param in stmt.params() {
@@ -88,22 +88,22 @@ impl<'a> From<&'a Bind> for StatementParameters<'a> {
     }
 }
 
-impl StatementParameters<'_> {
-    pub(super) fn parameter(&self, index: usize) -> Result<Option<ParameterWithFormat<'_>>, Error> {
+impl<'a> StatementParameters<'a> {
+    pub(super) fn parameter(self, index: usize) -> Result<Option<ParameterWithFormat<'a>>, Error> {
         match self {
             Self::Bind(bind) => bind.parameter(index),
             Self::Execute(params) => Ok(params.parameter(index)),
         }
     }
 
-    pub(super) fn params_raw(&self) -> &[BindParameter] {
+    pub(super) fn params_raw(self) -> &'a [BindParameter] {
         match self {
             Self::Bind(bind) => bind.params_raw(),
             Self::Execute(params) => &params.params,
         }
     }
 
-    pub(super) fn format_codes_raw(&self) -> &[Format] {
+    pub(super) fn format_codes_raw(self) -> &'a [Format] {
         match self {
             Self::Bind(bind) => bind.format_codes_raw(),
             Self::Execute(params) => &params.format,

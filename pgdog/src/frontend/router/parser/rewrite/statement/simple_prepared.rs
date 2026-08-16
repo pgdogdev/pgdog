@@ -195,11 +195,10 @@ mod tests {
             "EXECUTE should use global name, got: {sql}"
         );
         assert_eq!(plan.prepares.len(), 1);
-        panic!("fix test");
 
-        // let (name, statement) = &plan.prepares[0];
-        // assert!(name.starts_with("__pgdog_"));
-        // assert_eq!(statement, "SELECT 1");
+        let prepare = &plan.prepares[0];
+        assert!(prepare.name().starts_with("__pgdog_"));
+        assert_eq!(prepare.query(), "SELECT 1");
     }
 
     #[test]

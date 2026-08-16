@@ -1,7 +1,6 @@
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_raw_parse::normalize::normalize;
-use pgdog_config::QueryParserEngine;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -190,17 +189,31 @@ impl Cache {
         Ok(entry)
     }
 
+    pub(crate) fn record(&self, query: &str) -> Result<Ast, Error> {
+        {
+            let mut guard = self.inner.lock();
+            if let Some(entry) = self.inner.lock().queries.get(query) {
+                guard.stats.hits += 1;
+                entry.stats.lock().hits += 1;
+                return Ok(entry.clone());
+            }
+        }
+
+        let entry = Ast::new_record(&query)?;
+
+        let mut guard = self.inner.lock();
+        guard.queries.put(query.into(), entry.clone());
+        guard.stats.misses += 1;
+
+        Ok(entry)
+    }
+
     /// Record a query sent over the simple protocol, while removing parameters.
     ///
     /// Used by dry run mode to keep stats on what queries are routed correctly,
     /// and which are not.
     ///
-    pub fn record_normalized(
-        &self,
-        query: &str,
-        route: &Route,
-        query_parser_engine: QueryParserEngine,
-    ) -> Result<(), Error> {
+    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<(), Error> {
         let normalized = normalize(query)?;
 
         {
@@ -212,7 +225,7 @@ impl Cache {
             }
         }
 
-        let entry = Ast::new_record(&normalized, query_parser_engine)?;
+        let entry = Ast::new_record(&normalized)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();

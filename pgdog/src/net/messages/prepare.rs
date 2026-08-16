@@ -31,7 +31,7 @@ impl Prepare {
 }
 
 impl FromBytes for Prepare {
-    fn from_bytes(bytes: Bytes) -> Result<Self, Error> {
+    fn from_bytes(_bytes: Bytes) -> Result<Self, Error> {
         unreachable!("Prepare must be constructed manually")
     }
 }

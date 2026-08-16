@@ -145,7 +145,7 @@ impl GlobalCache {
     }
 
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
-    pub(super) fn prepare(&self, name: &str) -> Option<Prepare> {
+    pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
         self.names.get(name).map(|p| p.prepare()).flatten()
     }
 
@@ -356,33 +356,35 @@ mod test {
         cache.statements.get(statement.cache_key()).unwrap().used
     }
 
-    // #[test]
-    // fn test_simple_prepared_is_never_shared() {
-    //     let mut cache = GlobalCache::default();
-    //     let parse = Parse::named("client_stmt", "SELECT $1");
+    #[test]
+    fn test_simple_prepared_is_never_shared() {
+        let mut cache = GlobalCache::default();
 
-    //     let (_, first) = cache.insert_prepare(&parse);
-    //     let (_, second) = cache.insert_prepare(&parse);
+        let query = Bytes::from("SELECT $1");
+        let parse = Parse::named("client_stmt", "SELECT $1");
 
-    //     assert_ne!(first, second);
-    //     assert_eq!(cache.len(), 2);
-    //     assert_eq!(used(&cache, &first), 1);
-    //     assert_eq!(used(&cache, &second), 1);
+        let (_, first) = cache.insert_prepare(query.clone(), vec![]);
+        let (_, second) = cache.insert_prepare(query, vec![]);
 
-    //     // A Parse never re-uses a SQL PREPARE statement.
-    //     let (new, extended) = cache.insert(&parse);
-    //     assert!(new);
-    //     assert_ne!(extended, first);
-    //     assert_ne!(extended, second);
-    //     assert_eq!(cache.len(), 3);
+        assert_eq!(first, second);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(used(&cache, &first), 2);
+        assert_eq!(used(&cache, &second), 2);
 
-    //     // A Parse re-uses another Parse.
-    //     let (new_again, shared) = cache.insert(&parse);
-    //     assert!(!new_again);
-    //     assert_eq!(shared, extended);
-    //     assert_eq!(cache.len(), 3);
-    //     assert_eq!(used(&cache, &extended), 2);
-    // }
+        // A Parse never re-uses a SQL PREPARE statement.
+        let (new, extended) = cache.insert(&parse);
+        assert!(new);
+        assert_ne!(extended, first);
+        assert_ne!(extended, second);
+        assert_eq!(cache.len(), 3);
+
+        // A Parse re-uses another Parse.
+        let (new_again, shared) = cache.insert(&parse);
+        assert!(!new_again);
+        assert_eq!(shared, extended);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(used(&cache, &extended), 2);
+    }
 
     #[test]
     fn test_remove_unused() {

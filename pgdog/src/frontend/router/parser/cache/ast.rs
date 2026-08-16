@@ -148,18 +148,15 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    pub(crate) fn new_record(
-        query: &str,
-        query_parser_engine: QueryParserEngine,
-    ) -> Result<Self, Error> {
+    pub(crate) fn new_record(query: &str) -> Result<Self, Error> {
         let ast = pg_raw_parse::parse(query)?;
 
         Ok(Self {
             cached: true,
             comment_role: None,
             comment_shard: None,
-            query_parser_engine,
             comment_sharding_key: None,
+            query_parser_engine: QueryParserEngine::default(),
             inner: Arc::new(AstInner::new(ast.into_inner())),
         })
     }

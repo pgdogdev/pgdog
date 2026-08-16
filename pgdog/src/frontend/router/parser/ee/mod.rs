@@ -2,13 +2,7 @@
 
 use pgdog_config::Role;
 
-use crate::{
-    frontend::router::{
-        parser::Value,
-        parser::{Column, Shard},
-    },
-    net::Bind,
-};
+use crate::frontend::router::parser::{Column, Shard, StatementParameters, Value};
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ParserHooks {}
@@ -20,7 +14,7 @@ impl ParserHooks {
         _shard: &Shard,
         _column: &Column<'_>,
         _value: &Value,
-        _bind: &Option<&Bind>,
+        _params: Option<StatementParameters<'_>>,
     ) {
     }
 

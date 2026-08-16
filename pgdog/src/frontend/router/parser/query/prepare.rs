@@ -1,5 +1,10 @@
 use pg_raw_parse::nodes::{ExecuteStmt, PrepareStmt};
 
+use crate::{
+    frontend::{BufferedQuery, PreparedStatements},
+    net::Query,
+};
+
 use super::*;
 
 impl QueryParser {
@@ -27,11 +32,38 @@ impl QueryParser {
         Ok(Command::Query(route))
     }
 
+    /// An `EXECUTE` statement.
     pub(super) fn execute(
-        &self,
+        &mut self,
         stmt: &ExecuteStmt,
         context: &mut QueryParserContext<'_>,
     ) -> Result<Command, Error> {
-        todo!()
+        // Extract parameters from `EXECUTE` statement.
+        let params = ExecuteParams::new(stmt);
+        let stmt_params = StatementParameters::Execute(&params);
+
+        // Create new parser context.
+        let mut context = context.clone();
+        context.router_context.bind = Some(stmt_params);
+
+        // Get the original query from the prepared
+        // statements cache.
+        //
+        // INVARIANT: The prepared statements rewriter places it there.
+        let stmt = PreparedStatements::global()
+            .read()
+            .prepare(stmt.name().expect("execute to have a name"))
+            .expect("rewriter did not record PREPARE statement");
+
+        let query = BufferedQuery::Query(Query::new(stmt.query()));
+        let ast = Cache::get().record(&query)?;
+
+        match ast.ast.stmts().next() {
+            Some(Node::SelectStmt(stmt)) => self.select(&ast, stmt.into(), &mut context),
+            Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
+            Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
+            Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),
+            _ => Err(Error::PrepareNotDml),
+        }
     }
 }

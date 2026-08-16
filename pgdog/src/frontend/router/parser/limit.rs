@@ -4,7 +4,6 @@ use pg_raw_parse::{
 };
 
 use super::{Error, StatementParameters};
-use crate::net::Bind;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Limit {
@@ -15,11 +14,11 @@ pub(crate) struct Limit {
 #[derive(Debug, Clone)]
 pub(crate) struct LimitClause<'a> {
     stmt: &'a SelectStmt,
-    bind: Option<&'a StatementParameters<'a>>,
+    bind: Option<StatementParameters<'a>>,
 }
 
 impl<'a> LimitClause<'a> {
-    pub(crate) fn new(stmt: &'a SelectStmt, bind: Option<&'a StatementParameters<'a>>) -> Self {
+    pub(crate) fn new(stmt: &'a SelectStmt, bind: Option<StatementParameters<'a>>) -> Self {
         Self { stmt, bind }
     }
 

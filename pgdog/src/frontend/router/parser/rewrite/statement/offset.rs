@@ -192,7 +192,7 @@ mod tests {
     use crate::net::Parse;
     use crate::net::messages::Query;
     use crate::net::messages::bind::{Bind, Parameter};
-    use pgdog_config::{QueryParserEngine, Rewrite};
+    use pgdog_config::Rewrite;
 
     fn sharded_schema() -> ShardingSchema {
         ShardingSchema {
@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn make_ast(sql: &str) -> Ast {
-        Ast::new_record(sql, QueryParserEngine::PgQueryProtobuf).unwrap()
+        Ast::new_record(sql).unwrap()
     }
 
     fn run_limit_offset(sql: &str, schema: &ShardingSchema) -> RewritePlan {

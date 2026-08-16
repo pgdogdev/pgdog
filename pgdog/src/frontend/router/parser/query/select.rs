@@ -258,9 +258,12 @@ impl QueryParser {
     /// # Arguments
     ///
     /// * `nodes`: List of parser-generated nodes from the ORDER BY clause.
-    /// * `params`: Bind parameters, if any.
+    /// * `params`: Statement parameters, if any.
     ///
-    fn select_sort(stmt: &nodes::SelectStmt, params: Option<&Bind>) -> Vec<OrderBy> {
+    fn select_sort(
+        stmt: &nodes::SelectStmt,
+        params: Option<StatementParameters<'_>>,
+    ) -> Vec<OrderBy> {
         stmt.sort_clause()
             .into_iter()
             .filter_map(|sort_by| {
