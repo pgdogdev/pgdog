@@ -6,13 +6,22 @@ use crate::{frontend::PreparedStatements, net::Prepare};
 
 use super::{Error, StatementRewrite};
 
+#[derive(Debug, Clone)]
+pub(crate) enum PrepareExecute {
+    /// PREPARE statement sent by client
+    Prepare(Prepare),
+    /// EXECUTE statement sent by client and may require
+    /// a PREPARE first.
+    Execute(Prepare),
+}
+
 /// Result of rewriting all PREPARE/EXECUTE statements in a query.
 #[derive(Debug, Clone, Default)]
-pub struct SimplePreparedResult {
+pub(crate) struct SimplePreparedResult {
     /// Whether any statement was rewritten.
-    pub rewritten: bool,
+    pub(crate) rewritten: bool,
     /// Prepared statements to prepend (name, statement) for EXECUTE rewrites.
-    pub prepares: Vec<Prepare>,
+    pub(crate) rewrites: Vec<PrepareExecute>,
 }
 
 /// Result of rewriting a single PREPARE or EXECUTE SQL command.
@@ -21,7 +30,7 @@ enum SimplePreparedRewrite {
     /// Node was not a PREPARE or EXECUTE statement.
     None,
     /// PREPARE statement was rewritten.
-    Prepared,
+    Prepared { prepare: Prepare },
     /// EXECUTE statement was rewritten. Contains the global name and statement
     /// needed to prepend a ProtocolMessage::Prepare.
     Executed { prepare: Prepare },
@@ -51,11 +60,12 @@ impl StatementRewrite<'_> {
         }
 
         match rewrite_single_prepared(node, mem, self.prepared_statements)? {
-            SimplePreparedRewrite::Prepared => {
+            SimplePreparedRewrite::Prepared { prepare } => {
+                result.rewrites.push(PrepareExecute::Prepare(prepare));
                 result.rewritten = true;
             }
             SimplePreparedRewrite::Executed { prepare } => {
-                result.prepares.push(prepare);
+                result.rewrites.push(PrepareExecute::Execute(prepare));
                 result.rewritten = true;
             }
             SimplePreparedRewrite::None => {}
@@ -88,15 +98,17 @@ fn rewrite_single_prepared<'a>(
                 })
                 .collect();
 
-            let global_name = prepared_statements.insert_prepare(
-                stmt.name().expect("prepare must have a name"),
-                query,
-                data_types,
-            );
+            let name = stmt.name().expect("prepare must have a name").to_owned();
+
+            let global_name = prepared_statements.insert_prepare(&name, query, data_types);
 
             stmt.set_name(Some(mem.copy_string(global_name.as_str())));
 
-            Ok(SimplePreparedRewrite::Prepared)
+            Ok(SimplePreparedRewrite::Prepared {
+                prepare: prepared_statements
+                    .prepare(&name)
+                    .expect("global cache missing prepare we just inserted"),
+            })
         }
 
         NodeMut::ExecuteStmt(mut stmt) => {
@@ -182,7 +194,7 @@ mod tests {
             !sql.contains("test_stmt"),
             "original name should be replaced: {sql}"
         );
-        assert!(plan.prepares.is_empty());
+        assert!(plan.prepare_rewrites.is_empty());
         assert!(plan.stmt.is_some());
     }
 
@@ -196,11 +208,17 @@ mod tests {
             sql.contains("__pgdog_"),
             "EXECUTE should use global name, got: {sql}"
         );
-        assert_eq!(plan.prepares.len(), 1);
+        assert_eq!(plan.prepare_rewrites.len(), 1);
 
-        let prepare = &plan.prepares[0];
-        assert!(prepare.name().starts_with("__pgdog_"));
-        assert_eq!(prepare.query(), "SELECT 1");
+        let prepare = &plan.prepare_rewrites[0];
+        match prepare {
+            PrepareExecute::Execute(prepare) => {
+                assert!(prepare.name().starts_with("__pgdog_"));
+                assert_eq!(prepare.query(), "SELECT 1");
+            }
+
+            _ => panic!("expected PrepareExecute::Execute"),
+        }
     }
 
     #[test]
@@ -217,7 +235,7 @@ mod tests {
             sql.contains("(1, 'hello')"),
             "EXECUTE params should be preserved, got: {sql}"
         );
-        assert_eq!(plan.prepares.len(), 1);
+        assert_eq!(plan.prepare_rewrites.len(), 1);
     }
 
     #[test]
@@ -233,7 +251,7 @@ mod tests {
         let (sql, plan) = ctx.rewrite("SELECT 1, 2, 3").unwrap();
 
         assert_eq!(sql, "SELECT 1, 2, 3");
-        assert!(plan.prepares.is_empty());
+        assert!(plan.prepare_rewrites.is_empty());
         assert!(plan.stmt.is_none());
     }
 }

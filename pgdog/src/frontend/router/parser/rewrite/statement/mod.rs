@@ -21,7 +21,7 @@ pub mod update;
 pub use error::Error;
 pub use insert::InsertSplit;
 pub(crate) use plan::RewritePlan;
-pub use simple_prepared::SimplePreparedResult;
+pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
 
 /// Statement rewrite engine context.
@@ -122,7 +122,7 @@ impl<'a> StatementRewrite<'a> {
         let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem)?;
         if prepared_result.rewritten {
             self.rewritten = true;
-            plan.prepares = prepared_result.prepares;
+            plan.prepare_rewrites = prepared_result.rewrites;
         }
 
         // Inject pgdog.unique_id() for missing BIGINT primary keys.

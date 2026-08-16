@@ -302,6 +302,18 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
+            ProtocolMessage::PrepareClient(prepare) => {
+                use crate::net::{CommandComplete, ReadyForQuery};
+                if self.contains(prepare.name()) {
+                    self.state
+                        .add_simulated(CommandComplete::from_str("PREPARE").message()?);
+                    self.state
+                        .add_simulated(ReadyForQuery::in_transaction(false).message()?);
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.state.add(ExecutionCode::ReadyForQuery);
+                }
+            }
             ProtocolMessage::Prepare(prepare) => {
                 if self.contains(prepare.name()) {
                     return Ok(HandleResult::Drop);

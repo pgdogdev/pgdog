@@ -1,11 +1,13 @@
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, Prepare, ProtocolMessage, Query};
+use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
 use super::offset::OffsetPlan;
-use super::{Error, InsertSplit, ShardingKeyUpdate, aggregate::AggregateRewritePlan};
+use super::{
+    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
+};
 
 /// Statement rewrite plan.
 ///
@@ -30,7 +32,7 @@ pub struct RewritePlan {
 
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
-    pub(crate) prepares: Vec<Prepare>,
+    pub(crate) prepare_rewrites: Vec<PrepareExecute>,
 
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
@@ -74,7 +76,7 @@ impl RewritePlan {
         self.unique_ids == 0
             && self.auto_id_injected == 0
             && self.stmt.is_none()
-            && self.prepares.is_empty()
+            && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
             && self.aggregates.is_noop()
             && self.sharding_key_update.is_none()
@@ -118,13 +120,20 @@ impl RewritePlan {
     /// Apply the rewrite plan to a ClientRequest.
     pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
-        if !self.prepares.is_empty() {
-            let prepends: Vec<ProtocolMessage> = self
-                .prepares
+        if !self.prepare_rewrites.is_empty() {
+            self.prepare_rewrites
                 .iter()
-                .map(|prepare| ProtocolMessage::Prepare(prepare.clone()))
-                .collect();
-            request.messages.splice(0..0, prepends);
+                .for_each(|prepare| match prepare {
+                    PrepareExecute::Prepare(prepare) => {
+                        request.messages.clear();
+                        request.push(ProtocolMessage::PrepareClient(prepare.clone()));
+                    }
+                    PrepareExecute::Execute(prepare) => {
+                        request
+                            .messages
+                            .splice(0..0, vec![ProtocolMessage::Prepare(prepare.clone())]);
+                    }
+                });
         }
 
         for message in request.messages.iter_mut() {
