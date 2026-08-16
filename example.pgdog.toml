@@ -146,6 +146,10 @@ shutdown_termination_timeout = 60_000
 #
 # Default: not set
 openmetrics_port = 9090
+# The IP address the OpenMetrics HTTP endpoint will bind to.
+#
+# Default: 0.0.0.0
+openmetrics_host = "0.0.0.0"
 # Namespace to use for Prometheus metrics.
 #
 # Disambiguates metric names from metrics scraped from other apps.

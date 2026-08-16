@@ -128,8 +128,9 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     if let Some(openmetrics_port) = general.openmetrics_port {
+        let openmetrics_host = general.openmetrics_host.clone();
         pgdog::tasks::spawn("openmetrics server", async move {
-            stats::http_server::server(openmetrics_port).await
+            stats::http_server::server(&openmetrics_host, openmetrics_port).await
         });
     }
 

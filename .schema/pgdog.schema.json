@@ -76,6 +76,7 @@
         "mirror_exposure": 1.0,
         "mirror_queue": 128,
         "omnisharded_sticky": false,
+        "openmetrics_host": "0.0.0.0",
         "openmetrics_namespace": null,
         "openmetrics_port": null,
         "passthrough_auth": "disabled",
@@ -982,6 +983,11 @@
           "description": "If turned on, queries touching omnisharded tables are always sent to the same shard for any given client connection. The shard is determined at random on connection creation.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#omnisharded_sticky>",
           "type": "boolean",
           "default": false
+        },
+        "openmetrics_host": {
+          "description": "The IP address of the local network interface the OpenMetrics HTTP endpoint will bind to.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `0.0.0.0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_host>",
+          "type": "string",
+          "default": "0.0.0.0"
         },
         "openmetrics_namespace": {
           "description": "Prefix added to all metric names exposed via the OpenMetrics endpoint.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_namespace>",
