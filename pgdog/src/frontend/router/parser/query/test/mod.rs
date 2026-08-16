@@ -30,6 +30,7 @@ pub mod test_explain;
 pub mod test_functions;
 pub mod test_insert;
 pub mod test_prefer_primary;
+pub mod test_prepared;
 pub mod test_rr;
 pub mod test_schema_sharding;
 pub mod test_search_path;

@@ -195,6 +195,14 @@ impl TestClient {
         Self::new(params).await
     }
 
+    pub(crate) fn with_full_prepared_statements(self) -> Self {
+        let mut config = config().deref().clone();
+        config.config.general.prepared_statements = pgdog_config::PreparedStatements::Full;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+        self
+    }
+
     /// Send message to client.
     pub(crate) async fn send(&mut self, message: impl Protocol) {
         send_message(&mut self.conn, message).await;

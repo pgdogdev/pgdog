@@ -30,6 +30,14 @@ impl Prepare {
     pub fn len(&self) -> usize {
         self.name.len() + self.query.len()
     }
+
+    #[cfg(test)]
+    pub fn new(name: &str, query: &str) -> Self {
+        Self {
+            name: Bytes::from(name.to_owned()),
+            query: Bytes::from(query.to_owned()),
+        }
+    }
 }
 
 impl FromBytes for Prepare {
