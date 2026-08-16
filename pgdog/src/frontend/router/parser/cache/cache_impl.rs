@@ -192,14 +192,13 @@ impl Cache {
     pub(crate) fn record(&self, query: &str) -> Result<Ast, Error> {
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = self.inner.lock().queries.get(query) {
-                guard.stats.hits += 1;
+            if let Some(entry) = guard.queries.get_mut(query) {
                 entry.stats.lock().hits += 1;
                 return Ok(entry.clone());
             }
         }
 
-        let entry = Ast::new_record(&query)?;
+        let entry = Ast::new_record(query)?;
 
         let mut guard = self.inner.lock();
         guard.queries.put(query.into(), entry.clone());

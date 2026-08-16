@@ -74,10 +74,12 @@ fn rewrite_single_prepared<'a>(
     match node {
         NodeMut::PrepareStmt(mut stmt) => {
             let query = Bytes::from(pg_raw_parse::deparse(stmt.query())?.as_str().to_owned());
+
             let data_types: Vec<TypeName> = stmt
                 .argtypes()
                 .iter()
                 .map(|data_type| {
+                    // data_type.typmods().iter().map(|tmod| tmod.)
                     data_type
                         .names()
                         .iter()

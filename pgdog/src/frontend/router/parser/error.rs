@@ -114,4 +114,7 @@ pub enum Error {
 
     #[error("prepare statement can only be DML")]
     PrepareNotDml,
+
+    #[error("execute requires prepared statements to be set to full")]
+    ExecuteRequiresFull,
 }

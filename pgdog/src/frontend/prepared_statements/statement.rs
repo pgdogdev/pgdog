@@ -74,11 +74,11 @@ impl Statement {
     }
 
     pub(super) fn set_rewrite(&mut self, parse: &Parse) {
-        match self.stmt {
-            StatementType::Parse {
-                ref mut rewrite, ..
-            } => *rewrite = Some(parse.clone()),
-            _ => (),
+        if let StatementType::Parse {
+            ref mut rewrite, ..
+        } = self.stmt
+        {
+            *rewrite = Some(parse.clone())
         }
     }
 }

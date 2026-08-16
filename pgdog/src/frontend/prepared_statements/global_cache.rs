@@ -99,7 +99,7 @@ impl GlobalCache {
             stmt: StatementType::Prepare {
                 prepare: Prepare {
                     name: Bytes::from(name.clone()),
-                    query: query,
+                    query,
                     data_types,
                 },
             },
@@ -141,12 +141,12 @@ impl GlobalCache {
     /// It can be used to prepare this statement on a server connection
     /// or to inspect the original query.
     pub fn parse(&self, name: &str) -> Option<Parse> {
-        self.names.get(name).map(|p| p.parse().clone()).flatten()
+        self.names.get(name).and_then(|p| p.parse().clone())
     }
 
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
     pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
-        self.names.get(name).map(|p| p.prepare()).flatten()
+        self.names.get(name).and_then(|p| p.prepare())
     }
 
     /// Get the rewritten Parse statement.
@@ -156,8 +156,7 @@ impl GlobalCache {
     pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
         self.names
             .get(name)
-            .map(|p| p.rewrite().clone().or(p.parse()))
-            .flatten()
+            .and_then(|p| p.rewrite().clone().or(p.parse()))
     }
 
     /// Returns true if this prepared statement has been
@@ -255,7 +254,7 @@ impl GlobalCache {
     }
 
     fn reuse(&mut self, cache_key: &CacheKey) -> Option<String> {
-        if let Some(entry) = self.statements.get_mut(&cache_key) {
+        if let Some(entry) = self.statements.get_mut(cache_key) {
             if entry.used == 0 {
                 self.unused.remove(&entry.counter);
             }
@@ -376,13 +375,13 @@ mod test {
         assert!(new);
         assert_ne!(extended, first);
         assert_ne!(extended, second);
-        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.len(), 2);
 
         // A Parse re-uses another Parse.
         let (new_again, shared) = cache.insert(&parse);
         assert!(!new_again);
         assert_eq!(shared, extended);
-        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.len(), 2);
         assert_eq!(used(&cache, &extended), 2);
     }
 

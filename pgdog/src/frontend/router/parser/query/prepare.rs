@@ -49,17 +49,18 @@ impl QueryParser {
         // Get the original query from the prepared
         // statements cache.
         //
-        // INVARIANT: The prepared statements rewriter places it there.
+        // INVARIANT 1: The prepared statements rewriter places it there.
+        // INVARIANT 2: The rewriter renamed the EXECUTE statement to its global name.
         let stmt = PreparedStatements::global()
             .read()
             .prepare(stmt.name().expect("execute to have a name"))
-            .expect("rewriter did not record PREPARE statement");
+            .ok_or(Error::ExecuteRequiresFull)?;
 
         let query = BufferedQuery::Query(Query::new(stmt.query()));
         let ast = Cache::get().record(&query)?;
 
         match ast.ast.stmts().next() {
-            Some(Node::SelectStmt(stmt)) => self.select(&ast, stmt.into(), &mut context),
+            Some(Node::SelectStmt(stmt)) => self.select(&ast, stmt, &mut context),
             Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
             Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
             Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),
