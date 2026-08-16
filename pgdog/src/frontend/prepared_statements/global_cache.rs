@@ -367,8 +367,8 @@ mod test {
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);
-        assert_eq!(used(&cache, &first.name()), 2);
-        assert_eq!(used(&cache, &second.name()), 2);
+        assert_eq!(used(&cache, first.name()), 2);
+        assert_eq!(used(&cache, second.name()), 2);
 
         // A Parse never re-uses a SQL PREPARE statement.
         let (new, extended) = cache.insert(&parse);
