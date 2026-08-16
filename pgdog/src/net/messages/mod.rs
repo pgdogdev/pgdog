@@ -71,7 +71,7 @@ pub use parameter_status::ParameterStatus;
 pub use parse::Parse;
 pub use parse_complete::ParseComplete;
 pub use payload::Payload;
-pub use prepare::Prepare;
+pub use prepare::{PREPARE_TEMPLATE_NAME, Prepare};
 pub use protocol_version::ProtocolVersion;
 pub use query::Query;
 pub use rfq::{ReadyForQuery, TransactionState};

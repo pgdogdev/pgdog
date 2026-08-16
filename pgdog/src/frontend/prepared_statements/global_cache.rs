@@ -80,35 +80,35 @@ impl GlobalCache {
     }
 
     /// Insert a statement prepared using the simple protocol into the global cache.
-    pub(super) fn insert_prepare(
-        &mut self,
-        query: Bytes,
-        data_types: Vec<TypeName>,
-    ) -> (bool, String) {
+    pub(super) fn insert_prepare(&mut self, query: Bytes) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
             query: query.clone(),
-            data_types: data_types.clone(),
         };
 
         if let Some(name) = self.reuse(&cache_key) {
-            return (false, name);
+            return (
+                false,
+                self.prepare(&name)
+                    .expect("prepared to be in cache if reuse is true"),
+            );
         }
 
         let name = self.next_name();
+        let prepare = Prepare {
+            name: Bytes::from(name.clone()),
+            query,
+        };
+
         let statement = Statement {
             stmt: StatementType::Prepare {
-                prepare: Prepare {
-                    name: Bytes::from(name.clone()),
-                    query,
-                    data_types,
-                },
+                prepare: prepare.clone(),
             },
             row_description: None,
             cache_key: cache_key.clone(),
         };
 
         self.insert_internal(&name, cache_key, statement);
-        (true, name)
+        (true, prepare)
     }
 
     /// Rewrite prepared statement in the global cache.
@@ -359,22 +359,22 @@ mod test {
     fn test_simple_prepared_is_never_shared() {
         let mut cache = GlobalCache::default();
 
-        let query = Bytes::from("SELECT $1");
+        let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) = cache.insert_prepare(query.clone(), vec![]);
-        let (_, second) = cache.insert_prepare(query, vec![]);
+        let (_, first) = cache.insert_prepare(query.clone());
+        let (_, second) = cache.insert_prepare(query);
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);
-        assert_eq!(used(&cache, &first), 2);
-        assert_eq!(used(&cache, &second), 2);
+        assert_eq!(used(&cache, &first.name()), 2);
+        assert_eq!(used(&cache, &second.name()), 2);
 
         // A Parse never re-uses a SQL PREPARE statement.
         let (new, extended) = cache.insert(&parse);
         assert!(new);
-        assert_ne!(extended, first);
-        assert_ne!(extended, second);
+        assert_ne!(extended, first.name());
+        assert_ne!(extended, second.name());
         assert_eq!(cache.len(), 2);
 
         // A Parse re-uses another Parse.

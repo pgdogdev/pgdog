@@ -64,7 +64,9 @@ impl QueryParser {
             Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
             Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
             Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),
-            _ => Err(Error::PrepareNotDml),
+            _ => Ok(Command::Query(Route::write(
+                ShardWithPriority::new_default_unset(Shard::All),
+            ))),
         }
     }
 }

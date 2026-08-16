@@ -1,8 +1,10 @@
 use bytes::Bytes;
 use pg_raw_parse::{NodeMut, make::MemoryToken};
-use pgdog_postgres_types::TypeName;
 
-use crate::{frontend::PreparedStatements, net::Prepare};
+use crate::{
+    frontend::PreparedStatements,
+    net::{PREPARE_TEMPLATE_NAME, Prepare},
+};
 
 use super::{Error, StatementRewrite};
 
@@ -83,32 +85,18 @@ fn rewrite_single_prepared<'a>(
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
         NodeMut::PrepareStmt(mut stmt) => {
-            let query = Bytes::from(pg_raw_parse::deparse(stmt.query())?.as_str().to_owned());
+            let client_name = stmt.name().expect("prepare must have a name").to_owned();
 
-            let data_types: Vec<TypeName> = stmt
-                .argtypes()
-                .iter()
-                .map(|data_type| {
-                    // data_type.typmods().iter().map(|tmod| tmod.)
-                    data_type
-                        .names()
-                        .iter()
-                        .filter_map(|name| name.sval().map(str::to_owned))
-                        .collect()
-                })
-                .collect();
+            // Create a globally unique key using the query text
+            // with a hardcoded name.
+            stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
+            let query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
 
-            let name = stmt.name().expect("prepare must have a name").to_owned();
+            let prepare = prepared_statements.insert_prepare(&client_name, query);
 
-            let global_name = prepared_statements.insert_prepare(&name, query, data_types);
+            stmt.set_name(Some(mem.copy_string(prepare.name())));
 
-            stmt.set_name(Some(mem.copy_string(global_name.as_str())));
-
-            Ok(SimplePreparedRewrite::Prepared {
-                prepare: prepared_statements
-                    .prepare(&name)
-                    .expect("global cache missing prepare we just inserted"),
-            })
+            Ok(SimplePreparedRewrite::Prepared { prepare })
         }
 
         NodeMut::ExecuteStmt(mut stmt) => {

@@ -1,5 +1,3 @@
-use pgdog_postgres_types::TypeName;
-
 use crate::stats::memory::MemoryUsage;
 
 use super::prelude::*;
@@ -17,14 +15,8 @@ use super::prelude::*;
 ///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum CacheKey {
-    Extended {
-        query: Bytes,
-        data_types: Bytes,
-    },
-    Simple {
-        query: Bytes,
-        data_types: Vec<TypeName>,
-    },
+    Extended { query: Bytes, data_types: Bytes },
+    Simple { query: Bytes },
 }
 
 impl MemoryUsage for CacheKey {

@@ -1,8 +1,11 @@
 //! Used for preparing statements sent over with the simple protocol.
+//!
+//! This is a fake message. It contains a PREPARE query sent using the simple
+//! protocol.
 
-use std::str::from_utf8;
+use std::str::from_utf8_unchecked;
 
-use pgdog_postgres_types::TypeName;
+pub static PREPARE_TEMPLATE_NAME: &str = "__pgdog_template_name";
 
 use super::prelude::*;
 use super::{Message, Query};
@@ -11,22 +14,21 @@ use super::{Message, Query};
 pub struct Prepare {
     pub(crate) name: Bytes,
     pub(crate) query: Bytes,
-    pub(crate) data_types: Vec<TypeName>,
 }
 
 impl Prepare {
     pub fn query(&self) -> &str {
-        from_utf8(&self.query).expect("prepare query to be utf-8")
+        // SAFETY: We only support UTF-8.
+        unsafe { from_utf8_unchecked(&self.query) }
     }
 
     pub fn name(&self) -> &str {
-        from_utf8(&self.name).expect("prepare name to be utf-8")
+        // SAFETY: We only support UTF-8.
+        unsafe { from_utf8_unchecked(&self.name) }
     }
 
     pub fn len(&self) -> usize {
-        self.name.len()
-            + self.query.len()
-            + self.data_types.iter().map(|t| t.0.len()).sum::<usize>()
+        self.name.len() + self.query.len()
     }
 }
 
@@ -52,21 +54,13 @@ impl Protocol for Prepare {
 
 impl ToBytes for Prepare {
     fn to_bytes(&self) -> Bytes {
-        let query = from_utf8(&self.query).expect("prepare query to be utf-8");
-        let name = from_utf8(&self.name).expect("prepare name to be utf-8");
-        let data_types = if self.data_types.is_empty() {
-            "".into()
-        } else {
-            format!(
-                "({})",
-                self.data_types
-                    .iter()
-                    .map(|data_type| data_type.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
+        let query = self.query();
+        let name = self.name();
+        // This is safe because the statement looks like this:
+        // PREPARE __pgdog_template_name AS [...]
+        // so the template name will always match first.
+        let query = query.replacen(PREPARE_TEMPLATE_NAME, name, 1);
 
-        Query::new(format!(r#"PREPARE "{}" {} AS {}"#, name, data_types, query)).to_bytes()
+        Query::new(query).to_bytes()
     }
 }

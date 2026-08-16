@@ -5,7 +5,6 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use pgdog_postgres_types::TypeName;
 
 use crate::{
     config::PreparedStatements as PreparedStatementsLevel,
@@ -126,17 +125,12 @@ impl PreparedStatements {
     ///
     /// Nothing, but the message is renamed to a unique, global name.
     ///
-    pub fn insert_prepare(
-        &mut self,
-        name: &str,
-        query: Bytes,
-        data_types: Vec<TypeName>,
-    ) -> String {
-        let (_new, global_name) = { self.global.write().insert_prepare(query, data_types) };
+    pub(crate) fn insert_prepare(&mut self, name: &str, query: Bytes) -> Prepare {
+        let (_new, prepare) = { self.global.write().insert_prepare(query) };
 
-        self.insert_internal(name, &global_name);
+        self.insert_internal(name, prepare.name());
 
-        global_name
+        prepare
     }
 
     /// Get the global unique name for a prepared statement
