@@ -4,16 +4,16 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
         client::{Sticky, TransactionType},
-        router::Ast,
         router::sharding::ResolvedLookups,
+        router::{Ast, parser::StatementParameters},
     },
-    net::{Bind, Parameters},
+    net::Parameters,
 };
 
 #[derive(Debug)]
 pub struct RouterContext<'a> {
     /// Bound parameters to the query.
-    pub bind: Option<&'a Bind>,
+    pub bind: Option<StatementParameters<'a>>,
     /// Query we're looking it.
     pub query: Option<BufferedQuery>,
     /// Cluster configuration.
@@ -53,7 +53,7 @@ impl<'a> RouterContext<'a> {
         sticky: Sticky,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
-        let bind = buffer.parameters()?;
+        let bind = buffer.parameters()?.map(|bind| bind.into());
         let copy_mode = buffer.is_copy();
 
         Ok(Self {

@@ -25,6 +25,7 @@ mod ddl;
 mod delete;
 mod explain;
 mod plugins;
+mod prepare;
 mod select;
 mod set;
 mod set_config;
@@ -429,6 +430,10 @@ impl QueryParser {
                     stmt.conditionname().unwrap_or_default().to_owned(),
                 ));
             }
+
+            Node::PrepareStmt(stmt) => self.prepare(stmt),
+
+            Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
             Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
 
