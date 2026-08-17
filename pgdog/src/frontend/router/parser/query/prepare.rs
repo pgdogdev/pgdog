@@ -16,16 +16,16 @@ impl QueryParser {
     pub(super) fn prepare(
         &self,
         stmt: &PrepareStmt,
-        // context: &mut QueryParserContext<'_>,
+        context: &mut QueryParserContext<'_>,
     ) -> Result<Command, Error> {
         let query = stmt.query();
 
         let route = match query {
             Node::SelectStmt(_) => Route::read(ShardWithPriority::new_rr_not_executable(
-                round_robin::next().into(),
+                (round_robin::next(context.shards)).into(),
             )),
             _ => Route::write(ShardWithPriority::new_rr_not_executable(
-                round_robin::next().into(),
+                (round_robin::next(context.shards)).into(),
             )),
         };
 

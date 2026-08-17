@@ -349,7 +349,7 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
-                    round_robin::next() % context.shards,
+                    round_robin::next(context.shards),
                 )));
             // Send empty query to any shard.
             return Ok(Command::Query(Route::read(
@@ -431,7 +431,7 @@ impl QueryParser {
                 ));
             }
 
-            Node::PrepareStmt(stmt) => self.prepare(stmt),
+            Node::PrepareStmt(stmt) => self.prepare(stmt, context),
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
@@ -455,7 +455,7 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
-                    round_robin::next() % context.shards,
+                    round_robin::next(context.shards),
                 )));
 
             // Since this query isn't executable and we decided

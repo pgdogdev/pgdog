@@ -1090,9 +1090,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         if let Some(table) = ctx.table
             && Tables::new(self.schema).sharded(table).is_some()
         {
-            Ok(Some(Shard::Direct(
-                round_robin::next() % self.schema.shards,
-            )))
+            Ok(Some(Shard::Direct(round_robin::next(self.schema.shards))))
         } else {
             Ok(None)
         }

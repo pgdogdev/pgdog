@@ -107,7 +107,7 @@ impl QueryParser {
 
         // SELECT NOW(), SELECT 1
         if shards.is_empty() && stmt.from_clause().is_empty() {
-            let shard = Shard::Direct(round_robin::next() % context.shards);
+            let shard = Shard::Direct(round_robin::next(context.shards));
 
             if let Some(recorder) = self.recorder_mut() {
                 recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table".to_string());
@@ -210,12 +210,15 @@ impl QueryParser {
                         .tables()
                         .is_omnisharded_sticky_default()
                 {
-                    (context.router_context.sticky.omni_index, "sticky")
+                    (
+                        context.router_context.sticky.omni_index % context.shards,
+                        "sticky",
+                    )
                 } else {
-                    (round_robin::next(), "round robin")
+                    (round_robin::next(context.shards), "round robin")
                 };
 
-                let shard = Shard::Direct(rr_index % context.shards);
+                let shard = Shard::Direct(rr_index);
 
                 // Routed to a single shard via the omnisharded-by-default path
                 // (non-sharded tables, including system catalogs).

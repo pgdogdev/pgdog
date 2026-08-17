@@ -113,16 +113,12 @@ impl<'a> StatementRewrite<'a> {
                     plan.params = plan.params.max(param.number as u16)
                 }
             }),
-            Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
+            Node::PrepareStmt(_) => {
+                // Will use parameters for replacing args, not materialize values.
+                self.extended = true;
+            }
             // We can't do anything with DDL statements
             _ => return Ok(plan),
-        }
-
-        // Handle top-level PREPARE/EXECUTE statements.
-        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem)?;
-        if prepared_result.rewritten {
-            self.rewritten = true;
-            plan.prepare_rewrites = prepared_result.rewrites;
         }
 
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
@@ -164,6 +160,13 @@ impl<'a> StatementRewrite<'a> {
 
         if self.rewritten {
             plan.stmt = Some(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+        }
+
+        // Handle top-level PREPARE/EXECUTE statements.
+        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem)?;
+        if prepared_result.rewritten {
+            self.rewritten = true;
+            plan.prepare_rewrites = prepared_result.rewrites;
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {
