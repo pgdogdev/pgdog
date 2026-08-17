@@ -3,8 +3,7 @@ use pg_raw_parse::{
     nodes::{self, SelectStmt},
 };
 
-use super::Error;
-use crate::net::Bind;
+use super::{Error, StatementParameters};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct Limit {
@@ -15,11 +14,11 @@ pub(crate) struct Limit {
 #[derive(Debug, Clone)]
 pub(crate) struct LimitClause<'a> {
     stmt: &'a SelectStmt,
-    bind: Option<&'a Bind>,
+    bind: Option<StatementParameters<'a>>,
 }
 
 impl<'a> LimitClause<'a> {
-    pub(crate) fn new(stmt: &'a SelectStmt, bind: Option<&'a Bind>) -> Self {
+    pub(crate) fn new(stmt: &'a SelectStmt, bind: Option<StatementParameters<'a>>) -> Self {
         Self { stmt, bind }
     }
 

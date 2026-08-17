@@ -34,6 +34,7 @@ mod schema_changed;
 mod set;
 mod set_schema_sharding;
 mod sharded;
+mod sharded_prepared;
 mod spliced;
 mod test_omnisharded;
 mod transaction_state;

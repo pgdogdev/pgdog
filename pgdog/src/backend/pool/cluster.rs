@@ -779,7 +779,7 @@ impl Cluster {
     ) -> Result<Vec<T>, crate::backend::Error> {
         let shard = self
             .shards
-            .get(round_robin::next() % self.shards.len().max(1))
+            .get(round_robin::next(self.shards.len().max(1)))
             .ok_or(crate::backend::pool::Error::NoDatabases)?;
         let mut server = shard.primary_or_replica(&Request::default()).await?;
 

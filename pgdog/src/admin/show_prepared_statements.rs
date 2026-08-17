@@ -33,7 +33,7 @@ impl Command for ShowPreparedStatements {
         ];
         for (key, stmt) in statements.statements() {
             let name = stmt.name();
-            let rewrite = statements.rewritten_parse(&name).ok_or(Error::Empty)?;
+            let rewrite = statements.rewritten_parse(&name);
             let rewritten = statements.is_rewritten(&name);
             let name_memory = statements
                 .names()
@@ -43,8 +43,12 @@ impl Command for ShowPreparedStatements {
             let mut dr = DataRow::new();
             dr.add(stmt.name())
                 .add(key.query()?)
-                .add(if rewritten {
-                    rewrite.query().to_data_row_column()
+                .add(if let Some(rewrite) = rewrite {
+                    if rewritten {
+                        rewrite.query().to_data_row_column()
+                    } else {
+                        Data::null()
+                    }
                 } else {
                     Data::null()
                 })

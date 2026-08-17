@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::util::time::deadline;
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -13,7 +12,9 @@ use crate::{
         ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
+    state::State,
 };
+use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
 use pgdog_stats::PreparedStatementsConfig;
 
@@ -105,6 +106,7 @@ pub struct PreparedStatements {
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
+    server_state: State,
 }
 
 #[cfg(test)]
@@ -126,6 +128,7 @@ impl PreparedStatements {
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
+            server_state: State::Idle,
         }
     }
 
@@ -133,6 +136,10 @@ impl PreparedStatements {
     #[inline]
     pub fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+    }
+
+    pub(super) fn set_server_state(&mut self, state: State) {
+        self.server_state = state;
     }
 
     /// Current prepared statement settings.
@@ -272,6 +279,8 @@ impl PreparedStatements {
 
                 if !parse.anonymous() {
                     if self.contains(parse.name()) {
+                        // TODO(lev): perform the same in errored transaction check
+                        // as we do for PREPARE below.
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
@@ -302,15 +311,43 @@ impl PreparedStatements {
                     self.state.add('3');
                 }
             }
-            ProtocolMessage::Prepare { name, .. } => {
-                if self.contains(name) {
+            ProtocolMessage::PrepareFromClient(prepare) => {
+                use crate::net::{CommandComplete, ReadyForQuery};
+                if self.contains(prepare.name()) {
+                    if self.server_state == State::TransactionError {
+                        self.state
+                            .add_simulated(ErrorResponse::in_failed_transaction().message()?);
+                    } else {
+                        self.state
+                            .add_simulated(CommandComplete::from_str("PREPARE").message()?);
+                    }
+
+                    self.state.add_simulated(
+                        if self.server_state == State::TransactionError {
+                            ReadyForQuery::error()
+                        } else {
+                            ReadyForQuery::in_transaction(
+                                self.server_state == State::IdleInTransaction,
+                            )
+                        }
+                        .message()?,
+                    );
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(name.clone());
+                    self.parses.push_back(prepare.name().to_owned());
+                    self.state.add(ExecutionCode::ReadyForQuery);
+                }
+            }
+            ProtocolMessage::EnsurePrepared(prepare) => {
+                if self.contains(prepare.name()) {
+                    return Ok(HandleResult::Drop);
+                } else {
+                    self.parses.push_back(prepare.name().to_string());
                     self.state.add_ignore('C');
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
                     self.state.add_ignore(ExecutionCode::ReadyForQuery);
+                    self.parses.push_back(prepare.name().to_owned());
                     return Ok(HandleResult::Forward);
                 }
             }

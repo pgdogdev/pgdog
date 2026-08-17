@@ -569,7 +569,7 @@ impl Server {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
                 // never substitute a non-unique value here.
-                return Ok(message.backend(self.id));
+                break message.backend(self.id);
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
@@ -679,6 +679,9 @@ impl Server {
             '2' => self.stats.bind_complete(),
             _ => (),
         }
+
+        self.prepared_statements
+            .set_server_state(self.stats.get_state());
 
         trace!("{:#?} <<< [{}]", message, self.addr());
 
@@ -1326,7 +1329,7 @@ impl Drop for Server {
 pub mod test {
     use std::time::SystemTime;
 
-    use bytes::{BufMut, BytesMut};
+    use bytes::{BufMut, Bytes, BytesMut};
     use pgdog_stats::PreparedStatementsConfig;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1334,8 +1337,10 @@ pub mod test {
     };
 
     use crate::{
-        backend::pool::token_cache::TokenCache, config::Memory, frontend::PreparedStatements,
-        net::*,
+        backend::pool::token_cache::TokenCache,
+        config::Memory,
+        frontend::{PreparedStatements, RewritePlan},
+        net::{Prepare, *},
     };
 
     use super::{Error, *};
@@ -2314,20 +2319,20 @@ pub mod test {
 
     #[tokio::test]
     async fn test_manual_prepared() {
+        crate::logger();
         let mut server = test_server().await;
 
         let mut prep = PreparedStatements::new();
-        let mut parse = Parse::named("test", "SELECT 1::bigint");
-        prep.insert_prepare(&mut parse);
-        assert_eq!(parse.name(), "__pgdog_1");
+        let name = "test";
+        let query = Bytes::from("SELECT 1::bigint".to_owned());
+        let prepare = prep.insert_prepare(name, query.clone(), &RewritePlan::default());
+        assert_eq!(prepare.name(), "__pgdog_1");
 
         server
             .send(
-                &vec![ProtocolMessage::from(Query::new(format!(
-                    "PREPARE {} AS {}",
-                    parse.name(),
-                    parse.query()
-                )))]
+                &vec![ProtocolMessage::Query(Query::new(
+                    "PREPARE __pgdog_1 AS SELECT 1::bigint",
+                ))]
                 .into(),
             )
             .await
@@ -4360,6 +4365,126 @@ pub mod test {
             0,
             "Postgres should have no prepared statements despite many named parses"
         );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_from_client() {
+        let mut server = test_server().await;
+
+        // The last 2 will be simulated
+        // and we won't receive a "prepared statement already exists" error.
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            for c in ['C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+
+        assert!(server.prepared_statements_mut().contains("__stmt_1"));
+    }
+
+    #[tokio::test]
+    async fn test_prepared_execute() {
+        let mut server = test_server().await;
+
+        for _ in 0..3 {
+            let req = vec![
+                ProtocolMessage::EnsurePrepared(Prepare::new(
+                    "__stmt_1",
+                    "PREPARE __pgdog_template_name (int) AS SELECT $1",
+                )),
+                ProtocolMessage::Query(Query::new("EXECUTE __stmt_1 (1)")),
+            ];
+
+            server.send(&req.into()).await.unwrap();
+
+            for c in ['T', 'D', 'C', 'Z'] {
+                let msg = server.read().await.unwrap();
+                assert_eq!(msg.code(), c);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_in_transaction() {
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            let cmd = server.read().await.unwrap();
+            assert_eq!(cmd.code(), 'C');
+            let rfq = server.read().await.unwrap();
+            assert!(rfq.in_transaction());
+        }
+
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_prepare_in_transaction_error() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                    "__stmt_1",
+                    "PREPARE __pgdog_template_name AS SELECT $1",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let cmd = server.read().await.unwrap();
+        assert_eq!(cmd.code(), 'C');
+        let rfq = server.read().await.unwrap();
+        assert!(!rfq.in_transaction());
+
+        server.execute("BEGIN").await.unwrap();
+
+        let _ = server.execute("SELECT asd").await;
+
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            let err = ErrorResponse::try_from(server.read().await.unwrap()).unwrap();
+            assert_eq!(err.code, "25P02");
+
+            let rfq = ReadyForQuery::try_from(server.read().await.unwrap()).unwrap();
+            assert!(rfq.is_transaction_aborted());
+        }
     }
 
     #[test]

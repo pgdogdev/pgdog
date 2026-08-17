@@ -66,6 +66,11 @@ pub struct ParameterWithFormat<'a> {
 }
 
 impl<'a> ParameterWithFormat<'a> {
+    /// Create new parameter with format information.
+    pub(crate) fn new(parameter: &'a Parameter, format: Format) -> Self {
+        Self { parameter, format }
+    }
+
     /// Get text representation if it's valid UTF-8.
     pub fn text(&self) -> Option<&str> {
         from_utf8(&self.parameter.data).ok()
@@ -268,11 +273,11 @@ impl Bind {
         me
     }
 
-    pub fn params_raw(&self) -> &Vec<Parameter> {
+    pub fn params_raw(&self) -> &[Parameter] {
         &self.params
     }
 
-    pub fn format_codes_raw(&self) -> &Vec<Format> {
+    pub fn format_codes_raw(&self) -> &[Format] {
         &self.codes
     }
 

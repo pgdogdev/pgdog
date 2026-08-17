@@ -201,7 +201,6 @@ mod tests {
     use super::*;
     use crate::backend::pool::ClusterMetrics;
     use parking_lot::Mutex;
-    use pgdog_config::QueryParserEngine;
     use std::sync::Arc;
     use tokio::sync::mpsc::{Receiver, channel};
 
@@ -500,7 +499,7 @@ mod tests {
 
     fn request_with_ast(query: &str) -> ClientRequest {
         use crate::frontend::router::Ast;
-        let ast = Ast::new_record(query, QueryParserEngine::PgQueryProtobuf).unwrap();
+        let ast = Ast::new_record(query).unwrap();
         ClientRequest {
             ast: Some(ast),
             ..Default::default()

@@ -18,6 +18,7 @@ use super::Error;
 /// Contains a lot of info we collect from the router context
 /// and its inputs.
 ///
+#[derive(Clone)]
 pub struct QueryParserContext<'a> {
     /// Cluster is read-only, i.e. has no primary.
     pub(super) read_only: bool,

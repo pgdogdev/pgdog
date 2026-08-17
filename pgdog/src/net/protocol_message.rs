@@ -1,6 +1,8 @@
 use bytes::Buf;
 use std::io::Cursor;
 
+use crate::net::Prepare;
+
 use super::{
     Bind, Close, CopyData, CopyDone, CopyFail, Describe, Execute, Fastpath, Flush, FromBytes,
     Message, Parse, Protocol, Query, Sync, ToBytes,
@@ -11,7 +13,8 @@ pub enum ProtocolMessage {
     Bind(Bind),
     Parse(Parse),
     Describe(Describe),
-    Prepare { name: String, statement: String },
+    EnsurePrepared(Prepare),
+    PrepareFromClient(Prepare),
     Execute(Execute),
     Close(Close),
     Query(Query),
@@ -59,7 +62,8 @@ impl ProtocolMessage {
             Self::Bind(bind) => bind.len(),
             Self::Parse(parse) => parse.len(),
             Self::Describe(describe) => describe.len(),
-            Self::Prepare { statement, .. } => statement.len() + 1 + 1 + 4, // NULL + code + len
+            Self::EnsurePrepared(prepare) => prepare.len(),
+            Self::PrepareFromClient(prepare) => prepare.len(),
             Self::Execute(execute) => execute.len(),
             Self::Close(close) => close.len(),
             Self::Query(query) => query.len(),
@@ -79,7 +83,7 @@ impl Protocol for ProtocolMessage {
             Self::Bind(bind) => bind.code(),
             Self::Parse(parse) => parse.code(),
             Self::Describe(describe) => describe.code(),
-            Self::Prepare { .. } => 'Q',
+            Self::EnsurePrepared { .. } | Self::PrepareFromClient { .. } => 'Q',
             Self::Execute(execute) => execute.code(),
             Self::Close(close) => close.code(),
             Self::Query(query) => query.code(),
@@ -119,9 +123,8 @@ impl ToBytes for ProtocolMessage {
             Self::Bind(bind) => bind.to_bytes(),
             Self::Parse(parse) => parse.to_bytes(),
             Self::Describe(describe) => describe.to_bytes(),
-            Self::Prepare { statement, name } => {
-                Query::new(format!("PREPARE {} AS {}", name, statement)).to_bytes()
-            }
+            Self::EnsurePrepared(prepare) => prepare.to_bytes(),
+            Self::PrepareFromClient(prepare) => prepare.to_bytes(),
             Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use super::StatementParameters;
 use crate::util::ResultControlFlowExt;
 use itertools::*;
 use pg_raw_parse::walk::Recurse;
@@ -10,7 +11,7 @@ use std::ops::ControlFlow;
 
 fn advisory_locks_from_func_call(
     func: &nodes::FuncCall,
-    bind: Option<&Bind>,
+    bind: Option<StatementParameters<'_>>,
     values_columns: Option<&ValuesColumns<'_>>,
 ) -> Vec<AdvisoryLock> {
     let mut name_parts = func.funcname().into_iter().filter_map(Node::as_str);
@@ -136,7 +137,7 @@ fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>>
     Some(values)
 }
 
-fn integer_arg(node: Node<'_>, bind: Option<&Bind>) -> Option<i64> {
+fn integer_arg(node: Node<'_>, bind: Option<StatementParameters<'_>>) -> Option<i64> {
     match node {
         Node::A_Const(a) => a.val()?.numeric_value(),
         Node::TypeCast(c) => integer_arg(c.arg(), bind),
@@ -232,7 +233,7 @@ use crate::{
             ShardedTable, Tables, lookup,
         },
     },
-    net::{Bind, messages::Format, parameter::ParameterValue},
+    net::{messages::Format, parameter::ParameterValue},
 };
 use pgdog_config::LookupResult;
 
@@ -355,7 +356,7 @@ pub struct SchemaLookupContext<'a> {
 
 pub struct StatementParser<'a, 'b, 'c> {
     stmt: pg_raw_parse::Node<'a>,
-    bind: Option<&'b Bind>,
+    bind: Option<StatementParameters<'b>>,
     schema: &'b ShardingSchema,
     recorder: Option<&'c mut ExplainRecorder>,
     /// Optional schema lookup context for INSERT without column list.
@@ -373,7 +374,7 @@ pub struct StatementParser<'a, 'b, 'c> {
 impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     pub(crate) fn new(
         stmt: Node<'a>,
-        bind: Option<&'b Bind>,
+        bind: Option<StatementParameters<'b>>,
         schema: &'b ShardingSchema,
         recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
@@ -439,7 +440,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     /// Record a sharding key match.
     fn record_sharding_key(&mut self, shard: &Shard, column: Column<'_>, value: &Value<'_>) {
         self.hooks
-            .record_sharding_key(shard, &column, value, &self.bind);
+            .record_sharding_key(shard, &column, value, self.bind);
 
         if let Some(recorder) = self.recorder.as_mut() {
             let col_str = if let Some(table) = column.table {
@@ -1089,9 +1090,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         if let Some(table) = ctx.table
             && Tables::new(self.schema).sharded(table).is_some()
         {
-            Ok(Some(Shard::Direct(
-                round_robin::next() % self.schema.shards,
-            )))
+            Ok(Some(Shard::Direct(round_robin::next(self.schema.shards))))
         } else {
             Ok(None)
         }
@@ -1168,7 +1167,7 @@ mod test {
         let schema = test_schema();
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind, &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
         parser.shard()
     }
 
@@ -1181,7 +1180,7 @@ mod test {
     ) -> (Option<Shard>, Vec<PendingLookup>) {
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind, schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), schema, None);
         let shard = parser.shard().unwrap();
         (shard, parser.take_pending_lookups())
     }
@@ -2148,7 +2147,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind, &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
         parser.shard()
     }
 
@@ -2260,7 +2259,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind, &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
         parser.shard()
     }
 
@@ -2416,7 +2415,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind, &sharding_schema, None)
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &sharding_schema, None)
             .with_schema_lookup(schema_lookup);
         parser.shard()
     }
@@ -2619,7 +2618,7 @@ mod test {
             let schema = ShardingSchema::default();
             let raw = pg_raw_parse::parse(query).unwrap();
             let stmt = raw.stmts().next().unwrap();
-            let mut parser = StatementParser::new(stmt, bind, &schema, None);
+            let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
             let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
             v.sort_by_key(|l| (l.id, l.unlock));
             v

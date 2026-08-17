@@ -10,12 +10,12 @@ use crate::{
         round_robin,
         sharding::{self, Centroids, ContextBuilder, ShardOrLookup},
     },
-    net::{
-        messages::{Bind, Vector},
-        parameter::ParameterValue,
-    },
+    net::{messages::Vector, parameter::ParameterValue},
     plugin::plugins,
 };
+
+#[cfg(test)]
+use crate::net::messages::Bind;
 
 use super::{
     explain_trace::{ExplainRecorder, ExplainSummary},
@@ -25,6 +25,7 @@ mod ddl;
 mod delete;
 mod explain;
 mod plugins;
+mod prepare;
 mod select;
 mod set;
 mod set_config;
@@ -348,7 +349,7 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_empty_query(Shard::Direct(
-                    round_robin::next() % context.shards,
+                    round_robin::next(context.shards),
                 )));
             // Send empty query to any shard.
             return Ok(Command::Query(Route::read(
@@ -430,6 +431,10 @@ impl QueryParser {
                 ));
             }
 
+            Node::PrepareStmt(stmt) => self.prepare(stmt, context),
+
+            Node::ExecuteStmt(stmt) => self.execute(stmt, context),
+
             Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
 
             Node::DiscardStmt { .. } => {
@@ -450,7 +455,7 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_not_executable(Shard::Direct(
-                    round_robin::next() % context.shards,
+                    round_robin::next(context.shards),
                 )));
 
             // Since this query isn't executable and we decided
@@ -519,11 +524,7 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
                 let query = context.query()?.query();
-                Cache::get().record_normalized(
-                    query,
-                    command.route(),
-                    context.sharding_schema.query_parser_engine,
-                )?;
+                Cache::get().record_normalized(query, command.route())?;
             }
             Ok(command.dry_run())
         } else {

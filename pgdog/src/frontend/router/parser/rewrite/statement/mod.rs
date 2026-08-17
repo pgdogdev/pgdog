@@ -20,8 +20,8 @@ pub mod update;
 
 pub use error::Error;
 pub use insert::InsertSplit;
-pub(crate) use plan::RewritePlan;
-pub use simple_prepared::SimplePreparedResult;
+pub use plan::RewritePlan;
+pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
 
 /// Statement rewrite engine context.
@@ -104,32 +104,41 @@ impl<'a> StatementRewrite<'a> {
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
-        match stmt.stmt() {
+        let node = stmt.stmt();
+        let parameterized_stmt = match node {
             Node::InsertStmt(_)
             | Node::SelectStmt(_)
             | Node::UpdateStmt(_)
-            | Node::DeleteStmt(_) => walk::walk(stmt.stmt(), |node| {
+            | Node::DeleteStmt(_) => Some(node),
+            Node::PrepareStmt(prepare) => {
+                // Will use parameters for replacing args, not materialize values.
+                self.extended = true;
+                Some(prepare.query())
+            }
+            Node::ExecuteStmt(_) | Node::ExplainStmt(_) => None,
+            // We can't do anything with DDL statements
+            _ => return Ok(plan),
+        };
+
+        if let Some(parameterized_stmt) = parameterized_stmt {
+            walk::walk(parameterized_stmt, |node| {
                 if let Node::ParamRef(param) = node {
                     plan.params = plan.params.max(param.number as u16)
                 }
-            }),
-            Node::PrepareStmt(_) | Node::ExecuteStmt(_) | Node::ExplainStmt(_) => {}
-            // We can't do anything with DDL statements
-            _ => return Ok(plan),
-        }
-
-        // Handle top-level PREPARE/EXECUTE statements.
-        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem)?;
-        if prepared_result.rewritten {
-            self.rewritten = true;
-            plan.prepares = prepared_result.prepares;
+            });
         }
 
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
-        if let NodeMut::InsertStmt(insert) = stmt.stmt_mut() {
-            self.inject_auto_id(insert, mem, &mut plan)?;
+        match stmt.stmt_mut() {
+            NodeMut::InsertStmt(insert) => self.inject_auto_id(insert, mem, &mut plan)?,
+            NodeMut::PrepareStmt(mut prepare) => {
+                if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
+                    self.inject_auto_id(insert, mem, &mut plan)?;
+                }
+            }
+            _ => {}
         }
 
         // Track the next parameter number to use
@@ -160,6 +169,13 @@ impl<'a> StatementRewrite<'a> {
         if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
             self.limit_offset(&select, &mut plan);
+        }
+
+        // Handle top-level PREPARE/EXECUTE statements.
+        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan)?;
+        if prepared_result.rewritten {
+            self.rewritten = true;
+            plan.prepare_rewrites = prepared_result.rewrites;
         }
 
         if self.rewritten {

@@ -33,7 +33,7 @@ async fn test_close_parse_same_name_global_cache() {
     assert_eq!(cached_query, "SELECT $1");
 
     // Verify the client's local cache
-    assert_eq!(client.client().prepared_statements.len_local(), 1);
+    assert_eq!(client.client().prepared_statements.num_statements(), 1);
     assert!(
         client
             .client()

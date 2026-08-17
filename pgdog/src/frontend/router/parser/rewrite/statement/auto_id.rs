@@ -200,6 +200,7 @@ mod tests {
     use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::{Relation, Schema};
     use crate::backend::{ShardedTables, ShardingSchema};
+    use crate::config::PreparedStatements as PreparedStatementsLevel;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::test_utils::set_env_var;
@@ -489,13 +490,22 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
     ) -> Result<(String, RewritePlan), Error> {
+        let mut prepared = PreparedStatements::default();
+        rewrite_sql_with_prepared_statements(sql, db_schema, schema, &mut prepared)
+    }
+
+    fn rewrite_sql_with_prepared_statements(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+        prepared: &mut PreparedStatements,
+    ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let ast = pg_raw_parse::parse(sql).unwrap();
-        let mut prepared = PreparedStatements::default();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             extended: false,
             prepared: false,
-            prepared_statements: &mut prepared,
+            prepared_statements: prepared,
             schema,
             db_schema,
             user: "",
@@ -509,6 +519,53 @@ mod tests {
         })?;
         let sql = pg_raw_parse::deparse_stmts(&*ast)?;
         Ok((sql, plan))
+    }
+
+    #[test]
+    fn test_prepare_execute_rewrite_injects_auto_id() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = sharding_schema_with_mode(RewriteMode::Rewrite);
+        let mut prepared = PreparedStatements::default();
+        prepared.set_level(PreparedStatementsLevel::Full);
+
+        let (prepare_sql, prepare_plan) = rewrite_sql_with_prepared_statements(
+            "PREPARE stmt(text) AS INSERT INTO users (name) VALUES ($1)",
+            &db_schema,
+            &schema,
+            &mut prepared,
+        )
+        .unwrap();
+
+        assert_eq!(prepare_plan.params, 1);
+        assert_eq!(prepare_plan.auto_id_injected, 1);
+        assert_eq!(prepare_plan.unique_ids, 1);
+        assert!(prepare_sql.contains("(name, id)"));
+        assert!(prepare_sql.contains("$2::bigint"));
+
+        let (execute_sql, _) = rewrite_sql_with_prepared_statements(
+            "EXECUTE stmt('alice')",
+            &db_schema,
+            &schema,
+            &mut prepared,
+        )
+        .unwrap();
+        let ast = pg_raw_parse::parse(&execute_sql).unwrap();
+        let Node::ExecuteStmt(execute) = ast.stmts().next().unwrap() else {
+            panic!("expected EXECUTE statement");
+        };
+
+        assert_eq!(execute.params().len(), 2);
+        assert!(matches!(
+            execute.params().first(),
+            Some(Node::A_Const(value))
+                if matches!(value.val(), Some(pg_raw_parse::ConstValue::String("alice")))
+        ));
+        assert!(matches!(
+            execute.params().get(1),
+            Some(Node::A_Const(value))
+                if matches!(value.val(), Some(pg_raw_parse::ConstValue::Float(id))
+                    if id.parse::<i64>().is_ok())
+        ));
     }
 
     #[test]

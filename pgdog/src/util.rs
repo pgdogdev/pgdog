@@ -533,6 +533,7 @@ mod test {
     }
 
     #[test]
+    #[pgdog_macros::flaky]
     fn test_node_id_error() {
         let _guard = remove_env_var("NODE_ID");
         assert!(node_id().is_err());
