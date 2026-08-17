@@ -33,7 +33,7 @@ impl CacheKey {
     pub(crate) fn query(&self) -> Result<&str, crate::net::Error> {
         match self {
             Self::Extended { query, .. } => Ok(from_utf8(&query[0..query.len() - 1])?),
-            Self::Simple { query } => Ok(from_utf8(&query)?), // Simple queries are regular Rust strings.
+            Self::Simple { query } => Ok(from_utf8(query)?), // Simple queries are regular Rust strings.
         }
     }
 }

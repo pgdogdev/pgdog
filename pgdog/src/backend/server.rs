@@ -569,7 +569,7 @@ impl Server {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
                 // never substitute a non-unique value here.
-                return Ok(message.backend(self.id));
+                break message.backend(self.id);
             }
             match self.stream_buffer.read(self.stream.as_mut().unwrap()).await {
                 Ok(message) => {
