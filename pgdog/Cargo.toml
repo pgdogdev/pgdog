@@ -103,7 +103,3 @@ stats_alloc = "0.1.10"
 brunch = "0.5"
 wiremock = "0.6"
 tokio = { version = "1", features = ["full", "test-util"] }
-
-[[bench]]
-name = "comment_parser"
-harness = false
