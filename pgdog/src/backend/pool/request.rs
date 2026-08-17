@@ -8,14 +8,19 @@ pub struct Request {
     pub id: FrontendPid,
     pub created_at: Instant,
     pub read: bool,
+
+    // Load balancer uses this to determine if primary should be allowed to read.
+    // Propagated from `User.read_only` setting.
+    pub read_only: bool,
 }
 
 impl Request {
-    pub fn new(id: FrontendPid, read: bool) -> Self {
+    pub fn new(id: FrontendPid, read: bool, read_only: bool) -> Self {
         Self {
             id,
             created_at: Instant::now(),
             read,
+            read_only,
         }
     }
 
@@ -24,6 +29,7 @@ impl Request {
             id,
             created_at: Instant::now(),
             read: false,
+            read_only: false,
         }
     }
 }

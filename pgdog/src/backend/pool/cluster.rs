@@ -46,6 +46,7 @@ pub struct PoolConfig {
 
 /// A collection of sharded replicas and primaries
 /// belonging to the same database cluster.
+/// Mapped to a singular `User`, see "databases: HashMap<User, Cluster>" in backend/databases.rs
 #[derive(Clone, Debug)]
 pub struct Cluster {
     identifier: Arc<DatabaseUser>,
@@ -89,6 +90,7 @@ pub struct Cluster {
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
     canonical_oids: Option<Arc<CanonicalOids>>,
+    read_only: bool,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -140,6 +142,7 @@ impl Default for Cluster {
             tls_client_certificate_required: Default::default(),
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
+            read_only: Default::default(),
         }
     }
 }
@@ -233,6 +236,7 @@ pub struct ClusterConfig<'a> {
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
+    read_only: bool,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -306,6 +310,7 @@ impl<'a> ClusterConfig<'a> {
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
+            read_only: user.read_only.unwrap_or(false),
         }
     }
 }
@@ -356,6 +361,7 @@ impl Cluster {
             tls_client_certificate_required,
             schema_cache,
             canonicalize_oids,
+            read_only,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -428,6 +434,7 @@ impl Cluster {
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
+            read_only,
         }
     }
 
@@ -559,8 +566,13 @@ impl Cluster {
         self.pub_sub_channel_size > 0
     }
 
-    /// A cluster is read_only if zero shards have a primary.
+    /// A cluster is read_only if zero shards have a primary,
+    /// or if `read_only` for the corresponding `User` is set to true.
     pub fn read_only(&self) -> bool {
+        if self.read_only {
+            return true;
+        }
+
         for shard in &self.shards {
             if shard.has_primary() {
                 return false;

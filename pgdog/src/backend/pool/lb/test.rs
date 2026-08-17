@@ -402,6 +402,95 @@ async fn test_read_write_split_exclude_primary() {
     replicas.shutdown();
 }
 
+/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
+/// then ensures that the primary is not chosen for reads. We have replicas available.
+#[tokio::test]
+async fn test_user_read_only_include_primary() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [
+        create_test_pool_config("localhost", 5432),
+        create_test_pool_config("127.0.0.1", 5432),
+    ];
+
+    // Use `IncludePrimary`
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+
+    // Notice that we `read` to true and `read_only` to true.
+    let request = Request::new(Default::default(), true, true);
+
+    // Try getting connections multiple times and verify primary is never used
+    let mut replica_ids = HashSet::new();
+    for _ in 0..100 {
+        let conn = replicas.get(&request).await.unwrap();
+        replica_ids.insert(conn.pool.id());
+    }
+
+    // Should only use replica pools, not primary
+    assert_eq!(replica_ids.len(), 2);
+
+    // Verify primary pool ID is not in the set of used pools
+    let primary_id = replicas.primary().unwrap().id();
+    assert!(!replica_ids.contains(&primary_id));
+
+    // Shutdown both primary and replicas
+    replicas.shutdown();
+}
+
+/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
+/// then ensures that the primary IS chosen for reads. We have no usable replicas.
+#[tokio::test]
+async fn test_user_read_only_include_primary_no_replicas() {
+    let primary_config = create_test_pool_config("127.0.0.1", 5432);
+    let primary_pool = Pool::new(&primary_config);
+    primary_pool.launch();
+
+    let replica_configs = [create_test_pool_config("localhost", 5432)];
+
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &replica_configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+
+    // Ban the replica
+    let replica_ban = &replicas.targets[0].ban;
+    replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
+
+    // `read_only` is set to true. This would usually override `IncludePrimary`,
+    // but we have no replicas available.
+    let request = Request::new(Default::default(), true, true);
+
+    // Should only use primary since replica is banned
+    let mut used_pool_ids = HashSet::new();
+    for _ in 0..10 {
+        let conn = replicas.get(&request).await.unwrap();
+        used_pool_ids.insert(conn.pool.id());
+    }
+
+    // Should only use primary pool since replica is banned
+    assert_eq!(used_pool_ids.len(), 1);
+
+    // Verify primary pool ID is in the set of used pools
+    let primary_id = replicas.targets.last().unwrap().pool.id();
+    assert!(used_pool_ids.contains(&primary_id));
+
+    // Shutdown both primary and replicas
+    replicas.shutdown();
+}
+
 #[tokio::test]
 async fn test_read_write_split_include_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
