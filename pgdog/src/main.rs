@@ -1,6 +1,7 @@
 #![allow(clippy::len_without_is_empty)]
 #![allow(clippy::result_unit_err)]
 #![deny(clippy::print_stdout)]
+#![allow(clippy::enum_variant_names)]
 
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
