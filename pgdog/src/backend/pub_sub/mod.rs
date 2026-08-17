@@ -1,5 +1,4 @@
 pub mod client;
-pub mod commands;
 pub mod listener;
 pub mod notification;
 pub mod stats;

@@ -37,10 +37,10 @@ use tracing_throttle::{Policy, SuppressionSummary, TracingRateLimitLayer};
 #[macro_use]
 extern crate derive_more;
 
-pub mod admin;
-pub mod api;
-pub mod auth;
-pub mod backend;
+mod admin;
+mod api;
+mod auth;
+mod backend;
 pub mod cli;
 pub mod config;
 pub mod frontend;
@@ -54,8 +54,6 @@ pub(crate) mod sync;
 pub mod tasks;
 #[cfg(test)]
 pub mod test_utils;
-#[cfg(feature = "tui")]
-pub mod tui;
 pub mod unique_id;
 pub mod util;
 

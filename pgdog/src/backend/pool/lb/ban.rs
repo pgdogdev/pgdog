@@ -87,11 +87,6 @@ impl Ban {
         }
     }
 
-    /// Get reference to the connection pool.
-    pub fn pool(&self) -> &Pool {
-        &self.pool
-    }
-
     /// Ban the database for the ban_timeout duration.
     pub fn ban(&self, error: Error, ban_timeout: Duration) -> bool {
         let created_at = Instant::now();
@@ -278,7 +273,7 @@ mod tests {
     fn test_pool_reference() {
         let pool = Pool::new_test();
         let ban = Ban::new(&pool);
-        assert_eq!(ban.pool().id(), pool.id());
+        assert_eq!(ban.pool.id(), pool.id());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::{
     frontend::client::query_engine::two_pc::TwoPcTransactions,
     net::{
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
-        replication::{StatusUpdate, XLogData},
+        replication::StatusUpdate,
     },
     util::random_string,
 };
@@ -20,7 +20,6 @@ pub use pgdog_stats::Lsn;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Snapshot {
-    Export,
     Use,
     Nothing,
 }
@@ -34,7 +33,6 @@ pub enum SlotKind {
 impl Display for Snapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Export => write!(f, "snapshot"),
             Self::Use => write!(f, "use"),
             Self::Nothing => write!(f, "nothing"),
         }
@@ -417,11 +415,6 @@ impl ReplicationSlot {
     pub fn lsn(&self) -> Lsn {
         self.lsn
     }
-
-    /// Slot name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -430,23 +423,26 @@ pub enum ReplicationData {
     CopyDone,
 }
 
-impl ReplicationData {
-    pub fn xlog_data(&self) -> Option<XLogData> {
-        if let Self::CopyData(copy_data) = self {
-            copy_data.xlog_data()
-        } else {
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use tokio::spawn;
 
-    use crate::{backend::server::test::test_server, net::replication::xlog_data::XLogPayload};
+    use crate::{
+        backend::server::test::test_server,
+        net::replication::xlog_data::{XLogData, XLogPayload},
+    };
 
     use super::*;
+
+    impl ReplicationData {
+        fn xlog_data(&self) -> Option<XLogData> {
+            if let Self::CopyData(copy_data) = self {
+                copy_data.xlog_data()
+            } else {
+                None
+            }
+        }
+    }
 
     #[test]
     fn test_lsn() {

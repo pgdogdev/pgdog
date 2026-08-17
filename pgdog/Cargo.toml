@@ -10,9 +10,6 @@ repository = "https://github.com/pgdogdev/pgdog"
 readme = "README.md"
 default-run = "pgdog"
 
-[features]
-tui = ["ratatui"]
-
 [dependencies]
 bon.workspace = true
 pin-project = "1"
@@ -51,7 +48,6 @@ memchr = "2"
 semver = "1"
 uuid.workspace = true
 url = "2"
-ratatui = { version = "0.30.0-alpha.1", optional = true }
 rmp-serde = "1"
 rust_decimal = { version = "1.36", features = ["db-postgres", "macros", "maths"] }
 chrono = "0.4"

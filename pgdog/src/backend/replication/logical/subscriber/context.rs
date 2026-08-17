@@ -86,11 +86,6 @@ impl StreamContext {
         }
     }
 
-    /// The `Bind` message to send to the destination.
-    pub fn bind(&self) -> &Bind {
-        &self.bind
-    }
-
     /// Consume the context into the routed shard and the `Bind`, so
     /// the send path owns the message without cloning it.
     pub fn into_parts(self) -> (Shard, Bind) {
@@ -183,9 +178,9 @@ mod test {
         let parse = Parse::new_anonymous("INSERT INTO sharded (id) VALUES ($1)");
 
         let ctx = StreamContext::new(&cluster, &tuple, &parse).await.unwrap();
-        assert_eq!(ctx.bind().parameter_format(0).unwrap(), Format::Binary);
+        assert_eq!(ctx.bind.parameter_format(0).unwrap(), Format::Binary);
         assert_eq!(
-            ctx.bind().parameter(0).unwrap().unwrap().data(),
+            ctx.bind.parameter(0).unwrap().unwrap().data(),
             &id.to_be_bytes()
         );
         assert!(matches!(ctx.shard(), Shard::Direct(_)));

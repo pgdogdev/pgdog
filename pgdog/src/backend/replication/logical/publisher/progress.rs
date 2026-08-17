@@ -36,10 +36,6 @@ impl Progress {
         Self::new(Some(table), ProgressKind::DataSync)
     }
 
-    pub fn new_replication(table: &PublicationTable) -> Self {
-        Self::new(Some(table), ProgressKind::Replication)
-    }
-
     pub fn new_stream() -> Self {
         Self::new(None, ProgressKind::Replication)
     }

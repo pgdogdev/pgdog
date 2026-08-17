@@ -311,11 +311,6 @@ impl LoadBalancer {
         Ok(())
     }
 
-    /// Replica pools handle.
-    pub fn pools(&self) -> Vec<&Pool> {
-        self.targets.iter().map(|target| &target.pool).collect()
-    }
-
     /// Collect all connection pools used for read queries.
     pub fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
         let result: Vec<_> = self

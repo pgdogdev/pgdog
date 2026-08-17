@@ -12,7 +12,6 @@ pub use error::*;
 use ee::*;
 use orchestrator::*;
 pub use publisher::publisher_impl::{Publisher, Waiter};
-pub use subscriber::{CopySubscriber, StreamSubscriber};
 
 use crate::{
     backend::{

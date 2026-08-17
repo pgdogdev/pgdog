@@ -8,7 +8,7 @@ use crate::config::{
     ShardedMappingList, ShardedMappingRange,
 };
 use crate::{
-    backend::server::test::test_server,
+    backend::{ShardingSchema, server::test::test_server},
     config::FlexibleType,
     net::{Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter},
 };
@@ -89,11 +89,6 @@ async fn test_shard_varchar() {
 }
 
 fn assert_shard(val: &[u8], expected_shard: usize) {
-    let schema = ShardingSchema {
-        shards: 3,
-        ..Default::default()
-    };
-
     let table = ShardedTable {
         data_type: DataType::Varchar,
         ..Default::default()
@@ -102,8 +97,6 @@ fn assert_shard(val: &[u8], expected_shard: usize) {
     assert_eq!(varchar(val) as usize % 3, expected_shard);
 
     let s = from_utf8(val).unwrap();
-    let shard = shard_str(s, &schema, &vec![], 0);
-    assert_eq!(shard, Shard::Direct(expected_shard));
     let shard = shard_value(
         s,
         &crate::config::DataType::Varchar,

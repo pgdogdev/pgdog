@@ -13,7 +13,6 @@ use tokio::sync::{
 use crate::backend::pool::Address;
 use crate::{
     backend::Server,
-    frontend::ClientRequest,
     net::{Message, ProtocolMessage},
 };
 
@@ -54,22 +53,6 @@ impl ParallelConnection {
             .send(ParallelMessage::ProtocolMessage(message.clone()))
             .await
             .map_err(|_| Error::ParallelConnection)?;
-
-        Ok(())
-    }
-
-    // Queue up the contents of the buffer.
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
-        for message in client_request.messages.iter() {
-            self.tx
-                .send(ParallelMessage::ProtocolMessage(message.clone()))
-                .await
-                .map_err(|_| Error::ParallelConnection)?;
-            self.tx
-                .send(ParallelMessage::Flush)
-                .await
-                .map_err(|_| Error::ParallelConnection)?;
-        }
 
         Ok(())
     }
@@ -235,15 +218,11 @@ mod test {
         let mut parallel = ParallelConnection::new(server).unwrap();
 
         parallel
-            .send(
-                &vec![
-                    Parse::named("test", "SELECT $1::bigint").into(),
-                    Sync.into(),
-                ]
-                .into(),
-            )
+            .send_one(&Parse::named("test", "SELECT $1::bigint").into())
             .await
             .unwrap();
+        parallel.send_one(&Sync.into()).await.unwrap();
+        parallel.flush().await.unwrap();
 
         for c in ['1', 'Z'] {
             let msg = parallel.read().await.unwrap();

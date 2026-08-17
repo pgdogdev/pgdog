@@ -10,22 +10,8 @@ use super::Statement;
 
 #[derive(Clone)]
 pub enum Item {
-    Index {
-        schema: String,
-        table: String,
-        name: String,
-    },
-    Table {
-        schema: String,
-        name: String,
-    },
-    TableDump {
-        schema: String,
-        name: String,
-    },
-    Other {
-        sql: String,
-    },
+    Table { schema: String, name: String },
+    Other { sql: String },
 }
 
 fn no_comments(sql: &str) -> String {
@@ -66,19 +52,8 @@ impl Default for Item {
 impl Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Index {
-                schema,
-                table,
-                name,
-            } => write!(
-                f,
-                "index \"{}\" on table \"{}\".\"{}\"",
-                name, schema, table
-            ),
-
             Self::Table { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
             Self::Other { sql } => write!(f, "\"{}\"", no_comments(sql)),
-            Self::TableDump { schema, name } => write!(f, "table \"{}\".\"{}\"", schema, name),
         }
     }
 }
@@ -86,10 +61,8 @@ impl Display for Item {
 impl Item {
     fn action(&self) -> &str {
         match self {
-            Self::Index { .. } => "creating",
             Self::Table { .. } => "creating",
             Self::Other { .. } => "executing",
-            Self::TableDump { .. } => "fetching schema for",
         }
     }
 }
