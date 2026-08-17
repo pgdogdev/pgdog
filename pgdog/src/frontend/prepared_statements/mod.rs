@@ -52,12 +52,6 @@ impl Default for PreparedStatements {
     }
 }
 
-impl Drop for PreparedStatements {
-    fn drop(&mut self) {
-        self.close_all();
-    }
-}
-
 impl PreparedStatements {
     /// New shared prepared statements cache instance.
     ///
@@ -177,7 +171,7 @@ impl PreparedStatements {
     ///
     /// This only happens when the client disconnects. This will update
     /// the global usage counters of all of client's prepared statements.
-    fn close_all(&mut self) {
+    pub(super) fn close_all(&mut self) {
         if !self.local.is_empty() {
             let mut global = self.global.write();
 
