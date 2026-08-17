@@ -28,19 +28,26 @@ impl MemoryUsage for CacheKey {
 }
 
 impl CacheKey {
-    pub(super) fn query_ref(&self) -> &Bytes {
-        match self {
-            Self::Extended { query, .. } => query,
-            Self::Simple { query, .. } => query,
-        }
-    }
-
     /// Get a UTF-8 encoded query string
     /// stored in the cache.
     pub(crate) fn query(&self) -> Result<&str, crate::net::Error> {
-        let query = self.query_ref();
+        match self {
+            Self::Extended { query, .. } => Ok(from_utf8(&query[0..query.len() - 1])?),
+            Self::Simple { query } => Ok(from_utf8(&query)?), // Simple queries are regular Rust strings.
+        }
+    }
+}
 
-        // Postgres string.
-        Ok(from_utf8(&query[0..query.len() - 1])?)
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    impl CacheKey {
+        pub(crate) fn query_ref(&self) -> &Bytes {
+            match self {
+                Self::Extended { query, .. } => query,
+                Self::Simple { query, .. } => query,
+            }
+        }
     }
 }

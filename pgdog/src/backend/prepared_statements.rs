@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::util::time::deadline;
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -13,7 +12,9 @@ use crate::{
         ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
+    state::State,
 };
+use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
 use pgdog_stats::PreparedStatementsConfig;
 
@@ -105,7 +106,7 @@ pub struct PreparedStatements {
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
-    in_transaction: bool,
+    server_state: State,
 }
 
 #[cfg(test)]
@@ -127,7 +128,7 @@ impl PreparedStatements {
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
-            in_transaction: false,
+            server_state: State::Idle,
         }
     }
 
@@ -137,8 +138,8 @@ impl PreparedStatements {
         self.config = config;
     }
 
-    pub(super) fn set_in_transaction(&mut self, in_transaction: bool) {
-        self.in_transaction = in_transaction;
+    pub(super) fn set_server_state(&mut self, state: State) {
+        self.server_state = state;
     }
 
     /// Current prepared statement settings.
@@ -278,6 +279,8 @@ impl PreparedStatements {
 
                 if !parse.anonymous() {
                     if self.contains(parse.name()) {
+                        // TODO(lev): perform the same in errored transaction check
+                        // as we do for PREPARE below.
                         self.state.add_simulated(ParseComplete.message()?);
                         return Ok(HandleResult::Drop);
                     } else {
@@ -311,10 +314,23 @@ impl PreparedStatements {
             ProtocolMessage::PrepareFromClient(prepare) => {
                 use crate::net::{CommandComplete, ReadyForQuery};
                 if self.contains(prepare.name()) {
-                    self.state
-                        .add_simulated(CommandComplete::from_str("PREPARE").message()?);
+                    if self.server_state == State::TransactionError {
+                        self.state
+                            .add_simulated(ErrorResponse::in_failed_transaction().message()?);
+                    } else {
+                        self.state
+                            .add_simulated(CommandComplete::from_str("PREPARE").message()?);
+                    }
+
                     self.state.add_simulated(
-                        ReadyForQuery::in_transaction(self.in_transaction).message()?,
+                        if self.server_state == State::TransactionError {
+                            ReadyForQuery::error()
+                        } else {
+                            ReadyForQuery::in_transaction(
+                                self.server_state == State::IdleInTransaction,
+                            )
+                        }
+                        .message()?,
                     );
                     return Ok(HandleResult::Drop);
                 } else {

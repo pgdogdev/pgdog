@@ -472,9 +472,6 @@ impl Server {
             self.in_transaction = true;
         }
 
-        self.prepared_statements
-            .set_in_transaction(self.in_transaction);
-
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
@@ -682,6 +679,9 @@ impl Server {
             '2' => self.stats.bind_complete(),
             _ => (),
         }
+
+        self.prepared_statements
+            .set_server_state(self.stats.get_state());
 
         trace!("{:#?} <<< [{}]", message, self.addr());
 
@@ -4429,6 +4429,77 @@ pub mod test {
                 let msg = server.read().await.unwrap();
                 assert_eq!(msg.code(), c);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_in_transaction() {
+        let mut server = test_server().await;
+
+        server.execute("BEGIN").await.unwrap();
+
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            let cmd = server.read().await.unwrap();
+            assert_eq!(cmd.code(), 'C');
+            let rfq = server.read().await.unwrap();
+            assert!(rfq.in_transaction());
+        }
+
+        server.execute("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_prepare_in_transaction_error() {
+        let mut server = test_server().await;
+
+        server
+            .send(
+                &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                    "__stmt_1",
+                    "PREPARE __pgdog_template_name AS SELECT $1",
+                ))]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let cmd = server.read().await.unwrap();
+        assert_eq!(cmd.code(), 'C');
+        let rfq = server.read().await.unwrap();
+        assert!(!rfq.in_transaction());
+
+        server.execute("BEGIN").await.unwrap();
+
+        let _ = server.execute("SELECT asd").await;
+
+        for _ in 0..3 {
+            server
+                .send(
+                    &vec![ProtocolMessage::PrepareFromClient(Prepare::new(
+                        "__stmt_1",
+                        "PREPARE __pgdog_template_name AS SELECT $1",
+                    ))]
+                    .into(),
+                )
+                .await
+                .unwrap();
+
+            let err = ErrorResponse::try_from(server.read().await.unwrap()).unwrap();
+            assert_eq!(err.code, "25P02");
+
+            let rfq = ReadyForQuery::try_from(server.read().await.unwrap()).unwrap();
+            assert!(rfq.is_transaction_aborted());
         }
     }
 

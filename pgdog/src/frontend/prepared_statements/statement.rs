@@ -23,7 +23,16 @@ pub(crate) enum StatementType {
 
 impl MemoryUsage for StatementType {
     fn memory_usage(&self) -> usize {
-        0
+        match self {
+            Self::Prepare { prepare } => prepare.len(),
+            Self::Parse { parse, rewrite } => {
+                parse.len()
+                    + rewrite
+                        .as_ref()
+                        .map(|rewrite| rewrite.len())
+                        .unwrap_or_default()
+            }
+        }
     }
 }
 
