@@ -63,10 +63,14 @@ impl ParallelSync {
         let mut attempt = 0usize;
 
         loop {
-            match self
-                .table
-                .data_sync(&self.addr, &self.source, &self.dest, &self.cancel, tracker)
-                .await
+            match Box::pin(self.table.data_sync(
+                &self.addr,
+                &self.source,
+                &self.dest,
+                &self.cancel,
+                tracker,
+            ))
+            .await
             {
                 Ok(_) => return Ok(self.table),
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {

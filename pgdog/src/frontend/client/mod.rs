@@ -143,7 +143,7 @@ impl Client {
 
         match safe_timeout(
             login_timeout,
-            Self::login(stream, params, addr, config, protocol_version),
+            Box::pin(Self::login(stream, params, addr, config, protocol_version)),
         )
         .await
         {
@@ -472,7 +472,7 @@ impl Client {
 
     /// Run the client and log disconnect.
     async fn spawn_internal(&mut self) {
-        match self.run().await {
+        match Box::pin(self.run()).await {
             Ok(_) => {
                 if config().config.general.log_disconnections {
                     let (user, database) = user_database_from_params(&self.params);

@@ -104,12 +104,12 @@ impl ReplicationSlot {
     /// Connect to database using replication mode.
     pub async fn connect(&mut self) -> Result<(), Error> {
         self.server = Some(
-            Server::connect(
+            Box::pin(Server::connect(
                 &self.address,
                 ServerOptions::new_replication(),
                 ConnectReason::Replication,
                 Default::default(),
-            )
+            ))
             .await?,
         );
 

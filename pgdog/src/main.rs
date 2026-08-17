@@ -2,6 +2,7 @@
 #![allow(clippy::result_unit_err)]
 #![deny(clippy::print_stdout)]
 #![allow(clippy::enum_variant_names)]
+#![warn(clippy::large_futures)]
 
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 

@@ -236,7 +236,7 @@ impl Listener {
                             .await?;
                     }
 
-                    Client::spawn(stream, params, addr, config, negotiated).await?;
+                    Box::pin(Client::spawn(stream, params, addr, config, negotiated)).await?;
                     break;
                 }
 

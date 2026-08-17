@@ -212,7 +212,7 @@ impl TokenCache {
 
         // Cold miss — block once to prime the cache.
         // After this the monitor's refresh loop takes over.
-        let (token, expires_at) = fetcher(addr.clone()).await?;
+        let (token, expires_at) = Box::pin(fetcher(addr.clone())).await?;
         self.set(addr, token.clone(), expires_at);
         Ok(token)
     }
@@ -258,7 +258,7 @@ impl TokenCache {
 
         // Cold miss — block once to prime the cache.
         // After this the monitor's refresh loop takes over.
-        let fetched = fetcher(addr.clone()).await?;
+        let fetched = Box::pin(fetcher(addr.clone())).await?;
         let credentials = fetched.credentials.clone();
         self.set_credentials(addr, fetched);
         Ok(credentials)
