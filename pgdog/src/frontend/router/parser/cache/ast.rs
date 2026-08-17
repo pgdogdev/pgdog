@@ -30,6 +30,8 @@ pub struct Ast {
     pub comment_role: Option<Role>,
     /// Parser query engine used.
     pub query_parser_engine: QueryParserEngine,
+    /// Sharding Key.
+    pub comment_sharding_key: Option<String>,
     /// Inner sync.
     inner: Arc<AstInner>,
 }
@@ -119,6 +121,7 @@ impl Ast {
             comment_shard: None,
             comment_role: None,
             query_parser_engine: schema.query_parser_engine,
+            comment_sharding_key: None,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
                 ast,
@@ -156,6 +159,7 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine,
+            comment_sharding_key: None,
             inner: Arc::new(AstInner::new(ast.into_inner())),
         })
     }
@@ -167,6 +171,7 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             query_parser_engine: QueryParserEngine::default(),
+            comment_sharding_key: None,
             inner: Arc::new(AstInner::new(stmts)),
         }
     }

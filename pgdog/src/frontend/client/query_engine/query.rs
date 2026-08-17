@@ -363,7 +363,6 @@ impl QueryEngine {
         if !cross_shard_disabled {
             return Ok(true);
         }
-
         let query_is_cross_shard = context.client_request.route().is_cross_shard();
 
         // The query is direct-to-shard, we're good.
@@ -389,9 +388,11 @@ impl QueryEngine {
         // should be cross-shard (e.g. BEGIN, COMMIT) but aren't really.
         if connected_shards == 0 || connected_shards > 1 {
             let query = context.client_request.query()?;
-            let error = ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query()));
-
-            self.error_response(context, error).await?;
+            self.error_response(
+                context,
+                ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query())),
+            )
+            .await?;
 
             if self.backend.connected() && self.backend.done() {
                 self.backend.disconnect();

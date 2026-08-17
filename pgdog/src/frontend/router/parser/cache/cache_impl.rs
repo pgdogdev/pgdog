@@ -110,7 +110,6 @@ impl Cache {
     ) -> Result<Ast, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-
         {
             let mut guard = self.inner.lock();
             let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
@@ -120,7 +119,8 @@ impl Cache {
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
                 ast.comment_role = query_and_comment.role;
-                ast.comment_shard = query_and_comment.shard.clone();
+                ast.comment_shard = query_and_comment.shard;
+                ast.comment_sharding_key = query_and_comment.sharding_key;
 
                 return Ok(ast);
             }
@@ -136,7 +136,9 @@ impl Cache {
             prepared_statements,
         )?;
         entry.comment_role = query_and_comment.role;
-        entry.comment_shard = query_and_comment.shard.clone();
+        entry.comment_shard = query_and_comment.shard;
+        entry.comment_sharding_key = query_and_comment.sharding_key;
+
         let parse_time = entry.stats.lock().parse_time;
 
         let mut guard = self.inner.lock();
@@ -177,7 +179,8 @@ impl Cache {
         )?;
         entry.cached = false;
         entry.comment_role = query_and_comment.role;
-        entry.comment_shard = query_and_comment.shard.clone();
+        entry.comment_shard = query_and_comment.shard;
+        entry.comment_sharding_key = query_and_comment.sharding_key;
 
         let parse_time = entry.stats.lock().parse_time;
 
