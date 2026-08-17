@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::net::SocketAddr;
 
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -68,10 +67,10 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
     Ok(response)
 }
 
-pub async fn server(port: u16) -> std::io::Result<()> {
-    info!("OpenMetrics endpoint http://0.0.0.0:{}", port);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = TcpListener::bind(addr).await?;
+pub async fn server(host: &str, port: u16) -> std::io::Result<()> {
+    let addr = format!("{}:{}", host, port);
+    info!("OpenMetrics endpoint http://{}", addr);
+    let listener = TcpListener::bind(&addr).await?;
     let shutdown = tasks::shutdown_signal();
 
     loop {

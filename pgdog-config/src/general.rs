@@ -334,6 +334,16 @@ pub struct General {
     #[serde(default = "General::query_size_limit_action")]
     pub query_size_limit_action: QuerySizeLimitAction,
 
+    /// The IP address of the local network interface the OpenMetrics HTTP endpoint will bind to.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `0.0.0.0`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_host>
+    #[serde(default = "General::openmetrics_host")]
+    pub openmetrics_host: String,
+
     /// The port used for the OpenMetrics HTTP endpoint.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#openmetrics_port>
@@ -903,6 +913,7 @@ impl Default for General {
             log_query_sample_length: Self::log_query_sample_length(),
             query_size_limit: Self::default_query_size_limit(),
             query_size_limit_action: Self::query_size_limit_action(),
+            openmetrics_host: Self::openmetrics_host(),
             openmetrics_port: Self::openmetrics_port(),
             openmetrics_namespace: Self::openmetrics_namespace(),
             prepared_statements: Self::prepared_statements(),
@@ -1352,6 +1363,10 @@ impl General {
         Self::env_enum_or_default("PGDOG_QUERY_SIZE_LIMIT_ACTION")
     }
 
+    pub fn openmetrics_host() -> String {
+        Self::env_string_or_default("PGDOG_OPENMETRICS_HOST", "0.0.0.0")
+    }
+
     pub fn openmetrics_port() -> Option<u16> {
         Self::env_option("PGDOG_OPENMETRICS_PORT")
     }
@@ -1779,6 +1794,15 @@ mod tests {
 
         assert_eq!(General::host(), "0.0.0.0");
         assert_eq!(General::port(), 6432);
+    }
+
+    #[test]
+    fn test_env_openmetrics_host() {
+        let _guard = set_env_var("PGDOG_OPENMETRICS_HOST", "127.0.0.1");
+        assert_eq!(General::openmetrics_host(), "127.0.0.1");
+
+        let _guard = remove_env_var("PGDOG_OPENMETRICS_HOST");
+        assert_eq!(General::openmetrics_host(), "0.0.0.0");
     }
 
     #[test]
