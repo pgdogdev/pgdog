@@ -366,21 +366,23 @@ impl LoadBalancer {
             .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
             .collect();
 
+        let has_unbanned_replica = candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica && !target.ban.banned());
+        // If `read_only` is true, only allow if there's no replicas.
         let primary_reads = match self.rw_split {
-            IncludePrimary => true,
+            IncludePrimary => !(request.read_only && has_unbanned_replica),
             IncludePrimaryIfReplicaBanned => {
-                candidates.iter().any(|target| target.ban.banned()) || candidates.len() == 1 // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+                !(request.read_only && has_unbanned_replica)
+                    && (candidates.iter().any(|target| target.ban.banned())
+                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
             }
             // we read from the primary if we have no replicas
-            ExcludePrimary => !candidates
-                .iter()
-                .any(|target| target.role() == Role::Replica),
+            ExcludePrimary => !has_unbanned_replica,
             // PreferPrimary makes all queries writes. If a query lands here,
             // it's because of pgdog.role=replica. Let it use the primary only if
             // no replicas are available.
-            PreferPrimary => !candidates
-                .iter()
-                .any(|target| target.role() == Role::Replica && !target.ban.banned()),
+            PreferPrimary => !has_unbanned_replica,
         };
 
         if !primary_reads {
