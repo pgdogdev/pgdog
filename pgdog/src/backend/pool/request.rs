@@ -11,7 +11,7 @@ pub struct Request {
 
     // Load balancer uses this to determine if primary should be allowed to read.
     // Propagated from `User.read_only` setting.
-    pub read_only: bool,
+    pub(crate) read_only: bool,
 }
 
 impl Request {
