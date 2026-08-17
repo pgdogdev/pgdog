@@ -28,12 +28,12 @@ impl Command for Probe {
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let mut conn = safe_timeout(
             Duration::from_millis(config().config.general.connect_timeout),
-            Server::connect(
+            Box::pin(Server::connect(
                 &Address::try_from(self.url.clone()).map_err(|_| Error::InvalidAddress)?,
                 ServerOptions::default(),
                 ConnectReason::Probe,
                 Default::default(),
-            ),
+            )),
         )
         .await?
         .map_err(|err| Error::Backend(Box::new(err)))?;

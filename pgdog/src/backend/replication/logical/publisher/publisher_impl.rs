@@ -181,7 +181,7 @@ impl Publisher {
                 Some(self.slot_name.clone()),
                 number,
             );
-            slot.create_slot().await?;
+            Box::pin(slot.create_slot()).await?;
 
             self.slots.insert(number, slot);
         }
@@ -204,7 +204,7 @@ impl Publisher {
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
-            self.create_slots(source, &stop).await?;
+            Box::pin(self.create_slots(source, &stop)).await?;
         }
 
         let n_sources = source.shards().len();

@@ -120,10 +120,10 @@ impl Monitor {
         // Token refresh loop — one task per pool, tied to pool lifetime.
         // Only spawned for pools that use an external identity provider.
         if self.pool.addr().server_auth.is_external_identity() {
-            let pool = self.pool.clone();
-            tasks::spawn("pool token refresh", async move {
-                Self::token_refresh(pool).await
-            });
+            tasks::spawn(
+                "pool token refresh",
+                Box::pin(Self::token_refresh(self.pool.clone())),
+            );
         }
 
         loop {
@@ -203,7 +203,7 @@ impl Monitor {
             select! {
                 _ = safe_sleep(sleep_duration) => {
                     let result = match addr.server_auth {
-                        ServerAuth::RdsIam => rds_iam::token(addr.clone()).await.map(
+                        ServerAuth::RdsIam => Box::pin(rds_iam::token(addr.clone())).await.map(
                             |(token, expires_at)| {
                                 TokenCache::global().set(&addr, token, expires_at)
                             },
@@ -445,12 +445,12 @@ impl Monitor {
         for attempt in 0..connect_attempts {
             match safe_timeout(
                 connect_timeout,
-                Server::connect(
+                Box::pin(Server::connect(
                     pool.addr(),
                     options.clone(),
                     reason,
                     Arc::clone(&pool.inner().oids),
-                ),
+                )),
             )
             .await
             {

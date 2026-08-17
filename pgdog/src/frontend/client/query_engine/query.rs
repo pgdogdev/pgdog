@@ -60,7 +60,7 @@ impl QueryEngine {
 
         match safe_timeout(
             context.timeouts.query_timeout(&State::Active),
-            self.client_server_exchange(context),
+            Box::pin(self.client_server_exchange(context)),
         )
         .await
         {

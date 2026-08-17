@@ -37,7 +37,7 @@ pub(crate) struct PublicationGuard {
 impl PublicationGuard {
     /// Drop any replication slots the publisher still owns.
     pub(crate) async fn cleanup(self) -> Result<(), Error> {
-        self.publisher.lock().await.cleanup().await
+        Box::pin(self.publisher.lock().await.cleanup()).await
     }
 }
 
