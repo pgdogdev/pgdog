@@ -66,11 +66,6 @@ impl NonIdentityColumnsPresence {
     pub fn no_non_identity_present(&self) -> bool {
         self.mask.none()
     }
-
-    /// Count of present (non-Toasted) non-identity columns. O(1) — cached at construction.
-    pub fn count_present(&self) -> usize {
-        self.count_present
-    }
 }
 
 #[cfg(test)]

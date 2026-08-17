@@ -410,7 +410,7 @@ async fn begin_sets_transaction_state() {
 
     assert!(sub.in_transaction());
     assert_eq!(sub.lsn(), 100);
-    assert!(sub.lsn_changed());
+    assert!(sub.lsn_changed);
 }
 
 /// Commit clears in_transaction, advances LSN, and returns a StatusUpdate.
@@ -464,13 +464,13 @@ fn lsn_changed_tracking() {
     let mut sub = make_subscriber();
 
     assert!(sub.set_current_lsn(100));
-    assert!(sub.lsn_changed());
+    assert!(sub.lsn_changed);
 
     assert!(!sub.set_current_lsn(100));
-    assert!(!sub.lsn_changed());
+    assert!(!sub.lsn_changed);
 
     assert!(sub.set_current_lsn(200));
-    assert!(sub.lsn_changed());
+    assert!(sub.lsn_changed);
 }
 
 /// status_update() must always reflect the last *committed* LSN, never the

@@ -118,18 +118,6 @@ impl TokenCache {
         &INSTANCE
     }
 
-    /// When the cached token for `addr` expires, if one exists.
-    ///
-    /// Useful for introspection and testing. The monitor should prefer
-    /// [`refresh_at`] for scheduling — it applies [`EXPIRY_BUFFER`]
-    /// automatically.
-    pub fn expires_at(&self, addr: &Address) -> Option<SystemTime> {
-        self.inner
-            .lock()
-            .get(&CacheKey::from(addr))
-            .and_then(|c| c.expires_at)
-    }
-
     /// How long the monitor should sleep before waking up to refresh the
     /// token for `addr`.
     ///
@@ -274,6 +262,21 @@ impl TokenCache {
         let credentials = fetched.credentials.clone();
         self.set_credentials(addr, fetched);
         Ok(credentials)
+    }
+}
+
+#[cfg(test)]
+impl TokenCache {
+    /// When the cached token for `addr` expires, if one exists.
+    ///
+    /// Useful for introspection and testing. The monitor should prefer
+    /// [`refresh_at`] for scheduling — it applies [`EXPIRY_BUFFER`]
+    /// automatically.
+    pub(super) fn expires_at(&self, addr: &Address) -> Option<SystemTime> {
+        self.inner
+            .lock()
+            .get(&CacheKey::from(addr))
+            .and_then(|c| c.expires_at)
     }
 }
 

@@ -125,7 +125,7 @@ pub struct StreamSubscriber {
     committed_lsn: i64,
     // Working position in the stream (advances on Begin for deduplication).
     lsn: i64,
-    lsn_changed: bool,
+    pub(super) lsn_changed: bool,
     in_transaction: bool,
 
     // Bytes sharded
@@ -910,11 +910,6 @@ impl StreamSubscriber {
     /// Get current LSN.
     pub fn lsn(&self) -> i64 {
         self.lsn
-    }
-
-    /// Lsn changed since the last time we updated it.
-    pub fn lsn_changed(&self) -> bool {
-        self.lsn_changed
     }
 
     /// Whether we are inside a transaction.

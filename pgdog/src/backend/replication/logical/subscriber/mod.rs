@@ -12,4 +12,3 @@ pub use context::StreamContext;
 pub use copy::CopySubscriber;
 pub use parallel_connection::ParallelConnection;
 pub use pipeline::PipelinedConnection;
-pub use stream::StreamSubscriber;

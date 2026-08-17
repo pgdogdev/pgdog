@@ -571,6 +571,7 @@ impl AsyncTasksStorage {
     }
 
     /// Snapshot a single root task by id.
+    #[cfg(test)]
     pub fn task(&self, id: AsyncTaskId) -> Option<TaskSnapshot> {
         self.prune();
 

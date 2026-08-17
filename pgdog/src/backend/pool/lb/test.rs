@@ -66,6 +66,13 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
     *target.pool.inner().lsn_stats.write() = stats;
 }
 
+impl LoadBalancer {
+    /// Replica pools handle.
+    pub fn pools(&self) -> Vec<&Pool> {
+        self.targets.iter().map(|target| &target.pool).collect()
+    }
+}
+
 #[tokio::test]
 async fn test_include_primary_if_replica_banned_only_primary() {
     let mut primary = create_test_pool_config("127.0.0.1", 5432);

@@ -29,7 +29,7 @@ pub mod waiting;
 
 pub use address::Address;
 pub use cluster::{Cluster, ClusterConfig, ClusterShardConfig, PoolConfig, ShardingSchema};
-pub use cluster_metrics::{ClusterMetrics, Counts};
+pub use cluster_metrics::ClusterMetrics;
 pub use config::Config;
 pub use connection::Connection;
 pub use error::Error;
