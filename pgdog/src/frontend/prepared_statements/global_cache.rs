@@ -1,4 +1,5 @@
 use crate::{
+    frontend::RewritePlan,
     net::{
         Prepare,
         messages::{Parse, RowDescription},
@@ -80,7 +81,11 @@ impl GlobalCache {
     }
 
     /// Insert a statement prepared using the simple protocol into the global cache.
-    pub(super) fn insert_prepare(&mut self, query: Bytes) -> (bool, Prepare) {
+    pub(super) fn insert_prepare(
+        &mut self,
+        query: Bytes,
+        rewrite_plan: &RewritePlan,
+    ) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
             query: query.clone(),
         };
@@ -88,8 +93,9 @@ impl GlobalCache {
         if let Some(name) = self.reuse(&cache_key) {
             return (
                 false,
-                self.prepare(&name)
-                    .expect("prepared to be in cache if reuse is true"),
+                self.prepare_and_rewrite(&name)
+                    .expect("prepared to be in cache if reuse is true")
+                    .0,
             );
         }
 
@@ -102,6 +108,7 @@ impl GlobalCache {
         let statement = Statement {
             stmt: StatementType::Prepare {
                 prepare: prepare.clone(),
+                rewrite_plan: Arc::new(rewrite_plan.clone()),
             },
             row_description: None,
             cache_key: cache_key.clone(),
@@ -145,8 +152,8 @@ impl GlobalCache {
     }
 
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
-    pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
-        self.names.get(name).and_then(|p| p.prepare())
+    pub(crate) fn prepare_and_rewrite(&self, name: &str) -> Option<(Prepare, Arc<RewritePlan>)> {
+        self.names.get(name).and_then(|p| p.prepare_and_rewrite())
     }
 
     /// Get the rewritten Parse statement.
@@ -156,7 +163,7 @@ impl GlobalCache {
     pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
         self.names
             .get(name)
-            .and_then(|p| p.rewrite().clone().or(p.parse()))
+            .and_then(|p| p.rewritten_parse().clone().or(p.parse()))
     }
 
     /// Returns true if this prepared statement has been
@@ -164,7 +171,7 @@ impl GlobalCache {
     pub(crate) fn is_rewritten(&self, name: &str) -> bool {
         self.names
             .get(name)
-            .map(|p| p.rewrite().is_some())
+            .map(|p| p.rewritten_parse().is_some())
             .unwrap_or_default()
     }
 
@@ -362,8 +369,8 @@ mod test {
         let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) = cache.insert_prepare(query.clone());
-        let (_, second) = cache.insert_prepare(query);
+        let (_, first) = cache.insert_prepare(query.clone(), &RewritePlan::default());
+        let (_, second) = cache.insert_prepare(query, &RewritePlan::default());
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);

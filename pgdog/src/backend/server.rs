@@ -1339,7 +1339,7 @@ pub mod test {
     use crate::{
         backend::pool::token_cache::TokenCache,
         config::Memory,
-        frontend::PreparedStatements,
+        frontend::{PreparedStatements, RewritePlan},
         net::{Prepare, *},
     };
 
@@ -2325,7 +2325,7 @@ pub mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(name, query.clone());
+        let prepare = prep.insert_prepare(name, query.clone(), &RewritePlan::default());
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server

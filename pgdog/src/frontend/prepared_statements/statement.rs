@@ -1,4 +1,6 @@
-use crate::{net::Prepare, stats::memory::MemoryUsage};
+use std::sync::Arc;
+
+use crate::{frontend::RewritePlan, net::Prepare, stats::memory::MemoryUsage};
 
 use super::prelude::*;
 
@@ -18,13 +20,14 @@ pub(crate) enum StatementType {
 
     Prepare {
         prepare: Prepare,
+        rewrite_plan: Arc<RewritePlan>,
     },
 }
 
 impl MemoryUsage for StatementType {
     fn memory_usage(&self) -> usize {
         match self {
-            Self::Prepare { prepare } => prepare.len(),
+            Self::Prepare { prepare, .. } => prepare.len(),
             Self::Parse { parse, rewrite } => {
                 parse.len()
                     + rewrite
@@ -57,14 +60,17 @@ impl Statement {
         }
     }
 
-    pub(super) fn prepare(&self) -> Option<Prepare> {
+    pub(super) fn prepare_and_rewrite(&self) -> Option<(Prepare, Arc<RewritePlan>)> {
         match self.stmt {
-            StatementType::Prepare { ref prepare } => Some(prepare.clone()),
+            StatementType::Prepare {
+                ref prepare,
+                ref rewrite_plan,
+            } => Some((prepare.clone(), rewrite_plan.clone())),
             _ => None,
         }
     }
 
-    pub(crate) fn rewrite(&self) -> Option<Parse> {
+    pub(crate) fn rewritten_parse(&self) -> Option<Parse> {
         match self.stmt {
             StatementType::Parse { ref rewrite, .. } => rewrite.clone(),
             _ => None,
@@ -74,7 +80,7 @@ impl Statement {
     pub(super) fn query(&self) -> &str {
         match self.stmt {
             StatementType::Parse { ref parse, .. } => parse.query(),
-            StatementType::Prepare { ref prepare } => prepare.query(),
+            StatementType::Prepare { ref prepare, .. } => prepare.query(),
         }
     }
 

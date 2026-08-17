@@ -8,6 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatements as PreparedStatementsLevel,
+    frontend::RewritePlan,
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -119,8 +120,13 @@ impl PreparedStatements {
     ///
     /// Nothing, but the message is renamed to a unique, global name.
     ///
-    pub(crate) fn insert_prepare(&mut self, name: &str, query: Bytes) -> Prepare {
-        let (_new, prepare) = { self.global.write().insert_prepare(query) };
+    pub(crate) fn insert_prepare(
+        &mut self,
+        name: &str,
+        query: Bytes,
+        rewrite_plan: &RewritePlan,
+    ) -> Prepare {
+        let (_new, prepare) = { self.global.write().insert_prepare(query, rewrite_plan) };
 
         self.insert_internal(name, prepare.name());
 
@@ -141,10 +147,10 @@ impl PreparedStatements {
     }
 
     /// Get a globally unique [`Prepare`] message using the client name as key.
-    pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
+    pub(crate) fn prepare_and_rewrite(&self, name: &str) -> Option<(Prepare, Arc<RewritePlan>)> {
         self.local
             .get(name)
-            .and_then(|name| self.global.read().prepare(name))
+            .and_then(|name| self.global.read().prepare_and_rewrite(name))
     }
 
     /// Number of prepared statements in the client's cache.

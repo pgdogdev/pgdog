@@ -26,6 +26,6 @@ pub(crate) use prepared_statements::PreparedStatements;
 #[cfg(debug_assertions)]
 pub use query_logger::QueryLogger;
 pub(crate) use regex_parser::RegexParser;
-pub use router::{Command, Router, SetParam};
+pub use router::{Command, RewritePlan, Router, SetParam};
 pub use router::{RouterContext, SearchPath};
 pub use stats::Stats;

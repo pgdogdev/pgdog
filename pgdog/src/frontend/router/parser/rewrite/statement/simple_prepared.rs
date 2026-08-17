@@ -1,12 +1,13 @@
 use bytes::Bytes;
-use pg_raw_parse::{NodeMut, make::MemoryToken};
+use pg_raw_parse::{ConstValue, NodeMut, make::MemoryToken, nodes::ExecuteStmtMut};
 
 use crate::{
     frontend::PreparedStatements,
     net::{PREPARE_TEMPLATE_NAME, Prepare},
+    unique_id::UniqueId,
 };
 
-use super::{Error, StatementRewrite};
+use super::{Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrepareExecute {
@@ -54,6 +55,7 @@ impl StatementRewrite<'_> {
         &mut self,
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
+        plan: &mut RewritePlan,
     ) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
 
@@ -61,7 +63,7 @@ impl StatementRewrite<'_> {
             return Ok(result);
         }
 
-        match rewrite_single_prepared(node, mem, self.prepared_statements)? {
+        match rewrite_single_prepared(node, mem, self.prepared_statements, plan)? {
             SimplePreparedRewrite::Prepared { prepare } => {
                 result.rewrites.push(PrepareExecute::Prepare(prepare));
                 result.rewritten = true;
@@ -82,6 +84,7 @@ fn rewrite_single_prepared<'a>(
     node: NodeMut<'a, '_>,
     mem: MemoryToken<'a>,
     prepared_statements: &mut PreparedStatements,
+    plan: &RewritePlan,
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
         NodeMut::PrepareStmt(mut stmt) => {
@@ -92,7 +95,7 @@ fn rewrite_single_prepared<'a>(
             stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
             let query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
 
-            let prepare = prepared_statements.insert_prepare(&client_name, query);
+            let prepare = prepared_statements.insert_prepare(&client_name, query, plan);
 
             stmt.set_name(Some(mem.copy_string(prepare.name())));
 
@@ -101,8 +104,12 @@ fn rewrite_single_prepared<'a>(
 
         NodeMut::ExecuteStmt(mut stmt) => {
             let stmt_name = stmt.name().expect("EXECUTE always has name");
-            let prepare = prepared_statements.prepare(stmt_name);
-            if let Some(prepare) = prepare {
+            let prepare_and_rewrite = prepared_statements.prepare_and_rewrite(stmt_name);
+            if let Some((prepare, rewrite_plan)) = prepare_and_rewrite {
+                // Rewrite EXECUTE statement to match the rewrite
+                // we did on the PREPARE statement.
+                apply_prepare_rewrite_plan(&mut stmt, mem, &rewrite_plan)?;
+
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
                 Ok(SimplePreparedRewrite::Executed { prepare })
             } else {
@@ -114,6 +121,23 @@ fn rewrite_single_prepared<'a>(
     }
 }
 
+fn apply_prepare_rewrite_plan<'a>(
+    stmt: &mut ExecuteStmtMut<'a, '_>,
+    mem: MemoryToken<'a>,
+    plan: &RewritePlan,
+) -> Result<(), Error> {
+    for _ in 0..plan.unique_ids {
+        let unique_id = UniqueId::generator()?.next_id();
+        stmt.params_mut().push(
+            mem,
+            mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
+                .uncast(),
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
@@ -121,7 +145,10 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::config::PreparedStatements as PreparedStatementsLevel;
+    use crate::test_utils::set_env_var;
+    use pg_raw_parse::Node;
     use pgdog_config::Rewrite;
+    use std::collections::HashSet;
 
     struct TestContext {
         ps: PreparedStatements,
@@ -167,6 +194,72 @@ mod tests {
             let sql = pg_raw_parse::deparse_stmts(&*ast)?;
             Ok((sql, plan))
         }
+    }
+
+    fn apply_plan(sql: &str, plan: &RewritePlan) -> Result<String, Error> {
+        let stmt = pg_raw_parse::parse(sql)?;
+        let ast = pg_raw_parse::make::try_owned(|mem| {
+            let mut copy = mem.make_unique(&*stmt.into_inner());
+            let mut raw_stmt = copy
+                .as_mut()
+                .into_iter()
+                .next()
+                .expect("query must contain a statement");
+            let NodeMut::ExecuteStmt(mut execute) = raw_stmt.stmt_mut() else {
+                panic!("expected EXECUTE statement");
+            };
+
+            apply_prepare_rewrite_plan(&mut execute, mem, plan)?;
+            Ok::<_, Error>(copy)
+        })?;
+
+        Ok(pg_raw_parse::deparse_stmts(&*ast)?)
+    }
+
+    #[test]
+    fn test_apply_prepare_rewrite_plan_no_unique_ids() {
+        let sql = apply_plan("EXECUTE stmt(1, 'hello')", &RewritePlan::default()).unwrap();
+
+        assert_eq!(sql, "EXECUTE stmt(1, 'hello')");
+    }
+
+    #[test]
+    fn test_apply_prepare_rewrite_plan_appends_unique_ids() {
+        let _guard = set_env_var("NODE_ID", "pgdog-1");
+        let plan = RewritePlan {
+            unique_ids: 3,
+            ..Default::default()
+        };
+        let sql = apply_plan("EXECUTE stmt(42)", &plan).unwrap();
+        let ast = pg_raw_parse::parse(&sql).unwrap();
+        let Node::ExecuteStmt(execute) = ast.stmts().next().unwrap() else {
+            panic!("expected EXECUTE statement");
+        };
+
+        assert_eq!(execute.params().len(), 4);
+        assert!(matches!(
+            execute.params().first(),
+            Some(Node::A_Const(value))
+                if matches!(value.val(), Some(ConstValue::Integer(42)))
+        ));
+
+        let ids: HashSet<_> = execute
+            .params()
+            .iter()
+            .skip(1)
+            .map(|param| {
+                let Node::A_Const(value) = param else {
+                    panic!("expected unique ID to be a constant");
+                };
+                let Some(ConstValue::Float(value)) = value.val() else {
+                    panic!("expected unique ID to be a numeric literal");
+                };
+
+                value.parse::<i64>().expect("unique ID must be an i64")
+            })
+            .collect();
+
+        assert_eq!(ids.len(), 3, "all appended IDs should be unique");
     }
 
     #[test]
