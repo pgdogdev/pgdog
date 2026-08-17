@@ -1,34 +1,77 @@
+#![allow(clippy::len_without_is_empty)]
+#![allow(clippy::result_unit_err)]
+#![deny(clippy::print_stdout)]
+
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
+#[cfg(test)]
+use std::alloc::System;
 use std::fs::read_to_string;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::exit;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use backend::databases;
 use clap::Parser;
-use pgdog::backend::databases;
-use pgdog::cli::{self, Commands};
-use pgdog::config::{self, config};
-use pgdog::frontend::client::query_engine::two_pc::Manager;
-use pgdog::frontend::listener::Listener;
-use pgdog::frontend::prepared_statements;
-use pgdog::plugin;
-use pgdog::stats;
-use pgdog::util::pgdog_version;
-use pgdog::{healthcheck, net};
+use cli::Commands;
+use config::config;
+use frontend::client::query_engine::two_pc::Manager;
+use frontend::listener::Listener;
+use frontend::prepared_statements;
 use tokio::runtime::Builder;
 use tracing::{error, info, warn};
+use util::pgdog_version;
+
+use arc_swap::ArcSwapOption;
+use pgdog_config::{General, LogFormat};
+use tracing::level_filters::LevelFilter;
+use tracing::subscriber::Interest;
+use tracing::{Event, Metadata, Subscriber};
+use tracing_subscriber::layer::{Context, Filter};
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_throttle::{Policy, SuppressionSummary, TracingRateLimitLayer};
+
+#[macro_use]
+extern crate derive_more;
+
+pub mod admin;
+pub mod api;
+pub mod auth;
+pub mod backend;
+pub mod cli;
+pub mod config;
+pub mod frontend;
+pub mod healthcheck;
+pub mod net;
+pub mod plugin;
+pub mod sighup;
+pub mod state;
+pub mod stats;
+pub(crate) mod sync;
+pub mod tasks;
+#[cfg(test)]
+pub mod test_utils;
+#[cfg(feature = "tui")]
+pub mod tui;
+pub mod unique_id;
+pub mod util;
+
+#[cfg(test)]
+mod tests;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    pgdog::enable_jemalloc_background_thread();
+    enable_jemalloc_background_thread();
 
     let args = cli::Cli::parse();
     let command = args.command.clone();
-    let mut overrides = pgdog::config::Overrides::default();
+    let mut overrides = config::Overrides::default();
 
     match command.as_ref() {
         Some(Commands::Hash { password }) => {
-            pgdog::cli::hash_password(password);
+            cli::hash_password(password);
             exit(0);
         }
 
@@ -37,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             min_pool_size,
             session_mode,
         }) => {
-            overrides = pgdog::config::Overrides {
+            overrides = config::Overrides {
                 min_pool_size: *min_pool_size,
                 session_mode: *session_mode,
                 default_pool_size: *pool_size,
@@ -49,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     bootstrap_logger(&args.config);
 
-    let nofile = pgdog::util::raise_nofile_limit();
+    let nofile = util::raise_nofile_limit();
 
     let config = match config::load(&args.config, &args.users) {
         Ok(config) => config,
@@ -119,9 +162,9 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     // Load databases and connect if needed.
     databases::init()?;
 
-    let general = &config::config().config.general;
+    let general = &config().config.general;
 
-    pgdog::install_log_throttle(general);
+    install_log_throttle(general);
 
     if let Some(broadcast_addr) = general.broadcast_address {
         net::discovery::Listener::get().run(broadcast_addr, general.broadcast_port);
@@ -129,17 +172,17 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     if let Some(openmetrics_port) = general.openmetrics_port {
         let openmetrics_host = general.openmetrics_host.clone();
-        pgdog::tasks::spawn("openmetrics server", async move {
+        tasks::spawn("openmetrics server", async move {
             stats::http_server::server(&openmetrics_host, openmetrics_port).await
         });
     }
 
     if config::config().config.otel.endpoint.is_some() {
-        pgdog::tasks::spawn("otel publisher", stats::otel_exporter::run());
+        tasks::spawn("otel publisher", stats::otel_exporter::run());
     }
 
     if let Some(healthcheck_port) = general.healthcheck_port {
-        pgdog::tasks::spawn("http healthcheck server", async move {
+        tasks::spawn("http healthcheck server", async move {
             healthcheck::server(healthcheck_port).await
         });
     }
@@ -245,7 +288,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     }
 
     stats_logger.shutdown();
-    pgdog::tasks::shutdown().await;
+    tasks::shutdown().await;
 
     // Any shutdown routines go below.
     plugin::shutdown();
@@ -296,9 +339,193 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
 fn bootstrap_logger(config_path: &Path) {
     let general = read_to_string(config_path)
         .ok()
-        .and_then(|config| toml::from_str::<pgdog::config::Config>(&config).ok())
+        .and_then(|config| toml::from_str::<config::Config>(&config).ok())
         .map(|config| config.general)
         .unwrap_or_default();
 
-    pgdog::logger_with_config(&general);
+    logger_with_config(&general);
+}
+
+#[cfg(not(test))]
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(test)]
+#[global_allocator]
+static GLOBAL: &stats_alloc::StatsAlloc<System> = &stats_alloc::INSTRUMENTED_SYSTEM;
+
+/// Enable jemalloc's background purge threads so freed memory is returned to
+/// the OS after allocation bursts.
+#[cfg(all(not(test), not(target_env = "msvc")))]
+fn enable_jemalloc_background_thread() {
+    let _ = tikv_jemalloc_ctl::background_thread::write(true);
+}
+
+/// No-op fallback where jemalloc is not the active allocator.
+#[cfg(any(test, target_env = "msvc"))]
+fn enable_jemalloc_background_thread() {}
+
+/// Filter that dynamically installs or removes an inner
+/// [`TracingRateLimitLayer`] at runtime.
+///
+/// The tracing global dispatcher can only be set once, and
+/// [`TracingRateLimitLayer`] must be constructed inside a tokio runtime
+/// (its summary emitter uses `tokio::spawn`). The logger is bootstrapped
+/// before the runtime exists, so we install this filter up front and let
+/// the caller swap the real throttle in once the runtime is running.
+#[derive(Default, Clone)]
+struct DynamicThrottle {
+    inner: Arc<ArcSwapOption<TracingRateLimitLayer>>,
+}
+
+impl DynamicThrottle {
+    fn set(&self, layer: TracingRateLimitLayer) {
+        self.inner.store(Some(Arc::new(layer)));
+    }
+}
+
+impl<S> Filter<S> for DynamicThrottle
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn callsite_enabled(&self, _meta: &'static Metadata<'static>) -> Interest {
+        // Always reevaluate per event: the inner filter can appear or
+        // disappear between callsite cache and call time.
+        Interest::sometimes()
+    }
+
+    fn enabled(&self, meta: &Metadata<'_>, cx: &Context<'_, S>) -> bool {
+        match self.inner.load().as_ref() {
+            Some(throttle) => Filter::<S>::enabled(throttle.as_ref(), meta, cx),
+            None => true,
+        }
+    }
+
+    fn event_enabled(&self, event: &Event<'_>, cx: &Context<'_, S>) -> bool {
+        match self.inner.load().as_ref() {
+            Some(throttle) => Filter::<S>::event_enabled(throttle.as_ref(), event, cx),
+            None => true,
+        }
+    }
+}
+
+/// Target for suppression summary events — matches the tracing-throttle
+/// crate's internal target so they remain exempt from further throttling.
+const SUMMARY_TARGET: &str = "tracing_throttle::summary";
+
+fn format_suppression_summary(summary: &SuppressionSummary) {
+    let count = summary.count;
+    let Some(meta) = summary.metadata.as_ref() else {
+        tracing::warn!(target: SUMMARY_TARGET, "event [repeated {} times]", count);
+        return;
+    };
+    match meta.level.as_str() {
+        "ERROR" => {
+            tracing::error!(target: SUMMARY_TARGET, "{} [repeated {} times]", meta.message, count)
+        }
+        "WARN" => {
+            tracing::warn!(target: SUMMARY_TARGET, "{} [repeated {} times]", meta.message, count)
+        }
+        "INFO" => {
+            tracing::info!(target: SUMMARY_TARGET, "{} [repeated {} times]", meta.message, count)
+        }
+        "DEBUG" => {
+            tracing::debug!(target: SUMMARY_TARGET, "{} [repeated {} times]", meta.message, count)
+        }
+        _ => tracing::trace!(target: SUMMARY_TARGET, "{} [repeated {} times]", meta.message, count),
+    }
+}
+
+static THROTTLE: OnceLock<DynamicThrottle> = OnceLock::new();
+
+fn throttle_handle() -> &'static DynamicThrottle {
+    THROTTLE.get_or_init(DynamicThrottle::default)
+}
+
+/// Setup the logger, so `info!`, `debug!`
+/// and other macros actually output something.
+///
+/// Using try_init and ignoring errors to allow
+/// for use in tests (setting up multiple times).
+#[cfg(test)]
+fn logger() {
+    init_logger(None);
+}
+
+/// Setup the logger using PgDog configuration.
+fn logger_with_config(general: &General) {
+    init_logger(Some(general));
+}
+
+/// Install the log-throttle filter using the configured dedup window and
+/// threshold. Must be called from within a tokio runtime — the throttle's
+/// summary emitter task is spawned with `tokio::spawn`.
+///
+/// No-op when throttling is disabled (window or threshold set to 0) or
+/// when the logger was not initialized.
+fn install_log_throttle(general: &General) {
+    if general.log_dedup_window == 0 || general.log_dedup_threshold == 0 {
+        return;
+    }
+    let window = Duration::from_millis(general.log_dedup_window);
+    let Ok(policy) = Policy::time_window(general.log_dedup_threshold as usize, window) else {
+        return;
+    };
+    let layer = TracingRateLimitLayer::builder()
+        .with_policy(policy)
+        .with_summary_interval(window)
+        .with_active_emission(true)
+        .with_summary_formatter(Arc::new(format_suppression_summary))
+        .build();
+    if let Ok(layer) = layer {
+        throttle_handle().set(layer);
+    }
+}
+
+fn init_logger(general: Option<&General>) {
+    let filter = match general {
+        Some(general) => EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .parse_lossy(general.log_level.as_str()),
+        None => EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy(),
+    };
+
+    let throttle = throttle_handle().clone();
+
+    let log_format = general
+        .map(|general| general.log_format)
+        .unwrap_or_default();
+
+    let format = fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_writer(std::io::stderr)
+        .with_file(false);
+    #[cfg(not(debug_assertions))]
+    let format = format.with_target(false);
+
+    match log_format {
+        LogFormat::Text => {
+            let format = format.with_filter(throttle);
+            let _ = tracing_subscriber::registry()
+                .with(format)
+                .with(filter)
+                .try_init();
+        }
+        LogFormat::Json | LogFormat::JsonFlattened => {
+            let format = format.json().with_current_span(false);
+            let format = match log_format {
+                LogFormat::JsonFlattened => format.flatten_event(true),
+                _ => format,
+            };
+            let format = format.with_filter(throttle);
+
+            let _ = tracing_subscriber::registry()
+                .with(format)
+                .with(filter)
+                .try_init();
+        }
+    }
 }
