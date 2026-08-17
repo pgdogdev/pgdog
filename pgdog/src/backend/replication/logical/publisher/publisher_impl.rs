@@ -78,10 +78,6 @@ impl Publisher {
         }
     }
 
-    pub fn replication_slot(&self) -> &str {
-        &self.slot_name
-    }
-
     fn distribute_omnisharded_tables(
         &mut self,
         omnisharded: HashMap<(String, String), Table>,

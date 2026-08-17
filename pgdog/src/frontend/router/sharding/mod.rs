@@ -1,7 +1,6 @@
 use uuid::Uuid;
 
 use crate::{
-    backend::ShardingSchema,
     config::DataType,
     net::{
         messages::{Format, FromDataType, ParameterWithFormat, Vector},
@@ -62,28 +61,6 @@ pub fn uuid(uuid: Uuid) -> u64 {
 /// Hash VARCHAR.
 pub fn varchar(s: &[u8]) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
-}
-
-/// Shard a string value, parsing out a BIGINT, UUID, or vector.
-///
-/// TODO: This is really not great, we should pass in the type oid
-/// from RowDescription in here to avoid guessing.
-pub(crate) fn shard_str(
-    value: &str,
-    schema: &ShardingSchema,
-    centroids: &Vec<Vector>,
-    centroid_probes: usize,
-) -> Shard {
-    let data_type = if value.starts_with('[') && value.ends_with(']') {
-        DataType::Vector
-    } else if value.parse::<i64>().is_ok() {
-        DataType::Bigint
-    } else if value.parse::<Uuid>().is_ok() {
-        DataType::Uuid
-    } else {
-        DataType::Varchar
-    };
-    shard_value(value, &data_type, schema.shards, centroids, centroid_probes)
 }
 
 /// Shard a value that's coming out of the query text directly.

@@ -128,17 +128,6 @@ impl Server {
         }
     }
 
-    /// Create a new SCRAM server using a prehashed `pg_shadow` style password.
-    /// Only the first hash is used; prehashed passwords cannot share salts so
-    /// multi-password verification is not supported in this mode.
-    pub fn hashed(hash: &str) -> Self {
-        Self {
-            provider: Provider::Hashed(HashedPassword {
-                hash: hash.to_string(),
-            }),
-        }
-    }
-
     /// Read the next password message from the client, ignoring error
     /// responses by logging them.
     async fn read_password(stream: &mut Stream) -> Result<Option<Password>, Error> {

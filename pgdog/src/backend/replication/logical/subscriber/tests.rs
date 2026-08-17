@@ -171,7 +171,7 @@ fn text_column(data: &str) -> TupleColumn {
     }
 }
 
-fn begin_copy_data(lsn: i64) -> CopyData {
+pub(super) fn begin_copy_data(lsn: i64) -> CopyData {
     xlog_copy_data(
         Begin {
             final_transaction_lsn: lsn,
@@ -398,21 +398,6 @@ async fn cleanup(server: &mut Server, table: &str, ids: &[&str]) {
 
 // ── State machine tests ─────────────────────────────────────────────
 
-/// Begin message sets in_transaction and records the LSN.
-#[tokio::test]
-async fn begin_sets_transaction_state() {
-    let mut sub = make_subscriber();
-    assert!(!sub.in_transaction());
-    assert_eq!(sub.lsn(), 0);
-
-    sub.connect().await.unwrap();
-    sub.handle(begin_copy_data(100)).await.unwrap();
-
-    assert!(sub.in_transaction());
-    assert_eq!(sub.lsn(), 100);
-    assert!(sub.lsn_changed());
-}
-
 /// Commit clears in_transaction, advances LSN, and returns a StatusUpdate.
 #[tokio::test]
 async fn commit_returns_status_and_clears_transaction() {
@@ -456,21 +441,6 @@ async fn bytes_sharded_accumulates() {
     let after_begin = sub.bytes_sharded();
     sub.handle(commit_copy_data(200)).await.unwrap();
     assert!(sub.bytes_sharded() > after_begin);
-}
-
-/// set_current_lsn returns true only when the LSN changes.
-#[test]
-fn lsn_changed_tracking() {
-    let mut sub = make_subscriber();
-
-    assert!(sub.set_current_lsn(100));
-    assert!(sub.lsn_changed());
-
-    assert!(!sub.set_current_lsn(100));
-    assert!(!sub.lsn_changed());
-
-    assert!(sub.set_current_lsn(200));
-    assert!(sub.lsn_changed());
 }
 
 /// status_update() must always reflect the last *committed* LSN, never the

@@ -8,4 +8,3 @@ pub mod vault;
 
 pub use auth_result::AuthResult;
 pub use error::Error;
-pub use md5::Client;

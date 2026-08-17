@@ -912,11 +912,6 @@ impl StreamSubscriber {
         self.lsn
     }
 
-    /// Lsn changed since the last time we updated it.
-    pub fn lsn_changed(&self) -> bool {
-        self.lsn_changed
-    }
-
     /// Whether we are inside a transaction.
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
@@ -1028,6 +1023,7 @@ impl Display for MissedRows {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::begin_copy_data;
     use super::*;
     use crate::config::config;
 
@@ -1072,5 +1068,35 @@ mod tests {
         assert_eq!(sub.table_lsns.get(&oid), Some(&100));
         assert_eq!(sub.lsn(), 200);
         assert!(sub.changed_tables.is_empty());
+    }
+
+    /// Begin message sets in_transaction and records the LSN.
+    #[tokio::test]
+    async fn begin_sets_transaction_state() {
+        let mut sub = make_subscriber();
+        assert!(!sub.in_transaction());
+        assert_eq!(sub.lsn(), 0);
+
+        sub.connect().await.unwrap();
+        sub.handle(begin_copy_data(100)).await.unwrap();
+
+        assert!(sub.in_transaction());
+        assert_eq!(sub.lsn(), 100);
+        assert!(sub.lsn_changed);
+    }
+
+    /// set_current_lsn returns true only when the LSN changes.
+    #[test]
+    fn lsn_changed_tracking() {
+        let mut sub = make_subscriber();
+
+        assert!(sub.set_current_lsn(100));
+        assert!(sub.lsn_changed);
+
+        assert!(!sub.set_current_lsn(100));
+        assert!(!sub.lsn_changed);
+
+        assert!(sub.set_current_lsn(200));
+        assert!(sub.lsn_changed);
     }
 }
