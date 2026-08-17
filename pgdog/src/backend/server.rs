@@ -4367,22 +4367,6 @@ pub mod test {
         );
     }
 
-    #[test]
-    fn test_effective_max_age_default_is_base() {
-        let server = Server::default();
-        let base = Duration::from_secs(60);
-        assert_eq!(base, server.effective_max_age(base));
-    }
-
-    #[test]
-    fn test_effective_max_age_uses_stored_value() {
-        let mut server = Server::default();
-        server.set_max_age(Duration::from_millis(1500));
-        let base = Duration::from_secs(60);
-        // Stored value wins regardless of the supplied base.
-        assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));
-    }
-
     #[tokio::test]
     async fn test_prepare_from_client() {
         let mut server = test_server().await;
@@ -4501,6 +4485,22 @@ pub mod test {
             let rfq = ReadyForQuery::try_from(server.read().await.unwrap()).unwrap();
             assert!(rfq.is_transaction_aborted());
         }
+    }
+
+    #[test]
+    fn test_effective_max_age_default_is_base() {
+        let server = Server::default();
+        let base = Duration::from_secs(60);
+        assert_eq!(base, server.effective_max_age(base));
+    }
+
+    #[test]
+    fn test_effective_max_age_uses_stored_value() {
+        let mut server = Server::default();
+        server.set_max_age(Duration::from_millis(1500));
+        let base = Duration::from_secs(60);
+        // Stored value wins regardless of the supplied base.
+        assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));
     }
 
     #[test]
