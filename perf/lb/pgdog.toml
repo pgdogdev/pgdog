@@ -1,0 +1,24 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+host = "localhost"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+host = "localhost"
+role = "replica"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
