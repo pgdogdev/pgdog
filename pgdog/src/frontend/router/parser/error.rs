@@ -112,9 +112,6 @@ pub enum Error {
     #[error("unmapped sharding key was specified")]
     UnmappedShardKey(String),
 
-    #[error("prepare statement can only be DML")]
-    PrepareNotDml,
-
     #[error("execute requires prepared statements to be set to full")]
     ExecuteRequiresFull,
 }
