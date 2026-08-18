@@ -1,0 +1,38 @@
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 0
+database_name = "pgdog1"
+
+[[databases]]
+name = "pgdog"
+host = "localhost"
+role = "replica"
+shard = 0
+database_name = "pgdog1"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 1
+database_name = "pgdog2"
+
+[[databases]]
+name = "pgdog"
+host = "localhost"
+role = "replica"
+shard = 1
+database_name = "pgdog2"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+shard = 2
+database_name = "pgdog3"
+
+[[databases]]
+name = "pgdog"
+host = "localhost"
+role = "replica"
+shard = 2
+database_name = "pgdog3"
