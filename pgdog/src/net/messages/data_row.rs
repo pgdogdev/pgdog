@@ -120,7 +120,7 @@ impl DataRow {
         index: usize,
         decoder: &'a Decoder,
     ) -> Result<Option<Column<'a>>, Error> {
-        if let Some(field) = decoder.rd().field(index)
+        if let Some(field) = decoder.row_description().field(index)
             && let Some(data) = self.columns.get(index)
         {
             return Ok(Some(Column {
@@ -128,7 +128,7 @@ impl DataRow {
                 value: Datum::new(
                     &data.data,
                     field.data_type(),
-                    decoder.format(index),
+                    decoder.get_format(index),
                     data.is_null,
                 )?,
             }));

@@ -332,7 +332,7 @@ impl Route {
     /// 3. `DISTINCT` clause
     /// 4. `LIMIT` or `OFFSET` clause
     ///
-    pub fn should_buffer(&self) -> bool {
+    pub fn requires_post_processing(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
             || self.distinct().is_some()
@@ -743,7 +743,7 @@ mod test {
     #[test]
     fn test_should_buffer_empty_route() {
         let route = Route::default();
-        assert!(!route.should_buffer());
+        assert!(!route.requires_post_processing());
     }
 
     #[test]
@@ -755,7 +755,7 @@ mod test {
             Limit::default(),
             None,
         );
-        assert!(route.should_buffer());
+        assert!(route.requires_post_processing());
     }
 
     #[test]
@@ -770,7 +770,7 @@ mod test {
             },
             None,
         );
-        assert!(!route.should_buffer());
+        assert!(!route.requires_post_processing());
     }
 
     #[test]
@@ -785,7 +785,7 @@ mod test {
             },
             None,
         );
-        assert!(route.should_buffer());
+        assert!(route.requires_post_processing());
     }
 
     #[test]
@@ -800,7 +800,7 @@ mod test {
             },
             None,
         );
-        assert!(route.should_buffer());
+        assert!(route.requires_post_processing());
     }
 
     #[test]
@@ -812,7 +812,7 @@ mod test {
             Limit::default(),
             None,
         );
-        assert!(!route.should_buffer());
+        assert!(!route.requires_post_processing());
     }
 
     #[test]

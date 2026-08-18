@@ -414,7 +414,7 @@ impl Connection {
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
             Binding::MultiShard(_, ref mut state) => {
-                state.set_bind_context(bind);
+                state.push_bind(bind);
                 Ok(())
             }
 

@@ -90,7 +90,6 @@ impl Binding {
             Binding::Direct(guard, _) => guard.read().await,
 
             Binding::NotConnected => loop {
-                debug!("binding suspended");
                 safe_sleep(Duration::MAX).await
             },
 
@@ -98,7 +97,6 @@ impl Binding {
             Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
-                        debug!("multi-shard binding suspended");
                         safe_sleep(Duration::MAX).await;
                     }
                 } else {
@@ -106,7 +104,7 @@ impl Binding {
                     // or there are no more messages to be read.
                     loop {
                         // Return all sorted data rows if any.
-                        if let Some(message) = state.message() {
+                        if let Some(message) = state.get_server_message() {
                             return Ok(message);
                         }
                         let mut read = false;
@@ -118,7 +116,7 @@ impl Binding {
                             let message = server.read().await?;
 
                             read = true;
-                            if let Some(message) = state.forward(message)? {
+                            if let Some(message) = state.handle_server_message(message)? {
                                 return Ok(message);
                             }
                         }
@@ -129,8 +127,7 @@ impl Binding {
                     }
 
                     loop {
-                        state.reset();
-                        debug!("multi-shard binding done");
+                        state.query_complete();
                         safe_sleep(Duration::MAX).await;
                     }
                 }
@@ -155,7 +152,7 @@ impl Binding {
                     // Map positional index to actual shard number.
                     // When only a subset of shards is connected (Shard::Multi binding),
                     // positional indices don't match actual shard numbers.
-                    let shard = state.shard_index(position);
+                    let shard = state.shard_number(position);
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
                             shards_sent = 1;
@@ -213,7 +210,7 @@ impl Binding {
                 if !servers.is_empty() {
                     let mut futures = Vec::new();
                     for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_index(position);
+                        let shard = state.shard_number(position);
                         let send = match route.shard() {
                             Shard::Direct(s) => *s == shard,
                             Shard::Multi(shards) => shards.contains(&shard),
@@ -243,7 +240,7 @@ impl Binding {
             Binding::MultiShard(servers, state) => {
                 for row in rows {
                     for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_index(position);
+                        let shard = state.shard_number(position);
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {
