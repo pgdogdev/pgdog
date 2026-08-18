@@ -8,7 +8,7 @@ use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
 use std::ops::ControlFlow;
 use std::panic::Location;
-use std::{env, future::Future, future::pending, num::ParseIntError, time::Duration};
+use std::{env, future::Future, future::pending, time::Duration};
 use tokio::time::Interval;
 use tracing::warn;
 
@@ -143,13 +143,18 @@ pub fn instance_id() -> &'static str {
 /// Get an externally assigned, unique, node identifier
 /// for this instance of PgDog.
 ///
-/// This assumes the NODE ID follows the following format:
+/// Requires the `NODE_ID` environment variable. Accepts a bare number,
+/// or the documented `<prefix>-<number>` form.
 ///
-/// <something we don't care about>-<number between 0 and 1023 inclusively>
-///
-pub fn node_id() -> Result<u64, ParseIntError> {
-    // split always returns at least one element.
-    instance_id().split("-").last().unwrap().parse()
+/// Returns `None` when `NODE_ID` is unset, or when it does not end in a
+/// number.
+pub fn node_id() -> Option<u64> {
+    let node_id = env::var("NODE_ID").ok()?;
+    let digits = node_id
+        .rsplit_once('-')
+        .map_or(node_id.as_str(), |(_, digits)| digits);
+
+    digits.parse().ok()
 }
 
 static DEPLOYMENT_ID: Lazy<Option<String>> = Lazy::new(|| env::var("DEPLOYMENT_ID").ok());
@@ -533,10 +538,21 @@ mod test {
     }
 
     #[test]
-    #[pgdog_macros::flaky]
-    fn test_node_id_error() {
+    fn test_node_id_unset() {
         let _guard = remove_env_var("NODE_ID");
-        assert!(node_id().is_err());
+        assert_eq!(node_id(), None);
+    }
+
+    #[test]
+    fn test_node_id_not_a_number() {
+        let _guard = set_env_var("NODE_ID", "pgdog-abc");
+        assert_eq!(node_id(), None);
+    }
+
+    #[test]
+    fn test_node_id_bare_number() {
+        let _guard = set_env_var("NODE_ID", "7");
+        assert_eq!(node_id(), Some(7));
     }
 
     #[test]
@@ -619,7 +635,7 @@ mod test {
     #[test]
     fn test_node_id_set() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
-        assert_eq!(node_id(), Ok(1));
+        assert_eq!(node_id(), Some(1));
     }
 
     #[test]
