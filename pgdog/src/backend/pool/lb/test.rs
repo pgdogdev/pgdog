@@ -2450,7 +2450,7 @@ async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     };
     let new = LoadBalancer::new(
         &None,
-        &[new_config.clone()],
+        std::slice::from_ref(&new_config),
         Default::default(),
         Default::default(),
         Default::default(),

@@ -76,6 +76,7 @@ impl Config {
                 idle_healthcheck_interval: Duration::from_millis(general.idle_healthcheck_interval),
                 idle_healthcheck_delay: Duration::from_millis(general.idle_healthcheck_delay),
                 healthcheck_timeout: Duration::from_millis(general.healthcheck_timeout),
+                require_healthcheck_on_discovery: general.require_healthcheck_on_discovery,
                 ban_timeout: Duration::from_millis(general.ban_timeout),
                 rollback_timeout: Duration::from_millis(general.rollback_timeout),
                 statement_timeout: user

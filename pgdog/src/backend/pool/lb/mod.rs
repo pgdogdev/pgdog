@@ -8,7 +8,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use itertools::*;
 use rand::seq::SliceRandom;
 use tokio::sync::Notify;
 use tracing::warn;
@@ -255,34 +254,21 @@ impl LoadBalancer {
     /// address. New targets with no matching old target start empty; old targets
     /// with no match in the new config have their connections dropped.
     pub fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
-        let (existing, new): (Vec<_>, Vec<_>) = destination.targets.iter().partition_map(|to| {
-            self.targets
+        for from in &self.targets {
+            if let Some(to) = destination
+                .targets
                 .iter()
-                .find(|from| from.pool.can_move_conns_to(&to.pool))
-                .map(|from| Either::Left((from, to)))
-                .unwrap_or(Either::Right(to))
-        });
+                .find(|to| from.pool.has_compatible_address_with(&to.pool))
+            {
+                from.pool.move_conns_to(&to.pool)?;
 
-        for (from, to) in existing {
-            from.pool.move_conns_to(&to.pool)?;
-
-            // Carry over detected roles and LSN stats so the new load balancer
-            // doesn't briefly appear read-only before the role detector runs.
-            to.set_role(from.role());
-            *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
-
-            if let Some(Error::InitialHealthCheck) = from.ban.error() {
-                to.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                to.health().toggle(from.health().healthy());
+                // Carry over detected roles and LSN stats so the new load balancer
+                // doesn't briefly appear read-only before the role detector runs.
+                to.set_role(from.role());
+                *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
             }
         }
-
-        for target in new {
-            if target.pool.config().require_healthcheck_on_discovery {
-                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                target.health().toggle(false);
-            }
-        }
+        destination.require_healthcheck_for_new_targets(&self.targets);
 
         Ok(())
     }
@@ -297,7 +283,7 @@ impl LoadBalancer {
             destination
                 .targets
                 .iter()
-                .any(|to| from.pool.can_move_conns_to(&to.pool))
+                .any(|to| from.pool.has_compatible_address_with(&to.pool))
         })
     }
 
@@ -486,5 +472,23 @@ impl LoadBalancer {
         }
 
         self.maintenance.notify_waiters();
+    }
+
+    fn require_healthcheck_for_new_targets(&self, old_targets: &[Target]) {
+        for target in &self.targets {
+            let old_target = old_targets
+                .iter()
+                .find(|t| t.pool.has_compatible_address_with(&target.pool));
+
+            if let Some(old) = old_target
+                && let Some(Error::InitialHealthCheck) = old.ban.error()
+            {
+                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                target.health().toggle(old.health().healthy());
+            } else if target.pool.config().require_healthcheck_on_discovery {
+                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                target.health().toggle(false);
+            }
+        }
     }
 }

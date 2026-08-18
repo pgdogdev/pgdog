@@ -169,6 +169,14 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_port>
     pub healthcheck_port: Option<u16>,
 
+    /// Should newly added servers require a successful healthcheck before serving traffic?
+    ///
+    /// _Default_: `false`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#require_healthcheck_on_discovery>
+    #[serde(default = "General::require_healthcheck_on_discovery")]
+    pub require_healthcheck_on_discovery: bool,
+
     /// Connection pools blocked from serving traffic due to an error will be placed back into active rotation after this long.
     ///
     /// _Default:_ `300000`
@@ -888,6 +896,7 @@ impl Default for General {
             idle_healthcheck_delay: Self::idle_healthcheck_delay(),
             healthcheck_timeout: Self::healthcheck_timeout(),
             healthcheck_port: Self::healthcheck_port(),
+            require_healthcheck_on_discovery: Self::require_healthcheck_on_discovery(),
             ban_timeout: Self::ban_timeout(),
             ban_replica_lag: Self::ban_replica_lag(),
             ban_replica_lag_bytes: Self::ban_replica_lag_bytes(),
@@ -1066,6 +1075,10 @@ impl General {
 
     fn healthcheck_port() -> Option<u16> {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
+    }
+
+    fn require_healthcheck_on_discovery() -> bool {
+        Self::env_bool_or_default("PGDOG_REQUIRE_HEALTHCHECK_ON_DISCOVERY", false)
     }
 
     pub fn regex_parser_limit() -> usize {
