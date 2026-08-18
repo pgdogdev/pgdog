@@ -100,6 +100,7 @@
         "read_write_strategy": "conservative",
         "regex_parser_limit": 1000,
         "reload_schema_on_ddl": true,
+        "require_healthcheck_on_discovery": false,
         "resharding_copy_format": "binary",
         "resharding_copy_retry_max_attempts": 5,
         "resharding_copy_retry_min_delay": 1000,
@@ -1138,6 +1139,11 @@
           "description": "Automatically reload the schema cache used by PgDog to route queries upon detecting DDL statements.\n\n**Note:** This setting requires PgDog Enterprise Edition to work as expected. If using the open source edition, it will only work with single-node PgDog deployments, e.g., in local development or CI.\n\n_Default:_ `true`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#reload_schema_on_ddl>",
           "type": "boolean",
           "default": true
+        },
+        "require_healthcheck_on_discovery": {
+          "description": "Should newly added servers require a successful healthcheck before serving traffic?\n\n_Default_: `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#require_healthcheck_on_discovery>",
+          "type": "boolean",
+          "default": false
         },
         "resharding_copy_format": {
           "description": "Which format to use for `COPY` statements during resharding.\n\n**Note:** Text format is required when migrating from `INTEGER` to `BIGINT` primary keys during resharding.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_copy_format>",

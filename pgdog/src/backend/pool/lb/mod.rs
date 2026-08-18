@@ -258,7 +258,7 @@ impl LoadBalancer {
             if let Some(to) = destination
                 .targets
                 .iter()
-                .find(|to| from.pool.can_move_conns_to(&to.pool))
+                .find(|to| from.pool.has_compatible_address_with(&to.pool))
             {
                 from.pool.move_conns_to(&to.pool)?;
 
@@ -268,6 +268,7 @@ impl LoadBalancer {
                 *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
             }
         }
+        destination.require_healthcheck_for_new_targets(&self.targets);
 
         Ok(())
     }
@@ -282,7 +283,7 @@ impl LoadBalancer {
             destination
                 .targets
                 .iter()
-                .any(|to| from.pool.can_move_conns_to(&to.pool))
+                .any(|to| from.pool.has_compatible_address_with(&to.pool))
         })
     }
 
@@ -471,5 +472,23 @@ impl LoadBalancer {
         }
 
         self.maintenance.notify_waiters();
+    }
+
+    fn require_healthcheck_for_new_targets(&self, old_targets: &[Target]) {
+        for target in &self.targets {
+            let old_target = old_targets
+                .iter()
+                .find(|t| t.pool.has_compatible_address_with(&target.pool));
+
+            if let Some(old) = old_target
+                && let Some(Error::InitialHealthCheck) = old.ban.error()
+            {
+                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                target.health().toggle(old.health().healthy());
+            } else if target.pool.config().require_healthcheck_on_discovery {
+                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                target.health().toggle(false);
+            }
+        }
     }
 }

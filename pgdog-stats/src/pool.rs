@@ -357,6 +357,9 @@ pub struct Config {
     pub idle_healthcheck_interval: Duration, // ms
     /// Idle healthcheck delay.
     pub idle_healthcheck_delay: Duration, // ms
+    /// Should new servers on config reload wait for a successful health
+    /// check to be added to the load balancer?
+    pub require_healthcheck_on_discovery: bool,
     /// Read timeout (dangerous).
     pub read_timeout: Duration, // ms
     /// Write timeout (dangerous).
@@ -436,6 +439,7 @@ impl Default for Config {
             healthcheck_interval: Duration::from_millis(30_000),
             idle_healthcheck_interval: Duration::from_millis(5_000),
             idle_healthcheck_delay: Duration::from_millis(5_000),
+            require_healthcheck_on_discovery: false,
             read_timeout: Duration::MAX,
             write_timeout: Duration::MAX,
             query_timeout: Duration::MAX,

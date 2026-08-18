@@ -79,6 +79,9 @@ pub enum Error {
 
     #[error("replica lag")]
     ReplicaLag,
+
+    #[error("initial health check has not been successfully performed")]
+    InitialHealthCheck,
 }
 
 impl Error {

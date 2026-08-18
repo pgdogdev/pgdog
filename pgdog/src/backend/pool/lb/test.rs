@@ -5,6 +5,7 @@ use tokio::time::sleep;
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
+use itertools::*;
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 
 use super::*;
@@ -12,22 +13,30 @@ use monitor::Monitor;
 
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     PoolConfig {
-        address: Address {
-            host: host.into(),
-            port,
-            user: "pgdog".into(),
-            passwords: vec!["pgdog".into()],
-            database_name: "pgdog".into(),
-            configured_role: Role::Replica,
-            ..Default::default()
-        },
-        config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::from_millis(100),
-                ..Config::default().inner
-            },
+        address: test_addr(host, port),
+        config: test_config(Default::default()),
+    }
+}
+
+fn test_addr(host: &str, port: u16) -> Address {
+    Address {
+        host: host.into(),
+        port,
+        user: "pgdog".into(),
+        passwords: vec!["pgdog".into()],
+        database_name: "pgdog".into(),
+        configured_role: Role::Replica,
+        ..Default::default()
+    }
+}
+
+fn test_config(config: pgdog_stats::Config) -> Config {
+    Config {
+        inner: pgdog_stats::Config {
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::from_millis(100),
+            ..config
         },
     }
 }
@@ -2382,5 +2391,98 @@ async fn test_params_returns_all_replicas_down_when_empty() {
     assert!(
         matches!(result, Err(Error::AllReplicasDown)),
         "params() should return AllReplicasDown when no targets exist"
+    );
+}
+
+#[tokio::test]
+async fn ban_new_targets_until_health_check() {
+    let old = setup_test_replicas();
+    let new_config = PoolConfig {
+        address: test_addr("localhost", 2345),
+        config: test_config(pgdog_stats::Config {
+            require_healthcheck_on_discovery: true,
+            ..Default::default()
+        }),
+    };
+    let new = LoadBalancer::new(
+        &None,
+        &[new_config],
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+    old.move_conns_to(&new).unwrap();
+
+    let banned_targets = new
+        .targets
+        .iter()
+        .filter(|target| target.ban.banned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        1,
+        banned_targets.len(),
+        "only the new target should have been banned"
+    );
+    let banned_target = banned_targets[0];
+    assert_eq!(2345, banned_target.pool.addr().port);
+    assert!(!banned_target.health().healthy());
+
+    banned_target.health().toggle(true);
+    Monitor::new_test(&new).ban_check(&ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    });
+
+    assert!(
+        !new.targets.iter().any(|target| target.ban.banned()),
+        "target still banned after health check"
+    );
+}
+
+#[tokio::test]
+async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
+    let old = setup_test_replicas();
+    let new_config = PoolConfig {
+        address: test_addr("localhost", 2345),
+        config: test_config(pgdog_stats::Config {
+            require_healthcheck_on_discovery: true,
+            ..Default::default()
+        }),
+    };
+    let new = LoadBalancer::new(
+        &None,
+        std::slice::from_ref(&new_config),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+    let new_new = LoadBalancer::new(
+        &None,
+        &[new_config],
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+
+    old.move_conns_to(&new).unwrap();
+    assert_eq!(
+        1,
+        new.targets
+            .iter()
+            .filter(|target| target.ban.banned())
+            .count(),
+        "target was not banned moving to new lb"
+    );
+    new.move_conns_to(&new_new).unwrap();
+
+    let banned_target = new_new
+        .targets
+        .iter()
+        .filter(|target| target.ban.banned())
+        .exactly_one()
+        .expect("wrong number of targets banned");
+    assert!(
+        !banned_target.health().healthy(),
+        "banned target became healthy on copy"
     );
 }
