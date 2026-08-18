@@ -20,7 +20,7 @@ use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
 use crate::net::Parameters;
 use crate::net::messages::FrontendPid;
 
-use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
+use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request, Stats};
 
 pub(crate) mod failover_signal;
 pub(crate) mod monitor;
@@ -111,6 +111,14 @@ impl Shard {
     /// with the other shard. If yes, they can be moved without closing them.
     pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
         self.lb.can_move_conns_to(&other.lb)
+    }
+
+    /// Reset statistics collected by this shard's pools,
+    /// used by the RESET STATS command.
+    pub fn reset_stats(&self) {
+        for pool in self.pool_iter() {
+            pool.lock().stats = Stats::default();
+        }
     }
 
     /// Listen for notifications on channel.
