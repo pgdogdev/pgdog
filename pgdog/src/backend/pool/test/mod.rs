@@ -1260,3 +1260,34 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
 
     destination.shutdown();
 }
+
+#[tokio::test]
+async fn test_move_conns_to_carries_stats_over() {
+    // Pool statistics (counts and averages) must survive a config reload:
+    // the destination pool takes over the source pool's stats so SHOW POOLS
+    // and OpenMetrics gauges don't reset to zero on every reload.
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    {
+        let mut guard = source.lock();
+        guard.stats.counts.query_count = 42;
+        guard.stats.counts.xact_count = 7;
+        guard.stats.counts.query_time = Duration::from_millis(500);
+        guard.stats.calc_averages(Duration::from_secs(1));
+    }
+
+    assert!(source.can_move_conns_to(&destination));
+    source.move_conns_to(&destination).unwrap();
+
+    let stats = destination.lock().stats;
+    assert_eq!(stats.counts.query_count, 42);
+    assert_eq!(stats.counts.xact_count, 7);
+    assert_eq!(stats.counts.query_time, Duration::from_millis(500));
+    assert_eq!(stats.averages.query_time, Duration::from_millis(500) / 42);
+
+    destination.shutdown();
+}
