@@ -11,6 +11,7 @@ use crate::net::parameter::ParameterValue;
 pub mod aggregate;
 pub mod auto_id;
 pub mod error;
+mod having;
 pub mod insert;
 pub mod offset;
 pub mod plan;
