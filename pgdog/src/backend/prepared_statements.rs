@@ -347,7 +347,6 @@ impl PreparedStatements {
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
                     self.state.add_ignore(ExecutionCode::ReadyForQuery);
-                    self.parses.push_back(prepare.name().to_owned());
                     return Ok(HandleResult::Forward);
                 }
             }
@@ -665,8 +664,9 @@ pub(crate) mod test {
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
-        Bind, Describe, ErrorResponse, Execute, Message, Parse, ProtocolMessage, Query, Sync,
-        bind::Parameter, messages::ReadyForQuery,
+        Bind, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
+        Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
+        messages::ReadyForQuery,
     };
     use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
@@ -900,6 +900,26 @@ pub(crate) mod test {
         let parse = Parse::named(name, query);
         let (_, rewritten_name) = FrontendPreparedStatements::global().write().insert(&parse);
         rewritten_name
+    }
+
+    #[test]
+    fn ensure_prepared_completes_after_backend_responses() {
+        let mut ps = new_extended();
+        let name = "__stmt_ensure";
+        let prepare = ProtocolMessage::EnsurePrepared(SimplePrepare::new(
+            name,
+            "PREPARE __pgdog_template_name AS SELECT $1",
+        ));
+
+        assert_eq!(ps.handle(&prepare).unwrap(), HandleResult::Forward);
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(!ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
+        assert!(!ps.forward(&mut ready_for_query).unwrap());
+        assert!(ps.done());
     }
 
     // -------------------------------------------------------

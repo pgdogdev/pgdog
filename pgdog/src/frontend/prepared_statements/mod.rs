@@ -110,7 +110,7 @@ impl PreparedStatements {
         }
     }
 
-    /// Insert statement into the cache bypassing duplicate checks.
+    /// Insert PREPARE statement into the cache.
     ///
     /// # Arguments
     ///
