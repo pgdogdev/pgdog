@@ -116,12 +116,21 @@ impl QueryParser {
                 let is_search_path = context.shards_calculator.is_search_path();
                 route.set_search_path_driven(is_search_path);
 
+                // Was there, at any point in time, a `ShardSource::SearchPath` shard?
+                // We use this for a check in schema sharding for `SearchPath` + `manual_routing`
+                // within the cross-shard omni check.
+                let contains_search_path = context.shards_calculator.contains_search_path();
+                route.set_contains_search_path(contains_search_path);
+
                 let full_shard_coverage = route.requires_full_shard_coverage();
                 let schema_sharding = !context.sharding_schema.schemas.is_empty();
+
                 let manual_routing = matches!(
                     route.shard_with_priority().source(),
                     ShardSource::Comment | ShardSource::Set
                 );
+
+                route.set_manual_routing(manual_routing);
 
                 // This means we are serving the request, not just extracting
                 // which keys we need to lookup in the routing table.
