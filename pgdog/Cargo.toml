@@ -10,6 +10,9 @@ repository = "https://github.com/pgdogdev/pgdog"
 readme = "README.md"
 default-run = "pgdog"
 
+[features]
+fips = ["tokio-rustls/fips"]
+
 [dependencies]
 bon.workspace = true
 pin-project = "1"
