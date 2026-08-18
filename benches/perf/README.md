@@ -13,4 +13,4 @@ We have three benchmarks:
 2. [Load balancer](lb): a bit slower, does more stuff
 3. [Sharding](sharding): the most complex, slowest
 
-Use the `run.sh` script in each benchmark folder to quickly run the test. Use [`../integration/setup.sql`](../integration/setup.sql) to configure your local with the necessary databases and users.
+Use the `run.sh` script in each benchmark folder to quickly run the test. Use [`../../integration/setup.sql`](../../integration/setup.sql) to configure your local with the necessary databases and users.
