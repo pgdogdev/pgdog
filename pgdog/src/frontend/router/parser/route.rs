@@ -1,12 +1,11 @@
 use std::{fmt::Display, ops::Deref};
 
-use lazy_static::lazy_static;
-
 use super::{
     Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
     rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
 use crate::frontend::router::sharding::PendingLookup;
+use lazy_static::lazy_static;
 
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
@@ -129,6 +128,10 @@ pub struct Route {
     /// The query engine resolves them and routes the query again;
     /// the query doesn't execute while any are unresolved.
     pending_lookups: Vec<PendingLookup>,
+    /// Being routed by `ShardSource::Comment` or `ShardSource::Set`
+    manual_routing: bool,
+    /// Previously (or currently) a `ShardSource::SearchPath` as the source
+    contains_search_path: bool,
 }
 
 impl Display for Route {
@@ -283,12 +286,40 @@ impl Route {
         self.search_path_driven
     }
 
+    pub fn set_contains_search_path(&mut self, contains_search_path: bool) {
+        self.contains_search_path = contains_search_path;
+    }
+
+    /// Returns true if there was ever a `ShardSource::SearchPath` shard
+    /// (even if not highest priority)
+    pub fn contains_search_path(&self) -> bool {
+        self.contains_search_path
+    }
+
+    pub fn set_manual_routing(&mut self, manual_routing: bool) {
+        self.manual_routing = manual_routing;
+    }
+
+    /// Returns true if the shard is being routed by `ShardSource::Comment` or `ShardSource::Set`
+    pub fn is_manual_routing(&self) -> bool {
+        self.manual_routing
+    }
+
     /// Whether an omnisharded write must reach every shard to remain consistent.
     ///
     /// Schema-based sharding intentionally limits the write to the shard selected
-    /// by `search_path`; every other omnisharded write requires full coverage.
+    /// by `search_path`
+    ///
+    /// Furthermore, we check for the manual_routing and contains_search_path combination to see if
+    /// a `ShardSource::Comment` or `ShardSource::Set` is routing this, with a prior
+    /// de-prioritized `ShardSource::SearchPath`. If that's the case, the write is also allowed.
+    ///
+    /// Every other omnisharded write requires full coverage.
     pub(crate) fn requires_full_shard_coverage(&self) -> bool {
-        self.is_omnisharded() && self.is_write() && !self.is_search_path_driven()
+        self.is_omnisharded()
+            && self.is_write()
+            && !self.is_search_path_driven()
+            && !(self.is_manual_routing() && self.contains_search_path())
     }
 
     /// Return true if this route requires result set manipulation to
@@ -613,6 +644,7 @@ impl Deref for ShardWithPriority {
 #[derive(Default, Debug, Clone)]
 pub struct ShardsWithPriority {
     max: Option<ShardWithPriority>,
+    search_path: bool,
 }
 
 impl ShardsWithPriority {
@@ -629,6 +661,11 @@ impl ShardsWithPriority {
     }
 
     pub(crate) fn push(&mut self, shard: ShardWithPriority) {
+        // If there's another push(), it'll be lost without the search_path flag.
+        if matches!(shard.source, ShardSource::SearchPath(_)) {
+            self.search_path = true;
+        }
+
         if let Some(ref max) = self.max {
             if max < &shard {
                 self.max = Some(shard);
@@ -647,6 +684,11 @@ impl ShardsWithPriority {
         self.peek()
             .map(|shard| matches!(shard.source, ShardSource::SearchPath(_)))
             .unwrap_or_default()
+    }
+
+    /// Was there previously (or currently) a `ShardSource::SearchPath` as the source?
+    pub(crate) fn contains_search_path(&self) -> bool {
+        self.search_path
     }
 }
 
