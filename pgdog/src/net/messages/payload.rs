@@ -7,7 +7,9 @@ use std::ops::{Deref, DerefMut};
 /// Payload wrapper.
 pub struct Payload {
     bytes: BytesMut,
-    name: Option<char>,
+    /// Bytes of header already written into `bytes` (name byte, if any,
+    /// plus the length placeholder, if any).
+    header_len: usize,
     with_len: bool,
 }
 
@@ -20,9 +22,12 @@ impl Default for Payload {
 impl Payload {
     /// Create new payload.
     pub fn new() -> Self {
+        let mut bytes = BytesMut::with_capacity(4);
+        bytes.put_i32(0); // Length placeholder, patched in on freeze().
+
         Self {
-            bytes: BytesMut::new(),
-            name: None,
+            bytes,
+            header_len: 4,
             with_len: true,
         }
     }
@@ -33,17 +38,24 @@ impl Payload {
 
     /// Create new named payload.
     pub fn named(name: char) -> Self {
+        let mut bytes = BytesMut::with_capacity(5);
+        bytes.put_u8(name as u8);
+        bytes.put_i32(0); // Length placeholder, patched in on freeze().
+
         Self {
-            bytes: BytesMut::new(),
-            name: Some(name),
+            bytes,
+            header_len: 5,
             with_len: true,
         }
     }
 
     pub fn wrapped(name: char) -> Self {
+        let mut bytes = BytesMut::with_capacity(1);
+        bytes.put_u8(name as u8);
+
         Self {
-            bytes: BytesMut::new(),
-            name: Some(name),
+            bytes,
+            header_len: 1,
             with_len: false,
         }
     }
@@ -51,15 +63,24 @@ impl Payload {
     pub fn raw() -> Self {
         Self {
             bytes: BytesMut::new(),
-            name: None,
+            header_len: 0,
             with_len: false,
         }
     }
 
     /// Finish assembly and return final bytes array.
-    pub fn freeze(self) -> Bytes {
-        use super::ToBytes;
-        self.to_bytes()
+    ///
+    /// The header (name byte and/or length) was already written in place
+    /// when the payload was created, so this just patches the length
+    /// field, if any, and freezes the buffer. No extra allocation or copy.
+    pub fn freeze(mut self) -> Bytes {
+        if self.with_len {
+            let name_len = self.header_len - 4;
+            let len = (self.bytes.len() - name_len) as i32;
+            self.bytes[name_len..self.header_len].copy_from_slice(&len.to_be_bytes());
+        }
+
+        self.bytes.freeze()
     }
 
     /// Add a C-style string to the payload. It will be NULL-terminated
@@ -82,31 +103,5 @@ impl Deref for Payload {
 impl DerefMut for Payload {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.bytes
-    }
-}
-
-impl super::ToBytes for Payload {
-    fn to_bytes(&self) -> bytes::Bytes {
-        let len = if self.with_len {
-            Some(self.bytes.len() as i32 + 4) // self
-        } else {
-            None
-        };
-
-        let mut buf = BytesMut::with_capacity(match len {
-            Some(len) => len as usize + 5,
-            None => 15,
-        });
-
-        if let Some(name) = self.name {
-            buf.put_u8(name as u8);
-        }
-
-        if let Some(len) = len {
-            buf.put_i32(len);
-        }
-        buf.put_slice(&self.bytes);
-
-        buf.freeze()
     }
 }
