@@ -179,6 +179,29 @@ impl MultiShard {
         })
     }
 
+    /// Get the next available server message to send to the client.
+    ///
+    /// Used when buffering and transforming messages. This returns [`None`] until
+    /// the state is ready, i.e., we received everything we need to sort/limit/offset, etc.
+    ///
+    pub(super) fn get_server_message(&mut self) -> Option<Message> {
+        match self.buffer.take() {
+            Some(data_row) => Some(data_row),
+            _ => self.request_state.command_complete.take(),
+        }
+    }
+
+    /// The state has more messages for the client.
+    pub(super) fn has_more_messages(&self) -> bool {
+        self.buffer.can_take() || self.request_state.command_complete.is_some()
+    }
+
+    /// Push [`Bind`] message into decoding queue. This is used with multi-[`Bind`] extended
+    /// protocol requests to make sure we process them in the right order and with correct decoding.
+    pub(super) fn push_bind(&mut self, bind: &Bind) {
+        self.bound_statements.push_back(bind.clone());
+    }
+
     fn handle_ready_for_query(&mut self, message: Message) -> Result<Option<Message>, Error> {
         self.request_state.ready_for_query += 1;
 
@@ -393,28 +416,5 @@ impl MultiShard {
         // 3. The route does not concern omnisharded tables which have the same data on all shards
         //    anyway.
         self.shards > 1 && self.route.requires_post_processing() && !self.route.is_omnisharded()
-    }
-
-    /// Get the next available server message to send to the client.
-    ///
-    /// Used when buffering and transforming messages. This returns [`None`] until
-    /// the state is ready, i.e., we received everything we need to sort/limit/offset, etc.
-    ///
-    pub(super) fn get_server_message(&mut self) -> Option<Message> {
-        match self.buffer.take() {
-            Some(data_row) => Some(data_row),
-            _ => self.request_state.command_complete.take(),
-        }
-    }
-
-    /// The state has more messages for the client.
-    pub(super) fn has_more_messages(&self) -> bool {
-        self.buffer.can_take() || self.request_state.command_complete.is_some()
-    }
-
-    /// Push [`Bind`] message into decoding queue. This is used with multi-[`Bind`] extended
-    /// protocol requests to make sure we process them in the right order and with correct decoding.
-    pub(super) fn push_bind(&mut self, bind: &Bind) {
-        self.bound_statements.push_back(bind.clone());
     }
 }
