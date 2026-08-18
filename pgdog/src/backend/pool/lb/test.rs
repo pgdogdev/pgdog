@@ -5,6 +5,7 @@ use tokio::time::sleep;
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
+use itertools::*;
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 
 use super::*;
