@@ -175,7 +175,7 @@ pub struct UniqueId {
 impl UniqueId {
     /// Initialize the UniqueId generator.
     fn new(function: UniqueIdFunction) -> Result<Self, Error> {
-        let node_id = node_id().map_err(|_| Error::InvalidNodeId(instance_id().to_string()))?;
+        let node_id = node_id().ok_or_else(|| Error::InvalidNodeId(instance_id().to_string()))?;
 
         let min_id = config().config.general.unique_id_min;
 
