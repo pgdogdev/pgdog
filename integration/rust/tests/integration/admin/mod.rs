@@ -2,6 +2,7 @@
 //!
 //! Each submodule connects to the live PgDog admin database (`rust::setup::admin_sqlx`).
 pub mod resharding;
+pub mod reset_stats;
 pub mod show_config;
 pub mod show_version;
 pub mod tasks;
