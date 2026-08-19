@@ -26,6 +26,8 @@ pub struct QueryParserContext<'a> {
     pub(super) write_only: bool,
     /// Number of shards in the cluster.
     pub(super) shards: usize,
+    /// Are there any sharding tables in the database?
+    pub(super) sharded_tables: bool,
     /// Which tables are sharded and using which columns.
     pub(super) sharding_schema: ShardingSchema,
     /// Context created by the router.
@@ -62,6 +64,8 @@ impl<'a> QueryParserContext<'a> {
     pub fn new(router_context: RouterContext<'a>) -> Result<Self, Error> {
         let mut shards_calculator = ShardsWithPriority::default();
         let mut bare_key_lookups = Vec::new();
+
+        let sharded_tables = !router_context.cluster.sharded_tables().is_empty();
         let sharding_schema = router_context.cluster.sharding_schema();
 
         router_context.parameter_hints.compute_shard(
@@ -75,6 +79,7 @@ impl<'a> QueryParserContext<'a> {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
             shards: router_context.cluster.shards().len(),
+            sharded_tables,
             sharding_schema,
             rw_strategy: router_context.cluster.read_write_strategy(),
             prefer_primary: router_context.cluster.prefer_primary(),

@@ -4,6 +4,9 @@ cross_shard_disabled = true
 # Key! It's default but emphasized here due to the default integration config using aggressive.
 read_write_strategy = "conservative"
 
+
+# solely using sharded_schemas; not mixed
+
 [[databases]]
 host = "127.0.0.1"
 name = "pgdog"
@@ -21,5 +24,40 @@ shard = 0
 
 [[sharded_schemas]]
 database = "pgdog"
+name = "customer_b"
+shard = 1
+
+
+
+# mixed (pgdog2): table sharding + schema sharding
+
+[[databases]]
+host = "127.0.0.1"
+name = "pgdog2"
+shard = 0
+
+[[databases]]
+host = "127.0.0.1"
+name = "pgdog2"
+shard = 1
+
+[[sharded_tables]]
+database = "pgdog2"
+name = "sharded"
+column = "id"
+data_type = "bigint"
+primary = true
+
+[[omnisharded_tables]]
+database = "pgdog2"
+tables = ["sharded_omni"]
+
+[[sharded_schemas]]
+database = "pgdog2"
+name = "customer_a"
+shard = 0
+
+[[sharded_schemas]]
+database = "pgdog2"
 name = "customer_b"
 shard = 1
