@@ -2,7 +2,10 @@ use crate::{
     backend::databases::reload_from_existing,
     config::{config, load_test, load_test_sharded, set},
     expect_message,
-    net::{CommandComplete, ErrorResponse, ReadyForQuery, parameter::ParameterValue},
+    net::{
+        CommandComplete, DataRow, ErrorResponse, Format, ReadyForQuery, RowDescription,
+        parameter::ParameterValue,
+    },
 };
 
 use super::{change_config, prelude::*};
@@ -754,6 +757,63 @@ async fn test_set_application_name_add_host() {
         test_client.client().params.get("application_name").unwrap(),
         &ParameterValue::String("toto - 127.0.0.1:1234".into()),
         "SET application_name should re-append the client host"
+    );
+
+    change_config(|g| g.application_name_add_host = false);
+}
+
+#[tokio::test]
+async fn test_set_application_name_add_host_with_backend() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    change_config(|g| g.application_name_add_host = true);
+
+    test_client.send_simple(Query::new("BEGIN")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    test_client.send_simple(Query::new("SELECT 1")).await;
+    test_client.read_until('Z').await.unwrap();
+    assert!(test_client.backend_connected());
+
+    test_client
+        .send_simple(Query::new("SET application_name TO 'server'"))
+        .await;
+    test_client.read_until('Z').await.unwrap();
+
+    assert_eq!(
+        test_client.client().params.get("application_name").unwrap(),
+        &ParameterValue::String("server - 127.0.0.1:1234".into()),
+        "backend SET should sync suffixed application_name from ParameterStatus"
+    );
+
+    test_client.send_simple(Query::new("ROLLBACK")).await;
+    test_client.read_until('Z').await.unwrap();
+
+    change_config(|g| g.application_name_add_host = false);
+}
+
+#[tokio::test]
+async fn test_set_config_application_name_add_host() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    change_config(|g| g.application_name_add_host = true);
+
+    test_client
+        .send_simple(Query::new(
+            "SELECT set_config('application_name', 'cfg', false)",
+        ))
+        .await;
+
+    expect_message!(test_client.read().await, RowDescription);
+    let row = expect_message!(test_client.read().await, DataRow);
+    assert_eq!(
+        row.get::<String>(0, Format::Text).unwrap(),
+        "cfg - 127.0.0.1:1234"
+    );
+    expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ReadyForQuery);
+
+    assert_eq!(
+        test_client.client().params.get("application_name").unwrap(),
+        &ParameterValue::String("cfg - 127.0.0.1:1234".into()),
     );
 
     change_config(|g| g.application_name_add_host = false);

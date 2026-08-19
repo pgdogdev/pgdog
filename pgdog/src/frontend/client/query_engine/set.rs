@@ -146,3 +146,112 @@ fn rewrite_application_name_query(request: &mut ClientRequest, params: &[SetPara
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::SetParam;
+    use crate::net::Query;
+    use crate::net::parameter::ParameterValue;
+
+    fn query_sql(request: &ClientRequest) -> &str {
+        match &request.messages[0] {
+            ProtocolMessage::Query(query) => query.query(),
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_application_name_query_rewrites_set() {
+        let mut request = ClientRequest::default();
+        request.push(ProtocolMessage::Query(Query::new(
+            "SET application_name TO 'client'",
+        )));
+        let params = vec![SetParam {
+            name: "application_name".into(),
+            value: Some(ParameterValue::String("client - 127.0.0.1:1234".into())),
+            local: false,
+        }];
+
+        rewrite_application_name_query(&mut request, &params);
+
+        assert_eq!(
+            query_sql(&request),
+            r#"SET "application_name" TO "client - 127.0.0.1:1234""#
+        );
+    }
+
+    #[test]
+    fn rewrite_application_name_query_uses_set_local() {
+        let mut request = ClientRequest::default();
+        request.push(ProtocolMessage::Query(Query::new(
+            "SET LOCAL application_name TO 'client'",
+        )));
+        let params = vec![SetParam {
+            name: "application_name".into(),
+            value: Some(ParameterValue::String("client - 127.0.0.1:1234".into())),
+            local: true,
+        }];
+
+        rewrite_application_name_query(&mut request, &params);
+
+        assert_eq!(
+            query_sql(&request),
+            r#"SET LOCAL "application_name" TO "client - 127.0.0.1:1234""#
+        );
+    }
+
+    #[test]
+    fn rewrite_application_name_query_skips_non_application_name() {
+        let mut request = ClientRequest::default();
+        request.push(ProtocolMessage::Query(Query::new("SET timezone TO 'UTC'")));
+        let params = vec![SetParam {
+            name: "timezone".into(),
+            value: Some(ParameterValue::String("UTC".into())),
+            local: false,
+        }];
+
+        rewrite_application_name_query(&mut request, &params);
+
+        assert_eq!(query_sql(&request), "SET timezone TO 'UTC'");
+    }
+
+    #[test]
+    fn rewrite_application_name_query_skips_multi_param() {
+        let mut request = ClientRequest::default();
+        request.push(ProtocolMessage::Query(Query::new(
+            "SET application_name TO 'client'",
+        )));
+        let params = vec![
+            SetParam {
+                name: "application_name".into(),
+                value: Some(ParameterValue::String("client".into())),
+                local: false,
+            },
+            SetParam {
+                name: "timezone".into(),
+                value: Some(ParameterValue::String("UTC".into())),
+                local: false,
+            },
+        ];
+
+        rewrite_application_name_query(&mut request, &params);
+
+        assert_eq!(query_sql(&request), "SET application_name TO 'client'");
+    }
+
+    #[test]
+    fn rewrite_application_name_query_skips_reset() {
+        let mut request = ClientRequest::default();
+        request.push(ProtocolMessage::Query(Query::new("RESET application_name")));
+        let params = vec![SetParam {
+            name: "application_name".into(),
+            value: None,
+            local: false,
+        }];
+
+        rewrite_application_name_query(&mut request, &params);
+
+        assert_eq!(query_sql(&request), "RESET application_name");
+    }
+}

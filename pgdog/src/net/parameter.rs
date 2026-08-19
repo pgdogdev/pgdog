@@ -591,6 +591,12 @@ mod test {
     }
 
     #[test]
+    fn test_with_client_host_non_string_is_unchanged() {
+        let value = ParameterValue::Integer(1).with_client_host("127.0.0.1:1234");
+        assert_eq!(value, ParameterValue::Integer(1));
+    }
+
+    #[test]
     fn test_identical() {
         let mut me = Parameters::default();
         me.insert("application_name", "something");
