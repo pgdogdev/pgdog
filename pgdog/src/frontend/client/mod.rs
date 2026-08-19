@@ -594,6 +594,9 @@ impl Client {
             QueryEngineResult::Done(transaction) => {
                 self.transaction = transaction;
             }
+            QueryEngineResult::AbortSplitSimple(_) => {
+                panic!("query engine cannot abort first request")
+            }
             QueryEngineResult::ReplaySplitSimple(reqs) => {
                 let mut reqs = reqs.into_iter();
                 self.transaction.get_or_insert(TransactionType::Implicit);
@@ -609,6 +612,10 @@ impl Client {
 
                     match result {
                         QueryEngineResult::Done(transaction) => self.transaction = transaction,
+                        QueryEngineResult::AbortSplitSimple(transaction) => {
+                            self.transaction = transaction;
+                            break;
+                        }
                         _ => panic!("replay split simple cannot split further"),
                     }
                 }

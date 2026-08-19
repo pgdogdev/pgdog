@@ -93,9 +93,15 @@ impl Ast {
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut ast = mem.parse(query.query_without_comment)?;
-            if let Some(stmt) = ast.as_mut().into_iter().next() {
+            // Only rewrite if there is one statement in the request.
+            // Otherwise, the parser will refuse to run it and tell the query
+            // engine to re-send statements separately.
+            let only_one = ast.stmts().into_iter().count() == 1;
+
+            if only_one && let Some(stmt) = ast.as_mut().into_iter().next() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
+
             Ok::<_, Error>(ast)
         })?;
 

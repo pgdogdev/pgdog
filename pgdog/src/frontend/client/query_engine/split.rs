@@ -86,11 +86,29 @@ impl QueryEngine {
     /// should be forwarded to the client.
     ///
     pub(super) fn split_simple_check(
-        &self,
+        &mut self,
         context: &QueryEngineContext<'_>,
         message: &Message,
     ) -> bool {
-        message.code() == 'Z' && context.multi_simple_query_request && context.more_requests_pending
+        if context.in_multi_query_request {
+            if message.code() == 'E' {
+                self.in_simple_split_error = true;
+            }
+        }
+
+        message.code() == 'Z'
+            && context.in_multi_query_request
+            && context.more_requests_pending
+            && !self.in_simple_split_error
+    }
+
+    pub(super) fn split_simple_abort_check(&mut self) -> bool {
+        if self.in_simple_split_error {
+            self.in_simple_split_error = false;
+            true
+        } else {
+            false
+        }
     }
 }
 

@@ -21,7 +21,7 @@ pub struct QueryEngineContext<'a> {
     /// Request position in a splice.
     pub(super) more_requests_pending: bool,
     /// Spliced simple query.
-    pub(super) multi_simple_query_request: bool,
+    pub(super) in_multi_query_request: bool,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -62,7 +62,7 @@ impl<'a> QueryEngineContext<'a> {
             memory_stats,
             admin: client.admin,
             more_requests_pending: false,
-            multi_simple_query_request: false,
+            in_multi_query_request: false,
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
@@ -86,7 +86,7 @@ impl<'a> QueryEngineContext<'a> {
     /// We will drop [`ReadyForQuery`] for all requests except
     /// the last one, just like Postgres.
     pub fn spliced_simple(mut self) -> Self {
-        self.multi_simple_query_request = true;
+        self.in_multi_query_request = true;
         self
     }
 
@@ -104,7 +104,7 @@ impl<'a> QueryEngineContext<'a> {
             memory_stats: MemoryStats::default(),
             admin: false,
             more_requests_pending: false,
-            multi_simple_query_request: false,
+            in_multi_query_request: false,
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,

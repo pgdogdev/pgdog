@@ -7,6 +7,9 @@ pub enum QueryEngineResult {
     Done(Option<TransactionType>),
     ReplaySplitSimple(Vec<ClientRequest>),
     ReplaySplitExtended(Vec<ClientRequest>),
+    /// One of the queries returned an error. If this was a single query, Postgres
+    /// would abort the transaction.
+    AbortSplitSimple(Option<TransactionType>),
 }
 
 impl QueryEngineResult {

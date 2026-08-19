@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     frontend::router::Ast,
     net::{
-        Error, Flush, Parse, ProtocolMessage,
+        Error, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
@@ -345,9 +345,8 @@ impl DerefMut for ClientRequest {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Describe, Execute, Parse, Query, Sync};
-
     use super::*;
+    use crate::net::{Flush, *};
 
     #[test]
     fn test_detect_begin() {
