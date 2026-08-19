@@ -29,16 +29,16 @@ fn test_mixed_set_passthrough_in_session_mode() {
 }
 
 #[test]
-fn test_mixed_set_rejected_in_transaction_mode() {
+fn test_mixed_set_is_split() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
-        Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
-    ]);
-    assert!(
-        result.is_err(),
-        "expected error for mixed SET in transaction mode, got {result:#?}",
-    );
+    let command = test
+        .try_execute(vec![
+            Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
+        ])
+        .unwrap();
+
+    assert!(matches!(command, Command::SimpleQuerySplit { queries } if queries.len() == 2));
 }
 
 #[test]
@@ -121,24 +121,38 @@ fn test_set_multi_statement_mixed_local() {
 }
 
 #[test]
-fn test_set_multi_statement_mixed_returns_error() {
+fn test_set_multi_statement_mixed_is_split() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET statement_timeout TO 1; SELECT 1").into(),
     ]);
-    assert!(result.is_err());
+
+    match command {
+        Command::SimpleQuerySplit { queries } => {
+            assert_eq!(queries[0], "SET statement_timeout TO 1");
+            assert_eq!(queries[2], "SELECT 1");
+            assert_eq!(queries.len(), 2);
+        }
+
+        cmd => panic!("expected split, got: {:?}", cmd),
+    }
 }
 
 #[test]
-fn test_multi_statement_no_set_falls_through() {
+fn test_multi_statement_no_set_is_split() {
     let mut test = QueryParserTest::new();
 
     let command = test.execute(vec![Query::new("SELECT 1; SELECT 2").into()]);
-    assert!(
-        matches!(command, Command::Query(_)),
-        "multi-statement without SET should fall through, got {command:#?}",
-    );
+    match command {
+        Command::SimpleQuerySplit { queries } => {
+            assert_eq!(queries[0], "SELECT 1");
+            assert_eq!(queries[2], "SELECT 2");
+            assert_eq!(queries.len(), 2);
+        }
+
+        cmd => panic!("expected split, got: {:?}", cmd),
+    }
 }
 
 #[test]

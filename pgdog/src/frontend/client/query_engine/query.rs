@@ -461,8 +461,9 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
-        if context.in_multi_query_request {
-            self.in_simple_split_error = true;
+        // The rest of the pipeline should be ignored.
+        if context.more_requests_pending {
+            self.pipeline_error = true;
         }
 
         // Attach query context.

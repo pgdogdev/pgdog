@@ -73,12 +73,13 @@ impl QueryEngine {
             requests.push(current_request);
         }
 
-        Ok(Some(QueryEngineResult::ReplaySplitExtended(requests)))
+        Ok(Some(QueryEngineResult::ReplaySplit {
+            requests,
+            extended: true,
+        }))
     }
 
-    /// Drop a [`ReadyForQuery`] message if it's part
-    /// of a simple query pipeline we split and it's not
-    /// the last one sent by the server.
+    /// Drop [`ReadyForQuery`] messages from intermediate requests.
     ///
     /// # Returns
     ///
@@ -90,23 +91,51 @@ impl QueryEngine {
         context: &QueryEngineContext<'_>,
         message: &Message,
     ) -> bool {
-        if context.in_multi_query_request {
-            if message.code() == 'E' {
-                self.in_simple_split_error = true;
+        if context.in_multi_query_request && context.more_requests_pending {
+            match message.code() {
+                'E' => {
+                    self.pipeline_error = true;
+                    false
+                }
+                'Z' => true,
+                _ => false,
             }
+        } else {
+            false
         }
-
-        message.code() == 'Z'
-            && context.in_multi_query_request
-            && context.more_requests_pending
-            && !self.in_simple_split_error
     }
 
-    pub(super) fn split_simple_abort_check(&mut self) -> bool {
-        if self.in_simple_split_error {
-            self.in_simple_split_error = false;
-            true
+    /// Skip requests until there are no more pending.
+    ///
+    /// This allows the caller to execute the last request in the pipeline which
+    /// is supposed to be a [`crate::net::Sync`].
+    ///
+    /// # Returns
+    ///
+    /// `true` if in error state, `false` if all is good.
+    ///
+    pub(super) fn in_pipeline_error_state(&mut self, context: &QueryEngineContext<'_>) -> bool {
+        // Error in extended protocol.
+        if self.backend.out_of_sync() {
+            self.pipeline_error = true;
+        }
+
+        // For multi-query requests, only reset the error state
+        // after the last request has been rejected.
+        if context.in_multi_query_request {
+            let in_error = self.pipeline_error;
+
+            if !context.more_requests_pending {
+                self.pipeline_error = false;
+            }
+
+            in_error
+        } else if context.more_requests_pending {
+            // Extended protocol requests will send a final `Sync`,
+            // this is when we'll reset the state back.
+            self.pipeline_error
         } else {
+            self.pipeline_error = false;
             false
         }
     }
@@ -121,7 +150,7 @@ mod tests {
         match QueryEngine::split_extended_check(client_request)
             .expect("extended request splitting should succeed")
         {
-            Some(QueryEngineResult::ReplaySplitExtended(requests)) => requests,
+            Some(QueryEngineResult::ReplaySplit { requests, .. }) => requests,
             Some(_) => panic!("expected an extended request split"),
             None => panic!("expected request to be split"),
         }

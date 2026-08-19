@@ -2,7 +2,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::net::{
     BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, ParameterDescription,
-    ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription, parameter::ParameterValue,
+    ParseComplete, Protocol, ProtocolMessage, ReadyForQuery, RowDescription,
+    parameter::ParameterValue,
 };
 
 use super::*;
@@ -61,21 +62,23 @@ impl QueryEngine {
                         .await?
                 }
                 ProtocolMessage::Query(_) => {
-                    (if let Some(row) = data_row.as_ref() {
+                    let mut sent = (if let Some(row) = data_row.as_ref() {
                         context.stream.send(&row_description).await?
                             + context.stream.send(row).await?
                     } else {
                         0
-                    }) + context.stream.send(&CommandComplete::new(command)).await?
-                        + context
-                            .stream
-                            .send(&ReadyForQuery::in_transaction(context.in_transaction()))
-                            .await?
+                    }) + context.stream.send(&CommandComplete::new(command)).await?;
+
+                    let rfq = ReadyForQuery::in_transaction(context.in_transaction()).message();
+                    // Only reply with RFQ if this is the last query
+                    // in a pipeline.
+                    if !self.split_simple_check(context, &rfq) {
+                        sent += context.stream.send(&rfq).await?
+                    }
+                    sent
                 }
                 // TODO(lev): Elixir closes the statement it just asked us to prepare.
                 // That's very memory-conscious of it, and we appreciate it.
-                //
-                // Add Elixir back to our CI.
                 ProtocolMessage::Close(_) => context.stream.send(&CloseComplete).await?,
 
                 _ => 0,

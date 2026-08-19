@@ -1,7 +1,5 @@
 use pg_raw_parse::{Error as PgParseRawError, deparse};
 
-use crate::net::Query;
-
 use super::*;
 
 impl QueryParser {
@@ -52,7 +50,7 @@ impl QueryParser {
             .collect::<Result<Vec<_>, PgParseRawError>>()?;
         let queries = stmts
             .into_iter()
-            .map(|query| Query::new(query.as_str()))
+            .map(|query| query.as_str().to_string())
             .collect::<Vec<_>>();
 
         Ok(Command::SimpleQuerySplit { queries })
