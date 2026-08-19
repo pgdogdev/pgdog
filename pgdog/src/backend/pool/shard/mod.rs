@@ -115,7 +115,7 @@ impl Shard {
 
     /// Reset statistics collected by this shard's pools,
     /// used by the RESET STATS command.
-    pub fn reset_stats(&self) {
+    pub(crate) fn reset_stats(&self) {
         for pool in self.pool_iter() {
             pool.lock().stats = Stats::default();
         }
