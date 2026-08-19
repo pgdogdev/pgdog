@@ -138,10 +138,6 @@ pub fn shutdown() {
     }
 }
 
-/// Get plugin by name.
-pub fn plugin(name: &str) -> Option<&PluginVtable> {
-    PLUGINS.get().unwrap().get(name).copied()
-}
 
 /// Get all loaded plugins.
 pub fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {

@@ -39,13 +39,6 @@ impl CopyRow {
         self.row.clone()
     }
 
-    /// Create new headers message that should go to all shards.
-    pub fn headers(headers: &str) -> Self {
-        Self {
-            shard: Shard::All,
-            row: CopyData::new(headers.as_bytes()),
-        }
-    }
 
     /// Length of the message.
     pub fn len(&self) -> usize {

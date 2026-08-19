@@ -26,10 +26,6 @@ impl Data {
             Self::Column(bytes) => bytes.len() as i32,
         }
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 #[derive(Debug, Clone)]

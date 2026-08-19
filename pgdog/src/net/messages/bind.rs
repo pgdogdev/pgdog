@@ -1,6 +1,5 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
-use uuid::Uuid;
 
 use super::Error;
 use super::FromDataType;
@@ -87,11 +86,6 @@ impl<'a> ParameterWithFormat<'a> {
 
     /// Get BIGINT if one is encoded in the field.
     pub fn bigint(&self) -> Option<i64> {
-        Self::decode(self)
-    }
-
-    /// Get UUID, if one is encoded in the field.
-    pub fn uuid(&self) -> Option<Uuid> {
         Self::decode(self)
     }
 

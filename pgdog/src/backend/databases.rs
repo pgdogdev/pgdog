@@ -38,7 +38,6 @@ use super::{
     Cluster, ClusterShardConfig, Error, ShardedTables,
     pool::{Address, ClusterConfig, Config},
     reload_notify,
-    replication::ReplicationConfig,
 };
 
 static DATABASES: Lazy<ArcSwap<Databases>> =
@@ -384,20 +383,6 @@ impl Databases {
     ) -> Option<&crate::config::MirrorConfig> {
         self.mirror_configs
             .get(&(source_db.to_string(), destination_db.to_string()))
-    }
-
-    /// Get replication configuration for the database.
-    pub fn replication(&self, database: &str) -> Option<ReplicationConfig> {
-        for (user, cluster) in &self.databases {
-            if user.database == database {
-                return Some(ReplicationConfig {
-                    shards: cluster.shards().len(),
-                    sharded_tables: cluster.sharded_tables().into(),
-                });
-            }
-        }
-
-        None
     }
 
     /// Get all clusters and databases.

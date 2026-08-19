@@ -44,11 +44,6 @@ impl ParameterDescription {
         Self { params: Vec::new() }
     }
 
-    /// Create a parameter description from a list of type OIDs.
-    pub fn from_params(params: Vec<i32>) -> Self {
-        Self { params }
-    }
-
     /// Type OIDs of the parameters, in order.
     pub fn params(&self) -> &[i32] {
         &self.params

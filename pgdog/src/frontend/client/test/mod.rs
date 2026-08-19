@@ -57,16 +57,6 @@ pub async fn test_client_sharded() -> (TcpStream, Client) {
     parallel_test_client().await
 }
 
-pub async fn test_client_with_params(params: Parameters, replicas: bool) -> (TcpStream, Client) {
-    if replicas {
-        load_test_replicas();
-    } else {
-        load_test();
-    }
-
-    parallel_test_client_with_params(params).await
-}
-
 pub async fn parallel_test_client() -> (TcpStream, Client) {
     parallel_test_client_with_params(Parameters::default()).await
 }
@@ -101,13 +91,6 @@ macro_rules! new_client {
     }};
 }
 
-pub fn buffer(messages: &[impl ToBytes]) -> BytesMut {
-    let mut buf = BytesMut::new();
-    for message in messages {
-        buf.put(message.to_bytes());
-    }
-    buf
-}
 
 /// Read a series of messages from the stream and make sure
 /// they arrive in the right order.

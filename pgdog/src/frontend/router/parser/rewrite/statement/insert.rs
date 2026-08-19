@@ -33,11 +33,6 @@ impl InsertSplit {
         &self.stmt
     }
 
-    /// Get the AST.
-    pub fn ast(&self) -> &Ast {
-        &self.ast
-    }
-
     /// Get the global prepared statement name, if this split was registered.
     pub fn statement_name(&self) -> Option<&str> {
         self.statement_name.as_deref()

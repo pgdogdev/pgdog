@@ -128,16 +128,6 @@ impl Startup {
         }
     }
 
-    /// Get a startup parameter by name.
-    ///
-    /// If no such parameter exists, `None` is returned.
-    pub fn parameter(&self, name: &str) -> Option<&str> {
-        match self {
-            Startup::Ssl | Startup::GssEnc | Startup::Cancel { .. } => None,
-            Startup::Startup { params, .. } => params.get(name).and_then(|s| s.as_str()),
-        }
-    }
-
     /// Create new startup message from config.
     pub fn new(user: &str, database: &str, params: Vec<Parameter>) -> Self {
         Self::new_with_protocol_version(ProtocolVersion::V3_0, user, database, params)

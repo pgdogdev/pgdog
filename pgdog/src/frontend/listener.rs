@@ -90,11 +90,6 @@ impl Listener {
         Ok(())
     }
 
-    /// Shutdown this listener.
-    pub fn shutdown(&self) {
-        self.shutdown.notify_one();
-    }
-
     fn start_shutdown(&self) {
         comms().shutdown();
 

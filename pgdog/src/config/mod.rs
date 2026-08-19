@@ -244,11 +244,6 @@ pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
 }
 
 #[cfg(test)]
-pub fn load_test_with_user(user: &str) {
-    load_test_with_user_and_pooler_mode(user, PoolerMode::Transaction, Role::Primary)
-}
-
-#[cfg(test)]
 fn load_test_with_user_and_pooler_mode(user: &str, pooler_mode: PoolerMode, role: Role) {
     use crate::backend::databases::init;
 

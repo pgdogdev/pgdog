@@ -94,20 +94,6 @@ impl LsnStats {
     pub fn valid(&self) -> bool {
         self.inner.valid()
     }
-
-    /// Calculate replica lag.
-    pub fn replica_lag(&self, primary: &LsnStats) -> ReplicaLag {
-        let bytes = primary.lsn.lsn - self.lsn.lsn;
-        let lag_ms = (primary.timestamp.to_naive_datetime() - self.timestamp.to_naive_datetime())
-            .num_milliseconds()
-            .clamp(0, i64::MAX);
-        let lag = Duration::from_millis(lag_ms as u64);
-
-        ReplicaLag {
-            bytes,
-            duration: lag,
-        }
-    }
 }
 
 impl LsnStats {

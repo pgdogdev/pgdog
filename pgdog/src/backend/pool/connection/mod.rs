@@ -471,11 +471,6 @@ impl Connection {
     pub(crate) fn pooler_mode(&self) -> PoolerMode {
         self.cluster().map(|c| c.pooler_mode()).unwrap_or_default()
     }
-
-    /// This is an admin DB connection.
-    pub fn is_admin(&self) -> bool {
-        matches!(self.binding, Binding::Admin(_))
-    }
 }
 
 impl Deref for Connection {

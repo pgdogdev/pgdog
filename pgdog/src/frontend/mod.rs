@@ -7,11 +7,7 @@ pub mod comms;
 pub mod connected_client;
 pub mod error;
 pub mod listener;
-pub mod logical_session;
-pub mod logical_transaction;
 pub mod prepared_statements;
-#[cfg(debug_assertions)]
-pub mod query_logger;
 pub mod regex_parser;
 pub mod router;
 pub mod stats;

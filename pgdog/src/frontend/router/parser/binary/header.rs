@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use bytes::{Buf, BufMut, BytesMut};
 use once_cell::sync::Lazy;
 
@@ -16,11 +14,6 @@ static SIGNATURE: Lazy<Vec<u8>> = Lazy::new(|| {
 
     expected
 });
-
-/// Get binary COPY signature.
-pub fn binary_signature() -> &'static Vec<u8> {
-    SIGNATURE.deref()
-}
 
 /// Total bytes required for a complete header.
 const HEADER_SIZE: usize = 11 + 4 + 4; // signature + flags + extension

@@ -4,8 +4,7 @@ pub mod logical;
 pub mod sharded_schema;
 pub mod sharded_tables;
 
-pub use config::ReplicationConfig;
 pub use error::Error;
 pub use logical::*;
 pub use sharded_schema::*;
-pub use sharded_tables::{ShardedColumn, ShardedTables};
+pub use sharded_tables::ShardedTables;

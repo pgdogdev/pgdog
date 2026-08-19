@@ -28,11 +28,6 @@ impl NotificationResponse {
         let start = 1 + 4 + 4 + self.channel_len;
         unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
     }
-
-    /// Which connection sent the notification.
-    pub fn pid(&self) -> i32 {
-        self.pid
-    }
 }
 
 impl FromBytes for NotificationResponse {

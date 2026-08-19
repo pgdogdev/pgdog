@@ -14,8 +14,8 @@ use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
         Schema, ShardedTables,
-        databases::{User as DatabaseUser, databases},
-        replication::{ReplicationConfig, ShardedSchemas},
+        databases::User as DatabaseUser,
+        replication::ShardedSchemas,
     },
     config::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
@@ -546,10 +546,6 @@ impl Cluster {
         &self.prepared_statements
     }
 
-    pub fn connection_recovery(&self) -> &ConnectionRecovery {
-        &self.connection_recovery
-    }
-
     pub fn client_connection_recovery(&self) -> &ConnectionRecovery {
         &self.client_connection_recovery
     }
@@ -560,10 +556,6 @@ impl Cluster {
 
     pub fn expanded_explain(&self) -> bool {
         self.expanded_explain
-    }
-
-    pub fn pub_sub_enabled(&self) -> bool {
-        self.pub_sub_channel_size > 0
     }
 
     /// A cluster is read_only if zero shards have a primary,
@@ -634,13 +626,6 @@ impl Cluster {
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
-    }
-
-    /// Get replication configuration for this cluster.
-    pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
-        self.replication_sharding
-            .as_ref()
-            .and_then(|database| databases().replication(database))
     }
 
     /// Get all data required for sharding.
