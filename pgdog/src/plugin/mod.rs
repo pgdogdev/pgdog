@@ -138,7 +138,6 @@ pub fn shutdown() {
     }
 }
 
-
 /// Get all loaded plugins.
 pub fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {
     PLUGINS.get()

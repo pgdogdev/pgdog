@@ -37,7 +37,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     aws_lc_rs::constant_time::verify_slices_are_equal(a, b).is_ok()
 }
 
-
 /// Get a human-readable duration for amounts that
 /// a human would use.
 pub fn human_duration(duration: Duration) -> String {

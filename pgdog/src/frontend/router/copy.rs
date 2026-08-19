@@ -39,7 +39,6 @@ impl CopyRow {
         self.row.clone()
     }
 
-
     /// Length of the message.
     pub fn len(&self) -> usize {
         self.row.len()

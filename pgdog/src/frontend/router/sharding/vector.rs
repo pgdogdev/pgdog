@@ -5,8 +5,6 @@ mod test {
     use crate::net::messages::{Vector, data_types::Float};
     use pgdog_vector::Distance;
 
-    
-
     #[test]
     fn test_euclidean() {
         let v1 = Vector::from(&[1.0, 2.0, 3.0][..]);

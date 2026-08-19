@@ -13,9 +13,7 @@ use crate::backend::server::ServerRequest;
 use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
-        Schema, ShardedTables,
-        databases::User as DatabaseUser,
-        replication::ShardedSchemas,
+        Schema, ShardedTables, databases::User as DatabaseUser, replication::ShardedSchemas,
     },
     config::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,

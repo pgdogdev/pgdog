@@ -161,7 +161,6 @@ impl Startup {
     pub fn tls() -> Self {
         Self::Ssl
     }
-
 }
 
 impl super::ToBytes for Startup {

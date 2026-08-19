@@ -139,7 +139,6 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
-
     /// Get a globally unique [`Prepare`] message using the client name as key.
     pub(crate) fn prepare_and_rewrite(&self, name: &str) -> Option<(Prepare, Arc<RewritePlan>)> {
         self.local

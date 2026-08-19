@@ -30,15 +30,12 @@ pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy}
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::RewriteMode;
 use std::path::Path;
-pub use users::{ServerAuth, User};
 #[cfg(test)]
 pub use users::Users;
+pub use users::{ServerAuth, User};
 
 // Re-export from sharding module
-pub use sharding::{
-    DataType, Hasher,
-    ShardedMappingDeprecated,
-};
+pub use sharding::{DataType, Hasher, ShardedMappingDeprecated};
 
 // Re-export from replication module
 pub use replication::MirrorConfig;

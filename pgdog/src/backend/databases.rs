@@ -857,10 +857,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_existing_user_no_password_set() {
-        setup_config(
-            PassthroughAuth::EnabledPlain,
-            vec![make_user("bob", None)],
-        );
+        setup_config(PassthroughAuth::EnabledPlain, vec![make_user("bob", None)]);
 
         let result = add(make_user("bob", Some("new_pass")));
         assert!(result.is_ok());

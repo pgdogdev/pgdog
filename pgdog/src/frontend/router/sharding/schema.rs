@@ -1,4 +1,7 @@
-use crate::{backend::replication::ShardedSchemas, frontend::router::parser::{Schema, Shard}};
+use crate::{
+    backend::replication::ShardedSchemas,
+    frontend::router::parser::{Schema, Shard},
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct SchemaSharder {

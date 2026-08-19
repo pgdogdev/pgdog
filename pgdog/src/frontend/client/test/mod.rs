@@ -91,7 +91,6 @@ macro_rules! new_client {
     }};
 }
 
-
 /// Read a series of messages from the stream and make sure
 /// they arrive in the right order.
 pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {

@@ -10,7 +10,10 @@ use crate::{
     backend::{ShardingSchema, server::test::test_server},
     config::DataType,
     frontend::router::parser::Shard,
-    net::{Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter, messages::Format},
+    net::{
+        Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter,
+        messages::Format,
+    },
 };
 
 use super::*;
