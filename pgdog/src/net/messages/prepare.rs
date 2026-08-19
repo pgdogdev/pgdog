@@ -51,8 +51,8 @@ impl Protocol for Prepare {
         'Q'
     }
 
-    fn message(&self) -> Result<Message, Error> {
-        Ok(Message::new(self.to_bytes()).frontend())
+    fn message(&self) -> Message {
+        Message::new(self.to_bytes()).frontend()
     }
 
     fn streaming(&self) -> bool {

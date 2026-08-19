@@ -45,7 +45,7 @@ impl Command for ShowPools {
             Field::bool("online"),
             Field::bool("schema_admin"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
                 for (role, ban, pool) in shard.pools_with_roles_and_bans() {
@@ -80,7 +80,7 @@ impl Command for ShowPools {
                         .add(state.online)
                         .add(cluster.schema_admin());
 
-                    messages.push(row.message()?);
+                    messages.push(row.message());
                 }
             }
         }

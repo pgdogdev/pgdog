@@ -39,8 +39,8 @@ impl Command for StopTask {
         let mut dr = DataRow::new();
         dr.add(result);
 
-        messages.push(RowDescription::new(&[Field::text("stop_task")]).message()?);
-        messages.push(dr.message()?);
+        messages.push(RowDescription::new(&[Field::text("stop_task")]).message());
+        messages.push(dr.message());
 
         Ok(messages)
     }

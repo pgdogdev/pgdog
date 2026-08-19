@@ -28,7 +28,7 @@ impl Command for ShowConfig {
         let _databases = databases();
 
         let mut messages =
-            vec![RowDescription::new(&[Field::text("name"), Field::text("value")]).message()?];
+            vec![RowDescription::new(&[Field::text("name"), Field::text("value")]).message()];
 
         // Reflection using JSON.
         let general = serde_json::to_value(&config.config.general)?;
@@ -46,7 +46,7 @@ impl Command for ShowConfig {
                     let mut dr = DataRow::new();
                     let name = prefix.to_string() + key.as_str();
                     dr.add(&name).add(pretty_value(&name, value)?);
-                    messages.push(dr.message()?);
+                    messages.push(dr.message());
                 }
             }
         }

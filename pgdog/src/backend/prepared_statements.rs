@@ -281,7 +281,7 @@ impl PreparedStatements {
                     if self.contains(parse.name()) {
                         // TODO(lev): perform the same in errored transaction check
                         // as we do for PREPARE below.
-                        self.state.add_simulated(ParseComplete.message()?);
+                        self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
                         self.parses.push_back(parse.name().to_string());
@@ -305,7 +305,7 @@ impl PreparedStatements {
                 if !close.anonymous() {
                     // We don't allow clients to close prepared statements.
                     // We manage them ourselves.
-                    self.state.add_simulated(CloseComplete.message()?);
+                    self.state.add_simulated(CloseComplete.message());
                     return Ok(HandleResult::Drop);
                 } else {
                     self.state.add('3');
@@ -316,10 +316,10 @@ impl PreparedStatements {
                 if self.contains(prepare.name()) {
                     if self.server_state == State::TransactionError {
                         self.state
-                            .add_simulated(ErrorResponse::in_failed_transaction().message()?);
+                            .add_simulated(ErrorResponse::in_failed_transaction().message());
                     } else {
                         self.state
-                            .add_simulated(CommandComplete::from_str("PREPARE").message()?);
+                            .add_simulated(CommandComplete::from_str("PREPARE").message());
                     }
 
                     self.state.add_simulated(
@@ -330,7 +330,7 @@ impl PreparedStatements {
                                 self.server_state == State::IdleInTransaction,
                             )
                         }
-                        .message()?,
+                        .message(),
                     );
                     return Ok(HandleResult::Drop);
                 } else {

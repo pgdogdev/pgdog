@@ -46,6 +46,6 @@ impl Command for Probe {
         let rd = RowDescription::new(&[Field::bigint("latency")]);
         let mut dr = DataRow::new();
         dr.add(duration.as_millis() as i64);
-        Ok(vec![rd.message()?, dr.message()?])
+        Ok(vec![rd.message(), dr.message()])
     }
 }

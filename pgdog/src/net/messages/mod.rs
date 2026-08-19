@@ -103,8 +103,8 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     fn code(&self) -> char;
 
     /// Convert to message.
-    fn message(&self) -> Result<Message, Error> {
-        Ok(Message::new(self.to_bytes()))
+    fn message(&self) -> Message {
+        Message::new(self.to_bytes())
     }
 
     /// Message is part of a stream and should not be buffered.

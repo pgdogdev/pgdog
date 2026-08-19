@@ -51,17 +51,17 @@ impl AdminServer {
         let messages = match Parser::parse(&query.query().to_lowercase()) {
             Ok(command) => {
                 let mut messages = command.execute().await?;
-                messages.push(CommandComplete::new(command.name()).message()?);
+                messages.push(CommandComplete::new(command.name()).message());
 
                 messages
             }
             Err(err) => {
-                vec![ErrorResponse::protocol_violation(err.to_string().as_str()).message()?]
+                vec![ErrorResponse::protocol_violation(err.to_string().as_str()).message()]
             }
         };
 
         self.messages.extend(messages);
-        self.messages.push_back(ReadyForQuery::idle().message()?);
+        self.messages.push_back(ReadyForQuery::idle().message());
 
         Ok(())
     }

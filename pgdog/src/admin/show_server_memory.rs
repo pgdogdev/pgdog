@@ -33,7 +33,7 @@ impl Command for ShowServerMemory {
             Field::numeric("net_buffer_bytes"),
             Field::numeric("total_bytes"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
 
         let stats = stats();
         for server in stats {
@@ -54,7 +54,7 @@ impl Command for ShowServerMemory {
                 .add(memory.stream as i64)
                 .add((memory.total()) as i64);
 
-            messages.push(row.message()?);
+            messages.push(row.message());
         }
 
         Ok(messages)

@@ -29,7 +29,7 @@ impl Command for ShowPreparedStatements {
                 Field::numeric("used_by"),
                 Field::numeric("memory_used"),
             ])
-            .message()?,
+            .message(),
         ];
         for (key, stmt) in statements.statements() {
             let name = stmt.name();
@@ -54,7 +54,7 @@ impl Command for ShowPreparedStatements {
                 })
                 .add(stmt.used)
                 .add(name_memory);
-            messages.push(dr.message()?);
+            messages.push(dr.message());
         }
         Ok(messages)
     }

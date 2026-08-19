@@ -29,8 +29,8 @@ impl QueryEngine {
                 context
                     .stream
                     .send_many(&[
-                        CommandComplete::new_begin().message()?,
-                        ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                        CommandComplete::new_begin().message(),
+                        ReadyForQuery::in_transaction(context.in_transaction()).message(),
                     ])
                     .await?
             };
@@ -51,28 +51,27 @@ impl QueryEngine {
         let mut reply = vec![];
         for message in context.client_request.iter() {
             match message.code() {
-                'P' => reply.push(ParseComplete.message()?),
-                'B' => reply.push(BindComplete.message()?),
+                'P' => reply.push(ParseComplete.message()),
+                'B' => reply.push(BindComplete.message()),
                 'D' => {
                     if matches!(message, ProtocolMessage::Describe(d) if d.is_statement()) {
-                        reply.push(ParameterDescription::empty().message()?);
+                        reply.push(ParameterDescription::empty().message());
                     }
-                    reply.push(NoData.message()?);
+                    reply.push(NoData.message());
                 }
                 'H' => (),
                 'E' => reply.push(if in_transaction {
-                    CommandComplete::new_begin().message()?
+                    CommandComplete::new_begin().message()
                 } else if !rollback {
-                    CommandComplete::new_commit().message()?
+                    CommandComplete::new_commit().message()
                 } else {
-                    CommandComplete::new_rollback().message()?
+                    CommandComplete::new_rollback().message()
                 }),
                 'S' => {
                     if rollback && !context.in_transaction() {
-                        reply
-                            .push(NoticeResponse::from(ErrorResponse::no_transaction()).message()?);
+                        reply.push(NoticeResponse::from(ErrorResponse::no_transaction()).message());
                     }
-                    reply.push(ReadyForQuery::in_transaction(in_transaction).message()?)
+                    reply.push(ReadyForQuery::in_transaction(in_transaction).message())
                 }
                 c => return Err(Error::UnexpectedMessage(c)),
             }

@@ -39,7 +39,7 @@ impl Command for ShowPeers {
                 Field::text("last_seen"),
                 Field::numeric("clients"),
             ])
-            .message()?,
+            .message(),
         ];
 
         let now = SystemTime::now();
@@ -53,7 +53,7 @@ impl Command for ShowPeers {
                         .unwrap_or(Duration::from_secs(0))
                 ))
                 .add(state.clients);
-            rows.push(row.message()?);
+            rows.push(row.message());
         }
 
         Ok(rows)

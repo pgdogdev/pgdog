@@ -1,4 +1,5 @@
-//! Buffer messages to sort and aggregate them later.
+//! Buffer messages to sort and aggregate them
+//! once we received all of them from the servers.
 
 use std::{
     cmp::Ordering,
@@ -40,19 +41,15 @@ impl Buffer {
 
     /// Mark the buffer as full. It will start returning messages now.
     /// Caller is responsible for sorting the buffer if needed.
-    pub(super) fn full(&mut self) {
+    pub(super) fn mark_full(&mut self) {
         self.full = true;
     }
 
-    pub(super) fn reset(&mut self) {
-        self.buffer.clear();
-        self.full = false;
-    }
-
-    /// Sort the buffer.
+    /// Sort the buffer in specified order, using the decoder to convert
+    /// Postgres column values to Rust values we can sort.
     pub(super) fn sort(&mut self, columns: &[OrderBy], decoder: &Decoder) {
         // Calculate column indices once, since
-        // fetching indices by name is O(number of columns).
+        // fetching indices by name is O (number of columns).
         let mut cols = vec![];
         for column in columns {
             match column {
@@ -210,7 +207,7 @@ impl Buffer {
     /// Take messages from buffer.
     pub(super) fn take(&mut self) -> Option<Message> {
         if self.full {
-            self.buffer.pop_front().and_then(|s| s.message().ok())
+            self.buffer.pop_front().map(|s| s.message())
         } else {
             None
         }
@@ -255,13 +252,13 @@ mod test {
         for i in 0..25_i64 {
             let mut dr = DataRow::new();
             dr.add(25 - i).add((25 - i).to_string());
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
-        buf.full();
+        buf.mark_full();
 
         let mut i = 1;
         while let Some(message) = buf.take() {
@@ -285,12 +282,12 @@ mod test {
         for _ in 0..6 {
             let mut dr = DataRow::new();
             dr.add(15_i64);
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
             .unwrap();
-        buf.full();
+        buf.mark_full();
 
         assert_eq!(buf.len(), 1);
         let row = buf.take().unwrap();
@@ -311,13 +308,13 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(15_i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 
         buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
             .unwrap();
-        buf.full();
+        buf.mark_full();
 
         assert_eq!(buf.len(), 2);
         for _ in &emails {
@@ -346,13 +343,13 @@ mod test {
         for (i, ts) in timestamps.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(ts.to_string()).add(format!("item_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
-        buf.full();
+        buf.mark_full();
 
         // Verify timestamps are sorted
         let expected_order = [
@@ -386,13 +383,13 @@ mod test {
         for (i, price) in prices.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(price.to_string()).add(format!("product_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
 
         buf.sort(&columns, &decoder);
-        buf.full();
+        buf.mark_full();
 
         // Verify numeric values are sorted in descending order
         let expected_order = [
@@ -442,12 +439,12 @@ mod test {
             let binary_data = create_binary_numeric(price);
             dr.add(Bytes::from(binary_data))
                 .add(format!("product_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
         buf.sort(&columns, &decoder);
-        buf.full();
+        buf.mark_full();
 
         let expected_order = [
             "1000.01", "1000.00", "199.99", "199.98", "75.50", "50.25", "0.99",
@@ -486,12 +483,12 @@ mod test {
         for (i, value) in values.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(value.to_string()).add(format!("case_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
         buf.sort(&columns, &decoder);
-        buf.full();
+        buf.mark_full();
 
         // Expected order: ascending numeric sort
         // Note: equal values maintain input order (stable sort)
@@ -520,7 +517,7 @@ mod test {
         for i in 0..10_i64 {
             let mut dr = DataRow::new();
             dr.add(i);
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         // LIMIT 5
@@ -545,7 +542,7 @@ mod test {
             limit: Some(4),
             offset: Some(2),
         });
-        b.full();
+        b.mark_full();
         assert_eq!(b.len(), 4);
         for expected in 2..6_i64 {
             let dr = DataRow::from_bytes(b.take().unwrap().to_bytes()).unwrap();
@@ -588,7 +585,7 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(i as i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 
@@ -622,7 +619,7 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(5_i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 

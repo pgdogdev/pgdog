@@ -42,6 +42,6 @@ impl Command for ShowGuc {
         let mut dr = DataRow::new();
         dr.add(&value);
 
-        Ok(vec![rd.message()?, dr.message()?])
+        Ok(vec![rd.message(), dr.message()])
     }
 }

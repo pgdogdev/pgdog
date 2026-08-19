@@ -121,10 +121,10 @@ impl Command for ShowClients {
                 .add("locked", client.stats.locked)
                 .add("prepared_statements", client.stats.prepared_statements)
                 .data_row();
-            rows.push(row.message()?);
+            rows.push(row.message());
         }
 
-        let mut messages = vec![self.filter.row_description().message()?];
+        let mut messages = vec![self.filter.row_description().message()];
         messages.extend(rows);
 
         Ok(messages)

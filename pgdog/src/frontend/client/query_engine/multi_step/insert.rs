@@ -120,13 +120,13 @@ impl<'a> InsertMulti<'a> {
 
         if let Some(cc) = self.state.command_complete(CommandType::Insert) {
             self.engine
-                .process_server_message(context, cc.message()?)
+                .process_server_message(context, cc.message())
                 .await?;
         }
 
         if let Some(rfq) = self.state.ready_for_query(context.in_transaction()) {
             self.engine
-                .process_server_message(context, rfq.message()?)
+                .process_server_message(context, rfq.message())
                 .await?;
         }
 
