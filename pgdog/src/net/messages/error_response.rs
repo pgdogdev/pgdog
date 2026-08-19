@@ -114,7 +114,7 @@ impl ErrorResponse {
             ..Default::default()
         }
     }
-    
+
     pub fn omni_write_with_directive() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
