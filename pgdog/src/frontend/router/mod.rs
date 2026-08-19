@@ -12,11 +12,7 @@ pub mod sharding;
 
 pub use copy::CopyRow;
 pub use error::Error;
-use lazy_static::lazy_static;
-use parser::Shard;
-pub use parser::{Ast, AstQuery, Command, QueryParser, RewritePlan, Route, SetParam};
-
-use crate::frontend::router::parser::ShardWithPriority;
+pub use parser::{Ast, Command, QueryParser, RewritePlan, Route, SetParam};
 
 use super::ClientRequest;
 pub use context::RouterContext;
@@ -80,19 +76,6 @@ impl Router {
                 .into_iter()
                 .map(CopyRow::omnishard)
                 .collect()),
-        }
-    }
-
-    /// Get current route.
-    pub fn route(&self) -> &Route {
-        lazy_static! {
-            static ref DEFAULT_ROUTE: Route =
-                Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        }
-
-        match self.command() {
-            Command::Query(route) => route,
-            _ => &DEFAULT_ROUTE,
         }
     }
 

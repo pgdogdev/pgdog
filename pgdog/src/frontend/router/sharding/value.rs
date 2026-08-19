@@ -104,10 +104,6 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn data(&self) -> &Data<'_> {
-        &self.data
-    }
-
     pub fn integer(&self) -> Result<Option<i64>, Error> {
         if self.data_type == DataType::Bigint {
             match self.data {

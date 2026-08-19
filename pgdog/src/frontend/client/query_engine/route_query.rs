@@ -16,7 +16,7 @@ pub enum ClusterCheck {
 }
 
 impl QueryEngine {
-    /// Get mutable reference to the backend connection.
+    #[cfg(test)]
     pub fn backend(&mut self) -> &mut Connection {
         &mut self.backend
     }

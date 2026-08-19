@@ -26,10 +26,6 @@ impl Data {
             Self::Column(bytes) => bytes.len() as i32,
         }
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +36,7 @@ pub struct Tuple {
 }
 
 impl Tuple {
+    #[cfg(test)]
     pub fn new(row: &[Data]) -> Self {
         Self {
             row: row.to_vec(),
@@ -48,6 +45,7 @@ impl Tuple {
         }
     }
 
+    #[cfg(test)]
     pub fn new_end() -> Self {
         Self {
             row: vec![],

@@ -71,7 +71,7 @@ mod test {
     async fn test_show_query_cache() {
         let cache = Cache::get();
         let mut prepared_statements = PreparedStatements::default();
-        let ctx = AstContext::empty();
+        let ctx = AstContext::default();
 
         for q in 0..5 {
             cache

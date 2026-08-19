@@ -6,8 +6,6 @@ use crate::net::{CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, T
 #[derive(Debug, Clone)]
 pub enum CommandType {
     Insert,
-    Update,
-    Delete,
 }
 
 #[derive(Debug, Clone)]
@@ -64,8 +62,6 @@ impl MultiServerState {
         }
 
         let name = match command_type {
-            CommandType::Delete => "DELETE",
-            CommandType::Update => "UPDATE",
             CommandType::Insert => "INSERT 0",
         };
 

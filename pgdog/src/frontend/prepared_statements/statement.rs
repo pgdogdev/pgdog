@@ -77,6 +77,7 @@ impl Statement {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn query(&self) -> &str {
         match self.stmt {
             StatementType::Parse { ref parse, .. } => parse.query(),

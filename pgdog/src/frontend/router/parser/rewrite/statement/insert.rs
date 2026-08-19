@@ -28,16 +28,6 @@ pub struct InsertSplit {
 }
 
 impl InsertSplit {
-    /// Get the SQL statement.
-    pub fn stmt(&self) -> &str {
-        &self.stmt
-    }
-
-    /// Get the AST.
-    pub fn ast(&self) -> &Ast {
-        &self.ast
-    }
-
     /// Get the global prepared statement name, if this split was registered.
     pub fn statement_name(&self) -> Option<&str> {
         self.statement_name.as_deref()
@@ -288,14 +278,14 @@ mod tests {
         // First tuple uses params 0 and 1 (original $1, $2)
         assert_eq!(splits[0].params.as_slice(), &[1, 2]);
         assert_eq!(
-            splits[0].stmt(),
+            splits[0].stmt,
             "INSERT INTO my_table (id, value) VALUES ($1, $2)"
         );
 
         // Second tuple uses params 2 and 3 (original $3, $4), renumbered to $1, $2
         assert_eq!(splits[1].params.as_slice(), &[3, 4]);
         assert_eq!(
-            splits[1].stmt(),
+            splits[1].stmt,
             "INSERT INTO my_table (id, value) VALUES ($1, $2)"
         );
     }
@@ -317,13 +307,13 @@ mod tests {
         // No params for literal values
         assert!(splits[0].params.is_empty());
         assert_eq!(
-            splits[0].stmt(),
+            splits[0].stmt,
             "INSERT INTO my_table (id, value) VALUES (1, 'a')"
         );
 
         assert!(splits[1].params.is_empty());
         assert_eq!(
-            splits[1].stmt(),
+            splits[1].stmt,
             "INSERT INTO my_table (id, value) VALUES (2, 'b')"
         );
     }
@@ -337,13 +327,13 @@ mod tests {
 
         assert_eq!(splits[0].params.as_slice(), &[1]);
         assert_eq!(
-            splits[0].stmt(),
+            splits[0].stmt,
             "INSERT INTO my_table (id, value) VALUES ($1, 'a')"
         );
 
         assert_eq!(splits[1].params.as_slice(), &[2]);
         assert_eq!(
-            splits[1].stmt(),
+            splits[1].stmt,
             "INSERT INTO my_table (id, value) VALUES ($1, 'b')"
         );
     }
@@ -427,13 +417,13 @@ mod tests {
         assert_eq!(splits.len(), 2);
 
         // First split: statement uses $1 with literal, bind extracts param 0
-        assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit1')");
+        assert_eq!(splits[0].stmt, "INSERT INTO t (a, b) VALUES ($1, 'lit1')");
         let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param1");
 
         // Second split: statement uses $1 (renumbered from $2) with literal, bind extracts param 1
-        assert_eq!(splits[1].stmt(), "INSERT INTO t (a, b) VALUES ($1, 'lit2')");
+        assert_eq!(splits[1].stmt, "INSERT INTO t (a, b) VALUES ($1, 'lit2')");
         let extracted = splits[1].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 1);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"value_for_param2");
@@ -455,7 +445,7 @@ mod tests {
         assert_eq!(splits.len(), 2);
 
         // First split: uses params 0 and 1 (original $1, $2)
-        assert_eq!(splits[0].stmt(), "INSERT INTO t (a, b) VALUES ($1, $2)");
+        assert_eq!(splits[0].stmt, "INSERT INTO t (a, b) VALUES ($1, $2)");
         let extracted = splits[0].extract_bind_params(&bind).unwrap();
         assert_eq!(extracted.params_raw().len(), 2);
         assert_eq!(extracted.params_raw()[0].data.as_ref(), b"p1");
@@ -463,7 +453,7 @@ mod tests {
 
         // Second split: uses param 2 (original $3), renumbered to $1
         assert_eq!(
-            splits[1].stmt(),
+            splits[1].stmt,
             "INSERT INTO t (a, b) VALUES ($1, 'literal')"
         );
         let extracted = splits[1].extract_bind_params(&bind).unwrap();

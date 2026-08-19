@@ -156,10 +156,9 @@ mod test {
     use crate::frontend::router::sharding::Mapping;
     use pgdog_config::SystemCatalogsBehavior;
 
-    use crate::{
-        backend::ShardedTables,
-        config::{FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange},
-        frontend::router::parser::Shard,
+    use crate::{backend::ShardedTables, frontend::router::parser::Shard};
+    use pgdog_config::sharding::{
+        FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange,
     };
 
     use super::*;
