@@ -268,6 +268,7 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
+            _ => panic!("unhandled command in query engine"),
         }
 
         self.hooks.after_execution(context)?;
