@@ -240,16 +240,6 @@ impl Schema {
             .collect()
     }
 
-    /// Get all sequences.
-    pub fn sequences(&self) -> Vec<&StatsRelation> {
-        self.inner
-            .relations
-            .values()
-            .flat_map(|tables| tables.values())
-            .filter(|relation| relation.is_sequence())
-            .collect()
-    }
-
     /// Get search path components.
     pub fn search_path(&self) -> &[String] {
         &self.inner.search_path
@@ -282,8 +272,10 @@ mod test {
         Schema::setup(&mut conn).await.unwrap();
         let schema = Schema::load(&mut conn).await.unwrap();
         let seq = schema
-            .sequences()
-            .into_iter()
+            .relations
+            .values()
+            .flat_map(|tables| tables.values())
+            .filter(|relation| relation.is_sequence())
             .find(|seq| seq.schema() == "pgdog")
             .cloned()
             .unwrap();

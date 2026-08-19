@@ -1,6 +1,6 @@
 //! Per-shard two-phase commit transaction names and control statements.
 
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
 
 use crate::frontend::client::query_engine::two_pc::TwoPcTransaction;
 
@@ -19,29 +19,11 @@ impl TwoPcTransactionOnShard {
     pub(crate) fn new(transaction: TwoPcTransaction, shard: usize) -> Self {
         Self { transaction, shard }
     }
-
-    /// Get the coordinator transaction.
-    pub(crate) fn transaction(&self) -> TwoPcTransaction {
-        self.transaction
-    }
 }
 
 impl Display for TwoPcTransactionOnShard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}_{}", self.transaction, self.shard)
-    }
-}
-
-impl FromStr for TwoPcTransactionOnShard {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (transaction, shard) = s.rsplit_once('_').ok_or(())?;
-
-        Ok(Self {
-            transaction: transaction.parse()?,
-            shard: shard.parse().map_err(|_| ())?,
-        })
     }
 }
 
@@ -76,28 +58,6 @@ mod test {
         assert_eq!(
             TwoPcTransactionOnShard::new(transaction, 3).to_string(),
             format!("{transaction}_3")
-        );
-    }
-
-    #[test]
-    fn parse_transaction_on_shard() {
-        let transaction = TwoPcTransaction::new();
-        let parsed: TwoPcTransactionOnShard = format!("{transaction}_3")
-            .parse()
-            .expect("valid transaction on shard");
-
-        assert_eq!(parsed.transaction, transaction);
-        assert_eq!(parsed.shard, 3);
-    }
-
-    #[test]
-    fn reject_invalid_transaction_on_shard() {
-        assert!("invalid".parse::<TwoPcTransactionOnShard>().is_err());
-        assert!("invalid_0".parse::<TwoPcTransactionOnShard>().is_err());
-        assert!(
-            "__pgdog_2pc_1_invalid"
-                .parse::<TwoPcTransactionOnShard>()
-                .is_err()
         );
     }
 

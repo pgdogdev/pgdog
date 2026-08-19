@@ -13,10 +13,6 @@ pub struct TwoPcStats {
 }
 
 impl TwoPcStats {
-    pub fn incr_recovered(&self) {
-        self.recovered_total.fetch_add(1, Ordering::Relaxed);
-    }
-
     pub fn recovered_total(&self) -> u64 {
         self.recovered_total.load(Ordering::Relaxed)
     }

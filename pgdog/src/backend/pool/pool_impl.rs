@@ -293,12 +293,6 @@ impl Pool {
         Ok(())
     }
 
-    /// Pool is available to serve connections.
-    pub fn available(&self) -> bool {
-        let guard = self.lock();
-        !guard.paused && guard.online
-    }
-
     /// Connection pool unique identifier.
     #[inline]
     pub(crate) fn id(&self) -> u64 {

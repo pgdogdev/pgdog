@@ -32,7 +32,7 @@ mod where_clause;
 
 pub use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub use binary::BinaryStream;
-pub use cache::{Ast, AstContext, AstQuery, Cache};
+pub use cache::{Ast, AstContext, Cache};
 pub(crate) use column::Column;
 pub use command::{Command, SetParam};
 pub(crate) use comment::parse_edge_comment;
@@ -49,7 +49,7 @@ pub use order_by::OrderBy;
 pub(crate) use params::*;
 pub use query::QueryParser;
 pub use rewrite::{
-    Assignment, AssignmentValue, StatementRewrite, StatementRewriteContext, statement::RewritePlan,
+    StatementRewrite, StatementRewriteContext, statement::RewritePlan,
 };
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;

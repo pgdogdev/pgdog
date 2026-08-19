@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use std::fs::read_to_string;
-use thiserror::Error;
 use tokio::{select, signal::ctrl_c};
 use tracing::{info, warn};
 
@@ -14,7 +12,6 @@ use crate::api::tasks_storage;
 use crate::backend::databases::databases;
 use crate::backend::replication::orchestrator::Orchestrator;
 use crate::backend::schema::sync::config::ShardConfig;
-use crate::config::{Config, Users};
 use crate::frontend::router::cli::RouterCli;
 
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
@@ -185,61 +182,6 @@ pub fn hash_password(password: &str) {
         "{}",
         crate::auth::scram::generate_hash(password, iterations, &salt)
     );
-}
-
-#[derive(Debug, Error)]
-pub enum ConfigCheckError {
-    #[error("need at least one of --config or --users")]
-    MissingInput,
-
-    #[error("I/O error on `{0}`: {1}")]
-    Io(PathBuf, #[source] std::io::Error),
-
-    #[error("TOML parse error in `{0}`: {1}")]
-    Parse(PathBuf, #[source] toml::de::Error),
-
-    #[error("{0:#?}")]
-    Multiple(Vec<ConfigCheckError>),
-}
-
-/// Confirm that the configuration and users files are valid.
-pub fn config_check(
-    config_path: Option<PathBuf>,
-    users_path: Option<PathBuf>,
-) -> Result<(), ConfigCheckError> {
-    if config_path.is_none() && users_path.is_none() {
-        return Err(ConfigCheckError::MissingInput);
-    }
-
-    let mut errors: Vec<ConfigCheckError> = Vec::new();
-
-    if let Some(path) = config_path {
-        match read_to_string(&path) {
-            Ok(s) => {
-                if let Err(e) = toml::from_str::<Config>(&s) {
-                    errors.push(ConfigCheckError::Parse(path.clone(), e));
-                }
-            }
-            Err(e) => errors.push(ConfigCheckError::Io(path.clone(), e)),
-        }
-    }
-
-    if let Some(path) = users_path {
-        match read_to_string(&path) {
-            Ok(s) => {
-                if let Err(e) = toml::from_str::<Users>(&s) {
-                    errors.push(ConfigCheckError::Parse(path.clone(), e));
-                }
-            }
-            Err(e) => errors.push(ConfigCheckError::Io(path.clone(), e)),
-        }
-    }
-
-    match errors.len() {
-        0 => Ok(()),
-        1 => Err(errors.into_iter().next().unwrap()),
-        _ => Err(ConfigCheckError::Multiple(errors)),
-    }
 }
 
 /// Run an api task to completion in the foreground, cancelling it on Ctrl-C so
