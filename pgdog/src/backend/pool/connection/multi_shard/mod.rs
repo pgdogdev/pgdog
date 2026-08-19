@@ -121,7 +121,7 @@ impl MultiShard {
     #[inline]
     fn reset(&mut self) {
         self.request_state = RequestState::default();
-        self.buffer.reset();
+        self.buffer = Buffer::default();
         self.validator.reset();
 
         // Intentionally does not reset:
@@ -257,7 +257,7 @@ impl MultiShard {
             .command_complete_count
             .is_multiple_of(self.shards)
         {
-            self.buffer.full();
+            self.buffer.mark_full();
 
             if !self.buffer.is_empty() {
                 self.buffer
