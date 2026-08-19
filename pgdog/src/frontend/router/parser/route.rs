@@ -119,7 +119,7 @@ pub struct Route {
     /// and will only go to one shard, always.
     search_path_driven: bool,
     /// This query is being run on a database that solely has `sharded_schemas` configured.
-    sharded_schema_only: bool,
+    pub(crate) sharded_schema_only: bool,
     /// This query is a DDL statement. We will need to
     /// reload the schema from Postgres once this runs.
     schema_changed: bool,
