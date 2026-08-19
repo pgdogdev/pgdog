@@ -36,22 +36,6 @@ pub struct Tuple {
 }
 
 impl Tuple {
-    pub fn new(row: &[Data]) -> Self {
-        Self {
-            row: row.to_vec(),
-            oid: None,
-            end: false,
-        }
-    }
-
-    pub fn new_end() -> Self {
-        Self {
-            row: vec![],
-            oid: None,
-            end: true,
-        }
-    }
-
     /// Calculate the total bytes needed to read a complete tuple.
     /// Returns None if there isn't enough data to determine the size.
     fn calculate_needed_bytes(header: &Header, data: &[u8]) -> Option<usize> {
@@ -210,5 +194,28 @@ impl Deref for Tuple {
 
     fn deref(&self) -> &Self::Target {
         &self.row
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Data, Tuple};
+
+    impl Tuple {
+        pub fn new(row: &[Data]) -> Self {
+            Self {
+                row: row.to_vec(),
+                oid: None,
+                end: false,
+            }
+        }
+
+        pub fn new_end() -> Self {
+            Self {
+                row: vec![],
+                oid: None,
+                end: true,
+            }
+        }
     }
 }

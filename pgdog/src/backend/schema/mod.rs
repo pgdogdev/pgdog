@@ -240,16 +240,6 @@ impl Schema {
             .collect()
     }
 
-    /// Get all sequences.
-    pub fn sequences(&self) -> Vec<&StatsRelation> {
-        self.inner
-            .relations
-            .values()
-            .flat_map(|tables| tables.values())
-            .filter(|relation| relation.is_sequence())
-            .collect()
-    }
-
     /// Get search path components.
     pub fn search_path(&self) -> &[String] {
         &self.inner.search_path
@@ -258,6 +248,17 @@ impl Schema {
 
 #[cfg(test)]
 mod test {
+    impl Schema {
+        fn sequences(&self) -> Vec<&super::StatsRelation> {
+            self.inner
+                .relations
+                .values()
+                .flat_map(|tables| tables.values())
+                .filter(|relation| relation.is_sequence())
+                .collect()
+        }
+    }
+
     use std::collections::HashMap;
 
     use indexmap::IndexMap;

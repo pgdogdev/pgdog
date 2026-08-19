@@ -22,12 +22,6 @@ impl NotificationResponse {
 
         unsafe { from_utf8_unchecked(&self.payload[start..end]) }
     }
-
-    /// Get message payload.
-    pub fn payload(&self) -> &str {
-        let start = 1 + 4 + 4 + self.channel_len;
-        unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
-    }
 }
 
 impl FromBytes for NotificationResponse {
@@ -65,11 +59,18 @@ impl Protocol for NotificationResponse {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
     use bytes::BufMut;
 
     use crate::net::{FromBytes, Payload};
+
+    impl NotificationResponse {
+        /// Get message payload.
+        pub fn payload(&self) -> &str {
+            let start = 1 + 4 + 4 + self.channel_len;
+            unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
+        }
+    }
 
     #[test]
     fn test_notification_response() {

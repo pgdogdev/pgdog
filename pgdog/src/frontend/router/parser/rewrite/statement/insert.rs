@@ -28,11 +28,6 @@ pub struct InsertSplit {
 }
 
 impl InsertSplit {
-    /// Get the SQL statement.
-    pub fn stmt(&self) -> &str {
-        &self.stmt
-    }
-
     /// Get the global prepared statement name, if this split was registered.
     pub fn statement_name(&self) -> Option<&str> {
         self.statement_name.as_deref()
@@ -226,6 +221,12 @@ impl StatementRewrite<'_> {
 
 #[cfg(test)]
 mod tests {
+    impl InsertSplit {
+        fn stmt(&self) -> &str {
+            &self.stmt
+        }
+    }
+
     use pgdog_config::Rewrite;
 
     use super::*;

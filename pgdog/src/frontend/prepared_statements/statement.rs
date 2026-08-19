@@ -77,13 +77,6 @@ impl Statement {
         }
     }
 
-    pub(super) fn query(&self) -> &str {
-        match self.stmt {
-            StatementType::Parse { ref parse, .. } => parse.query(),
-            StatementType::Prepare { ref prepare, .. } => prepare.query(),
-        }
-    }
-
     pub(super) fn cache_key(&self) -> &CacheKey {
         &self.cache_key
     }
@@ -94,6 +87,20 @@ impl Statement {
         } = self.stmt
         {
             *rewrite = Some(parse.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Statement, StatementType};
+
+    impl Statement {
+        pub(crate) fn query(&self) -> &str {
+            match self.stmt {
+                StatementType::Parse { ref parse, .. } => parse.query(),
+                StatementType::Prepare { ref prepare, .. } => prepare.query(),
+            }
         }
     }
 }

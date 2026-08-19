@@ -162,10 +162,6 @@ impl Startup {
         Self::Ssl
     }
 
-    /// Create new GSSENC request.
-    pub fn gss_enc() -> Self {
-        Self::GssEnc
-    }
 }
 
 impl super::ToBytes for Startup {
@@ -287,6 +283,12 @@ fn search_path(value: &str) -> ParameterValue {
 
 #[cfg(test)]
 mod test {
+    impl Startup {
+        fn gss_enc() -> Self {
+            Self::GssEnc
+        }
+    }
+
     use crate::net::FrontendPid;
     use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
 

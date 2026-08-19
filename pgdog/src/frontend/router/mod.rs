@@ -12,11 +12,7 @@ pub mod sharding;
 
 pub use copy::CopyRow;
 pub use error::Error;
-use lazy_static::lazy_static;
-use parser::Shard;
 pub use parser::{Ast, Command, QueryParser, RewritePlan, Route, SetParam};
-
-use crate::frontend::router::parser::ShardWithPriority;
 
 use super::ClientRequest;
 pub use context::RouterContext;
@@ -83,19 +79,6 @@ impl Router {
         }
     }
 
-    /// Get current route.
-    pub fn route(&self) -> &Route {
-        lazy_static! {
-            static ref DEFAULT_ROUTE: Route =
-                Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        }
-
-        match self.command() {
-            Command::Query(route) => route,
-            _ => &DEFAULT_ROUTE,
-        }
-    }
-
     /// Reset query routing state.
     pub fn reset(&mut self) {
         self.query_parser = QueryParser::default();
@@ -111,5 +94,28 @@ impl Router {
     /// Has the schema been altered?
     pub fn schema_changed(&self) -> bool {
         self.schema_changed
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use lazy_static::lazy_static;
+
+    use super::{Command, Route, Router};
+    use crate::frontend::router::parser::{Shard, ShardWithPriority};
+
+    impl Router {
+        /// Get current route.
+        pub fn route(&self) -> &Route {
+            lazy_static! {
+                static ref DEFAULT_ROUTE: Route =
+                    Route::write(ShardWithPriority::new_default_unset(Shard::All));
+            }
+
+            match self.command() {
+                Command::Query(route) => route,
+                _ => &DEFAULT_ROUTE,
+            }
+        }
     }
 }

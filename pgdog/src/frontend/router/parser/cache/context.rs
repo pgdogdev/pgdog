@@ -34,16 +34,6 @@ impl<'a> AstContext<'a> {
             search_path: params.get("search_path"),
         }
     }
-
-    /// Create a default/empty AstContext for tests.
-    pub fn empty() -> AstContext<'static> {
-        AstContext {
-            sharding_schema: ShardingSchema::default(),
-            db_schema: Schema::default(),
-            user: "",
-            search_path: None,
-        }
-    }
 }
 
 /// Query passed to the parser.
@@ -55,14 +45,6 @@ pub struct AstQuery<'a> {
 }
 
 impl<'a> AstQuery<'a> {
-    /// Create an AstQuery using the raw query text as the cache key.
-    pub fn from_query(query: &'a BufferedQuery) -> Self {
-        Self {
-            query_without_comment: query.query(),
-            original_query: query,
-        }
-    }
-
     /// Return the first `sample_len` characters of the original query, including any comment.
     pub fn truncated_query(&self, sample_len: usize) -> &str {
         let query = self.original_query.query();
@@ -71,5 +53,35 @@ impl<'a> AstQuery<'a> {
             .nth(sample_len)
             .map_or(query.len(), |(i, _)| i);
         &query[..end]
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{AstContext, AstQuery};
+    use crate::backend::ShardingSchema;
+    use crate::backend::schema::Schema;
+    use crate::frontend::BufferedQuery;
+
+    impl AstContext<'_> {
+        /// Create a default/empty AstContext for tests.
+        pub fn empty() -> AstContext<'static> {
+            AstContext {
+                sharding_schema: ShardingSchema::default(),
+                db_schema: Schema::default(),
+                user: "",
+                search_path: None,
+            }
+        }
+    }
+
+    impl<'a> AstQuery<'a> {
+        /// Create an AstQuery using the raw query text as the cache key.
+        pub fn from_query(query: &'a BufferedQuery) -> Self {
+            Self {
+                query_without_comment: query.query(),
+                original_query: query,
+            }
+        }
     }
 }

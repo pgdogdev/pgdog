@@ -21,7 +21,7 @@ use crate::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
     frontend::{ClientRequest, RegexParser, router::round_robin},
-    net::{Query, bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
+    net::{bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
 };
 
 use super::{
@@ -740,20 +740,6 @@ impl Cluster {
         Ok(())
     }
 
-    /// Execute a query on every primary in the cluster.
-    pub async fn execute(
-        &self,
-        query: impl Into<Query> + Clone,
-    ) -> Result<(), crate::backend::Error> {
-        let query: Query = query.into();
-        for shard in 0..self.shards.len() {
-            let mut server = self.primary(shard, &Request::default()).await?;
-            server.execute(query.clone()).await?;
-        }
-
-        Ok(())
-    }
-
     /// Run a parameterized query on one shard, picked round-robin, and
     /// return all rows. The answer is only authoritative if every shard
     /// has the same data, e.g. an omnisharded table.
@@ -801,7 +787,23 @@ mod test {
         net::Query,
     };
 
-    use super::{Cluster, DatabaseUser};
+    use super::{Cluster, DatabaseUser, Request};
+
+    impl Cluster {
+        /// Execute a query on every primary in the cluster.
+        pub async fn execute(
+            &self,
+            query: impl Into<Query> + Clone,
+        ) -> Result<(), crate::backend::Error> {
+            let query: Query = query.into();
+            for shard in 0..self.shards.len() {
+                let mut server = self.primary(shard, &Request::default()).await?;
+                server.execute(query.clone()).await?;
+            }
+
+            Ok(())
+        }
+    }
 
     impl Cluster {
         pub fn new_test(config: &ConfigAndUsers) -> Self {

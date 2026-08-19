@@ -23,6 +23,7 @@ pub use memory::*;
 pub use networking::{MultiTenant, TlsVerifyMode};
 pub use overrides::Overrides;
 use pgdog_config::LookupResult;
+#[cfg(test)]
 use pgdog_config::ShardedTableConfig;
 pub use pgdog_config::auth::AuthType;
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
@@ -308,10 +309,12 @@ pub fn load_test_sharded() {
 }
 
 /// Load 3-shard test configuration.
+#[cfg(test)]
 pub fn load_test_sharded_3() {
     load_test_sharded_n(3);
 }
 
+#[cfg(test)]
 fn load_test_sharded_n(num_shards: usize) {
     use pgdog_config::{OmnishardedTables, ShardedSchema};
 

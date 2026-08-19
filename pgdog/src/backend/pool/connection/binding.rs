@@ -468,11 +468,6 @@ impl Binding {
         }
     }
 
-    /// True if this binding is a direct-to-shard connection.
-    pub fn is_direct(&self) -> bool {
-        matches!(self, Binding::Direct(..))
-    }
-
     pub(super) fn dirty(&mut self) {
         match self {
             Binding::Direct(server, ..) => server.mark_dirty(true),
@@ -557,5 +552,17 @@ impl Binding {
                 return Err(Error::NotConnected);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Binding;
+
+    impl Binding {
+        /// True if this binding is a direct-to-shard connection.
+        pub fn is_direct(&self) -> bool {
+            matches!(self, Binding::Direct(..))
+        }
     }
 }

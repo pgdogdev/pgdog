@@ -135,13 +135,6 @@ impl GlobalCache {
         }
     }
 
-    /// Get the query string stored in the global cache
-    /// for the given globally unique prepared statement name.
-    #[inline]
-    pub fn query(&self, name: &str) -> Option<&str> {
-        self.names.get(name).map(|s| s.query())
-    }
-
     /// Get the Parse message for a globally unique prepared statement
     /// name.
     ///
@@ -288,6 +281,15 @@ impl GlobalCache {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    impl GlobalCache {
+        /// Get the query string stored in the global cache
+        /// for the given globally unique prepared statement name.
+        #[inline]
+        pub fn query(&self, name: &str) -> Option<&str> {
+            self.names.get(name).map(|s| s.query())
+        }
+    }
 
     #[test]
     fn test_close_unused_zero_keeps_in_use_and_counter() {
