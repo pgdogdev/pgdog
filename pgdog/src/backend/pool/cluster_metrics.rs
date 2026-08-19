@@ -82,7 +82,7 @@ pub struct ClusterMetrics {
 
 impl ClusterMetrics {
     /// Reset all counters to zero, used by the RESET STATS command.
-    pub fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.mirror = Counts::default();
         self.lookup.reset();
     }
