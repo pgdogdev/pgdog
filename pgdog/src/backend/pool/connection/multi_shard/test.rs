@@ -1,5 +1,5 @@
 use crate::{
-    frontend::router::parser::{Shard, ShardWithPriority},
+    frontend::router::parser::{DistinctBy, Shard, ShardWithPriority},
     net::{BindComplete, DataRow, Field, Format},
 };
 
@@ -120,6 +120,54 @@ fn test_rd_before_dr() {
 
     // Buffer is empty.
     assert!(multi_shard.get_server_message().is_none());
+}
+
+#[test]
+fn test_distinct_state_resets_between_requests() {
+    let route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![],
+        Default::default(),
+        Default::default(),
+        Some(DistinctBy::Row),
+    );
+    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let row_description = RowDescription::new(&[Field::bigint("id")]);
+    let mut data_row = DataRow::new();
+    data_row.add(1_i64);
+
+    // The same DISTINCT query returning the same row in consecutive requests must
+    // produce the row both times. Deduplication state is scoped to one request.
+    for request in 1..=2 {
+        for _ in 0..2 {
+            multi_shard
+                .handle_server_message(row_description.message())
+                .unwrap();
+            multi_shard
+                .handle_server_message(data_row.message())
+                .unwrap();
+            multi_shard
+                .handle_server_message(CommandComplete::from_str("SELECT 1").message())
+                .unwrap();
+        }
+
+        let message = multi_shard
+            .get_server_message()
+            .unwrap_or_else(|| panic!("request {request} should return its distinct row"));
+        assert_eq!(message.code(), 'D', "request {request}");
+
+        let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), 1);
+
+        let message = multi_shard
+            .get_server_message()
+            .unwrap_or_else(|| panic!("request {request} should return CommandComplete"));
+        let complete = CommandComplete::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(complete.rows().unwrap(), Some(1), "request {request}");
+        assert!(multi_shard.get_server_message().is_none());
+
+        multi_shard.query_complete();
+    }
 }
 
 #[test]
