@@ -39,7 +39,7 @@ pub use operator::*;
 pub use schema::SchemaSharder;
 pub use tables::*;
 pub use value::*;
-pub use vector::{Centroids, Distance};
+pub use vector::Centroids;
 
 use super::parser::Shard;
 

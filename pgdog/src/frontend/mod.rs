@@ -19,12 +19,10 @@ pub mod stats;
 pub use buffered_query::BufferedQuery;
 pub use client::Client;
 pub use client_request::ClientRequest;
-pub use comms::{ClientComms, Comms};
+pub use comms::ClientComms;
 pub use connected_client::ConnectedClient;
 pub(crate) use error::Error;
 pub(crate) use prepared_statements::PreparedStatements;
-#[cfg(debug_assertions)]
-pub use query_logger::QueryLogger;
 pub(crate) use regex_parser::RegexParser;
 pub use router::{Command, RewritePlan, Router, SetParam};
 pub use router::{RouterContext, SearchPath};

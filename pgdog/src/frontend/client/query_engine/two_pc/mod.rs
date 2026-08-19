@@ -15,7 +15,7 @@ pub mod transaction;
 pub mod wal;
 
 pub use guard::TwoPcGuard;
-pub use manager::{Manager, TransactionInfo};
+pub use manager::Manager;
 pub use phase::TwoPcPhase;
 pub(crate) use server_transactions::TwoPcTransactions;
 pub(crate) use statement::TwoPcTransactionOnShard;

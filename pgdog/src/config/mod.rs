@@ -18,28 +18,27 @@ pub mod users;
 pub use core::{Config, ConfigAndUsers};
 pub use database::{Database, Role};
 pub use error::Error;
-pub use general::{General, LogFormat};
+pub use general::General;
 pub use memory::*;
-pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
+pub use networking::{MultiTenant, TlsVerifyMode};
 pub use overrides::Overrides;
 use pgdog_config::LookupResult;
 use pgdog_config::ShardedTableConfig;
-pub use pgdog_config::auth::{AuthType, PassthroughAuth};
+pub use pgdog_config::auth::AuthType;
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
-pub use rewrite::{Rewrite, RewriteMode};
+pub use rewrite::RewriteMode;
 use std::path::Path;
-pub use users::{Admin, Plugin, ServerAuth, User, Users};
+pub use users::{ServerAuth, User, Users};
 
 // Re-export from sharding module
 pub use sharding::{
-    DataType, FlexibleType, Hasher, OmnishardedTables, ShardedMappingConfig,
-    ShardedMappingDeprecated, ShardedMappingKindDeprecated, ShardedMappingList,
-    ShardedMappingRange,
+    DataType, Hasher,
+    ShardedMappingDeprecated,
 };
 
 // Re-export from replication module
-pub use replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+pub use replication::MirrorConfig;
 
 use parking_lot::Mutex;
 use std::env;

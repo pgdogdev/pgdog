@@ -1,22 +1,15 @@
-pub mod array;
 pub mod bigint;
 pub mod boolean;
 pub mod double;
 pub mod float;
 pub mod integer;
-pub mod interval;
 pub mod numeric;
 pub mod text;
-pub mod timestamp;
-pub mod timestamptz;
 pub mod uuid;
 pub mod vector;
 
 pub use double::Double;
 pub use float::Float;
-pub use interval::Interval;
 pub use numeric::Numeric;
 pub use pgdog_postgres_types::{DataType, Datum, FromDataType};
-pub use timestamp::Timestamp;
-pub use timestamptz::TimestampTz;
 pub use vector::Vector;

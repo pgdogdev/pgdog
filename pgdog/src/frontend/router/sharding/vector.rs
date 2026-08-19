@@ -1,10 +1,11 @@
-pub use pgdog_vector::{Centroids, Distance};
+pub use pgdog_vector::Centroids;
 
 #[cfg(test)]
 mod test {
     use crate::net::messages::{Vector, data_types::Float};
+    use pgdog_vector::Distance;
 
-    use super::*;
+    
 
     #[test]
     fn test_euclidean() {

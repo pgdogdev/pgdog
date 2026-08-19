@@ -795,12 +795,12 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
 #[cfg(test)]
 mod tests {
-    use pgdog_config::General;
+    use pgdog_config::{General, Mirroring, PassthroughAuth};
 
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
-    fn setup_config(passthrough_auth: crate::config::PassthroughAuth, users: Vec<ConfigUser>) {
+    fn setup_config(passthrough_auth: PassthroughAuth, users: Vec<ConfigUser>) {
         let _lock = lock();
         let config = Config {
             databases: vec![Database {
@@ -846,7 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_new_user() {
-        setup_config(crate::config::PassthroughAuth::EnabledPlain, vec![]);
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
 
         let result = add(make_user("new_user", Some("secret")));
         assert!(result.is_ok());
@@ -861,7 +861,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_matching_password() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
+            PassthroughAuth::EnabledPlain,
             vec![make_user("alice", Some("pass123"))],
         );
 
@@ -873,7 +873,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_no_password_set() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
+            PassthroughAuth::EnabledPlain,
             vec![make_user("bob", None)],
         );
 
@@ -889,7 +889,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_wrong_password_no_change_allowed() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
+            PassthroughAuth::EnabledPlain,
             vec![make_user("charlie", Some("old_pass"))],
         );
 
@@ -901,7 +901,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_wrong_password_change_allowed() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlainAllowChange,
+            PassthroughAuth::EnabledPlainAllowChange,
             vec![make_user("dave", Some("old_pass"))],
         );
 
@@ -938,7 +938,7 @@ mod tests {
         ];
 
         // Set up mirroring configuration - one mirror for all users
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db1_mirror".to_string(),
             ..Default::default()
@@ -1018,7 +1018,7 @@ mod tests {
             },
         ];
 
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
             ..Default::default()
@@ -1095,7 +1095,7 @@ mod tests {
             },
         ];
 
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
@@ -1175,7 +1175,7 @@ mod tests {
         ];
 
         // Mirror config without custom values - should use defaults
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db2".to_string(),
             ..Default::default()
@@ -1255,13 +1255,13 @@ mod tests {
         ];
 
         config.mirroring = vec![
-            crate::config::Mirroring {
+            Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror1".to_string(),
                 queue_length: Some(200), // Override queue only
                 ..Default::default()
             },
-            crate::config::Mirroring {
+            Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror2".to_string(),
                 exposure: Some(0.25), // Override exposure only
@@ -1346,7 +1346,7 @@ mod tests {
             },
         ];
 
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source".to_string(),
             destination_db: "dest".to_string(),
             queue_length: Some(256),
@@ -1414,7 +1414,7 @@ mod tests {
         ];
 
         // Configure mirroring
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),

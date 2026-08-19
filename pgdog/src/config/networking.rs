@@ -1,1 +1,1 @@
-pub use pgdog_config::{MultiTenant, Tcp, TlsVerifyMode};
+pub use pgdog_config::{MultiTenant, TlsVerifyMode};

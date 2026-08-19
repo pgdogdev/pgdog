@@ -1,4 +1,3 @@
-pub use pgdog_vector::distance_simd_rust::*;
 
 #[cfg(test)]
 mod tests {

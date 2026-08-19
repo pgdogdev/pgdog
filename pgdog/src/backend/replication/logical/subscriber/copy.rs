@@ -354,7 +354,7 @@ mod test {
             pool::Request, replication::publisher::PublicationTable, server::test::test_server,
         },
         config::config,
-        frontend::router::parser::binary::{Data, Tuple, header::Header},
+        frontend::router::parser::binary::{Data, header::Header, tuple::Tuple},
     };
 
     use super::*;
