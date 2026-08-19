@@ -596,6 +596,8 @@ impl Client {
             }
             QueryEngineResult::ReplaySplitSimple(reqs) => {
                 let mut reqs = reqs.into_iter();
+                self.transaction.get_or_insert(TransactionType::Implicit);
+
                 while let Some(mut req) = reqs.next() {
                     let result = query_engine
                         .handle(
@@ -613,8 +615,8 @@ impl Client {
             }
             QueryEngineResult::ReplaySplitExtended(reqs) => {
                 let mut reqs = reqs.into_iter();
-
                 self.transaction.get_or_insert(TransactionType::Implicit);
+
                 let mut in_error = false;
 
                 while let Some(mut req) = reqs.next() {
