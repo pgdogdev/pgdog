@@ -284,21 +284,11 @@ impl Route {
         self.search_path_driven
     }
 
-    pub fn set_sharded_schema_only(&mut self, sharded_schema_only: bool) {
-        self.sharded_schema_only = sharded_schema_only;
-    }
-
-    /// Returns true if we have sharded_schemas configured in the database, and we
-    /// do NOT have sharded_tables configured.
-    pub fn is_sharded_schema_only(&self) -> bool {
-        self.sharded_schema_only
-    }
-
     /// Whether an omnisharded write must reach every shard to remain consistent.
     ///
     /// If the database is configured *only* with schema sharding, we don't run any checks.
     pub(crate) fn requires_full_shard_coverage(&self) -> bool {
-        self.is_omnisharded() && self.is_write() && !self.is_sharded_schema_only()
+        self.is_omnisharded() && self.is_write() && !self.sharded_schema_only
     }
 
     /// Return true if this route requires result set manipulation to
@@ -809,7 +799,7 @@ mod test {
         assert!(route.requires_full_shard_coverage());
 
         route.set_search_path_driven(true);
-        route.set_sharded_schema_only(true);
+        route.sharded_schema_only = true;
         assert!(!route.requires_full_shard_coverage());
     }
 }

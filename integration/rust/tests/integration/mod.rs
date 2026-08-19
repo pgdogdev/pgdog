@@ -11,6 +11,7 @@ pub mod connection_recovery;
 pub mod copy;
 pub mod cross_shard_disabled;
 mod cross_shard_oid_drift;
+mod cross_shard_omni_check;
 pub mod distinct;
 pub mod explain;
 pub mod fake_transactions;

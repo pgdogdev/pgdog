@@ -115,17 +115,17 @@ impl QueryParser {
                 let is_search_path = context.shards_calculator.is_search_path();
                 route.set_search_path_driven(is_search_path);
 
-                let full_shard_coverage = route.requires_full_shard_coverage();
-
                 // Are we using `sharded_schemas` and NOT using `sharded_tables`?
                 // If we're using both: there's no way to know right now if a query
                 // that doesn't have SearchPath specified (e.g. using a SET) might mess with an
                 // omnisharded configuration for a sharded schema.
                 // TODO: We should consider in the future what should happen
                 //       if people are using multiple sharding functions.
-                let schema_sharding =
+                route.sharded_schema_only =
                     !context.sharding_schema.schemas.is_empty() && !context.sharded_tables;
-                route.set_sharded_schema_only(schema_sharding);
+
+                // Note: this is dependent on route.sharded_schema_only being set first.
+                let full_shard_coverage = route.requires_full_shard_coverage();
 
                 let manual_routing = matches!(
                     route.shard_with_priority().source(),
@@ -136,7 +136,7 @@ impl QueryParser {
                 // which keys we need to lookup in the routing table.
                 let have_lookups = !context.bare_key_lookups.is_empty();
 
-                if full_shard_coverage && (manual_routing || have_lookups) && !schema_sharding {
+                if full_shard_coverage && (manual_routing || have_lookups) {
                     return Err(Error::OmniWriteWithDirective);
                 }
 
