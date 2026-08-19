@@ -95,12 +95,22 @@ impl QueryEngine {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::net::*;
 
+    fn split_extended(client_request: &ClientRequest) -> Vec<ClientRequest> {
+        match QueryEngine::split_extended_check(client_request)
+            .expect("extended request splitting should succeed")
+        {
+            Some(QueryEngineResult::ReplaySplitExtended(requests)) => requests,
+            Some(_) => panic!("expected an extended request split"),
+            None => panic!("expected request to be split"),
+        }
+    }
+
     #[test]
-    fn test_request_splice() {
+    fn test_split_extended_separates_requests() {
         let messages = vec![
             ProtocolMessage::from(Parse::named("start", "BEGIN")),
             Bind::new_statement("start").into(),
@@ -112,7 +122,7 @@ mod test {
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = QueryEngine::split_extended_check(&req);
+        let splice = split_extended(&req);
         assert_eq!(splice.len(), 4);
 
         // First slice should contain: Parse("start"), Bind("start"), Execute, Flush
@@ -162,7 +172,10 @@ mod test {
         let fourth_slice = &splice[3];
         assert_eq!(fourth_slice.len(), 1);
         assert_eq!(fourth_slice[0].code(), 'S'); // Sync
+    }
 
+    #[test]
+    fn test_split_extended_ignores_single_execute() {
         let messages = vec![
             ProtocolMessage::from(Parse::named("test", "SELECT $1")),
             Bind::new_statement("test").into(),
@@ -170,9 +183,13 @@ mod test {
             Sync.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
-        assert!(splice.is_empty());
+        let result = QueryEngine::split_extended_check(&req)
+            .expect("checking an extended request should succeed");
+        assert!(result.is_none());
+    }
 
+    #[test]
+    fn test_split_extended_adds_flush_after_each_execute() {
         let messages = vec![
             ProtocolMessage::from(Parse::named("test", "SELECT 1")),
             Bind::new_statement("test").into(),
@@ -183,7 +200,7 @@ mod test {
             Flush.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = split_extended(&req);
         assert_eq!(splice.len(), 2);
 
         // First slice: Parse("test"), Bind("test"), Execute, Flush
@@ -224,7 +241,13 @@ mod test {
             panic!("Expected Bind message");
         }
 
-        assert_eq!(splice.first().unwrap().messages.last().unwrap().code(), 'H');
+        assert_eq!(
+            splice
+                .first()
+                .and_then(|request| request.messages.last())
+                .map(Protocol::code),
+            Some('H')
+        );
         assert_eq!(
             splice
                 .iter()
@@ -232,7 +255,10 @@ mod test {
                 .sum::<usize>(),
             2
         );
+    }
 
+    #[test]
+    fn test_split_extended_preserves_flush_and_separates_sync() {
         // Test Parse, Describe, Flush, Bind, Execute, Bind, Execute, Sync sequence
         let messages = vec![
             Parse::named("stmt", "SELECT $1").into(),
@@ -245,7 +271,7 @@ mod test {
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = split_extended(&req);
         assert_eq!(splice.len(), 3);
 
         // First slice should contain: Parse("stmt"), Describe("stmt"), Flush, Bind("stmt"), Execute, Flush
