@@ -461,6 +461,10 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
+        if context.in_multi_query_request {
+            self.in_simple_split_error = true;
+        }
+
         // Attach query context.
         if error.detail.is_none() {
             let query = context

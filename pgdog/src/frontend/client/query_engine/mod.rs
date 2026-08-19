@@ -68,6 +68,7 @@ pub struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
+    in_simple_split_error: bool,
 }
 
 impl QueryEngine {
@@ -91,6 +92,7 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
+            in_simple_split_error: false,
         })
     }
 
@@ -118,8 +120,10 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
-        // Run this check first without affecting statistics
-        // or other state.
+        if self.split_simple_abort_check() {
+            return Ok(QueryEngineResult::AbortSplitSimple(context.transaction()));
+        }
+
         if let Some(split) = Self::split_extended_check(context.client_request)? {
             return Ok(split);
         }
