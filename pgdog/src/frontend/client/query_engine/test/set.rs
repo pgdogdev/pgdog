@@ -731,3 +731,66 @@ async fn test_lock_timeout() {
         "lock_timeout should be cleared after RESET"
     );
 }
+
+#[tokio::test]
+async fn test_multi_set() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    client
+        .send_simple(Query::new(
+            "SET application_name TO 'test'; SET application_name TO 'test2';",
+        ))
+        .await;
+
+    let msgs = client
+        .read_until('Z')
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|msg| msg.code())
+        .collect::<Vec<_>>();
+
+    assert_eq!(msgs, ['C', 'C', 'Z']);
+}
+
+#[tokio::test]
+async fn test_multi_set_mixed_state_change() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    client
+        .send_simple(Query::new(
+            "SET application_name TO 'test'; SELECT 1; SET application_name TO 'test2';",
+        ))
+        .await;
+
+    let msgs = client
+        .read_until('Z')
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|msg| msg.code())
+        .collect::<Vec<_>>();
+
+    // BUG(lev): Note 'S' returned after `SELECT 1` result
+    // because `SET` was buffered and executed manually
+    // when the client was linked with a server.
+    //
+    // Clients seem to be ok with this I guess.
+    assert_eq!(msgs, ['C', 'T', 'D', 'C', 'C', 'S', 'S', 'Z']);
+}
+
+#[tokio::test]
+async fn test_set_after_query_pipeline() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    client
+        .send_simple(Query::new("SELECT 1; SET statement_timeout TO 0;"))
+        .await;
+
+    let msgs = client
+        .read_until('Z')
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|msg| msg.code())
+        .collect::<Vec<_>>();
+
+    assert_eq!(msgs, ['T', 'D', 'C', 'C', 'Z']);
+}

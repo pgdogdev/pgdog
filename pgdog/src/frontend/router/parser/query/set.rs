@@ -56,54 +56,6 @@ impl QueryParser {
         }
     }
 
-    /// Try to handle multi-statement queries containing SET commands.
-    ///
-    /// - All SETs → returns `Ok(Some(Command::Set { .. }))`
-    /// - No SETs → returns `Ok(None)`, caller falls through to default parsing
-    /// - Mix of SET + non-SET → returns `Err(MultiStatementMixedSet)`
-    ///
-    /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
-    /// all multi-statement queries are forwarded to the server verbatim.
-    pub(super) fn try_multi_set<'a>(
-        &self,
-        stmts: impl IntoIterator<Item = &'a nodes::RawStmt>,
-        context: &QueryParserContext,
-    ) -> Result<Option<Command>, Error> {
-        // In session mode, pass through without validation — the server
-        // owns the session and can handle mixed SET + other statements.
-        if context.is_session_mode() {
-            return Ok(Some(Command::Query(Route::write(
-                context.shards_calculator.shard(),
-            ))));
-        }
-        let mut has_other = false;
-
-        let params = stmts
-            .into_iter()
-            .filter_map(|stmt| match stmt.stmt() {
-                Node::VariableSetStmt(stmt) if stmt.kind != VAR_SET_MULTI => {
-                    Some(Self::parse_set_param(stmt))
-                }
-                _ => {
-                    has_other = true;
-                    None
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if params.is_empty() {
-            Ok(None)
-        } else if has_other {
-            Err(Error::MultiStatementMixedSet)
-        } else {
-            Ok(Some(Command::Set {
-                params,
-                route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
-            }))
-        }
-    }
-
     fn parse_set_values(stmt: &nodes::VariableSetStmt) -> Result<ParameterValue, Error> {
         let mut value = stmt
             .args()

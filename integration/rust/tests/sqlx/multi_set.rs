@@ -1,5 +1,5 @@
 use crate::setup::connections_sqlx;
-use sqlx::Executor;
+use sqlx::{Executor, Row};
 
 #[tokio::test]
 async fn test_multi_set() {
@@ -72,25 +72,16 @@ async fn test_multi_set_in_transaction() {
 }
 
 #[tokio::test]
-async fn test_multi_set_mixed_returns_error() {
+async fn test_multi_set_mixed_works_normally() {
     for pool in connections_sqlx().await {
         let mut conn = pool.acquire().await.unwrap();
 
-        let err = conn
-            .execute("SET statement_timeout TO '10s'; SELECT 1")
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("multi-statement queries cannot mix SET with other commands"),
-            "unexpected error: {err}",
-        );
-
-        // Connection should still be usable after the error.
-        let val: String = sqlx::query_scalar("SHOW server_version")
-            .fetch_one(&mut *conn)
+        let rows = conn
+            .fetch_all("SET statement_timeout TO '10s'; SELECT 1 AS one; SHOW statement_timeout")
             .await
             .unwrap();
-        assert!(!val.is_empty());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get::<i32, _>("one"), 1);
+        assert_eq!(rows[1].get::<String, _>("statement_timeout"), "10s");
     }
 }

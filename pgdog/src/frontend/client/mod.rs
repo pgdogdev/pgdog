@@ -592,6 +592,7 @@ impl Client {
             .await?
         {
             QueryEngineResult::Done(transaction) => {
+                println!("regular");
                 self.transaction = transaction;
             }
 

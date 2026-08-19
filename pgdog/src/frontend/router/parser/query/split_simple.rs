@@ -30,9 +30,7 @@ impl QueryParser {
     ) -> Result<Option<Command>, Error> {
         let stmts = &ast.ast;
         if stmts.len() > 1 {
-            if let Ok(Some(command)) = self.try_multi_set(&**stmts, context) {
-                return Ok(Some(command));
-            } else if context.router_context.is_simple_protocol() {
+            if context.router_context.is_simple_protocol() {
                 return Ok(Some(self.split_simple_queries(ast)?));
             }
         }

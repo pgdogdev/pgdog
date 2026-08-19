@@ -22,10 +22,21 @@ fn test_mixed_set_passthrough_in_session_mode() {
         Query::new("SET DateStyle='ISO';SET extra_float_digits = 2;show transaction_isolation")
             .into(),
     ]);
-    assert!(
-        matches!(command, Command::Query(_)),
-        "expected Command::Query passthrough in session mode, got {command:#?}",
-    );
+
+    match command {
+        Command::SimpleQuerySplit { queries } => {
+            assert_eq!(
+                queries,
+                [
+                    "SET datestyle TO \"ISO\"",
+                    "SET extra_float_digits TO 2",
+                    "SHOW TRANSACTION ISOLATION LEVEL"
+                ]
+            );
+        }
+
+        cmd => panic!("expected split, got {:?}", cmd),
+    }
 }
 
 #[test]
@@ -89,16 +100,12 @@ fn test_set_multi_statement() {
     ]);
 
     match command {
-        Command::Set { ref params, .. } => {
-            assert_eq!(params.len(), 2);
-            assert_eq!(params[0].name, "statement_timeout");
-            assert_eq!(params[0].value, Some(ParameterValue::String("1".into())));
-            assert!(!params[0].local);
-            assert_eq!(params[1].name, "work_mem");
-            assert_eq!(params[1].value, Some(ParameterValue::String("64MB".into())));
-            assert!(!params[1].local);
-        }
-        _ => panic!("expected Command::Set, got {command:#?}"),
+        Command::SimpleQuerySplit { queries } => assert_eq!(
+            queries,
+            ["SET statement_timeout TO 1", "SET work_mem TO \"64MB\""]
+        ),
+
+        cmd => panic!("expected split, got {:?}", cmd),
     }
 }
 
@@ -111,12 +118,15 @@ fn test_set_multi_statement_mixed_local() {
     ]);
 
     match command {
-        Command::Set { ref params, .. } => {
-            assert_eq!(params.len(), 2);
-            assert!(!params[0].local);
-            assert!(params[1].local);
-        }
-        _ => panic!("expected Command::Set, got {command:#?}"),
+        Command::SimpleQuerySplit { queries } => assert_eq!(
+            queries,
+            [
+                "SET statement_timeout TO 1",
+                "SET LOCAL work_mem TO \"64MB\""
+            ]
+        ),
+
+        cmd => panic!("expected split, got {:?}", cmd),
     }
 }
 
@@ -131,7 +141,7 @@ fn test_set_multi_statement_mixed_is_split() {
     match command {
         Command::SimpleQuerySplit { queries } => {
             assert_eq!(queries[0], "SET statement_timeout TO 1");
-            assert_eq!(queries[2], "SELECT 1");
+            assert_eq!(queries[1], "SELECT 1");
             assert_eq!(queries.len(), 2);
         }
 
@@ -147,7 +157,7 @@ fn test_multi_statement_no_set_is_split() {
     match command {
         Command::SimpleQuerySplit { queries } => {
             assert_eq!(queries[0], "SELECT 1");
-            assert_eq!(queries[2], "SELECT 2");
+            assert_eq!(queries[1], "SELECT 2");
             assert_eq!(queries.len(), 2);
         }
 
@@ -167,20 +177,13 @@ fn test_set_multi_statement_with_timezone_interval() {
     ]);
 
     match command {
-        Command::Set { ref params, .. } => {
-            assert_eq!(params.len(), 2);
-            assert_eq!(params[0].name, "client_min_messages");
-            assert_eq!(
-                params[0].value,
-                Some(ParameterValue::String("warning".into()))
-            );
-            assert_eq!(params[1].name, "timezone");
-            assert_eq!(
-                params[1].value,
-                Some(ParameterValue::String("+00:00".into()))
-            );
+        Command::SimpleQuerySplit { queries } => {
+            assert_eq!(queries[0], "SET client_min_messages TO warning");
+            assert_eq!(queries[1], "SET TIME ZONE interval '+00:00' hour to minute");
+            assert_eq!(queries.len(), 2);
         }
-        _ => panic!("expected Command::Set, got {command:#?}"),
+
+        cmd => panic!("expected split, got: {:?}", cmd),
     }
 }
 
