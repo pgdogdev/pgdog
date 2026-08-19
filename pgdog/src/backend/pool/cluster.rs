@@ -452,6 +452,10 @@ impl Cluster {
 
     /// Move connections from cluster to another, saving them.
     pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
+        // Ensure no deadlock: locking the same mutex twice on this thread
+        // (if self and other were the same cluster) would hang forever.
+        assert!(!Arc::ptr_eq(&self.stats, &other.stats));
+
         // Carry cluster-level statistics over so a reload doesn't reset
         // mirror and lookup counters. The lookup counters are accumulated
         // into the new cluster's own stats Arc (unless it's the same one),
