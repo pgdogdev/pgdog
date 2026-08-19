@@ -48,9 +48,7 @@ pub(crate) use limit::{Limit, LimitClause};
 pub use order_by::OrderBy;
 pub(crate) use params::*;
 pub use query::QueryParser;
-pub use rewrite::{
-    StatementRewrite, StatementRewriteContext, statement::RewritePlan,
-};
+pub use rewrite::{StatementRewrite, StatementRewriteContext, statement::RewritePlan};
 pub use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub use schema::Schema;
 pub(crate) use sequence::Sequence;
