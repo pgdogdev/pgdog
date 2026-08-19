@@ -4487,6 +4487,29 @@ pub mod test {
         }
     }
 
+    #[tokio::test]
+    async fn test_state_handling_of_multi_queries() {
+        let mut server = test_server().await;
+        server
+            .send(
+                &vec![
+                    Query::new("SET statement_timeout TO 0; SELECT 1; SET statement_timeout TO 1")
+                        .into(),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        for c in ['C', 'T', 'D', 'C', 'C', 'Z'] {
+            let msg = server.read().await.unwrap();
+            assert_eq!(server.done(), msg.code() == 'Z');
+            assert_eq!(msg.code(), c);
+        }
+
+        assert!(server.done());
+    }
+
     #[test]
     fn test_effective_max_age_default_is_base() {
         let server = Server::default();
