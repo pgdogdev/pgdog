@@ -3,7 +3,7 @@ use super::super::status::ReplicationSlot as ReplicationSlotTracker;
 use crate::config::config;
 use crate::{
     backend::{self, ConnectReason, Server, ServerOptions, pool::Address},
-    frontend::client::query_engine::two_pc::TwoPcTransactions,
+    frontend::client::query_engine::two_pc,
     net::{
         CopyData, CopyDone, DataRow, ErrorResponse, Format, FromBytes, Protocol, Query, ToBytes,
         replication::StatusUpdate,
@@ -170,7 +170,7 @@ impl ReplicationSlot {
             self.name, self.address
         );
 
-        let two_pc = TwoPcTransactions::load(self.server()?).await?;
+        let two_pc = two_pc::server_transactions::load(self.server()?).await?;
 
         if !two_pc.is_empty() {
             warn!(

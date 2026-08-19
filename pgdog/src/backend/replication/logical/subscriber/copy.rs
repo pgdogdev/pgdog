@@ -359,6 +359,20 @@ mod test {
 
     use super::*;
 
+    /// Execute a query on every primary in the cluster.
+    async fn execute(
+        cluster: &Cluster,
+        query: impl Into<Query> + Clone,
+    ) -> Result<(), crate::backend::Error> {
+        let query: Query = query.into();
+        for shard in 0..cluster.shards().len() {
+            let mut server = cluster.primary(shard, &Request::default()).await?;
+            server.execute(query.clone()).await?;
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_subscriber() {
         crate::logger();
@@ -377,20 +391,21 @@ mod test {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
 
-        cluster
-            .execute("CREATE TABLE IF NOT EXISTS pgdog.sharded (id BIGINT, value TEXT)")
-            .await
-            .unwrap();
+        execute(
+            &cluster,
+            "CREATE TABLE IF NOT EXISTS pgdog.sharded (id BIGINT, value TEXT)",
+        )
+        .await
+        .unwrap();
 
-        cluster
-            .execute("TRUNCATE TABLE pgdog.sharded")
+        execute(&cluster, "TRUNCATE TABLE pgdog.sharded")
             .await
             .unwrap();
 
         let mut subscriber = CopySubscriber::new(&copy, &cluster, &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
-        let header = CopyData::new(&Header::new().to_bytes());
+        let header = CopyData::new(&Header::default().to_bytes());
         subscriber.copy_data(header).await.unwrap();
 
         for i in 0..25_i64 {
@@ -418,8 +433,7 @@ mod test {
         // Otherwise, it would of been 50 if this didn't work (all shard).
         assert_eq!(count.first().unwrap().clone(), 25);
 
-        cluster
-            .execute("TRUNCATE TABLE pgdog.sharded")
+        execute(&cluster, "TRUNCATE TABLE pgdog.sharded")
             .await
             .unwrap();
 

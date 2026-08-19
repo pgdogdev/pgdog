@@ -19,7 +19,7 @@ async fn test_transaction_state() {
     client.try_process().await.unwrap();
 
     assert!(client.client().transaction.is_some());
-    assert!(client.engine.router().route().is_write());
+    assert!(client.engine.router().command().route().is_write());
 
     expect_message!(client.read().await, CommandComplete);
     let rfq = expect_message!(client.read().await, ReadyForQuery);
@@ -32,7 +32,7 @@ async fn test_transaction_state() {
     client.try_process().await.unwrap();
 
     assert!(client.client().transaction.is_some());
-    assert!(client.engine.router().route().is_write());
+    assert!(client.engine.router().command().route().is_write());
 
     expect_message!(client.read().await, ParseComplete);
     client.read_until('Z').await.unwrap();
@@ -52,7 +52,7 @@ async fn test_transaction_state() {
     client.try_process().await.unwrap();
 
     assert!(client.client().transaction.is_some());
-    assert!(client.engine.router().route().is_write());
+    assert!(client.engine.router().command().route().is_write());
 
     expect_message!(client.read().await, BindComplete);
     expect_message!(client.read().await, DataRow);

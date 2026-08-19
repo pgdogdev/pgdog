@@ -1,6 +1,7 @@
 use rand::{Rng, rng};
 
 use crate::{
+    backend::pool::connection::binding::Binding,
     expect_message,
     frontend::{
         ClientRequest,
@@ -81,10 +82,7 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
 
     client.engine.connect(&mut context, None).await?;
 
-    assert!(
-        client.engine.backend.is_direct(),
-        "backend should be connected with Binding::Direct"
-    );
+    std::assert_matches!(&*client.engine.backend, Binding::Direct(..));
 
     let rewrite = context
         .client_request

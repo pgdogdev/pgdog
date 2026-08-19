@@ -13,6 +13,7 @@ use crate::net::parameter::ParameterValue;
 /// typically computed from the cluster. The user and search_path are
 /// borrowed references.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Default))]
 pub struct AstContext<'a> {
     /// Sharding schema configuration.
     pub sharding_schema: ShardingSchema,

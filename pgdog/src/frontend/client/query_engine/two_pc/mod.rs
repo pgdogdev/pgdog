@@ -8,7 +8,7 @@ use super::Error;
 pub mod guard;
 pub mod manager;
 pub mod phase;
-pub mod server_transactions;
+pub(crate) mod server_transactions;
 pub mod statement;
 pub mod stats;
 pub mod transaction;
@@ -17,8 +17,6 @@ pub mod wal;
 pub use guard::TwoPcGuard;
 pub use manager::Manager;
 pub use phase::TwoPcPhase;
-pub(crate) use server_transactions::TwoPcTransactions;
-pub(crate) use statement::TwoPcTransactionOnShard;
 pub use stats::TwoPcStats;
 pub use transaction::TwoPcTransaction;
 

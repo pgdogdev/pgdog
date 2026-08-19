@@ -285,8 +285,7 @@ mod test {
     impl GlobalCache {
         /// Get the query string stored in the global cache
         /// for the given globally unique prepared statement name.
-        #[inline]
-        pub fn query(&self, name: &str) -> Option<&str> {
+        pub(crate) fn query(&self, name: &str) -> Option<&str> {
             self.names.get(name).map(|s| s.query())
         }
     }

@@ -28,10 +28,10 @@ pub use lookup::{
 };
 pub use mapping::Mapping;
 pub use operator::*;
+pub use pgdog_vector::Centroids;
 pub use schema::SchemaSharder;
 pub use tables::*;
 pub use value::*;
-pub use vector::Centroids;
 
 /// Hash `BIGINT`.
 pub fn bigint(id: i64) -> u64 {
