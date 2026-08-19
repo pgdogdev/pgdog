@@ -554,15 +554,3 @@ impl Binding {
         })
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::Binding;
-
-    impl Binding {
-        /// True if this binding is a direct-to-shard connection.
-        pub fn is_direct(&self) -> bool {
-            matches!(self, Binding::Direct(..))
-        }
-    }
-}

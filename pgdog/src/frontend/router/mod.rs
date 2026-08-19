@@ -96,26 +96,3 @@ impl Router {
         self.schema_changed
     }
 }
-
-#[cfg(test)]
-mod test {
-    use lazy_static::lazy_static;
-
-    use super::{Command, Route, Router};
-    use crate::frontend::router::parser::{Shard, ShardWithPriority};
-
-    impl Router {
-        /// Get current route.
-        pub fn route(&self) -> &Route {
-            lazy_static! {
-                static ref DEFAULT_ROUTE: Route =
-                    Route::write(ShardWithPriority::new_default_unset(Shard::All));
-            }
-
-            match self.command() {
-                Command::Query(route) => route,
-                _ => &DEFAULT_ROUTE,
-            }
-        }
-    }
-}

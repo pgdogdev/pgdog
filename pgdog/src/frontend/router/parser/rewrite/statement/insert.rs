@@ -221,12 +221,6 @@ impl StatementRewrite<'_> {
 
 #[cfg(test)]
 mod tests {
-    impl InsertSplit {
-        fn stmt(&self) -> &str {
-            &self.stmt
-        }
-    }
-
     use pgdog_config::Rewrite;
 
     use super::*;

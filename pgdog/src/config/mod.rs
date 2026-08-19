@@ -23,8 +23,6 @@ pub use memory::*;
 pub use networking::{MultiTenant, TlsVerifyMode};
 pub use overrides::Overrides;
 use pgdog_config::LookupResult;
-#[cfg(test)]
-use pgdog_config::ShardedTableConfig;
 pub use pgdog_config::auth::AuthType;
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};

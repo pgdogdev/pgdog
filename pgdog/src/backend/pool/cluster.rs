@@ -767,23 +767,7 @@ mod test {
         net::Query,
     };
 
-    use super::{Cluster, DatabaseUser, Request};
-
-    impl Cluster {
-        /// Execute a query on every primary in the cluster.
-        pub async fn execute(
-            &self,
-            query: impl Into<Query> + Clone,
-        ) -> Result<(), crate::backend::Error> {
-            let query: Query = query.into();
-            for shard in 0..self.shards.len() {
-                let mut server = self.primary(shard, &Request::default()).await?;
-                server.execute(query.clone()).await?;
-            }
-
-            Ok(())
-        }
-    }
+    use super::{Cluster, DatabaseUser};
 
     impl Cluster {
         pub fn new_test(config: &ConfigAndUsers) -> Self {

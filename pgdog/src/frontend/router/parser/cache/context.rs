@@ -56,33 +56,3 @@ impl<'a> AstQuery<'a> {
         &query[..end]
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::{AstContext, AstQuery};
-    use crate::backend::ShardingSchema;
-    use crate::backend::schema::Schema;
-    use crate::frontend::BufferedQuery;
-
-    impl AstContext<'_> {
-        /// Create a default/empty AstContext for tests.
-        pub fn empty() -> AstContext<'static> {
-            AstContext {
-                sharding_schema: ShardingSchema::default(),
-                db_schema: Schema::default(),
-                user: "",
-                search_path: None,
-            }
-        }
-    }
-
-    impl<'a> AstQuery<'a> {
-        /// Create an AstQuery using the raw query text as the cache key.
-        pub fn from_query(query: &'a BufferedQuery) -> Self {
-            Self {
-                query_without_comment: query.query(),
-                original_query: query,
-            }
-        }
-    }
-}

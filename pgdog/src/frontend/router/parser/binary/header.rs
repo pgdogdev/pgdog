@@ -68,18 +68,3 @@ impl ToBytes for Header {
         payload.freeze()
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::Header;
-
-    impl Header {
-        pub fn new() -> Self {
-            Self {
-                flags: 0,
-                has_oid: false,
-                header_extension: 0,
-            }
-        }
-    }
-}
