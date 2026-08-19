@@ -809,6 +809,7 @@ mod test {
         assert!(route.requires_full_shard_coverage());
 
         route.set_search_path_driven(true);
+        route.set_sharded_schema_only(true);
         assert!(!route.requires_full_shard_coverage());
     }
 }

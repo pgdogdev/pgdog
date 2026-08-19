@@ -136,7 +136,7 @@ async fn test_omni_write_blocked_in_direct_to_shard_transaction() {
         .await;
 
     let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_in_direct_to_shard(&err);
+    assert_omni_write_with_directive(&err);
     // Transaction is now in the aborted state.
     let rfq = expect_message!(client.read().await, ReadyForQuery);
     assert_eq!(rfq.status, 'E');
@@ -211,7 +211,7 @@ async fn test_omni_read_blocked_in_direct_to_shard_transaction() {
         .send_simple(Query::new("SELECT * FROM sharded_omni"))
         .await;
     let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_in_direct_to_shard(&err);
+    assert_omni_write_with_directive(&err);
     let rfq = expect_message!(client.read().await, ReadyForQuery);
     assert_eq!(rfq.status, 'E');
 
