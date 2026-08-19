@@ -11,6 +11,8 @@ use super::prelude::*;
 pub struct NotificationResponse {
     payload: Bytes,
     channel_len: usize,
+    // Parsed off the wire for correctness; no getter needed yet.
+    #[allow(dead_code)]
     pid: i32,
 }
 

@@ -17,30 +17,6 @@ use crate::{
 
 use super::{BinaryStream, Column, CsvStream, Error, Table, binary::Data};
 
-/// Copy information parsed from a COPY statement.
-#[derive(Debug, Clone)]
-pub struct CopyInfo {
-    /// CSV contains headers.
-    pub headers: bool,
-    /// CSV delimiter.
-    pub delimiter: char,
-    /// Columns declared by the caller.
-    pub columns: Vec<String>,
-    /// Table name target for the COPY.
-    pub table_name: String,
-}
-
-impl Default for CopyInfo {
-    fn default() -> Self {
-        Self {
-            headers: false,
-            delimiter: ',',
-            columns: vec![],
-            table_name: "".into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CopyFormat {
     Text,

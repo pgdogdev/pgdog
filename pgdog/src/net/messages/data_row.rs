@@ -150,7 +150,7 @@ impl DataRow {
     }
 
     /// Render the data row.
-    pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
+    pub fn to_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
         let mut row = vec![];
 
         for (index, field) in rd.fields.iter().enumerate() {

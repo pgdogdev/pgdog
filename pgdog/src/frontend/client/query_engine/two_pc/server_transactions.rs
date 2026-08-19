@@ -8,6 +8,9 @@ use crate::{
 use super::{TwoPcTransaction, TwoPcTransactionOnShard};
 
 #[derive(Debug, Clone)]
+// Fields are collected for future use in the "open two-phase transactions"
+// warning (slot.rs); not yet surfaced in the log message.
+#[allow(dead_code)]
 pub enum TwoPcServerTransaction {
     Ours {
         txn: TwoPcTransaction,

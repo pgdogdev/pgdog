@@ -7,7 +7,6 @@ use crate::{
         parser::Column,
         sharding::{LookupCache, LookupTable, Mapping, ShardedTable},
     },
-    net::messages::Vector,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -208,14 +207,6 @@ impl ShardedTables {
 
         None
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ShardedColumn {
-    pub data_type: DataType,
-    pub position: usize,
-    pub centroids: Vec<Vector>,
-    pub centroid_probes: usize,
 }
 
 #[cfg(test)]

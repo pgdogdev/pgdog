@@ -37,7 +37,6 @@ mod test;
 #[cfg(test)]
 mod testing;
 pub mod two_pc;
-pub mod unknown_command;
 
 use self::query::ExplainResponseState;
 use self::query_log_stdout::log_query_stdout;
@@ -249,7 +248,6 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
-            command => self.unknown_command(context, command.clone()).await?,
         }
 
         self.hooks.after_execution(context)?;

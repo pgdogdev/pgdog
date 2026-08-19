@@ -30,7 +30,9 @@ pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy}
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::RewriteMode;
 use std::path::Path;
-pub use users::{ServerAuth, User, Users};
+pub use users::{ServerAuth, User};
+#[cfg(test)]
+pub use users::Users;
 
 // Re-export from sharding module
 pub use sharding::{
