@@ -37,7 +37,7 @@ impl Command for ShowReplication {
             Field::text("lsn_age"),
             Field::text("pg_is_in_recovery"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
@@ -83,7 +83,7 @@ impl Command for ShowReplication {
                             Data::null()
                         });
 
-                    messages.push(row.message()?);
+                    messages.push(row.message());
                 }
             }
         }

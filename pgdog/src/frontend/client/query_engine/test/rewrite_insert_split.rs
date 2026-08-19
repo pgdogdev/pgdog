@@ -143,7 +143,7 @@ async fn test_insert_split_not_sharded() {
         ProtocolMessage::Parse(Parse::new_anonymous(
             "INSERT INTO test (id, email) VALUES ($1, $2), ($3, $4)",
         )),
-        ProtocolMessage::Other(Flush.message().unwrap()),
+        ProtocolMessage::Other(Flush.message()),
     ]);
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);

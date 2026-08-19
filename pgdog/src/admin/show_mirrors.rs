@@ -28,7 +28,7 @@ impl Command for ShowMirrors {
             Field::numeric("queue_length"),
         ];
 
-        let mut messages = vec![RowDescription::new(&fields).message()?];
+        let mut messages = vec![RowDescription::new(&fields).message()];
 
         // Iterate through all clusters and create a row for each
         for (user, cluster) in databases().all() {
@@ -48,7 +48,7 @@ impl Command for ShowMirrors {
                 .add(counts.error_count as i64)
                 .add(counts.queue_length as i64);
 
-            messages.push(dr.message()?);
+            messages.push(dr.message());
         }
 
         Ok(messages)

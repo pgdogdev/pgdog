@@ -73,7 +73,7 @@ impl Command for ShowServers {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let mut messages = vec![self.row.row_description().message()?];
+        let mut messages = vec![self.row.row_description().message()];
 
         let stats = stats();
         let now = Instant::now();
@@ -119,7 +119,7 @@ impl Command for ShowServers {
                 .add("age", age.as_secs() as i64)
                 .add("application_name", server.application_name.as_str())
                 .data_row();
-            messages.push(dr.message()?);
+            messages.push(dr.message());
         }
 
         Ok(messages)

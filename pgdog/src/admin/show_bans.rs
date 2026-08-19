@@ -35,7 +35,7 @@ impl Command for ShowBans {
             Field::numeric("ban_time_left"),
         ]);
 
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = Instant::now();
 
         for (user, cluster) in databases().all() {
@@ -62,7 +62,7 @@ impl Command for ShowBans {
                         .add(ban.error().map(|err| err.to_string()))
                         .add(time_left);
 
-                    messages.push(row.message()?);
+                    messages.push(row.message());
                 }
             }
         }

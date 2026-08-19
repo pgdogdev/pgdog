@@ -15,13 +15,11 @@ fn test_inconsistent_row_descriptions() {
     let rd2 = RowDescription::new(&[Field::text("name")]); // Missing column
 
     // First row description should be processed successfully
-    let result = multi_shard
-        .handle_server_message(rd1.message().unwrap())
-        .unwrap();
+    let result = multi_shard.handle_server_message(rd1.message()).unwrap();
     assert!(result.is_none()); // Not forwarded until all shards respond
 
     // Second inconsistent row description should cause an error
-    let result = multi_shard.handle_server_message(rd2.message().unwrap());
+    let result = multi_shard.handle_server_message(rd2.message());
     assert!(result.is_err());
 
     if let Err(error) = result {
@@ -38,9 +36,7 @@ fn test_inconsistent_data_rows() {
 
     // Set up row description first
     let rd = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
-    multi_shard
-        .handle_server_message(rd.message().unwrap())
-        .unwrap();
+    multi_shard.handle_server_message(rd.message()).unwrap();
 
     // Create data rows with different column counts
     let mut dr1 = DataRow::new();
@@ -50,13 +46,11 @@ fn test_inconsistent_data_rows() {
     dr2.add("only_name"); // Missing id column
 
     // First data row should be processed successfully
-    let result = multi_shard
-        .handle_server_message(dr1.message().unwrap())
-        .unwrap();
+    let result = multi_shard.handle_server_message(dr1.message()).unwrap();
     assert!(result.is_none()); // Buffered, not forwarded immediately
 
     // Second inconsistent data row should cause an error
-    let result = multi_shard.handle_server_message(dr2.message().unwrap());
+    let result = multi_shard.handle_server_message(dr2.message());
     assert!(result.is_err());
 
     if let Err(error) = result {
@@ -77,19 +71,17 @@ fn test_rd_before_dr() {
     dr.add(1i64);
     for _ in 0..2 {
         let result = multi_shard
-            .handle_server_message(rd.message().unwrap().backend(BackendPid::for_test(1)))
+            .handle_server_message(rd.message().backend(BackendPid::for_test(1)))
             .unwrap();
         assert!(result.is_none()); // dropped
         let result = multi_shard
-            .handle_server_message(dr.message().unwrap().backend(BackendPid::for_test(1)))
+            .handle_server_message(dr.message().backend(BackendPid::for_test(1)))
             .unwrap();
         assert!(result.is_none()); // buffered.
     }
 
-    let result = multi_shard
-        .handle_server_message(rd.message().unwrap())
-        .unwrap();
-    assert_eq!(result, Some(rd.message().unwrap()));
+    let result = multi_shard.handle_server_message(rd.message()).unwrap();
+    assert_eq!(result, Some(rd.message()));
     let result = multi_shard.get_server_message();
     // Waiting for command complete
     assert!(result.is_none());
@@ -99,7 +91,6 @@ fn test_rd_before_dr() {
             .handle_server_message(
                 CommandComplete::from_str("SELECT 1")
                     .message()
-                    .unwrap()
                     .backend(BackendPid::for_test(1)),
             )
             .unwrap();
@@ -111,7 +102,7 @@ fn test_rd_before_dr() {
         let id = BackendPid::for_test(1);
         assert_eq!(
             result.map(|m| m.backend(id)),
-            Some(dr.message().unwrap().backend(id))
+            Some(dr.message().backend(id))
         );
     }
 
@@ -123,7 +114,6 @@ fn test_rd_before_dr() {
         Some(
             CommandComplete::from_str("SELECT 3")
                 .message()
-                .unwrap()
                 .backend(BackendPid::for_test(1))
         )
     );
@@ -143,13 +133,13 @@ fn test_ready_for_query_error_preservation() {
 
     // Forward first ReadyForQuery message with error state
     let result = multi_shard
-        .handle_server_message(rfq_error.message().unwrap())
+        .handle_server_message(rfq_error.message())
         .unwrap();
     assert!(result.is_none()); // Should not be forwarded yet (waiting for second shard)
 
     // Forward second normal ReadyForQuery message
     let result = multi_shard
-        .handle_server_message(rfq_normal.message().unwrap())
+        .handle_server_message(rfq_normal.message())
         .unwrap();
 
     // Should return the error message, not the normal one
@@ -174,7 +164,6 @@ fn test_omni_command_complete_not_summed() {
         .handle_server_message(
             CommandComplete::from_str("UPDATE 5")
                 .message()
-                .unwrap()
                 .backend(backend1),
         )
         .unwrap();
@@ -182,7 +171,6 @@ fn test_omni_command_complete_not_summed() {
         .handle_server_message(
             CommandComplete::from_str("UPDATE 5")
                 .message()
-                .unwrap()
                 .backend(backend2),
         )
         .unwrap();
@@ -190,7 +178,6 @@ fn test_omni_command_complete_not_summed() {
         .handle_server_message(
             CommandComplete::from_str("UPDATE 5")
                 .message()
-                .unwrap()
                 .backend(backend3),
         )
         .unwrap();
@@ -215,7 +202,6 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
         .handle_server_message(
             CommandComplete::from_str("UPDATE 7")
                 .message()
-                .unwrap()
                 .backend(backend1),
         )
         .unwrap();
@@ -225,7 +211,6 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
         .handle_server_message(
             CommandComplete::from_str("UPDATE 9")
                 .message()
-                .unwrap()
                 .backend(backend2),
         )
         .unwrap();
@@ -248,10 +233,10 @@ fn test_omni_data_rows_only_from_first_server() {
     // Setup: send RowDescription from both shards
     let rd = RowDescription::new(&[Field::bigint("id")]);
     multi_shard
-        .handle_server_message(rd.message().unwrap().backend(backend1))
+        .handle_server_message(rd.message().backend(backend1))
         .unwrap();
     let rd_result = multi_shard
-        .handle_server_message(rd.message().unwrap().backend(backend2))
+        .handle_server_message(rd.message().backend(backend2))
         .unwrap();
     assert!(rd_result.is_some()); // RowDescription forwarded after all shards
 
@@ -259,7 +244,7 @@ fn test_omni_data_rows_only_from_first_server() {
     let mut dr1 = DataRow::new();
     dr1.add(100_i64);
     let result = multi_shard
-        .handle_server_message(dr1.message().unwrap().backend(backend1))
+        .handle_server_message(dr1.message().backend(backend1))
         .unwrap();
     assert!(result.is_some()); // Should be forwarded
 
@@ -267,7 +252,7 @@ fn test_omni_data_rows_only_from_first_server() {
     let mut dr2 = DataRow::new();
     dr2.add(200_i64);
     let result = multi_shard
-        .handle_server_message(dr2.message().unwrap().backend(backend2))
+        .handle_server_message(dr2.message().backend(backend2))
         .unwrap();
     assert!(result.is_none()); // Should be dropped
 
@@ -275,7 +260,7 @@ fn test_omni_data_rows_only_from_first_server() {
     let mut dr3 = DataRow::new();
     dr3.add(101_i64);
     let result = multi_shard
-        .handle_server_message(dr3.message().unwrap().backend(backend1))
+        .handle_server_message(dr3.message().backend(backend1))
         .unwrap();
     assert!(result.is_some()); // Should be forwarded
 }
@@ -297,7 +282,7 @@ fn test_pipelined_describe_forwards_every_group() {
         for description in [&id, &name] {
             for _ in 0..shards {
                 if let Some(message) = multi_shard
-                    .handle_server_message(description.message().unwrap())
+                    .handle_server_message(description.message())
                     .unwrap()
                 {
                     forwarded.push(message);
@@ -307,7 +292,7 @@ fn test_pipelined_describe_forwards_every_group() {
 
         assert_eq!(
             forwarded,
-            vec![id.message().unwrap(), name.message().unwrap()],
+            vec![id.message(), name.message()],
             "{shards} shard(s)",
         );
     }
@@ -331,26 +316,22 @@ fn test_bind_result_formats_apply_per_statement() {
 
     for _ in 0..2 {
         multi_shard
-            .handle_server_message(BindComplete.message().unwrap())
+            .handle_server_message(BindComplete.message())
             .unwrap();
     }
     for _ in 0..2 {
-        multi_shard
-            .handle_server_message(rd.message().unwrap())
-            .unwrap();
+        multi_shard.handle_server_message(rd.message()).unwrap();
     }
     assert_eq!(multi_shard.decoder.get_format(0), Format::Binary);
 
     // The second statement asked for no formats.
     for _ in 0..2 {
         multi_shard
-            .handle_server_message(BindComplete.message().unwrap())
+            .handle_server_message(BindComplete.message())
             .unwrap();
     }
     for _ in 0..2 {
-        multi_shard
-            .handle_server_message(rd.message().unwrap())
-            .unwrap();
+        multi_shard.handle_server_message(rd.message()).unwrap();
     }
     assert_eq!(multi_shard.decoder.get_format(0), Format::Text);
 }
@@ -370,14 +351,14 @@ fn test_ready_for_query_drops_pending_binds() {
     // Only the first statement binds. The second is abandoned.
     for _ in 0..2 {
         multi_shard
-            .handle_server_message(BindComplete.message().unwrap())
+            .handle_server_message(BindComplete.message())
             .unwrap();
     }
     assert_eq!(multi_shard.bound_statements.len(), 1);
 
     for _ in 0..2 {
         multi_shard
-            .handle_server_message(ReadyForQuery::idle().message().unwrap())
+            .handle_server_message(ReadyForQuery::idle().message())
             .unwrap();
     }
     assert!(multi_shard.bound_statements.is_empty());

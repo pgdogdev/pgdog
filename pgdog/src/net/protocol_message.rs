@@ -194,7 +194,7 @@ impl From<Sync> for ProtocolMessage {
 
 impl From<Flush> for ProtocolMessage {
     fn from(value: Flush) -> Self {
-        Self::Other(value.message().unwrap())
+        Self::Other(value.message())
     }
 }
 

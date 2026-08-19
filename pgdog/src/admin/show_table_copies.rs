@@ -32,7 +32,7 @@ impl Command for ShowTableCopies {
             Field::bigint("elapsed_ms"),
             Field::text("sql"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
 
         let table_copies = TableCopies::get();
@@ -71,7 +71,7 @@ impl Command for ShowTableCopies {
                 .add(elapsed_ms)
                 .add(state.sql.as_str());
 
-            messages.push(row.message()?);
+            messages.push(row.message());
         }
 
         Ok(messages)

@@ -67,8 +67,8 @@ impl Command for Replicate {
         dr.add(task_id.to_string());
 
         Ok(vec![
-            RowDescription::new(&[Field::text("task_id")]).message()?,
-            dr.message()?,
+            RowDescription::new(&[Field::text("task_id")]).message(),
+            dr.message(),
         ])
     }
 }

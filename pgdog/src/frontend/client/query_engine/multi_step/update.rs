@@ -144,12 +144,12 @@ impl<'a> UpdateMulti<'a> {
                 .await?;
 
             self.engine
-                .process_server_message(context, CommandComplete::new("UPDATE 1").message()?) // We only allow to update one row at a time.
+                .process_server_message(context, CommandComplete::new("UPDATE 1").message()) // We only allow to update one row at a time.
                 .await?;
             self.engine
                 .process_server_message(
                     context,
-                    ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                    ReadyForQuery::in_transaction(context.in_transaction()).message(),
                 )
                 .await?;
 

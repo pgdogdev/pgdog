@@ -207,7 +207,7 @@ impl Buffer {
     /// Take messages from buffer.
     pub(super) fn take(&mut self) -> Option<Message> {
         if self.full {
-            self.buffer.pop_front().and_then(|s| s.message().ok())
+            self.buffer.pop_front().map(|s| s.message())
         } else {
             None
         }
@@ -252,7 +252,7 @@ mod test {
         for i in 0..25_i64 {
             let mut dr = DataRow::new();
             dr.add(25 - i).add((25 - i).to_string());
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
@@ -282,7 +282,7 @@ mod test {
         for _ in 0..6 {
             let mut dr = DataRow::new();
             dr.add(15_i64);
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
@@ -308,7 +308,7 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(15_i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 
@@ -343,7 +343,7 @@ mod test {
         for (i, ts) in timestamps.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(ts.to_string()).add(format!("item_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
@@ -383,7 +383,7 @@ mod test {
         for (i, price) in prices.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(price.to_string()).add(format!("product_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
@@ -439,7 +439,7 @@ mod test {
             let binary_data = create_binary_numeric(price);
             dr.add(Bytes::from(binary_data))
                 .add(format!("product_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
@@ -483,7 +483,7 @@ mod test {
         for (i, value) in values.iter().enumerate() {
             let mut dr = DataRow::new();
             dr.add(value.to_string()).add(format!("case_{}", i));
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         let decoder = Decoder::from(rd);
@@ -517,7 +517,7 @@ mod test {
         for i in 0..10_i64 {
             let mut dr = DataRow::new();
             dr.add(i);
-            buf.add(dr.message().unwrap()).unwrap();
+            buf.add(dr.message()).unwrap();
         }
 
         // LIMIT 5
@@ -585,7 +585,7 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(i as i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 
@@ -619,7 +619,7 @@ mod test {
                 let mut dr = DataRow::new();
                 dr.add(5_i64);
                 dr.add(email);
-                buf.add(dr.message().unwrap()).unwrap();
+                buf.add(dr.message()).unwrap();
             }
         }
 

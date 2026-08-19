@@ -32,7 +32,7 @@ impl Command for ShowClientMemory {
             Field::numeric("net_buffer_bytes"),
             Field::numeric("total_bytes"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
 
         let clients = comms().clients();
         for (_, client) in clients {
@@ -55,7 +55,7 @@ impl Command for ShowClientMemory {
                 .add(memory.stream as i64)
                 .add((memory.total()) as i64);
 
-            messages.push(row.message()?);
+            messages.push(row.message());
         }
 
         Ok(messages)

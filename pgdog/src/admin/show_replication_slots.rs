@@ -35,7 +35,7 @@ impl Command for ShowReplicationSlots {
             Field::text("last_transaction"),
             Field::bigint("last_transaction_ms"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
 
         for entry in ReplicationSlots::get().iter() {
@@ -70,7 +70,7 @@ impl Command for ShowReplicationSlots {
                     Data::null()
                 });
 
-            messages.push(row.message()?);
+            messages.push(row.message());
         }
 
         Ok(messages)

@@ -21,8 +21,8 @@ impl Command for ShowInstanceId {
         dr.add(instance_id());
 
         Ok(vec![
-            RowDescription::new(&[Field::text("instance_id")]).message()?,
-            dr.message()?,
+            RowDescription::new(&[Field::text("instance_id")]).message(),
+            dr.message(),
         ])
     }
 }

@@ -60,7 +60,7 @@ impl Command for ShowStats {
                 .collect::<Vec<Field>>(),
         );
 
-        let mut messages = vec![RowDescription::new(&fields).message()?];
+        let mut messages = vec![RowDescription::new(&fields).message()];
 
         let clusters = databases().all().clone();
 
@@ -110,7 +110,7 @@ impl Command for ShowStats {
                             .add(stat.rows_deleted);
                     }
 
-                    messages.push(dr.message()?);
+                    messages.push(dr.message());
                 }
             }
         }

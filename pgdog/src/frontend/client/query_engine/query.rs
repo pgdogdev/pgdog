@@ -221,7 +221,7 @@ impl QueryEngine {
                 // without the client's knowledge. We need to return a regular RFQ
                 // message and close the transaction.
                 context.transaction = None;
-                message = ReadyForQuery::in_transaction(false).message()?;
+                message = ReadyForQuery::in_transaction(false).message();
             }
 
             self.stats.idle(context.in_transaction());
@@ -274,7 +274,7 @@ impl QueryEngine {
             for line in state.lines.clone() {
                 let mut row = DataRow::new();
                 row.add(line);
-                let message = row.message()?;
+                let message = row.message();
                 let len = message.len();
                 context.stream.send(&message).await?;
                 self.stats.sent(len);

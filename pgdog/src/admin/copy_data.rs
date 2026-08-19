@@ -69,8 +69,8 @@ impl Command for CopyData {
 
         Ok(vec![
             RowDescription::new(&[Field::text("task_id"), Field::text("replication_slot")])
-                .message()?,
-            dr.message()?,
+                .message(),
+            dr.message(),
         ])
     }
 }

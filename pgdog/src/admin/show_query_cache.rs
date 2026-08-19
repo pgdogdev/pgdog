@@ -35,7 +35,7 @@ impl Command for ShowQueryCache {
                 Field::numeric("direct"),
                 Field::numeric("multi"),
             ])
-            .message()?,
+            .message(),
         ];
 
         queries.sort_by_cached_key(|v| v.1.stats.lock().hits);
@@ -51,7 +51,7 @@ impl Command for ShowQueryCache {
                 .add(stats.hits)
                 .add(stats.direct)
                 .add(stats.multi);
-            messages.push(data_row.message()?);
+            messages.push(data_row.message());
         }
 
         Ok(messages)

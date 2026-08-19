@@ -1061,10 +1061,10 @@ impl Server {
 
         let mut buf = vec![];
         for close in close {
-            buf.push(close.message()?);
+            buf.push(close.message());
         }
 
-        buf.push(Sync.message()?);
+        buf.push(Sync.message());
 
         debug!(
             "closing {} prepared statements [{}]",

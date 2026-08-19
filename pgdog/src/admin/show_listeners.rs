@@ -30,7 +30,7 @@ impl Command for ShowListeners {
                 Field::numeric("received"),
                 Field::numeric("dropped"),
             ])
-            .message()?,
+            .message(),
         ];
 
         for (key, stats) in channels {
@@ -43,7 +43,7 @@ impl Command for ShowListeners {
                 .add(stats.listeners as i64)
                 .add(stats.recv as i64)
                 .add(stats.dropped as i64);
-            messages.push(data_row.message()?);
+            messages.push(data_row.message());
         }
 
         Ok(messages)

@@ -35,7 +35,7 @@ impl Command for ShowSchemaSync {
             Field::text("table_name"),
             Field::text("sql"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
 
         let mut entries: Vec<_> = SchemaStatements::get()
@@ -72,7 +72,7 @@ impl Command for ShowSchemaSync {
                 .add(stmt.table_name.as_deref().unwrap_or(""))
                 .add(stmt.sql.as_str());
 
-            messages.push(row.message()?);
+            messages.push(row.message());
         }
 
         Ok(messages)

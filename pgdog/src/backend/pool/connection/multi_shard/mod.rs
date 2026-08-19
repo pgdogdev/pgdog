@@ -218,7 +218,7 @@ impl MultiShard {
                 self.bound_statements.clear();
 
                 if self.request_state.transaction_error {
-                    Some(ReadyForQuery::error().message()?)
+                    Some(ReadyForQuery::error().message())
                 } else {
                     Some(message)
                 }
@@ -279,9 +279,9 @@ impl MultiShard {
                 } else {
                     self.request_state.rows
                 };
-                self.request_state.command_complete = Some(cc.rewrite(rows)?.message()?);
+                self.request_state.command_complete = Some(cc.rewrite(rows)?.message());
             } else {
-                return Ok(Some(cc.message()?));
+                return Ok(Some(cc.message()));
             }
         }
 
@@ -316,7 +316,7 @@ impl MultiShard {
                 forward = Some(message);
             } else {
                 let client_rd = rd.drop_columns(plan.drop_columns());
-                forward = Some(client_rd.message()?);
+                forward = Some(client_rd.message());
             }
 
             // The next statement describes a different result set.

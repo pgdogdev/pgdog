@@ -23,7 +23,7 @@ impl Command for ShowTransactions {
             Field::text("transaction_state"),
         ];
 
-        let mut messages = vec![RowDescription::new(&fields).message()?];
+        let mut messages = vec![RowDescription::new(&fields).message()];
 
         let manager = Manager::get();
         let transactions = manager.transactions();
@@ -36,7 +36,7 @@ impl Command for ShowTransactions {
                 .add(transaction.to_string())
                 .add(info.phase.to_string());
 
-            messages.push(dr.message()?);
+            messages.push(dr.message());
         }
 
         Ok(messages)

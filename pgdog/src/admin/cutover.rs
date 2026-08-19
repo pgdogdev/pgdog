@@ -39,8 +39,8 @@ impl Command for Cutover {
         dr.add("OK");
 
         Ok(vec![
-            RowDescription::new(&[Field::text("cutover")]).message()?,
-            dr.message()?,
+            RowDescription::new(&[Field::text("cutover")]).message(),
+            dr.message(),
         ])
     }
 }

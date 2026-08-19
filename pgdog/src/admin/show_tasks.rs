@@ -32,7 +32,7 @@ impl Command for ShowTasks {
             Field::text("elapsed"),
             Field::bigint("elapsed_ms"),
         ]);
-        let mut messages = vec![rd.message()?];
+        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
 
         // Most-recent task first (highest id).
@@ -80,7 +80,7 @@ impl Command for ShowTasks {
                     .add(updated_at_str.as_str())
                     .add(elapsed_str.as_str())
                     .add(elapsed_ms);
-                messages.push(row.message()?);
+                messages.push(row.message());
             }
         }
 

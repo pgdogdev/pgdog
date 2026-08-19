@@ -51,6 +51,6 @@ impl Command for ShowLists {
             .add(0_i64)
             .add(servers.len() as i64);
 
-        Ok(vec![rd.message()?, dr.message()?])
+        Ok(vec![rd.message(), dr.message()])
     }
 }

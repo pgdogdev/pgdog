@@ -16,10 +16,10 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .send_many(&[
-                RowDescription::new(&[Field::text(&field)]).message()?,
-                DataRow::from_columns(vec![value]).message()?,
-                CommandComplete::from_str("SHOW").message()?,
-                ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                RowDescription::new(&[Field::text(&field)]).message(),
+                DataRow::from_columns(vec![value]).message(),
+                CommandComplete::from_str("SHOW").message(),
+                ReadyForQuery::in_transaction(context.in_transaction()).message(),
             ])
             .await?;
 
@@ -36,10 +36,10 @@ impl QueryEngine {
         let bytes_sent = context
             .stream
             .send_many(&[
-                RowDescription::new(&[Field::bigint("unique_id")]).message()?,
-                DataRow::from_columns(vec![id.to_string()]).message()?,
-                CommandComplete::from_str("SHOW").message()?,
-                ReadyForQuery::in_transaction(context.in_transaction()).message()?,
+                RowDescription::new(&[Field::bigint("unique_id")]).message(),
+                DataRow::from_columns(vec![id.to_string()]).message(),
+                CommandComplete::from_str("SHOW").message(),
+                ReadyForQuery::in_transaction(context.in_transaction()).message(),
             ])
             .await?;
 
