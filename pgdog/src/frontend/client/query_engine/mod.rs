@@ -68,7 +68,7 @@ pub struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
-    in_simple_split_error: bool,
+    pipeline_error: bool,
 }
 
 impl QueryEngine {
@@ -92,7 +92,7 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
-            in_simple_split_error: false,
+            pipeline_error: false,
         })
     }
 
@@ -120,8 +120,8 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
-        if self.split_simple_abort_check() {
-            return Ok(QueryEngineResult::AbortSplitSimple(context.transaction()));
+        if self.in_pipeline_error_state(context) {
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         if let Some(split) = Self::split_extended_check(context.client_request)? {
@@ -166,7 +166,7 @@ impl QueryEngine {
         }
 
         if let Command::SimpleQuerySplit { queries } = self.router.command() {
-            return Ok(QueryEngineResult::replay(queries));
+            return Ok(QueryEngineResult::new_replay(queries));
         }
 
         self.hooks.before_execution(context)?;
@@ -318,10 +318,5 @@ impl QueryEngine {
 
     pub fn get_state(&self) -> State {
         self.stats.state
-    }
-
-    /// Check if the backend protocol is out of sync due to an error in extended protocol.
-    pub fn out_of_sync(&self) -> bool {
-        self.backend.out_of_sync()
     }
 }

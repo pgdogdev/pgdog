@@ -594,64 +594,21 @@ impl Client {
             QueryEngineResult::Done(transaction) => {
                 self.transaction = transaction;
             }
-            QueryEngineResult::AbortSplitSimple(_) => {
-                panic!("query engine cannot abort first request")
-            }
-            QueryEngineResult::ReplaySplitSimple(reqs) => {
-                let mut reqs = reqs.into_iter();
+
+            QueryEngineResult::ReplaySplit { requests, extended } => {
+                let mut reqs = requests.into_iter();
                 self.transaction.get_or_insert(TransactionType::Implicit);
 
                 while let Some(mut req) = reqs.next() {
-                    let result = query_engine
-                        .handle(
-                            &mut QueryEngineContext::new(self)
-                                .spliced(&mut req, reqs.len() != 0)
-                                .spliced_simple(),
-                        )
-                        .await?;
-
-                    match result {
-                        QueryEngineResult::Done(transaction) => self.transaction = transaction,
-                        QueryEngineResult::AbortSplitSimple(transaction) => {
-                            self.transaction = transaction;
-                            break;
-                        }
-                        _ => panic!("replay split simple cannot split further"),
-                    }
-                }
-            }
-            QueryEngineResult::ReplaySplitExtended(reqs) => {
-                let mut reqs = reqs.into_iter();
-                self.transaction.get_or_insert(TransactionType::Implicit);
-
-                let mut in_error = false;
-
-                while let Some(mut req) = reqs.next() {
-                    // Fast-forward to `Sync`.
-                    if in_error && !req.is_sync_only() {
-                        continue;
-                    }
-
                     match query_engine
-                        .handle(
-                            &mut QueryEngineContext::new(self).spliced(&mut req, reqs.len() != 0),
-                        )
+                        .handle(&mut QueryEngineContext::new(self).spliced(
+                            &mut req,
+                            reqs.len() != 0,
+                            extended,
+                        ))
                         .await?
                     {
-                        QueryEngineResult::Done(transaction) => {
-                            self.transaction = transaction;
-
-                            // One of the requests returned an error.
-                            // Fast-forward to `Sync`, while ignoring the rest
-                            // since Postgres will ignore it, too.
-                            if query_engine.out_of_sync() {
-                                if req.is_sync_only() {
-                                    break;
-                                } else {
-                                    in_error = true;
-                                }
-                            }
-                        }
+                        QueryEngineResult::Done(transaction) => self.transaction = transaction,
                         _ => panic!("replay split extended cannot split further"),
                     }
                 }

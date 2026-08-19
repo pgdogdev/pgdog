@@ -75,18 +75,15 @@ impl<'a> QueryEngineContext<'a> {
     ///
     /// This prevents us from disconnecting from the servers until all
     /// requests are executed.
-    pub fn spliced(mut self, req: &'a mut ClientRequest, more_requests_pending: bool) -> Self {
+    pub fn spliced(
+        mut self,
+        req: &'a mut ClientRequest,
+        more_requests_pending: bool,
+        extended: bool,
+    ) -> Self {
         self.client_request = req;
         self.more_requests_pending = more_requests_pending;
-        self
-    }
-
-    /// We are executing multiple simple protocol queries.
-    ///
-    /// We will drop [`ReadyForQuery`] for all requests except
-    /// the last one, just like Postgres.
-    pub fn spliced_simple(mut self) -> Self {
-        self.in_multi_query_request = true;
+        self.in_multi_query_request = !extended;
         self
     }
 

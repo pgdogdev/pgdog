@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     frontend::{BufferedQuery, client::TransactionType},
-    net::{Query, parameter::ParameterValue},
+    net::parameter::ParameterValue,
 };
 use lazy_static::lazy_static;
 
@@ -52,7 +52,7 @@ pub enum Command {
         shard: Shard,
     },
     SimpleQuerySplit {
-        queries: Vec<Query>,
+        queries: Vec<String>,
     },
     Unlisten(String),
     UniqueId,

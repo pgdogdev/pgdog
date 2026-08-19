@@ -1,24 +1,28 @@
 use crate::{
     frontend::{ClientRequest, client::TransactionType},
-    net::{ProtocolMessage, Query},
+    net::Query,
 };
 
 pub enum QueryEngineResult {
     Done(Option<TransactionType>),
-    ReplaySplitSimple(Vec<ClientRequest>),
-    ReplaySplitExtended(Vec<ClientRequest>),
-    /// One of the queries returned an error. If this was a single query, Postgres
-    /// would abort the transaction.
-    AbortSplitSimple(Option<TransactionType>),
+    ReplaySplit {
+        requests: Vec<ClientRequest>,
+        extended: bool,
+    },
 }
 
 impl QueryEngineResult {
-    pub(super) fn replay(queries: &[Query]) -> Self {
-        let reqs = queries
+    /// Rewrite simple queries into extended ones to make sure
+    /// they are executed as part of one transaction.
+    pub(super) fn new_replay(queries: &[String]) -> Self {
+        let requests = queries
             .iter()
-            .map(|q| ClientRequest::from(vec![ProtocolMessage::Query(q.clone())]))
+            .map(|q| ClientRequest::from(vec![Query::new(q).into()]))
             .collect::<Vec<_>>();
 
-        Self::ReplaySplitSimple(reqs)
+        Self::ReplaySplit {
+            requests,
+            extended: false,
+        }
     }
 }
