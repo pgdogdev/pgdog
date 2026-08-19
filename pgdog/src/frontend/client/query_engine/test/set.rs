@@ -1,11 +1,11 @@
 use crate::{
     backend::databases::reload_from_existing,
-    config::{config, load_test_sharded, set},
+    config::{config, load_test, load_test_sharded, set},
     expect_message,
     net::{CommandComplete, ErrorResponse, ReadyForQuery, parameter::ParameterValue},
 };
 
-use super::prelude::*;
+use super::{change_config, prelude::*};
 
 /// Number of shards the client is currently connected to.
 fn connected_servers(client: &mut TestClient) -> usize {
@@ -730,4 +730,56 @@ async fn test_lock_timeout() {
         test_client.client().params.get("lock_timeout").is_none(),
         "lock_timeout should be cleared after RESET"
     );
+}
+
+#[tokio::test]
+async fn test_set_application_name_add_host() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    change_config(|g| g.application_name_add_host = true);
+
+    test_client
+        .send_simple(Query::new("SET application_name TO 'toto'"))
+        .await;
+
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'I'
+    );
+
+    assert_eq!(
+        test_client.client().params.get("application_name").unwrap(),
+        &ParameterValue::String("toto - 127.0.0.1:1234".into()),
+        "SET application_name should re-append the client host"
+    );
+
+    change_config(|g| g.application_name_add_host = false);
+}
+
+#[tokio::test]
+async fn test_startup_application_name_add_host() {
+    load_test();
+    change_config(|g| g.application_name_add_host = true);
+
+    let mut params = Parameters::default();
+    params.insert("application_name", "startup");
+    let client = Client::new_test(Stream::dev_null(), params);
+
+    assert_eq!(
+        client.params.get("application_name").unwrap(),
+        &ParameterValue::String("startup - 127.0.0.1:1234".into()),
+        "startup application_name should include client host"
+    );
+
+    let client = Client::new_test(Stream::dev_null(), Parameters::default());
+    assert_eq!(
+        client.params.get("application_name").unwrap(),
+        &ParameterValue::String(" - 127.0.0.1:1234".into()),
+        "missing application_name should keep an empty prefix"
+    );
+
+    change_config(|g| g.application_name_add_host = false);
 }

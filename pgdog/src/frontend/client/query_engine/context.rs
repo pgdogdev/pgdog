@@ -7,6 +7,7 @@ use crate::{
     },
     net::{FrontendPid, Parameters, Stream},
 };
+use std::net::SocketAddr;
 
 #[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
@@ -43,6 +44,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
+    /// Client TCP address, used for `application_name_add_host`.
+    pub(super) client_addr: SocketAddr,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -66,6 +69,7 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: client.query_log_stdout,
             query_size_limit: client.query_size_limit,
+            client_addr: client.addr,
         }
     }
 
@@ -94,6 +98,7 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: false,
             query_size_limit: None,
+            client_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
         }
     }
 

@@ -1,6 +1,7 @@
 use tracing::{info, trace};
 
 use crate::{
+    config::config,
     frontend::{
         client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -324,9 +325,16 @@ impl QueryEngine {
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
+                let add_host = config().config.general.application_name_add_host;
+                let host = context.client_addr.to_string();
                 for (name, value) in changed_params.iter() {
+                    let value = if add_host && name.eq_ignore_ascii_case("application_name") {
+                        value.clone().with_client_host(&host)
+                    } else {
+                        value.clone()
+                    };
                     debug!("setting client's \"{}\" to {}", name, value);
-                    context.params.insert(name.clone(), value.clone());
+                    context.params.insert(name.clone(), value);
                 }
                 self.comms.update_params(context.params);
             }

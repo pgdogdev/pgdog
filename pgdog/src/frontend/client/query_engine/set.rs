@@ -1,5 +1,8 @@
+use crate::config::config;
+use crate::frontend::ClientRequest;
 use crate::frontend::SetParam;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
+use crate::net::ProtocolMessage;
 use crate::net::messages::ErrorResponse;
 
 use super::*;
@@ -22,8 +25,23 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let mut params = params.to_vec();
+        if config().config.general.application_name_add_host {
+            let host = context.client_addr.to_string();
+            for param in &mut params {
+                if param.name.eq_ignore_ascii_case("application_name")
+                    && let Some(value) = param.value.take()
+                {
+                    param.value = Some(value.with_client_host(&host));
+                }
+            }
+            if !behave_like_select {
+                rewrite_application_name_query(context.client_request, &params);
+            }
+        }
+
         let mut fake_command = "SET";
-        for param in params {
+        for param in &params {
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
@@ -106,5 +124,25 @@ impl QueryEngine {
         }
 
         Ok(())
+    }
+}
+
+fn rewrite_application_name_query(request: &mut ClientRequest, params: &[SetParam]) {
+    let [param] = params else {
+        return;
+    };
+    if !param.name.eq_ignore_ascii_case("application_name") {
+        return;
+    }
+    let Some(value) = &param.value else {
+        return;
+    };
+
+    let cmd = if param.local { "SET LOCAL" } else { "SET" };
+    let sql = format!(r#"{cmd} "application_name" TO {value}"#);
+    for message in &mut request.messages {
+        if let ProtocolMessage::Query(query) = message {
+            query.set_query(&sql);
+        }
     }
 }
