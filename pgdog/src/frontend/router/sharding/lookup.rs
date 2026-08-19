@@ -342,7 +342,7 @@ impl LookupStats {
     }
 
     /// Zero all counters, used by the RESET STATS command.
-    pub fn reset(&self) {
+    pub(crate) fn reset(&self) {
         for counter in [
             &self.hits,
             &self.misses,
@@ -356,7 +356,7 @@ impl LookupStats {
 
     /// Add another snapshot of counters into this one, used when a config
     /// reload carries lookup statistics over to the new cluster's cache.
-    pub fn accumulate(&self, other: &LookupStats) {
+    pub(crate) fn accumulate(&self, other: &LookupStats) {
         for (to, from) in [
             (&self.hits, &other.hits),
             (&self.misses, &other.misses),
