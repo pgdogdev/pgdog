@@ -28,9 +28,11 @@ pub mod notify_buffer;
 pub mod pub_sub;
 pub mod query;
 mod query_log_stdout;
+mod result;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
+pub mod split;
 pub mod start_transaction;
 #[cfg(test)]
 mod test;
@@ -43,6 +45,7 @@ use self::query_log_stdout::log_query_stdout;
 pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
+pub use result::QueryEngineResult;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
 
@@ -111,7 +114,16 @@ impl QueryEngine {
     }
 
     /// Handle client request.
-    pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub async fn handle(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<QueryEngineResult, Error> {
+        // Run this check first without affecting statistics
+        // or other state.
+        if let Some(split) = Self::split_extended_check(context.client_request)? {
+            return Ok(split);
+        }
+
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
@@ -122,25 +134,29 @@ impl QueryEngine {
         self.rewrite_extended(context)?;
 
         if let ClusterCheck::Offline = self.cluster_check(context).await? {
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Rewrite statement if necessary.
         if !self.parse_and_rewrite(context).await? {
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Route transaction to the right servers.
         if !self.route_query(context).await? {
             self.update_stats(context);
             debug!("query has nowhere to go");
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
+        }
+
+        if let Command::SimpleQuerySplit { queries } = self.router.command() {
+            return Ok(QueryEngineResult::replay(queries));
         }
 
         self.hooks.before_execution(context)?;
@@ -262,7 +278,7 @@ impl QueryEngine {
 
         self.update_stats(context);
 
-        Ok(())
+        Ok(QueryEngineResult::Done(context.transaction()))
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

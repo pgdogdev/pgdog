@@ -65,7 +65,7 @@ impl QueryParser {
     /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
     /// all multi-statement queries are forwarded to the server verbatim.
     pub(super) fn try_multi_set<'a>(
-        &mut self,
+        &self,
         stmts: impl IntoIterator<Item = &'a nodes::RawStmt>,
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {

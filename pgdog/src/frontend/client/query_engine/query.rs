@@ -242,17 +242,22 @@ impl QueryEngine {
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
 
-        trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
+        let drop_message = self.split_simple_check(context, &message);
 
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
+        if !drop_message {
+            trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
+
+            if flush {
+                context.stream.send_flush(&message).await?;
+            } else {
+                context.stream.send(&message).await?;
+            }
         }
 
         if code == 'Z' {
             self.pending_explain = None;
         }
+
         self.hooks.on_server_message(context, &message)?;
 
         Ok(())
@@ -295,7 +300,7 @@ impl QueryEngine {
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
-            if !self.backend.session_mode() && context.requests_left == 0 {
+            if !self.backend.session_mode() && !context.more_requests_pending {
                 self.backend.disconnect();
             }
 

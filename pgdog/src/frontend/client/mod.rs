@@ -24,7 +24,7 @@ use crate::backend::{
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
-use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext, QueryEngineResult};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
@@ -566,9 +566,12 @@ impl Client {
         Ok(())
     }
 
-    /// Handle client messages.
-    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // Check maintenance mode.
+    /// Check if we're in maintenance mode, and if so, pause here
+    /// until maintenance mode is disabled.
+    async fn maintenance_mode_check(&self, query_engine: &mut QueryEngine) {
+        // Wait until the transaction is complete.
+        // Admin database doesn't respect maintenance mode since it can be used
+        // to turn it off.
         if !self.in_transaction()
             && !self.admin
             && let Some(waiter) = maintenance_mode::waiter(&self.database)
@@ -578,40 +581,73 @@ impl Client {
             waiter.await;
             query_engine.set_state(state);
         }
+    }
 
-        // If client sent multiple requests, split them up and execute individually.
-        let spliced = self.client_request.spliced()?;
-        if spliced.is_empty() {
-            let mut context = QueryEngineContext::new(self);
-            query_engine.handle(&mut context).await?;
-            self.transaction = context.transaction();
-        } else {
-            let total = spliced.len();
-            let mut reqs = spliced.into_iter().enumerate();
-            self.transaction.get_or_insert(TransactionType::Implicit);
-            while let Some((num, mut req)) = reqs.next() {
-                debug!("processing spliced request {}/{}", num + 1, total);
-                let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
-                query_engine.handle(&mut context).await?;
-                self.transaction = context.transaction();
+    /// Handle client messages.
+    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        self.maintenance_mode_check(query_engine).await;
 
-                // If pipeline is aborted due to error, skip to Sync to complete the pipeline.
-                // Postgres ignores all commands after an error until it receives Sync.
-                if query_engine.out_of_sync() && !req.is_sync_only() {
-                    debug!("pipeline aborted, skipping to Sync");
-                    for (_, mut next_req) in reqs.by_ref() {
-                        if next_req.is_sync_only() {
-                            debug!("processing Sync to complete aborted pipeline");
-                            let mut ctx = QueryEngineContext::new(self).spliced(&mut next_req, 0);
-                            query_engine.handle(&mut ctx).await?;
-                            self.transaction = ctx.transaction();
-                            break;
-                        }
+        match query_engine
+            .handle(&mut QueryEngineContext::new(self))
+            .await?
+        {
+            QueryEngineResult::Done(transaction) => {
+                self.transaction = transaction;
+            }
+            QueryEngineResult::ReplaySplitSimple(reqs) => {
+                let mut reqs = reqs.into_iter();
+                while let Some(mut req) = reqs.next() {
+                    let result = query_engine
+                        .handle(
+                            &mut QueryEngineContext::new(self)
+                                .spliced(&mut req, reqs.len() != 0)
+                                .spliced_simple(),
+                        )
+                        .await?;
+
+                    match result {
+                        QueryEngineResult::Done(transaction) => self.transaction = transaction,
+                        _ => panic!("replay split simple cannot split further"),
                     }
-                    break;
                 }
             }
-        }
+            QueryEngineResult::ReplaySplitExtended(reqs) => {
+                let mut reqs = reqs.into_iter();
+
+                self.transaction.get_or_insert(TransactionType::Implicit);
+                let mut in_error = false;
+
+                while let Some(mut req) = reqs.next() {
+                    // Fast-forward to `Sync`.
+                    if in_error && !req.is_sync_only() {
+                        continue;
+                    }
+
+                    match query_engine
+                        .handle(
+                            &mut QueryEngineContext::new(self).spliced(&mut req, reqs.len() != 0),
+                        )
+                        .await?
+                    {
+                        QueryEngineResult::Done(transaction) => {
+                            self.transaction = transaction;
+
+                            // One of the requests returned an error.
+                            // Fast-forward to `Sync`, while ignoring the rest
+                            // since Postgres will ignore it, too.
+                            if query_engine.out_of_sync() {
+                                if req.is_sync_only() {
+                                    break;
+                                } else {
+                                    in_error = true;
+                                }
+                            }
+                        }
+                        _ => panic!("replay split extended cannot split further"),
+                    }
+                }
+            }
+        };
 
         // Check buffer size once per request.
         self.stream_buffer.shrink_to_fit();
