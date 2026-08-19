@@ -24,14 +24,12 @@ pub use networking::{MultiTenant, TlsVerifyMode};
 pub use overrides::Overrides;
 use pgdog_config::LookupResult;
 pub use pgdog_config::auth::AuthType;
-#[cfg(test)]
-pub(crate) use pgdog_config::auth::PassthroughAuth;
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
 pub use rewrite::RewriteMode;
 use std::path::Path;
 #[cfg(test)]
-pub(crate) use users::Users;
+pub use users::Users;
 pub use users::{ServerAuth, User};
 
 // Re-export from sharding module
@@ -39,8 +37,6 @@ pub use sharding::{DataType, Hasher, ShardedMappingDeprecated};
 
 // Re-export from replication module
 pub use replication::MirrorConfig;
-#[cfg(test)]
-pub(crate) use replication::Mirroring;
 
 use parking_lot::Mutex;
 use std::env;

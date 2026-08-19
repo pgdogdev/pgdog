@@ -44,16 +44,6 @@ impl ParameterDescription {
         Self { params: Vec::new() }
     }
 
-    /// Create a parameter description from a list of type OIDs.
-    pub fn from_params(params: Vec<i32>) -> Self {
-        Self { params }
-    }
-
-    /// Type OIDs of the parameters, in order.
-    pub fn params(&self) -> &[i32] {
-        &self.params
-    }
-
     pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
         for param in &mut self.params {
             if let Some(&canonical) = mapping.get(&(*param as u32)) {
@@ -66,6 +56,13 @@ impl ParameterDescription {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    impl ParameterDescription {
+        /// Type OIDs of the parameters, in order.
+        pub fn params(&self) -> &[i32] {
+            &self.params
+        }
+    }
 
     #[test]
     fn parameter_description_round_trip_small() {

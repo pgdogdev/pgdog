@@ -1,10 +1,5 @@
 //! Process-wide background task tracking.
 
-use std::{
-    future::Future,
-    sync::atomic::{AtomicBool, Ordering},
-};
-
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use tokio::task::JoinHandle;
@@ -21,7 +16,6 @@ static TASKS: Lazy<BackgroundTasks> = Lazy::new(BackgroundTasks::default);
 struct BackgroundTasks {
     tracker: TaskTracker,
     shutdown: CancellationToken,
-    shutting_down: AtomicBool,
     counter: DashMap<&'static str, usize>,
 }
 
@@ -56,14 +50,8 @@ pub fn shutdown_signal() -> CancellationToken {
     TASKS.shutdown.clone()
 }
 
-/// True once process background tasks have been asked to stop.
-pub fn shutting_down() -> bool {
-    TASKS.shutting_down.load(Ordering::Relaxed)
-}
-
 /// Ask all tracked background tasks to stop and wait for them.
 pub async fn shutdown() {
-    TASKS.shutting_down.store(true, Ordering::Relaxed);
     TASKS.shutdown.cancel();
     TASKS.tracker.close();
 

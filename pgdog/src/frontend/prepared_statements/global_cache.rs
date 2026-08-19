@@ -133,6 +133,7 @@ impl GlobalCache {
             entry.row_description = Some(row_description);
         }
     }
+
     /// Get the Parse message for a globally unique prepared statement
     /// name.
     ///

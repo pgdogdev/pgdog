@@ -414,7 +414,7 @@ mod test {
     use super::*;
     use crate::{
         backend::server::test::test_server,
-        net::{Parse, messages::Parameter},
+        net::{Parse, messages::bind::Parameter},
     };
 
     #[tokio::test]

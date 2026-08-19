@@ -1105,7 +1105,7 @@ mod test {
     };
 
     use crate::backend::ShardedTables;
-    use crate::net::messages::{Bind, Parameter};
+    use crate::net::messages::{Bind, bind::Parameter};
 
     use super::*;
 

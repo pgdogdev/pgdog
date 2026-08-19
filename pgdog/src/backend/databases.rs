@@ -780,12 +780,12 @@ pub fn from_config(config: &ConfigAndUsers) -> Databases {
 
 #[cfg(test)]
 mod tests {
-    use pgdog_config::General;
+    use pgdog_config::{General, Mirroring, PassthroughAuth};
 
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
-    fn setup_config(passthrough_auth: crate::config::PassthroughAuth, users: Vec<ConfigUser>) {
+    fn setup_config(passthrough_auth: PassthroughAuth, users: Vec<ConfigUser>) {
         let _lock = lock();
         let config = Config {
             databases: vec![Database {
@@ -831,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_new_user() {
-        setup_config(crate::config::PassthroughAuth::EnabledPlain, vec![]);
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
 
         let result = add(make_user("new_user", Some("secret")));
         assert!(result.is_ok());
@@ -846,7 +846,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_matching_password() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
+            PassthroughAuth::EnabledPlain,
             vec![make_user("alice", Some("pass123"))],
         );
 
@@ -857,10 +857,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_existing_user_no_password_set() {
-        setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
-            vec![make_user("bob", None)],
-        );
+        setup_config(PassthroughAuth::EnabledPlain, vec![make_user("bob", None)]);
 
         let result = add(make_user("bob", Some("new_pass")));
         assert!(result.is_ok());
@@ -874,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_wrong_password_no_change_allowed() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlain,
+            PassthroughAuth::EnabledPlain,
             vec![make_user("charlie", Some("old_pass"))],
         );
 
@@ -886,7 +883,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_existing_user_wrong_password_change_allowed() {
         setup_config(
-            crate::config::PassthroughAuth::EnabledPlainAllowChange,
+            PassthroughAuth::EnabledPlainAllowChange,
             vec![make_user("dave", Some("old_pass"))],
         );
 
@@ -902,32 +899,30 @@ mod tests {
     #[test]
     fn test_mirror_user_isolation() {
         // Test that each user gets their own mirror cluster
-        let mut config = Config::default();
-
-        // Source database and one mirror destination
-        config.databases = vec![
-            Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db1_mirror".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            mirroring: vec![Mirroring {
+                source_db: "db1".to_string(),
+                destination_db: "db1_mirror".to_string(),
                 ..Default::default()
-            },
-            Database {
-                name: "db1_mirror".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
-
-        // Set up mirroring configuration - one mirror for all users
-        config.mirroring = vec![crate::config::Mirroring {
-            source_db: "db1".to_string(),
-            destination_db: "db1_mirror".to_string(),
+            }],
             ..Default::default()
-        }];
+        };
 
         let users = crate::config::Users {
             users: vec![
@@ -983,31 +978,30 @@ mod tests {
     #[test]
     fn test_mirror_user_mismatch_handling() {
         // Test that mirroring is disabled gracefully when users don't match
-        let mut config = Config::default();
-
-        // Source database with two users, destination with only one
-        config.databases = vec![
-            Database {
-                name: "source_db".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "source_db".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "dest_db".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            mirroring: vec![Mirroring {
+                source_db: "source_db".to_string(),
+                destination_db: "dest_db".to_string(),
                 ..Default::default()
-            },
-            Database {
-                name: "dest_db".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
-
-        config.mirroring = vec![crate::config::Mirroring {
-            source_db: "source_db".to_string(),
-            destination_db: "dest_db".to_string(),
+            }],
             ..Default::default()
-        }];
+        };
 
         let users = crate::config::Users {
             users: vec![
@@ -1080,7 +1074,7 @@ mod tests {
             },
         ];
 
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),
@@ -1160,7 +1154,7 @@ mod tests {
         ];
 
         // Mirror config without custom values - should use defaults
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "db1".to_string(),
             destination_db: "db2".to_string(),
             ..Default::default()
@@ -1240,13 +1234,13 @@ mod tests {
         ];
 
         config.mirroring = vec![
-            crate::config::Mirroring {
+            Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror1".to_string(),
                 queue_length: Some(200), // Override queue only
                 ..Default::default()
             },
-            crate::config::Mirroring {
+            Mirroring {
                 source_db: "primary".to_string(),
                 destination_db: "mirror2".to_string(),
                 exposure: Some(0.25), // Override exposure only
@@ -1312,32 +1306,32 @@ mod tests {
     #[test]
     fn test_invalid_mirror_not_precomputed() {
         // Test that invalid mirror configs (user mismatch) are not precomputed
-        let mut config = Config::default();
-
-        config.databases = vec![
-            Database {
-                name: "source".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "source".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "dest".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            mirroring: vec![Mirroring {
+                source_db: "source".to_string(),
+                destination_db: "dest".to_string(),
+                queue_length: Some(256),
+                exposure: Some(0.5),
                 ..Default::default()
-            },
-            Database {
-                name: "dest".to_string(),
-                host: "localhost".to_string(),
-                port: 5433,
-                role: Role::Primary,
-                ..Default::default()
-            },
-        ];
-
-        config.mirroring = vec![crate::config::Mirroring {
-            source_db: "source".to_string(),
-            destination_db: "dest".to_string(),
-            queue_length: Some(256),
-            exposure: Some(0.5),
+            }],
             ..Default::default()
-        }];
+        };
 
         // Create user mismatch - user1 for source, user2 for dest
         let users = crate::config::Users {
@@ -1399,7 +1393,7 @@ mod tests {
         ];
 
         // Configure mirroring
-        config.mirroring = vec![crate::config::Mirroring {
+        config.mirroring = vec![Mirroring {
             source_db: "source_db".to_string(),
             destination_db: "dest_db".to_string(),
             queue_length: Some(256),

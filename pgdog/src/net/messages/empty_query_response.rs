@@ -1,6 +1,7 @@
 use super::{code, prelude::*};
 
 #[derive(Debug, Copy, Clone, Default)]
+#[allow(dead_code)]
 pub struct EmptyQueryResponse;
 
 impl FromBytes for EmptyQueryResponse {

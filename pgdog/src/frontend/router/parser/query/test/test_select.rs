@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use crate::config::{self, config};
 use crate::frontend::router::parser::{DistinctBy, DistinctColumn, Shard};
-use crate::net::messages::Parameter;
+use crate::net::messages::bind::Parameter;
 
 use super::setup::*;
 

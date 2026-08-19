@@ -154,12 +154,12 @@ impl<'a> ContextBuilder<'a> {
 #[cfg(test)]
 mod test {
     use crate::frontend::router::sharding::Mapping;
-    use pgdog_config::SystemCatalogsBehavior;
+    use pgdog_config::{
+        FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange,
+        SystemCatalogsBehavior,
+    };
 
     use crate::{backend::ShardedTables, frontend::router::parser::Shard};
-    use pgdog_config::sharding::{
-        FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange,
-    };
 
     use super::*;
 
