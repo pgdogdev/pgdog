@@ -2,49 +2,52 @@ use crate::frontend::PreparedStatements;
 
 use super::{Bind, Format, RowDescription};
 
-/// Decodes result columns.
+/// Decodes columns returned by Postgres.
 ///
-/// The server owns the column names and types, the client's Bind owns the
-/// wire formats. Neither may overwrite the other.
+/// This is just a helpful interface on top of [`Bind`] and [`RowDescription`]. The
+/// decoding logic in those messages are doing all the work.
+///
 #[derive(Debug, Clone, Default)]
 pub struct Decoder {
-    /// Formats requested by the client's Bind.
+    /// Expected result column formats, as requested by [`Bind`] sent by client.
+    /// For queries using the simple protocol, the format will be text.
     formats: Vec<Format>,
-    rd: RowDescription,
+    /// Row description returned by Postgres.
+    row_description: Option<RowDescription>,
 }
 
 impl Decoder {
-    /// New column decoder.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Describe the rows a Bind is about to produce. Only a statement the
-    /// cache knows replaces the columns, because clearing them would leave
-    /// the sorter with no types at all.
-    pub fn bind(&mut self, bind: &Bind) {
+    /// Set the format the client specified for the request.
+    pub fn set_formats(&mut self, bind: &Bind) {
         self.formats.clear();
         self.formats.extend(bind.result_formats());
 
+        // Unnamed statements will cause the server to return `RowDescription`. Will will
+        // see it and set it. Named statements will often request it separately with `Describe`
+        // as part of a previous request, so we get it from the prepared statements cache.
         if !bind.anonymous()
             && let Some(rd) = PreparedStatements::global()
                 .read()
                 .row_description(bind.statement())
         {
-            self.rd = rd;
+            self.row_description = Some(rd);
         }
     }
 
-    /// Describe the rows the server just announced.
+    /// Set the [`RowDescription`] returned by the server.
+    /// This will be used to identify column names and types.
     pub fn set_row_description(&mut self, rd: RowDescription) {
-        self.rd = rd;
+        self.row_description = Some(rd);
     }
 
-    /// Get format used for column at position.
-    pub fn format(&self, position: usize) -> Format {
+    /// Get format used for column at position. Uses 0-indexed positioning.
+    ///
+    /// BUG(lev): Always returns a format, defaulting to text if the column format is not known.
+    ///
+    pub fn get_format(&self, position: usize) -> Format {
         match self.formats.len() {
             0 => self
-                .rd
+                .row_description()
                 .field(position)
                 .map(|field| field.format())
                 .unwrap_or(Format::Text),
@@ -53,8 +56,12 @@ impl Decoder {
         }
     }
 
-    pub fn rd(&self) -> &RowDescription {
-        &self.rd
+    /// Get a reference to the [`RowDescription`] the server sent
+    /// for the request.
+    pub fn row_description(&self) -> &RowDescription {
+        self.row_description
+            .as_ref()
+            .expect("decoder has no row description set")
     }
 }
 
@@ -64,7 +71,7 @@ mod test_impls {
 
     impl From<RowDescription> for Decoder {
         fn from(value: RowDescription) -> Self {
-            let mut decoder = Decoder::new();
+            let mut decoder = Decoder::default();
             decoder.set_row_description(value);
             decoder
         }
@@ -82,60 +89,60 @@ mod test {
 
     #[test]
     fn test_row_description_decides_without_bind() {
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::default();
         decoder.set_row_description(text_rd());
 
-        assert_eq!(decoder.format(0), Format::Text);
-        assert_eq!(decoder.format(1), Format::Text);
+        assert_eq!(decoder.get_format(0), Format::Text);
+        assert_eq!(decoder.get_format(1), Format::Text);
     }
 
     #[test]
     fn test_bind_result_formats_survive_row_description() {
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::default();
         let bind = Bind::new_params_codes_results("s1", &[], &[], &[1, 0]);
 
-        decoder.bind(&bind);
+        decoder.set_formats(&bind);
         decoder.set_row_description(text_rd());
 
-        assert_eq!(decoder.format(0), Format::Binary);
-        assert_eq!(decoder.format(1), Format::Text);
+        assert_eq!(decoder.get_format(0), Format::Binary);
+        assert_eq!(decoder.get_format(1), Format::Text);
     }
 
     #[test]
     fn test_row_description_before_bind_gives_the_same_answer() {
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::default();
         let bind = Bind::new_params_codes_results("s1", &[], &[], &[1, 0]);
 
         decoder.set_row_description(text_rd());
-        decoder.bind(&bind);
+        decoder.set_formats(&bind);
 
-        assert_eq!(decoder.format(0), Format::Binary);
-        assert_eq!(decoder.format(1), Format::Text);
+        assert_eq!(decoder.get_format(0), Format::Binary);
+        assert_eq!(decoder.get_format(1), Format::Text);
     }
 
     #[test]
     fn test_one_result_format_applies_to_every_column() {
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::default();
         decoder.set_row_description(text_rd());
-        decoder.bind(&Bind::new_params_codes_results("s1", &[], &[], &[1]));
+        decoder.set_formats(&Bind::new_params_codes_results("s1", &[], &[], &[1]));
 
-        assert_eq!(decoder.format(0), Format::Binary);
-        assert_eq!(decoder.format(1), Format::Binary);
+        assert_eq!(decoder.get_format(0), Format::Binary);
+        assert_eq!(decoder.get_format(1), Format::Binary);
     }
 
     #[test]
     fn test_bind_keeps_the_server_description_when_the_cache_is_empty() {
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::default();
         decoder.set_row_description(text_rd());
-        decoder.bind(&Bind::new_params_codes_results("s1", &[], &[], &[1]));
+        decoder.set_formats(&Bind::new_params_codes_results("s1", &[], &[], &[1]));
 
         // Nothing described s1, so the only columns we have are the ones the
         // server announced. The formats still come from the Bind.
-        assert_eq!(decoder.rd().fields.len(), 2);
-        assert_eq!(decoder.format(0), Format::Binary);
+        assert_eq!(decoder.row_description().fields.len(), 2);
+        assert_eq!(decoder.get_format(0), Format::Binary);
 
-        decoder.bind(&Bind::new_statement("s2"));
+        decoder.set_formats(&Bind::new_statement("s2"));
 
-        assert_eq!(decoder.format(0), Format::Text);
+        assert_eq!(decoder.get_format(0), Format::Text);
     }
 }

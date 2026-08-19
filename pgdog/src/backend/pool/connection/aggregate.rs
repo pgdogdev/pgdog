@@ -263,7 +263,7 @@ impl<'a> Aggregates<'a> {
         }
 
         for helper in plan.helpers() {
-            let Some(index) = decoder.rd().field_index(&helper.alias) else {
+            let Some(index) = decoder.row_description().field_index(&helper.alias) else {
                 continue;
             };
 
@@ -314,7 +314,7 @@ impl<'a> Aggregates<'a> {
 
     pub(super) fn aggregate(mut self) -> Result<VecDeque<DataRow>, Error> {
         // Determine which columns don't belong to GROUP BY or an aggregate function.
-        let num_cols = self.decoder.rd().fields.len();
+        let num_cols = self.decoder.row_description().fields.len();
         let mut covered_indices = vec![false; num_cols];
 
         for idx in self.aggregate.group_by() {
@@ -375,7 +375,7 @@ impl<'a> Aggregates<'a> {
             for (idx, datum) in grouping.columns {
                 row.insert(
                     idx,
-                    datum.encode(self.decoder.format(idx))?,
+                    datum.encode(self.decoder.get_format(idx))?,
                     datum.is_null(),
                 );
             }
@@ -386,7 +386,7 @@ impl<'a> Aggregates<'a> {
                 let datum = acc.finalize()?;
                 row.insert(
                     target_column,
-                    datum.encode(self.decoder.format(target_column))?,
+                    datum.encode(self.decoder.get_format(target_column))?,
                     datum.is_null(),
                 );
             }
@@ -399,7 +399,7 @@ impl<'a> Aggregates<'a> {
             for (target_column, datum) in state.passthrough {
                 row.insert(
                     target_column,
-                    datum.encode(self.decoder.format(target_column))?,
+                    datum.encode(self.decoder.get_format(target_column))?,
                     datum.is_null(),
                 );
             }
