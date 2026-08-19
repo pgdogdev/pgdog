@@ -592,13 +592,15 @@ impl Client {
             .await?
         {
             QueryEngineResult::Done(transaction) => {
-                println!("regular");
                 self.transaction = transaction;
             }
 
             QueryEngineResult::ReplaySplit { requests, extended } => {
                 let mut reqs = requests.into_iter();
-                self.transaction.get_or_insert(TransactionType::Implicit);
+
+                if extended {
+                    self.transaction.get_or_insert(TransactionType::Implicit);
+                }
 
                 while let Some(mut req) = reqs.next() {
                     match query_engine
