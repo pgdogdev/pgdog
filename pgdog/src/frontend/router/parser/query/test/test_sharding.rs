@@ -1,10 +1,8 @@
 use crate::config::config;
 use crate::frontend::Command;
-use crate::frontend::router::parser::{Cache, Shard, route::ShardSource};
-use crate::net::parameter::ParameterValue;
+use crate::frontend::router::parser::{Cache, Shard};
 use std::collections::HashSet;
 use std::ops::Deref;
-use tracing::debug;
 
 use super::setup::{QueryParserTest, *};
 
