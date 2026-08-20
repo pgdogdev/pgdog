@@ -2,7 +2,7 @@ use tracing::{info, trace};
 
 use crate::{
     frontend::{
-        client::TransactionType,
+        client::{TransactionType, query_engine::split::SplitCheckResult},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
@@ -237,12 +237,19 @@ impl QueryEngine {
             }
         }
 
+        let drop_message = match self.split_simple_check(context, &message).await? {
+            SplitCheckResult::Forward => false,
+            SplitCheckResult::DropMessage => true,
+            SplitCheckResult::Replace(msg) => {
+                message = msg;
+                false
+            }
+        };
+
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
-
-        let drop_message = self.split_simple_check(context, &message);
 
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());

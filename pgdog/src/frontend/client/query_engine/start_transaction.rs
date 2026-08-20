@@ -42,6 +42,16 @@ impl QueryEngine {
         Ok(())
     }
 
+    pub(super) async fn start_transaction_multi_query(&mut self) -> Result<(), Error> {
+        if !self.backend.connected() {
+            return Err(Error::ImplicitOnDisconnected);
+        }
+
+        self.backend.execute("BEGIN").await?;
+
+        Ok(())
+    }
+
     pub(super) async fn extended_transaction_reply(
         &self,
         context: &mut QueryEngineContext<'_>,

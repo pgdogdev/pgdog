@@ -73,6 +73,9 @@ pub enum Error {
     // to reach so deep into a module.
     #[error("{0}")]
     Multi(#[from] Box<crate::frontend::client::query_engine::multi_step::error::Error>),
+
+    #[error("implicit transaction on disconnected backend")]
+    ImplicitOnDisconnected,
 }
 
 impl From<crate::frontend::client::query_engine::multi_step::error::Error> for Error {
