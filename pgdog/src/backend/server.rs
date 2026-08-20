@@ -279,7 +279,9 @@ impl Server {
                 )?;
                 let plain = stream.take()?;
 
-                let server_name = ServerName::try_from(addr.host.clone())?;
+                let server_name = ServerName::try_from(
+                    addr.host.strip_suffix('.').unwrap_or(&addr.host).to_owned(),
+                )?;
                 debug!("connecting with TLS to server name: {:?}", server_name);
 
                 match connector.connect(server_name.clone(), plain).await {
