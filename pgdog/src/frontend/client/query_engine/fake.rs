@@ -72,7 +72,7 @@ impl QueryEngine {
                     let rfq = ReadyForQuery::in_transaction(context.in_transaction()).message();
                     // Only reply with RFQ if this is the last query
                     // in a pipeline.
-                    if !self.split_simple_check(context, &rfq) {
+                    if self.split_simple_check(context, &rfq).await?.forward() {
                         sent += context.stream.send(&rfq).await?
                     }
                     sent

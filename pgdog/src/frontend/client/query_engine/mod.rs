@@ -166,7 +166,7 @@ impl QueryEngine {
         }
 
         if let Command::SimpleQuerySplit { queries } = self.router.command() {
-            return Ok(QueryEngineResult::new_replay(queries));
+            return Ok(QueryEngineResult::new_simple_split(queries));
         }
 
         self.hooks.before_execution(context)?;

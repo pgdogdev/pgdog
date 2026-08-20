@@ -14,7 +14,7 @@ pub enum QueryEngineResult {
 impl QueryEngineResult {
     /// Rewrite simple queries into extended ones to make sure
     /// they are executed as part of one transaction.
-    pub(super) fn new_replay(queries: &[String]) -> Self {
+    pub(super) fn new_simple_split(queries: &[String]) -> Self {
         let requests = queries
             .iter()
             .map(|q| ClientRequest::from(vec![Query::new(q).into()]))
