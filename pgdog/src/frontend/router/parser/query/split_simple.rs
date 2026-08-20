@@ -29,10 +29,8 @@ impl QueryParser {
         ast: &Ast,
     ) -> Result<Option<Command>, Error> {
         let stmts = &ast.ast;
-        if stmts.len() > 1 {
-            if context.router_context.is_simple_protocol() {
-                return Ok(Some(self.split_simple_queries(ast)?));
-            }
+        if stmts.len() > 1 && context.router_context.is_simple_protocol() {
+            return Ok(Some(self.split_simple_queries(ast)?));
         }
 
         Ok(None)
@@ -44,7 +42,7 @@ impl QueryParser {
         let stmts = ast
             .ast
             .stmts()
-            .map(|stmt| deparse(stmt))
+            .map(deparse)
             .collect::<Result<Vec<_>, PgParseRawError>>()?;
         let queries = stmts
             .into_iter()
