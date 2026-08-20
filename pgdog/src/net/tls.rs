@@ -355,10 +355,19 @@ fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>,
 
             config
         }
-        TlsVerifyMode::VerifyFull => build_client_config(
-            ClientConfig::builder().with_root_certificates(roots),
-            client_auth,
-        )?,
+        TlsVerifyMode::VerifyFull => {
+            let verifier = TrailingDotVerifier::new(roots.clone())?;
+            let mut config = build_client_config(
+                ClientConfig::builder().with_root_certificates(roots),
+                client_auth,
+            )?;
+
+            config
+                .dangerous()
+                .set_certificate_verifier(Arc::new(verifier));
+
+            config
+        }
     };
 
     increment_connector_build_count();
@@ -483,6 +492,109 @@ pub fn connector_with_verify_mode(
     CONNECTOR.store(Some(ConnectorCacheEntry::new(config_key, client_config)));
 
     Ok(connector)
+}
+
+/// Certificate verifier that treats one trailing dot in a DNS SAN as optional.
+#[derive(Debug)]
+struct TrailingDotVerifier {
+    webpki_verifier: Arc<dyn ServerCertVerifier>,
+}
+
+impl TrailingDotVerifier {
+    fn new(roots: rustls::RootCertStore) -> Result<Self, Error> {
+        let webpki_verifier = rustls::client::WebPkiServerVerifier::builder(roots.into())
+            .build()
+            .map_err(|e| {
+                invalid_data(format!("failed to build server certificate verifier: {e}"))
+            })?;
+
+        Ok(Self { webpki_verifier })
+    }
+}
+
+impl ServerCertVerifier for TrailingDotVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &rustls::pki_types::ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let result = self.webpki_verifier.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        );
+
+        if matches!(
+            &result,
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::NotValidForNameContext { .. }
+            ))
+        ) && matches_dns_san_with_trailing_dot(end_entity, server_name)
+        {
+            debug!("certificate hostname verification succeeded after normalizing a trailing dot");
+            return Ok(ServerCertVerified::assertion());
+        }
+
+        result
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.webpki_verifier
+            .verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.webpki_verifier
+            .verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.webpki_verifier.supported_verify_schemes()
+    }
+}
+
+fn matches_dns_san_with_trailing_dot(
+    end_entity: &CertificateDer<'_>,
+    server_name: &rustls::pki_types::ServerName<'_>,
+) -> bool {
+    use x509_parser::{certificate::X509Certificate, extensions::GeneralName};
+
+    let rustls::pki_types::ServerName::DnsName(expected_name) = server_name else {
+        return false;
+    };
+    let Ok((_, cert)) = X509Certificate::from_der(end_entity.as_ref()) else {
+        return false;
+    };
+    let Ok(Some(san)) = cert.subject_alternative_name() else {
+        return false;
+    };
+
+    san.value.general_names.iter().any(|name| {
+        let GeneralName::DNSName(presented_name) = name else {
+            return false;
+        };
+        let Some(normalized_name) = presented_name.strip_suffix('.') else {
+            return false;
+        };
+
+        !normalized_name.ends_with('.')
+            && normalized_name.eq_ignore_ascii_case(expected_name.as_ref())
+    })
 }
 
 /// Certificate verifier that validates certificates but skips hostname verification
