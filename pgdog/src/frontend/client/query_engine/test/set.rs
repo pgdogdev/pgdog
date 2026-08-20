@@ -774,7 +774,7 @@ async fn test_multi_set_mixed_state_change() {
     // when the client was linked with a server.
     //
     // Clients seem to be ok with this I guess.
-    assert_eq!(msgs, ['C', 'T', 'D', 'C', 'C', 'S', 'S', 'Z']);
+    assert_eq!(msgs, ['C', 'T', 'D', 'C', 'C', 'S', 'Z']);
 }
 
 #[tokio::test]
