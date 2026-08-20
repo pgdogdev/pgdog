@@ -99,9 +99,7 @@ impl Ast {
             // Only rewrite if there is one statement in the request.
             // Otherwise, the parser will refuse to run it and tell the query
             // engine to re-send statements separately.
-            let only_one = ast.stmts().count() == 1;
-
-            if only_one && let Some(stmt) = ast.as_mut().into_iter().next() {
+            if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
 
