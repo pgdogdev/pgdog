@@ -3288,6 +3288,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]
@@ -4083,7 +4084,9 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
+ "indexmap 2.14.0",
  "ref-cast",
  "schemars_derive",
  "serde",

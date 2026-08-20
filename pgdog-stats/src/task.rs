@@ -3,11 +3,15 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use derive_more::{Display, From, FromStr};
+use indexmap::IndexMap;
+
+use derive_more::{Display, Error, From, FromStr};
 use pgdog_postgres_types::ToDataRowColumn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_with::{TimestampMilliSeconds, serde_as, skip_serializing_none};
 
 use crate::{Lsn, SyncState};
 
@@ -62,6 +66,197 @@ pub enum TaskStatus {
     #[display("-")]
     #[serde(other)]
     Other,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum TaskProgress {
+    #[display("started")]
+    Started,
+    #[display("running")]
+    Running,
+    #[display("finished")]
+    Finished,
+    /// Cancellation has been requested; the task is winding down
+    /// cooperatively and has not yet reached a terminal state.
+    #[display("cancelling")]
+    Cancelling,
+    #[display("cancelled")]
+    Cancelled,
+    #[display("failed: {message}")]
+    Error { message: String },
+    #[display("panicked: {message}")]
+    Panic { message: String },
+    /// Fallback value for the communication protocol,
+    /// to cover versions mismatches
+    #[default]
+    #[display("unknown")]
+    #[serde(other)]
+    Unknown,
+}
+
+impl TaskProgress {
+    pub fn error(message: impl Into<String>) -> Self {
+        Self::Error {
+            message: message.into(),
+        }
+    }
+
+    pub fn panic(message: impl Into<String>) -> Self {
+        Self::Panic {
+            message: message.into(),
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Finished | Self::Cancelled | Self::Error { .. } | Self::Panic { .. }
+        )
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error { .. } | Self::Panic { .. })
+    }
+}
+
+/// Tasks representation used by EE
+#[serde_as]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskEntry {
+    pub id: TaskId,
+    #[serde_as(as = "TimestampMilliSeconds<i64>")]
+    pub started_at: SystemTime,
+    #[serde_as(as = "TimestampMilliSeconds<i64>")]
+    pub updated_at: SystemTime,
+    pub progress: TaskProgress,
+    pub status: TaskStatus,
+    pub definition: Arc<TaskDefinition>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub subtasks: IndexMap<TaskId, TaskEntry>,
+}
+
+/// Updates for the tasks that could omit some fields from [`TaskEntry`]
+/// and omit unchanged subtasks. A child list is partial: only changed
+/// are present.
+#[serde_as]
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskUpdate {
+    pub id: TaskId,
+    #[serde_as(as = "TimestampMilliSeconds<i64>")]
+    pub started_at: SystemTime,
+    #[serde_as(as = "TimestampMilliSeconds<i64>")]
+    pub updated_at: SystemTime,
+    /// `None` when the task did not change since the receiver's cursor.
+    pub progress: Option<TaskProgress>,
+    /// `None` when the task did not change since the receiver's cursor.
+    pub status: Option<TaskStatus>,
+    /// `None` once the receiver holds it: it never changes.
+    pub definition: Option<Arc<TaskDefinition>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub subtasks: IndexMap<TaskId, TaskUpdate>,
+}
+
+/// Error for incomplete update - some of the required fields are missing
+#[derive(Debug, Clone, PartialEq, Display, Error)]
+#[display("update for task {id} omits its {field}")]
+pub struct IncompleteUpdate {
+    pub id: TaskId,
+    pub field: &'static str,
+}
+
+/// Create the new [`TaskEntry`] from [`TaskUpdate`].
+///
+/// # Errors
+///
+/// If some required fields are missing the error is generated that should
+/// requests the whole tree from the instance again.
+impl TryFrom<TaskUpdate> for TaskEntry {
+    type Error = IncompleteUpdate;
+
+    fn try_from(update: TaskUpdate) -> Result<Self, IncompleteUpdate> {
+        let TaskUpdate {
+            id,
+            started_at,
+            updated_at,
+            progress,
+            status,
+            definition,
+            subtasks,
+        } = update;
+
+        let missing = |field| IncompleteUpdate { id, field };
+
+        let subtasks = subtasks
+            .into_values()
+            .map(|child| Self::try_from(child).map(|entry| (entry.id, entry)))
+            .collect::<Result<IndexMap<TaskId, Self>, IncompleteUpdate>>()?;
+
+        Ok(Self {
+            id,
+            started_at,
+            updated_at,
+            progress: progress.ok_or_else(|| missing("progress"))?,
+            status: status.ok_or_else(|| missing("status"))?,
+            definition: definition.ok_or_else(|| missing("definition"))?,
+            subtasks,
+        })
+    }
+}
+
+impl TaskEntry {
+    /// Newest `updated_at` in this subtree, this task included.
+    pub fn subtree_updated_at(&self) -> SystemTime {
+        self.subtasks
+            .values()
+            .map(Self::subtree_updated_at)
+            .fold(self.updated_at, SystemTime::max)
+    }
+
+    /// Whether this task reached a terminal state more than `ttl` ago. Only
+    /// this task is read: a terminal task implies terminal children.
+    pub fn expired(&self, now: SystemTime, ttl: Duration) -> bool {
+        self.progress.is_terminal()
+            && now
+                .duration_since(self.updated_at)
+                .is_ok_and(|age| age >= ttl)
+    }
+
+    /// Apply an update to current TaskEntry. The present fields will overwrite existing
+    /// fields, otherwise the current value will be used.
+    ///
+    /// # Errors
+    ///
+    /// In case some required fields are missing (when the entry was not seen before) the
+    /// error is raised.
+    pub fn update(&mut self, update: TaskUpdate) -> Result<(), IncompleteUpdate> {
+        if update.updated_at < self.updated_at {
+            return Ok(());
+        }
+
+        self.updated_at = update.updated_at;
+        if let Some(progress) = update.progress {
+            self.progress = progress;
+        }
+        if let Some(status) = update.status {
+            self.status = status;
+        }
+        if let Some(definition) = update.definition {
+            self.definition = definition;
+        }
+
+        for (id, child) in update.subtasks {
+            match self.subtasks.get_mut(&id) {
+                Some(entry) => entry.update(child)?,
+                None => {
+                    self.subtasks.insert(id, Self::try_from(child)?);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// The definition of the task - initial options of the task
@@ -431,6 +626,7 @@ pub struct SchemaShardDefinition {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
 
     fn table_copy() -> TableCopyDefinition {
         TableCopyDefinition {
@@ -848,5 +1044,129 @@ mod test {
             .to_string(),
             "10 rows, 2048 bytes, 512 bytes/s"
         );
+    }
+
+    fn at(ms: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_millis(ms)
+    }
+
+    fn create_task_update(id: u64, updated_at_ms: u64, subtasks: Vec<TaskUpdate>) -> TaskUpdate {
+        TaskUpdate {
+            id: TaskId::new(id),
+            started_at: at(1),
+            updated_at: at(updated_at_ms),
+            progress: Some(TaskProgress::Running),
+            status: Some(TaskStatus::Other),
+            definition: Some(Arc::new(TaskDefinition::named("my-task"))),
+            subtasks: subtasks.into_iter().map(|node| (node.id, node)).collect(),
+        }
+    }
+
+    fn shallow_update(mut update: TaskUpdate) -> TaskUpdate {
+        update.progress = None;
+        update.status = None;
+        update.definition = None;
+        update
+    }
+
+    fn stored(update: TaskUpdate) -> TaskEntry {
+        TaskEntry::try_from(update).unwrap()
+    }
+
+    #[test]
+    fn test_update_merges_into_the_stored_tree() {
+        let mut entry = stored(create_task_update(
+            1,
+            100,
+            vec![
+                create_task_update(2, 100, Vec::new()),
+                create_task_update(3, 100, Vec::new()),
+            ],
+        ));
+
+        entry
+            .update(shallow_update(create_task_update(
+                1,
+                200,
+                vec![shallow_update(create_task_update(3, 250, Vec::new()))],
+            )))
+            .unwrap();
+
+        assert_eq!(entry.updated_at, at(200));
+        assert_eq!(entry.progress, TaskProgress::Running);
+        assert_eq!(entry.status, TaskStatus::Other);
+        assert_eq!(entry.definition.name, "my-task");
+
+        assert_eq!(entry.subtasks.len(), 2);
+        assert_eq!(entry.subtasks[0].id, TaskId::new(2));
+        assert_eq!(entry.subtasks[0].updated_at, at(100));
+        assert_eq!(entry.subtasks[1].id, TaskId::new(3));
+        assert_eq!(entry.subtasks[1].updated_at, at(250));
+    }
+
+    #[test]
+    fn test_update_older_than_the_entry_is_ignored_whole() {
+        let mut entry = stored(create_task_update(
+            1,
+            300,
+            vec![create_task_update(2, 300, Vec::new())],
+        ));
+
+        entry
+            .update(shallow_update(create_task_update(1, 100, Vec::new())))
+            .unwrap();
+
+        assert_eq!(entry.updated_at, at(300));
+        assert_eq!(entry.progress, TaskProgress::Running);
+        assert_eq!(entry.subtasks.len(), 1);
+        assert_eq!(entry.subtasks[0].id, TaskId::new(2));
+    }
+
+    #[test]
+    fn test_try_from_names_the_task_and_the_missing_field() {
+        let err = TaskEntry::try_from(shallow_update(create_task_update(1, 100, Vec::new())))
+            .unwrap_err();
+        assert_eq!(err.id, TaskId::new(1));
+        assert_eq!(err.field, "progress");
+
+        let deep = create_task_update(
+            1,
+            100,
+            vec![shallow_update(create_task_update(9, 100, Vec::new()))],
+        );
+        assert_eq!(TaskEntry::try_from(deep).unwrap_err().id, TaskId::new(9));
+    }
+
+    #[test]
+    fn test_unknown_progress_decodes_without_failing_the_batch() {
+        let tree: TaskUpdate = serde_json::from_str(
+            r#"{"id":1,"started_at":1,"updated_at":1,
+                "progress":{"state":"teleporting"},"status":{"kind":"other"},
+                "subtasks":{
+                    "2":{"id":2,"started_at":1,"updated_at":2,
+                         "progress":{"state":"finished"},"status":{"kind":"other"}}
+                }}"#,
+        )
+        .unwrap();
+
+        assert_eq!(tree.progress, Some(TaskProgress::Unknown));
+        assert_eq!(
+            tree.subtasks[&TaskId::new(2)].progress,
+            Some(TaskProgress::Finished)
+        );
+    }
+
+    #[test]
+    fn test_progress_error_carries_its_message() {
+        let progress = TaskProgress::error("boom");
+        let json = serde_json::to_string(&progress).unwrap();
+
+        assert_eq!(json, r#"{"state":"error","message":"boom"}"#);
+        assert_eq!(
+            serde_json::from_str::<TaskProgress>(&json).unwrap(),
+            progress
+        );
+        assert!(progress.is_terminal());
+        assert!(progress.is_error());
     }
 }
