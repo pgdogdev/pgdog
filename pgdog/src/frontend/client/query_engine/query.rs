@@ -2,7 +2,7 @@ use tracing::{info, trace};
 
 use crate::{
     frontend::{
-        client::{TransactionType, query_engine::split::SplitCheckResult},
+        client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
@@ -31,7 +31,7 @@ impl QueryEngine {
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context);
+        self.auto_transaction_check(context);
 
         // We need to run a query now.
         if context.in_transaction() {
@@ -161,7 +161,7 @@ impl QueryEngine {
         if code == 'Z' {
             self.stats.query();
 
-            let mut two_pc_auto = false;
+            let mut replace_rfq = false;
             let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
 
             match state {
@@ -174,11 +174,25 @@ impl QueryEngine {
                         _ => None,
                     };
                     context.transaction = error_state;
-                    if self.two_pc.auto() {
-                        self.end_two_pc(true).await?;
+                    let end_two_pc = self.two_pc.is_auto();
+                    let end_multi_query = context.in_multi_query_request;
+
+                    if end_two_pc || end_multi_query {
                         // TODO: this records a 2pc transaction in client
                         // stats anyway but not on the servers. Is this what we want?
-                        two_pc_auto = true;
+                        replace_rfq = true;
+                    }
+
+                    if end_two_pc {
+                        self.end_two_pc(true).await?;
+                    }
+
+                    if end_multi_query && !end_two_pc {
+                        self.backend.execute("ROLLBACK").await?;
+                    }
+
+                    if end_multi_query {
+                        self.pipeline_error = true;
                     }
                 }
 
@@ -187,10 +201,19 @@ impl QueryEngine {
                 }
 
                 TransactionState::InTrasaction => {
-                    if self.two_pc.auto() {
+                    let end_two_pc = self.two_pc.is_auto()
+                        && (!context.in_multi_query_request || !context.more_requests_pending);
+                    let end_multi_query =
+                        context.in_multi_query_request && !context.more_requests_pending;
+
+                    if end_two_pc {
                         self.end_two_pc(false).await?;
-                        two_pc_auto = true;
+                        replace_rfq = true;
+                    } else if end_multi_query {
+                        self.backend.execute("COMMIT").await?;
+                        replace_rfq = true;
                     }
+
                     match context.transaction {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
@@ -212,7 +235,7 @@ impl QueryEngine {
                 }
             }
 
-            if two_pc_auto {
+            if replace_rfq {
                 // In auto mode, 2pc transaction was started automatically
                 // without the client's knowledge. We need to return a regular RFQ
                 // message and close the transaction.
@@ -229,23 +252,19 @@ impl QueryEngine {
             self.check_lock();
 
             if !context.in_transaction() {
-                self.stats.transaction(two_pc_auto);
+                self.stats.transaction(replace_rfq);
             }
         }
-
-        let drop_message = match self.split_simple_check(context, &message).await? {
-            SplitCheckResult::Forward => false,
-            SplitCheckResult::DropMessage => true,
-            SplitCheckResult::Replace(msg) => {
-                message = msg;
-                false
-            }
-        };
 
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
+
+        let drop_message = matches!(code, 'Z')
+            && context.in_multi_query_request
+            && context.more_requests_pending
+            && !self.pipeline_error;
 
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
@@ -412,21 +431,42 @@ impl QueryEngine {
         Ok(true)
     }
 
-    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
-        let enabled = self
+    /// Check if we need to start a transaction automatically without the client knowing about it.
+    ///
+    /// The two conditions for this are:
+    ///
+    /// 1. `two_phase_commit_auto = true`
+    /// 2. multi-query pipepline
+    ///
+    fn auto_transaction_check(&mut self, context: &mut QueryEngineContext<'_>) {
+        let two_pc_enabled = self
             .backend
             .cluster()
             .map(|c| c.two_pc_auto_enabled())
             .unwrap_or_default();
 
-        if enabled
-            && context.client_request.route().should_2pc()
-            && self.begin_stmt.is_none()
+        let two_pc_wants_transaction =
+            two_pc_enabled && context.client_request.route().should_2pc();
+
+        let no_transaction_already = !context.in_transaction() && self.begin_stmt.is_none();
+
+        println!(
+            "two_pc: {}, enabled: {}, no_transaction: {}, exec: {}",
+            two_pc_wants_transaction,
+            two_pc_enabled,
+            no_transaction_already,
+            context.client_request.is_executable()
+        );
+
+        if (two_pc_wants_transaction || context.in_multi_query_request)
+            && no_transaction_already
             && context.client_request.is_executable()
-            && !context.in_transaction()
+            && !self.backend.connected()
         {
-            debug!("[2pc] enabling automatic transaction");
-            self.two_pc.set_auto();
+            debug!("enabling automatic transaction");
+            if two_pc_wants_transaction {
+                self.two_pc.set_auto();
+            }
             self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
         }
     }
