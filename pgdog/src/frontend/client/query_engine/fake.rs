@@ -2,8 +2,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::net::{
     BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, ParameterDescription,
-    ParseComplete, Protocol, ProtocolMessage, ReadyForQuery, RowDescription,
-    parameter::ParameterValue,
+    ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription, parameter::ParameterValue,
 };
 
 use super::*;
@@ -69,12 +68,21 @@ impl QueryEngine {
                         0
                     }) + context.stream.send(&CommandComplete::new(command)).await?;
 
-                    let rfq = ReadyForQuery::in_transaction(context.in_transaction()).message();
-                    // Only reply with RFQ if this is the last query
-                    // in a pipeline.
-                    if self.split_simple_check(context, &rfq).await?.forward() {
-                        sent += context.stream.send(&rfq).await?
+                    let inside_multi_query_pipeline =
+                        context.in_multi_query_request && context.more_requests_pending;
+                    let send_rfq = !inside_multi_query_pipeline || self.pipeline_error;
+
+                    if send_rfq {
+                        let in_transaction = if context.in_multi_query_request {
+                            false
+                        } else {
+                            context.in_transaction()
+                        };
+
+                        let rfq = ReadyForQuery::in_transaction(in_transaction);
+                        sent += context.stream.send(&rfq).await?;
                     }
+
                     sent
                 }
                 // TODO(lev): Elixir closes the statement it just asked us to prepare.

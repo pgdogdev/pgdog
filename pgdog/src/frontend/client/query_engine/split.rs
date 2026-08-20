@@ -1,22 +1,9 @@
 use crate::{
     frontend::ClientRequest,
-    net::{Flush, Protocol, ReadyForQuery},
+    net::{Flush, Protocol},
 };
 
 use super::*;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum SplitCheckResult {
-    DropMessage,
-    Forward,
-    Replace(Message),
-}
-
-impl SplitCheckResult {
-    pub(super) fn forward(&self) -> bool {
-        matches!(self, Self::Forward)
-    }
-}
 
 impl QueryEngine {
     /// Check if the client request contains multiple
@@ -90,42 +77,6 @@ impl QueryEngine {
             requests,
             extended: true,
         }))
-    }
-
-    /// Drop [`ReadyForQuery`] messages from intermediate requests.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the message should be dropped, `false` if it
-    /// should be forwarded to the client.
-    ///
-    pub(super) async fn split_simple_check(
-        &mut self,
-        context: &QueryEngineContext<'_>,
-        message: &Message,
-    ) -> Result<SplitCheckResult, Error> {
-        if !context.in_multi_query_request {
-            return Ok(SplitCheckResult::Forward);
-        }
-
-        match message.code() {
-            'E' => {
-                self.pipeline_error = true;
-                Ok(SplitCheckResult::Forward)
-            }
-            'Z' => {
-                if self.pipeline_error {
-                    self.end_transaction_multi_query().await?;
-                    Ok(SplitCheckResult::Replace(ReadyForQuery::idle().message()))
-                } else if context.more_requests_pending {
-                    Ok(SplitCheckResult::DropMessage)
-                } else {
-                    self.end_transaction_multi_query().await?;
-                    Ok(SplitCheckResult::Forward)
-                }
-            }
-            _ => Ok(SplitCheckResult::Forward),
-        }
     }
 
     /// Skip requests until there are no more pending.

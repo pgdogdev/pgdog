@@ -129,15 +129,6 @@ impl QueryEngine {
 
         Ok(())
     }
-
-    /// End an implicitely started transaction.
-    pub(super) async fn end_transaction_multi_query(&mut self) -> Result<(), Error> {
-        if self.backend.connected() {
-            self.backend.execute("COMMIT").await?;
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
