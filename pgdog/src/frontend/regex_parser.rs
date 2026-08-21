@@ -60,9 +60,17 @@ impl RegexParser {
 
     /// Check if we should enable the parser just for this request.
     pub(crate) fn use_parser(&self, request: &ClientRequest) -> bool {
-        let with_locks = self.level == QueryParserLevel::SessionControlAndLocks;
-        let session_control =
-            self.level == QueryParserLevel::SessionControl || self.level == QueryParserLevel::Auto;
+        // Auto must detect advisory locks even when nothing else needs the
+        // parser (single primary, no sharding): session advisory locks taken
+        // through a transaction-mode pool are a correctness hazard — without
+        // detection the client isn't pinned, the unlock can land on a
+        // different backend, and the lock strands on the pooled server
+        // connection.
+        let with_locks = matches!(
+            self.level,
+            QueryParserLevel::SessionControlAndLocks | QueryParserLevel::Auto
+        );
+        let session_control = self.level == QueryParserLevel::SessionControl;
 
         if (with_locks || session_control)
             && let Ok(Some(query)) = request.query()
@@ -196,6 +204,27 @@ mod test {
             "SELECT pg_advisory_lock(1)",
             QueryParserLevel::SessionControl
         ));
+    }
+
+    #[test]
+    fn test_advisory_lock_auto_level() {
+        // Auto must detect advisory locks even on clusters where nothing else
+        // enables the parser (single primary, no sharding); otherwise session
+        // locks taken through a transaction-mode pool strand on pooled
+        // backends when the unlock routes to a different server connection.
+        let l = QueryParserLevel::Auto;
+        assert!(matches_at("SELECT pg_advisory_lock(1)", l));
+        assert!(matches_at("SELECT pg_try_advisory_lock(1, 2)", l));
+        assert!(matches_at(
+            "SELECT pg_try_advisory_lock(1, 2) AS t0abc /* app lock */",
+            l
+        ));
+        assert!(matches_at("SELECT pg_advisory_unlock(1, 2)", l));
+        assert!(matches_at("SELECT pg_advisory_unlock_all()", l));
+        // Base session-control statements still match at Auto.
+        assert!(matches_at("NOTIFY test_channel", l));
+        // Plain queries still bypass the parser at Auto.
+        assert!(!matches_at("SELECT 1", l));
     }
 
     #[test]
