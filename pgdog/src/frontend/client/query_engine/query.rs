@@ -102,7 +102,7 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
-                multi_step::UpdateMulti::new(self, sharding_key_update)
+                multi_step::UpdateMulti::new(self, &sharding_key_update)
                     .execute(context)
                     .await?;
             }

@@ -84,14 +84,11 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
 
     std::assert_matches!(&*client.engine.backend, Binding::Direct(..));
 
-    let rewrite = context
-        .client_request
-        .ast
-        .as_ref()
-        .expect("ast to exist")
+    let ast = context.client_request.ast.clone().expect("ast was set");
+    let rewrite = ast
         .rewrite_plan
         .sharding_key_update
-        .clone()
+        .as_ref()
         .expect("sharding key update to exist");
 
     let mut update = UpdateMulti::new(&mut client.engine, rewrite);
