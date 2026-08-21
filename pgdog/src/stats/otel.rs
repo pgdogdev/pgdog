@@ -34,6 +34,11 @@ struct CounterKey {
 /// Per-data-point counter bookkeeping: previous cumulative values (for delta
 /// computation) and first-seen timestamps (used as `start_time_unix_nano` so
 /// cumulative counters carry a stable collection-start reference).
+///
+/// None of these maps is evicted, so a pool that goes away keeps its entry for
+/// the life of the process. Eviction should cover all of them together: they
+/// are keyed identically, and expiring one but not the others would leave the
+/// same series half-forgotten.
 #[derive(Default)]
 struct CounterState {
     prev_values: Mutex<HashMap<CounterKey, f64>>,
@@ -432,17 +437,10 @@ fn histogram_data_point(
     now: &str,
     attributes: Vec<KeyValue>,
 ) -> Option<HistogramDataPoint> {
-    // OTLP wants per-bucket counts; the measurement carries cumulative ones.
+    // The measurement already carries per-bucket counts, which is what OTLP
+    // wants; only the OpenMetrics `le` format needs them accumulated.
     let cumulative = HistogramState {
-        buckets: histogram
-            .buckets
-            .iter()
-            .scan(0u64, |prev, cumulative| {
-                let bucket = cumulative.saturating_sub(*prev);
-                *prev = *cumulative;
-                Some(bucket)
-            })
-            .collect(),
+        buckets: histogram.buckets.clone(),
         sum: histogram.sum,
         count: histogram.count,
     };

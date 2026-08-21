@@ -50,20 +50,26 @@ pub enum MeasurementType {
     Integer(i64),
     Millis(u128),
     /// Distribution rendered as an OpenMetrics histogram.
-    Histogram(HistogramMeasurement),
+    ///
+    /// Boxed: the payload dwarfs the scalar variants, and one `Measurement` per
+    /// pool per metric family is built and deep-cloned on every scrape, so the
+    /// padding would be paid by every gauge and counter in the process.
+    Histogram(Box<HistogramMeasurement>),
 }
 
 /// A histogram observation set, in seconds.
 ///
-/// Bucket counts are cumulative (`le` semantics) and `bounds` excludes the
-/// implicit `+Inf` bucket, so `buckets.len() == bounds.len() + 1`.
+/// Bucket counts are per-bucket, as the source `pgdog_stats::Histogram`
+/// reports them; the OpenMetrics renderer accumulates them on the way out via
+/// `cumulative`. `bounds` excludes the implicit `+Inf` bucket, so
+/// `buckets.len() == bounds.len() + 1`.
 #[derive(Debug, Clone)]
 pub struct HistogramMeasurement {
     /// Upper bounds in seconds, ascending. Bounds are process-constant, so one
     /// shared allocation backs every pool's measurement; cloning a measurement
     /// only bumps the refcount.
     pub bounds: Arc<[f64]>,
-    /// Cumulative counts, with the `+Inf` bucket last.
+    /// Per-bucket (non-cumulative) counts, with the `+Inf` bucket last.
     pub buckets: Vec<u64>,
     /// Sum of all observations, in seconds.
     pub sum: f64,
@@ -74,25 +80,33 @@ pub struct HistogramMeasurement {
 impl HistogramMeasurement {
     /// Build a measurement from per-bucket (non-cumulative) counts.
     pub fn new(bounds: impl Into<Arc<[f64]>>, per_bucket: &[u64], sum: f64, count: u64) -> Self {
-        let mut buckets = Vec::with_capacity(per_bucket.len());
-        let mut running = 0u64;
-        for bucket in per_bucket {
-            running = running.saturating_add(*bucket);
-            buckets.push(running);
-        }
-
         Self {
             bounds: bounds.into(),
-            buckets,
+            buckets: per_bucket.to_vec(),
             sum,
             count,
         }
     }
 }
 
+/// Running sum of per-bucket counts.
+///
+/// OpenMetrics `le` buckets are cumulative; OTLP's are not. Cumulative is a
+/// property of the `le` wire format, not of the data, so the conversion lives
+/// at the OpenMetrics boundary rather than in the measurement.
+fn cumulative(per_bucket: &[u64]) -> Vec<u64> {
+    let mut buckets = Vec::with_capacity(per_bucket.len());
+    let mut running = 0u64;
+    for bucket in per_bucket {
+        running = running.saturating_add(*bucket);
+        buckets.push(running);
+    }
+    buckets
+}
+
 impl From<HistogramMeasurement> for MeasurementType {
     fn from(value: HistogramMeasurement) -> Self {
-        Self::Histogram(value)
+        Self::Histogram(Box::new(value))
     }
 }
 
@@ -189,10 +203,11 @@ impl Measurement {
     /// bucket must be `le="+Inf"`.
     fn render_histogram(&self, name: &str, histogram: &HistogramMeasurement) -> String {
         let mut lines = Vec::with_capacity(histogram.buckets.len() + 2);
+        let buckets = cumulative(&histogram.buckets);
 
         // `bounds` excludes +Inf, so zip stops one short and leaves the
         // overflow bucket for the explicit +Inf line below.
-        for (bound, count) in histogram.bounds.iter().zip(histogram.buckets.iter()) {
+        for (bound, count) in histogram.bounds.iter().zip(buckets.iter()) {
             lines.push(format!(
                 "{}_bucket{} {}",
                 name,
@@ -414,12 +429,63 @@ mod test {
     }
 
     #[test]
-    fn histogram_new_accumulates_buckets() {
+    fn histogram_new_preserves_per_bucket_counts() {
         let histogram = test_histogram();
 
-        // Cumulative. The trailing entry covers +Inf and so equals `count`.
-        assert_eq!(histogram.buckets, vec![1, 3, 3, 4]);
+        // Stored verbatim, matching the source `pgdog_stats::Histogram`.
+        // Accumulating is the OpenMetrics renderer's job, not the
+        // measurement's — OTLP wants these counts as they are.
+        assert_eq!(histogram.buckets, vec![1, 2, 0, 1]);
         assert_eq!(histogram.count, 4);
+    }
+
+    #[test]
+    fn cumulative_accumulates_per_bucket_counts() {
+        assert_eq!(cumulative(&[1, 2, 0, 1]), vec![1, 3, 3, 4]);
+        assert_eq!(cumulative(&[]), Vec::<u64>::new());
+        assert_eq!(cumulative(&[0, 0, 0]), vec![0, 0, 0]);
+
+        // Never decreases, whatever the inputs.
+        let counts = cumulative(&[3, 0, 7, 0, 0, 11]);
+        assert!(
+            counts.windows(2).all(|pair| pair[0] <= pair[1]),
+            "must be monotonic: {:?}",
+            counts
+        );
+    }
+
+    #[test]
+    fn cumulative_saturates_instead_of_overflowing() {
+        assert_eq!(cumulative(&[u64::MAX, 1]), vec![u64::MAX, u64::MAX]);
+    }
+
+    #[test]
+    fn last_cumulative_bucket_agrees_with_count() {
+        // The `+Inf` line renders `count`, not the last bucket, so the two
+        // reach the wire by different routes and must not disagree.
+        let histogram = test_histogram();
+        let buckets = cumulative(&histogram.buckets);
+
+        assert_eq!(buckets.last().copied(), Some(histogram.count));
+
+        let rendered = Measurement {
+            labels: vec![],
+            measurement: histogram.into(),
+        }
+        .render("query_time_seconds");
+
+        let value_of = |suffix: &str| -> u64 {
+            rendered
+                .lines()
+                .find(|line| line.starts_with(&format!("query_time_seconds{}", suffix)))
+                .and_then(|line| line.rsplit_once(' '))
+                .expect("line")
+                .1
+                .parse()
+                .expect("numeric")
+        };
+
+        assert_eq!(value_of("_bucket{le=\"+Inf\"}"), value_of("_count"));
     }
 
     #[test]

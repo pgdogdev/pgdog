@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use pgdog_stats::histogram::{self, Bounds, Normalized};
+use pgdog_stats::histogram::{self, Bounds, Latch, Normalized};
 use tracing::warn;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
@@ -98,8 +98,19 @@ fn set_histogram_bounds(config: &ConfigAndUsers) {
         }
     }
 
-    if !histogram::set_bounds(configured) && *histogram::bounds() != configured {
-        warn!("\"query_time_buckets\" cannot be changed at runtime, restart PgDog to apply");
+    match histogram::set_bounds(configured) {
+        Latch::AlreadySet(current) if current != configured => {
+            warn!("\"query_time_buckets\" cannot be changed at runtime, restart PgDog to apply")
+        }
+        // The bounds were read before this ran, so the read latched the
+        // defaults. Restarting repeats the same ordering, so telling the
+        // operator to restart would send them round a loop.
+        Latch::DefaultedByRead(current) if current != configured => warn!(
+            "\"query_time_buckets\" was read before the configuration was loaded, so the default buckets are in force for the life of this process"
+        ),
+        // The configuration is in force, either because this call latched it or
+        // because an earlier load latched the same bounds.
+        Latch::Set | Latch::AlreadySet(_) | Latch::DefaultedByRead(_) => (),
     }
 }
 

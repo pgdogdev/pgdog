@@ -25,21 +25,66 @@ pub const MAX_BUCKETS: usize = 20;
 ///
 /// Exponential from 100µs to 30s, which covers everything from an index lookup
 /// on a warm buffer cache to a query about to hit `statement_timeout`.
+///
+/// This belongs to the histogram rather than to the configuration, but this
+/// crate already depends on `pgdog-config` for the pool types, so owning the
+/// constant here would make the dependency circular.
 pub const DEFAULT_BOUNDS_MS: [f64; 12] = General::DEFAULT_QUERY_TIME_BUCKETS;
 
-static BOUNDS: OnceLock<Bounds> = OnceLock::new();
+static BOUNDS: OnceLock<LatchedBounds> = OnceLock::new();
+
+/// The process-wide bounds, plus how they got there.
+struct LatchedBounds {
+    bounds: Bounds,
+    /// Set when [`set_bounds`] filled the latch, clear when a [`bounds`] read
+    /// fell back to the defaults. The two need different remedies.
+    configured: bool,
+}
+
+/// What a [`set_bounds`] call did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Latch {
+    /// The bounds are now in force for the life of the process.
+    Set,
+    /// An earlier [`set_bounds`] already latched the enclosed bounds, which
+    /// stay in force. Applying different ones requires a restart.
+    AlreadySet(Bounds),
+    /// A [`bounds`] read latched the defaults before any [`set_bounds`] ran, so
+    /// the enclosed defaults stay in force. Unlike [`Latch::AlreadySet`] a
+    /// restart doesn't help: the read has to move after configuration load.
+    DefaultedByRead(Bounds),
+}
 
 /// Latch the process-wide bucket bounds.
 ///
-/// Returns `false` if the bounds were already read or set, in which case the
-/// existing bounds are kept. Reconfiguring buckets requires a restart.
-pub fn set_bounds(bounds: Bounds) -> bool {
-    BOUNDS.set(bounds).is_ok()
+/// Already-recorded histograms are indexed by position, so re-bucketing at
+/// runtime would reinterpret every existing sample. The first value latched
+/// wins for the life of the process.
+pub fn set_bounds(bounds: Bounds) -> Latch {
+    match BOUNDS.set(LatchedBounds {
+        bounds,
+        configured: true,
+    }) {
+        Ok(()) => Latch::Set,
+        Err(_) => {
+            let latched = BOUNDS.get().expect("a failed set means the latch is full");
+            if latched.configured {
+                Latch::AlreadySet(latched.bounds)
+            } else {
+                Latch::DefaultedByRead(latched.bounds)
+            }
+        }
+    }
 }
 
 /// Process-wide bucket bounds, defaulting to [`DEFAULT_BOUNDS_MS`].
 pub fn bounds() -> &'static Bounds {
-    BOUNDS.get_or_init(Bounds::default)
+    &BOUNDS
+        .get_or_init(|| LatchedBounds {
+            bounds: Bounds::default(),
+            configured: false,
+        })
+        .bounds
 }
 
 /// Ascending upper bounds of histogram buckets.
@@ -91,10 +136,7 @@ impl Bounds {
 
     /// The built-in bounds, which are always usable.
     fn defaults() -> Self {
-        Self::parse(&DEFAULT_BOUNDS_MS).unwrap_or(Self {
-            bounds: [Duration::ZERO; MAX_BUCKETS],
-            len: 0,
-        })
+        Self::parse(&DEFAULT_BOUNDS_MS).expect("DEFAULT_BOUNDS_MS is a valid ladder")
     }
 
     /// Normalize millisecond bounds, or `None` if none are usable.
@@ -109,7 +151,10 @@ impl Bounds {
             .collect::<Vec<_>>();
 
         values.sort_unstable();
-        values.dedup();
+        // Deduplicate on the exported value, not on the Duration: past roughly
+        // 10^7 seconds an f64 can't resolve nanoseconds, and two bounds that
+        // render to the same `le` label fail the whole Prometheus scrape.
+        values.dedup_by_key(|value| value.as_secs_f64());
         values.truncate(MAX_BUCKETS);
 
         if values.is_empty() {
@@ -159,6 +204,11 @@ impl Bounds {
 /// Counts are per-bucket rather than cumulative, so merging two histograms is
 /// an element-wise add. Samples above the last bound land in the trailing
 /// `+Inf` bucket.
+///
+/// [`Histogram::observe_with`] is what keeps the buckets, the sum and the count
+/// agreeing with each other; nothing enforces that across `Deserialize`, which
+/// exists only so the stats structs embedding this one can derive it. A decoded
+/// value can hold a count that disagrees with its buckets.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Histogram {
     /// Observations per bucket. Index [`MAX_BUCKETS`] is the `+Inf` bucket, so
@@ -216,30 +266,31 @@ impl Histogram {
         let mut counts = Vec::with_capacity(bounds.len() + 1);
         counts.extend_from_slice(&self.buckets[..bounds.len()]);
         counts.push(self.buckets[MAX_BUCKETS]);
+        // `_bucket` and `_count` are exported from different fields; a sample
+        // filed under a bound this call doesn't cover would only show up as a
+        // scrape that doesn't add up.
+        debug_assert_eq!(counts.iter().sum::<u64>(), self.count);
         counts
+    }
+}
+
+impl AddAssign for Histogram {
+    fn add_assign(&mut self, rhs: Self) {
+        for (bucket, rhs) in self.buckets.iter_mut().zip(rhs.buckets.iter()) {
+            *bucket = bucket.saturating_add(*rhs);
+        }
+
+        self.sum = self.sum.saturating_add(rhs.sum);
+        self.count = self.count.saturating_add(rhs.count);
     }
 }
 
 impl Add for Histogram {
     type Output = Histogram;
 
-    fn add(self, rhs: Self) -> Self::Output {
-        let mut buckets = self.buckets;
-        for (bucket, rhs) in buckets.iter_mut().zip(rhs.buckets.iter()) {
-            *bucket = bucket.saturating_add(*rhs);
-        }
-
-        Self {
-            buckets,
-            sum: self.sum.saturating_add(rhs.sum),
-            count: self.count.saturating_add(rhs.count),
-        }
-    }
-}
-
-impl AddAssign for Histogram {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
+    fn add(mut self, rhs: Self) -> Self::Output {
+        self += rhs;
+        self
     }
 }
 
@@ -288,6 +339,15 @@ mod test {
         let bounds = Bounds::from_millis(&[f64::NAN, -1.0, 0.0, f64::INFINITY, 5.0]);
 
         assert_eq!(bounds.as_slice(), [Duration::from_millis(5)]);
+    }
+
+    #[test]
+    fn the_default_ladder_is_usable() {
+        // `Bounds::defaults` panics if this ever stops holding, so state the
+        // invariant here rather than degrading at runtime to a bound-less
+        // histogram that files every sample under +Inf.
+        assert!(Bounds::parse(&DEFAULT_BOUNDS_MS).is_some());
+        assert_eq!(Bounds::default().len(), DEFAULT_BOUNDS_MS.len());
     }
 
     #[test]

@@ -1338,24 +1338,20 @@ impl General {
 
     /// Default `query_time_seconds` bucket bounds, in milliseconds.
     ///
-    /// Exponential from 100µs to 30s. Invalid values are dropped here and the
-    /// remainder is normalized when the histogram bounds are built, so a
-    /// malformed env var degrades to the defaults instead of failing startup.
+    /// Exponential from 100µs to 30s. A malformed env var degrades to the
+    /// defaults instead of failing startup; it degrades as a whole, so an
+    /// operator never gets a ladder made of the values that happened to parse.
     pub fn query_time_buckets() -> Vec<f64> {
         let Some(raw) = Self::env_option_string("PGDOG_QUERY_TIME_BUCKETS") else {
             return Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec();
         };
 
-        let buckets = raw
-            .split(',')
-            .filter_map(|value| value.trim().parse::<f64>().ok())
-            .collect::<Vec<_>>();
-
-        if buckets.is_empty() {
-            Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
-        } else {
-            buckets
-        }
+        raw.split(',')
+            .map(|value| value.trim().parse::<f64>())
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .filter(|buckets| !buckets.is_empty())
+            .unwrap_or_else(|| Self::DEFAULT_QUERY_TIME_BUCKETS.to_vec())
     }
 
     /// Schema-only default, so the generated schema documents the shipped
@@ -2010,6 +2006,14 @@ mod tests {
         // Nothing parseable falls back to the defaults rather than
         // disabling bucketing.
         let _guard = set_env_var("PGDOG_QUERY_TIME_BUCKETS", "nonsense");
+        assert_eq!(
+            General::query_time_buckets(),
+            General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
+        );
+
+        // One bad value discards the whole ladder: keeping the rest would build
+        // a histogram the operator never asked for.
+        let _guard = set_env_var("PGDOG_QUERY_TIME_BUCKETS", "1,abc,3");
         assert_eq!(
             General::query_time_buckets(),
             General::DEFAULT_QUERY_TIME_BUCKETS.to_vec()
