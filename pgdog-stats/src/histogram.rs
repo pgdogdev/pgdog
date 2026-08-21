@@ -38,6 +38,20 @@ struct LatchedBounds {
     configured: bool,
 }
 
+impl LatchedBounds {
+    /// What a conflicting [`set_bounds`] call reports, given that these bounds
+    /// are already latched. A configured latch is replaced by a restart; a
+    /// read-defaults latch is not, because restarting just repeats the same
+    /// read-before-config ordering.
+    fn conflict(&self) -> Latch {
+        if self.configured {
+            Latch::AlreadySet(self.bounds)
+        } else {
+            Latch::DefaultedByRead(self.bounds)
+        }
+    }
+}
+
 /// What a [`set_bounds`] call did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Latch {
@@ -63,14 +77,10 @@ pub fn set_bounds(bounds: Bounds) -> Latch {
         configured: true,
     }) {
         Ok(()) => Latch::Set,
-        Err(_) => {
-            let latched = BOUNDS.get().expect("a failed set means the latch is full");
-            if latched.configured {
-                Latch::AlreadySet(latched.bounds)
-            } else {
-                Latch::DefaultedByRead(latched.bounds)
-            }
-        }
+        Err(_) => BOUNDS
+            .get()
+            .expect("a failed set means the latch is full")
+            .conflict(),
     }
 }
 
@@ -325,6 +335,32 @@ mod test {
         // histogram that files every sample under +Inf.
         assert!(Bounds::try_from_millis(&DEFAULT_BOUNDS_MS).is_ok());
         assert_eq!(Bounds::default().len(), DEFAULT_BOUNDS_MS.len());
+    }
+
+    #[test]
+    fn a_conflict_reports_how_the_latch_was_filled() {
+        let bounds = test_bounds();
+
+        // Latched by an earlier `set_bounds`: a restart applies the new ladder.
+        assert_eq!(
+            LatchedBounds {
+                bounds,
+                configured: true
+            }
+            .conflict(),
+            Latch::AlreadySet(bounds),
+        );
+
+        // Latched by a `bounds()` read: a restart repeats the same ordering, so
+        // the warning has to point somewhere other than "restart".
+        assert_eq!(
+            LatchedBounds {
+                bounds,
+                configured: false
+            }
+            .conflict(),
+            Latch::DefaultedByRead(bounds),
+        );
     }
 
     #[test]
