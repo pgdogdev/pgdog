@@ -31,6 +31,7 @@ mod set;
 mod set_config;
 mod shared;
 mod show;
+mod split_simple;
 mod transaction;
 mod update;
 
@@ -339,10 +340,7 @@ impl QueryParser {
             .run()?;
         }
 
-        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        if stmts.len() > 1
-            && let Some(command) = self.try_multi_set(&**stmts, context)?
-        {
+        if let Some(command) = self.split_simple_check(context, &statement)? {
             return Ok(command);
         }
 

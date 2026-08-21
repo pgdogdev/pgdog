@@ -86,7 +86,7 @@ impl TwoPc {
         self.auto = true;
     }
 
-    pub fn auto(&self) -> bool {
+    pub fn is_auto(&self) -> bool {
         self.auto
     }
 }

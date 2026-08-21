@@ -114,12 +114,9 @@ impl PreparedStatements {
     ///
     /// # Arguments
     ///
-    /// - `parse`: [`Parse`] message, with the prepared statement named by the client.
-    ///
-    /// # Return
-    ///
-    /// Nothing, but the message is renamed to a unique, global name.
-    ///
+    /// * `name`: Prepared statement name provided by the client.
+    /// * `query`: Prepared statement command, e.g., `PREPARE stmt1 AS SELECT 1;`
+    /// * `rewrite_plan`: What we changed about that statement so we can apply it to subsequent `EXECUTE` statements.
     pub(crate) fn insert_prepare(
         &mut self,
         name: &str,

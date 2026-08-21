@@ -8,7 +8,6 @@ use crate::{
     net::{FrontendPid, Parameters, Stream},
 };
 
-#[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.
@@ -20,7 +19,9 @@ pub struct QueryEngineContext<'a> {
     /// Request.
     pub(super) client_request: &'a mut ClientRequest,
     /// Request position in a splice.
-    pub(super) requests_left: usize,
+    pub(super) more_requests_pending: bool,
+    /// Spliced simple query.
+    pub(super) in_multi_query_request: bool,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -60,7 +61,8 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats,
             admin: client.admin,
-            requests_left: 0,
+            more_requests_pending: false,
+            in_multi_query_request: false,
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
@@ -69,9 +71,19 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub fn spliced(mut self, req: &'a mut ClientRequest, request_left: usize) -> Self {
+    /// We are executing an extended protocol pipeline.
+    ///
+    /// This prevents us from disconnecting from the servers until all
+    /// requests are executed.
+    pub fn spliced(
+        mut self,
+        req: &'a mut ClientRequest,
+        more_requests_pending: bool,
+        extended: bool,
+    ) -> Self {
         self.client_request = req;
-        self.requests_left = request_left;
+        self.more_requests_pending = more_requests_pending;
+        self.in_multi_query_request = !extended;
         self
     }
 
@@ -88,7 +100,8 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats: MemoryStats::default(),
             admin: false,
-            requests_left: 0,
+            more_requests_pending: false,
+            in_multi_query_request: false,
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,

@@ -80,4 +80,8 @@ impl<'a> RouterContext<'a> {
     pub fn transaction(&self) -> &Option<TransactionType> {
         &self.transaction
     }
+
+    pub fn is_simple_protocol(&self) -> bool {
+        self.query.as_ref().map(|q| q.simple()).unwrap_or_default()
+    }
 }

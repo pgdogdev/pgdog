@@ -56,6 +56,10 @@ impl QueryEngine {
                 )
                 .await??;
 
+                if context.in_multi_query_request {
+                    self.start_transaction_multi_query().await?;
+                }
+
                 true
             }
 

@@ -51,6 +51,9 @@ pub enum Command {
         payload: String,
         shard: Shard,
     },
+    SimpleQuerySplit {
+        queries: Vec<String>,
+    },
     Unlisten(String),
     UniqueId,
 }
