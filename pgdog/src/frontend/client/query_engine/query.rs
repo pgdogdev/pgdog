@@ -170,29 +170,23 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    let error_state = match context.transaction {
+                    context.transaction = match context.transaction {
                         Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
                         Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
                             Some(TransactionType::ErrorReadWrite)
                         }
                         _ => None,
                     };
-                    context.transaction = error_state;
+
                     let end_two_pc = self.two_pc.is_auto();
                     let end_multi_query = context.in_multi_query_request;
 
-                    if end_two_pc || end_multi_query {
-                        // TODO: this records a 2pc transaction in client
-                        // stats anyway but not on the servers. Is this what we want?
-                        replace_rfq = true;
-                    }
-
                     if end_two_pc {
                         self.end_two_pc(true).await?;
-                    }
-
-                    if end_multi_query && !end_two_pc {
+                        replace_rfq = true;
+                    } else if end_multi_query {
                         self.backend.execute("ROLLBACK").await?;
+                        replace_rfq = true;
                     }
 
                     if end_multi_query {
@@ -240,9 +234,9 @@ impl QueryEngine {
             }
 
             if replace_rfq {
-                // In auto mode, 2pc transaction was started automatically
+                // A transaction was started automatically
                 // without the client's knowledge. We need to return a regular RFQ
-                // message and close the transaction.
+                // message instead.
                 context.transaction = None;
                 message = ReadyForQuery::in_transaction(false).message();
             }
@@ -453,14 +447,6 @@ impl QueryEngine {
             two_pc_enabled && context.client_request.route().should_2pc();
 
         let no_transaction_already = !context.in_transaction() && self.begin_stmt.is_none();
-
-        println!(
-            "two_pc: {}, enabled: {}, no_transaction: {}, exec: {}",
-            two_pc_wants_transaction,
-            two_pc_enabled,
-            no_transaction_already,
-            context.client_request.is_executable()
-        );
 
         if (two_pc_wants_transaction || context.in_multi_query_request)
             && no_transaction_already
