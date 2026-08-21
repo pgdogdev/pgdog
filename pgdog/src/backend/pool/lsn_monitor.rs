@@ -345,8 +345,8 @@ mod test {
             config: Config::default(),
         };
         config.address.configured_role = Role::Auto;
-        config.config.inner.role_detection = true;
-        config.config.inner.lsn_check_timeout = Duration::from_millis(10);
+        config.config.role_detection = true;
+        config.config.lsn_check_timeout = Duration::from_millis(10);
         let lb = LoadBalancer::new(
             &None,
             &[config],

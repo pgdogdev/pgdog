@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
-use crate::util::safe_timeout;
+use crate::{state::State, util::safe_timeout};
 
 pub(crate) mod ban;
 pub(crate) mod monitor;
@@ -92,6 +92,10 @@ impl Target {
 
         let stats = self.pool.lsn_stats();
         stats.valid() && !stats.replica
+    }
+
+    fn is_automatic_primary(&self) -> bool {
+        self.role() == Role::Primary && self.pool.addr().configured_role == Role::Auto
     }
 }
 
@@ -240,7 +244,7 @@ impl LoadBalancer {
         }
 
         self.elected_primary.send_replace(
-            self.qualified_primary_target()
+            self.qualified_primary_target(&[])
                 .map(|target| target.pool.clone()),
         );
 
@@ -348,11 +352,10 @@ impl LoadBalancer {
         result
     }
 
-    fn qualified_primary_target(&self) -> Option<&Target> {
-        self.targets
-            .iter()
-            .rev()
-            .find(|target| target.is_qualified_primary())
+    fn qualified_primary_target(&self, excluded_pools: &[u64]) -> Option<&Target> {
+        self.targets.iter().rev().find(|target| {
+            !excluded_pools.contains(&target.pool.id()) && target.is_qualified_primary()
+        })
     }
 
     /// Wait until automatic role detection elects a qualified primary.
@@ -383,15 +386,102 @@ impl LoadBalancer {
     }
 
     async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
-        if let Some(target) = self.qualified_primary_target() {
-            return target.pool.get(request).await;
+        use smallvec::SmallVec;
+
+        if self.qualified_primary_target(&[]).is_none() {
+            if !self.role_detection_enabled() {
+                return Err(Error::NoPrimary);
+            }
+            self.wait_primary().await?;
         }
 
-        if !self.role_detection_enabled() {
+        let mut attempted: SmallVec<[u64; 8]> = SmallVec::new();
+
+        while attempted.len() < self.targets.len() {
+            let target = self
+                .qualified_primary_target(&attempted)
+                .ok_or(Error::NoPrimary)?;
+            attempted.push(target.pool.id());
+
+            match self.checkout_target(target, request, true).await {
+                Err(Error::NoPrimary) => continue,
+                result => return result,
+            }
+        }
+
+        Err(Error::NoPrimary)
+    }
+
+    async fn checkout_target(
+        &self,
+        target: &Target,
+        request: &Request,
+        primary_required: bool,
+    ) -> Result<Guard, Error> {
+        let automatic_primary_before = target.is_automatic_primary();
+        if (primary_required || automatic_primary_before) && !target.is_qualified_primary() {
             return Err(Error::NoPrimary);
         }
 
-        self.wait_primary().await?.get(request).await
+        let guard = target.pool.get(request).await?;
+        if primary_required || automatic_primary_before || target.is_automatic_primary() {
+            self.check_automatic_primary_guard(target, guard).await
+        } else {
+            Ok(guard)
+        }
+    }
+
+    async fn check_automatic_primary_guard(
+        &self,
+        target: &Target,
+        guard: Guard,
+    ) -> Result<Guard, Error> {
+        let mut guard = guard;
+        if !target.is_qualified_primary() {
+            guard.stats_mut().state(State::ForceClose);
+            return Err(Error::NoPrimary);
+        }
+
+        if target.pool.addr().configured_role == Role::Auto {
+            match guard
+                .check_automatic_primary_backend(target.pool.config().lsn_check_timeout)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn!(
+                        "automatic primary checkout rejected: backend {} is in recovery [{}]",
+                        guard.id(),
+                        guard.addr(),
+                    );
+                    self.reject_automatic_primary(target, &mut guard);
+                    return Err(Error::NoPrimary);
+                }
+                Err(err) => {
+                    self.reject_automatic_primary(target, &mut guard);
+                    return Err(
+                        if matches!(err, crate::backend::Error::AutomaticPrimaryCheckTimeout) {
+                            Error::CheckoutTimeout
+                        } else {
+                            Error::ServerError
+                        },
+                    );
+                }
+            }
+        }
+
+        if !target.is_qualified_primary() {
+            guard.stats_mut().state(State::ForceClose);
+            return Err(Error::NoPrimary);
+        }
+
+        Ok(guard)
+    }
+
+    fn reject_automatic_primary(&self, target: &Target, guard: &mut Guard) {
+        guard.stats_mut().state(State::ForceClose);
+        target.pool.revoke_automatic_primary_evidence();
+        self.redetect_roles();
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
@@ -476,14 +566,26 @@ impl LoadBalancer {
         // Only ban a candidate pool if there are more than one
         // and we have alternates.
         let bannable = candidates.len() > 1;
+        let mut automatic_primary_rejected = false;
+        let mut automatic_primary_error = None;
 
         for target in &candidates {
             if target.ban.banned() {
                 continue;
             }
-            match target.pool.get(request).await {
+            let automatic_primary = target.is_automatic_primary();
+            match self.checkout_target(target, request, false).await {
                 Ok(conn) => return Ok(conn),
-                Err(Error::Offline) => {
+                Err(Error::Offline) => continue,
+                Err(Error::NoPrimary) => {
+                    automatic_primary_rejected = true;
+                    continue;
+                }
+                Err(err)
+                    if matches!(err, Error::CheckoutTimeout | Error::ServerError)
+                        && automatic_primary =>
+                {
+                    automatic_primary_error.get_or_insert(err);
                     continue;
                 }
                 Err(err) => {
@@ -498,7 +600,13 @@ impl LoadBalancer {
             .iter()
             .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
 
-        Err(Error::AllReplicasDown)
+        Err(if automatic_primary_rejected {
+            Error::NoPrimary
+        } else if let Some(err) = automatic_primary_error {
+            err
+        } else {
+            Error::AllReplicasDown
+        })
     }
 
     /// Shutdown replica pools.
