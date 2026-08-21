@@ -104,11 +104,12 @@ fn rewrite_single_prepared<'a>(
 
         NodeMut::ExecuteStmt(mut stmt) => {
             let stmt_name = stmt.name().expect("EXECUTE always has name");
-            let prepare_and_rewrite = prepared_statements.prepare_and_rewrite(stmt_name);
-            if let Some((prepare, rewrite_plan)) = prepare_and_rewrite {
+            if let Some((prepare, unique_ids)) =
+                prepared_statements.prepare_and_unique_ids(stmt_name)
+            {
                 // Rewrite EXECUTE statement to match the rewrite
                 // we did on the PREPARE statement.
-                apply_prepare_rewrite_plan(&mut stmt, mem, &rewrite_plan)?;
+                insert_unique_ids(&mut stmt, mem, unique_ids)?;
 
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
                 Ok(SimplePreparedRewrite::Executed { prepare })
@@ -121,12 +122,12 @@ fn rewrite_single_prepared<'a>(
     }
 }
 
-fn apply_prepare_rewrite_plan<'a>(
+fn insert_unique_ids<'a>(
     stmt: &mut ExecuteStmtMut<'a, '_>,
     mem: MemoryToken<'a>,
-    plan: &RewritePlan,
+    num_unique_ids: u16,
 ) -> Result<(), Error> {
-    for _ in 0..plan.unique_ids {
+    for _ in 0..num_unique_ids {
         let unique_id = UniqueId::generator()?.next_id();
         stmt.params_mut().push(
             mem,
@@ -209,7 +210,7 @@ mod tests {
                 panic!("expected EXECUTE statement");
             };
 
-            apply_prepare_rewrite_plan(&mut execute, mem, plan)?;
+            insert_unique_ids(&mut execute, mem, plan.unique_ids)?;
             Ok::<_, Error>(copy)
         })?;
 

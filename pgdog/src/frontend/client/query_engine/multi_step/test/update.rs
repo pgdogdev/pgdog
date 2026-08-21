@@ -90,7 +90,6 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
         .as_ref()
         .expect("ast to exist")
         .rewrite_plan
-        .clone()
         .sharding_key_update
         .clone()
         .expect("sharding key update to exist");

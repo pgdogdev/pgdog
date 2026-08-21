@@ -93,9 +93,8 @@ impl GlobalCache {
         if let Some(name) = self.reuse(&cache_key) {
             return (
                 false,
-                self.prepare_and_rewrite(&name)
-                    .expect("prepared to be in cache if reuse is true")
-                    .0,
+                self.prepare(&name)
+                    .expect("prepared to be in cache if reuse is true"),
             );
         }
 
@@ -108,7 +107,7 @@ impl GlobalCache {
         let statement = Statement {
             stmt: StatementType::Prepare {
                 prepare: prepare.clone(),
-                rewrite_plan: Arc::new(rewrite_plan.clone()),
+                unique_ids: rewrite_plan.unique_ids,
             },
             row_description: None,
             cache_key: cache_key.clone(),
@@ -144,8 +143,15 @@ impl GlobalCache {
     }
 
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
-    pub(crate) fn prepare_and_rewrite(&self, name: &str) -> Option<(Prepare, Arc<RewritePlan>)> {
-        self.names.get(name).and_then(|p| p.prepare_and_rewrite())
+    pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
+        self.prepare_and_unique_ids(name)
+            .map(|(prepare, _)| prepare)
+    }
+
+    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<(Prepare, u16)> {
+        self.names
+            .get(name)
+            .and_then(|p| p.prepare_and_unique_ids())
     }
 
     /// Get the rewritten Parse statement.
