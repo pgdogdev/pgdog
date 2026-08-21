@@ -58,12 +58,10 @@ impl QueryEngine {
             }
         }
 
-        match safe_timeout(
-            context.timeouts.query_timeout(&State::Active),
-            Box::pin(self.client_server_exchange(context)),
-        )
-        .await
-        {
+        let query_timeout = context.timeouts.query_timeout(&State::Active);
+        let result = safe_timeout(query_timeout, self.client_server_exchange(context)).await;
+
+        match result {
             Ok(response) => response?,
             Err(err) => {
                 // Close the conn, it could be stuck executing a query
@@ -82,8 +80,7 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         match context.rewrite_result.take() {
             Some(RewriteResult::InsertSplit(requests)) => {
-                multi_step::InsertMulti::from_engine(self, requests)
-                    .execute(context)
+                Box::pin(multi_step::InsertMulti::from_engine(self, requests).execute(context))
                     .await?;
             }
 
@@ -102,8 +99,7 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
-                multi_step::UpdateMulti::new(self, &sharding_key_update)
-                    .execute(context)
+                Box::pin(multi_step::UpdateMulti::new(self, &sharding_key_update).execute(context))
                     .await?;
             }
         }
