@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep, timeout};
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
+use crate::backend::{
+    Server,
+    pool::{Address, Config, Error, Pool, PoolConfig, Request},
+};
 use crate::config::{LoadBalancingStrategy, Role};
 use itertools::*;
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
@@ -73,6 +76,15 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
     }
     .into();
     target.pool.publish_lsn_stats(stats);
+}
+
+fn install_idle_server(pool: &Pool, mut server: Server) {
+    server.stats_mut().healthcheck();
+    let mut inner = pool.lock();
+    inner.online = true;
+    inner
+        .put(Box::new(server), Instant::now())
+        .expect("test server should check in");
 }
 
 impl LoadBalancer {
@@ -1622,6 +1634,127 @@ fn test_concurrent_role_detection_keeps_one_qualified_primary() {
         .collect::<Vec<_>>();
     assert_eq!(primaries.len(), 1);
     assert_eq!(primaries[0].pool.id(), lb.targets[1].pool.id());
+}
+
+#[tokio::test]
+async fn test_primary_checkout_retries_after_standby_automatic_backend() {
+    let configs = [
+        create_auto_test_pool_config("127.0.0.1", 5432),
+        create_auto_test_pool_config("localhost", 5432),
+    ];
+    let lb = LoadBalancer::new(
+        &None,
+        &configs,
+        LoadBalancingStrategy::RoundRobin,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    set_lsn_stats(&lb.targets[0], false, 100);
+    set_lsn_stats(&lb.targets[1], false, 200);
+    assert!(lb.redetect_roles());
+
+    let stale = crate::backend::server::test::automatic_role_server(Some("t")).await;
+    let writer = crate::backend::server::test::automatic_role_server(Some("f")).await;
+    let writer_id = writer.id();
+    install_idle_server(&lb.targets[1].pool, stale);
+    install_idle_server(&lb.targets[0].pool, writer);
+
+    let guard = lb.get_primary(&Request::default()).await.unwrap();
+    assert_eq!(guard.id(), writer_id);
+    assert_eq!(lb.targets[1].role(), Role::Replica);
+    assert!(!lb.targets[1].pool.lsn_stats().valid());
+    assert_eq!(lb.targets[1].pool.lock().force_close, 1);
+}
+
+#[tokio::test]
+async fn test_read_checkout_falls_through_after_standby_automatic_primary() {
+    let mut primary = create_auto_test_pool_config("primary", 5432);
+    primary.config.inner.lsn_check_timeout = Duration::from_millis(50);
+    let replica = create_test_pool_config("replica", 5432);
+    let lb = LoadBalancer::new(
+        &None,
+        &[primary, replica],
+        LoadBalancingStrategy::RoundRobin,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    set_lsn_stats(&lb.targets[0], false, 100);
+    assert!(lb.redetect_roles());
+
+    install_idle_server(
+        &lb.targets[0].pool,
+        crate::backend::server::test::automatic_role_server(Some("t")).await,
+    );
+    let replica_server = crate::backend::server::test::live_server().await;
+    let replica_id = replica_server.id();
+    install_idle_server(&lb.targets[1].pool, replica_server);
+
+    let guard = lb.get(&Request::default()).await.unwrap();
+    assert_eq!(guard.id(), replica_id);
+    assert_eq!(lb.targets[0].role(), Role::Replica);
+}
+
+async fn assert_automatic_primary_probe_error(server: Server, expected: Error) {
+    let mut config = create_auto_test_pool_config("127.0.0.1", 5432);
+    config.config.inner.lsn_check_timeout = Duration::from_millis(10);
+    let lb = LoadBalancer::new(
+        &None,
+        &[config],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    set_lsn_stats(&lb.targets[0], false, 100);
+    assert!(lb.redetect_roles());
+    install_idle_server(&lb.targets[0].pool, server);
+
+    assert_eq!(
+        lb.get_primary(&Request::default()).await.unwrap_err(),
+        expected
+    );
+    assert!(!lb.targets[0].pool.lsn_stats().valid());
+    assert_eq!(lb.targets[0].role(), Role::Replica);
+    assert_eq!(lb.targets[0].pool.lock().force_close, 1);
+}
+
+#[tokio::test]
+async fn test_automatic_primary_probe_errors_are_distinct_and_fail_closed() {
+    assert_automatic_primary_probe_error(
+        crate::backend::server::test::automatic_role_error_server().await,
+        Error::ServerError,
+    )
+    .await;
+    assert_automatic_primary_probe_error(
+        crate::backend::server::test::automatic_role_server(None).await,
+        Error::CheckoutTimeout,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_static_primary_checkout_does_not_probe_backend_role() {
+    let mut config = create_test_pool_config("127.0.0.1", 5432);
+    config.address.configured_role = Role::Primary;
+    let primary = Pool::new(&config);
+    let server = crate::backend::server::test::live_server().await;
+    let server_id = server.id();
+    install_idle_server(&primary, server);
+    let lb = LoadBalancer::new(
+        &Some(primary),
+        &[],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+
+    let result = timeout(
+        Duration::from_millis(50),
+        lb.get_primary(&Request::default()),
+    )
+    .await
+    .expect("static primary checkout must not issue a role probe")
+    .unwrap();
+    assert_eq!(result.id(), server_id);
 }
 
 #[tokio::test]

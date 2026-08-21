@@ -32,6 +32,7 @@ use crate::{
         },
     },
     stats::memory::MemoryUsage,
+    util::safe_timeout,
 };
 use crate::{
     config::{PoolerMode, TlsVerifyMode, config},
@@ -874,6 +875,23 @@ impl Server {
         &self.params
     }
 
+    pub(super) async fn check_automatic_primary_backend(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<bool, Error> {
+        let replica: bool = safe_timeout(
+            timeout,
+            self.fetch_all::<DataRow>("SELECT pg_is_in_recovery()"),
+        )
+        .await
+        .unwrap_or(Err(Error::ReadTimeout))
+        .and_then(|rows| rows.into_iter().next().ok_or(Error::DecoderRowError))
+        .and_then(|row| row.get(0, Format::Text).ok_or(Error::DecoderRowError))
+        .inspect_err(|_| self.stats.state(State::ForceClose))?;
+
+        Ok(!replica)
+    }
+
     /// Execute a batch of queries and return all results.
     pub async fn execute_batch(
         &mut self,
@@ -1424,6 +1442,21 @@ pub mod test {
         automatic_role_server_response(Some(AutomaticRoleResponse::Disconnect)).await
     }
 
+    pub(crate) async fn live_server() -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = tokio::net::TcpStream::connect(listener.local_addr().unwrap());
+        let (client, accepted) = tokio::join!(connect, listener.accept());
+        let socket = accepted.unwrap().0;
+        tokio::spawn(async move {
+            let _socket = socket;
+            std::future::pending::<()>().await;
+        });
+
+        let mut server = Server::default();
+        server.stream = Some(Stream::plain(client.unwrap(), 4096));
+        server
+    }
+
     enum AutomaticRoleResponse {
         Value(&'static str),
         Error,
@@ -1484,6 +1517,41 @@ pub mod test {
         let mut server = Server::default();
         server.stream = Some(Stream::plain(client.unwrap(), 4096));
         server
+    }
+
+    async fn assert_automatic_primary_check_fails_closed(mut server: Server) {
+        let result = server
+            .check_automatic_primary_backend(Duration::from_millis(25))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(server.stats().get_state(), State::ForceClose);
+    }
+
+    #[tokio::test]
+    async fn test_automatic_primary_backend_check() {
+        let timeout = Duration::from_millis(50);
+        let mut writer = automatic_role_server(Some("f")).await;
+        let mut standby = automatic_role_server(Some("t")).await;
+
+        assert!(
+            writer
+                .check_automatic_primary_backend(timeout)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !standby
+                .check_automatic_primary_backend(timeout)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_automatic_primary_backend_check_fails_closed() {
+        assert_automatic_primary_check_fails_closed(automatic_role_error_server().await).await;
+        assert_automatic_primary_check_fails_closed(automatic_role_empty_server().await).await;
+        assert_automatic_primary_check_fails_closed(automatic_role_server(None).await).await;
     }
 
     pub(crate) async fn test_server() -> Server {
