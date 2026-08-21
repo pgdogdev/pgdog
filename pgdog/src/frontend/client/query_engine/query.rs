@@ -1,5 +1,3 @@
-use std::pin::pin;
-
 use tracing::{info, trace};
 
 use crate::{
@@ -60,19 +58,8 @@ impl QueryEngine {
             }
         }
 
-        // Stack-pinned, not `Box::pin`: this runs once per query, and boxing
-        // costs a malloc, a free and a memcpy of the whole exchange future
-        // every time. `Pin<&mut F>` is a `Future`, so `safe_timeout` takes it.
-        //
-        // The inner block matters: unlike the boxed future, which was moved
-        // into `safe_timeout` and dropped by the `.await`, `pin!` binds a local
-        // that would otherwise hold its borrow of `self` and `context` until
-        // the end of the function, past the arms below.
         let query_timeout = context.timeouts.query_timeout(&State::Active);
-        let result = {
-            let exchange = pin!(self.client_server_exchange(context));
-            safe_timeout(query_timeout, exchange).await
-        };
+        let result = safe_timeout(query_timeout, self.client_server_exchange(context)).await;
 
         match result {
             Ok(response) => response?,
