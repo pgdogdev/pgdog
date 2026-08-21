@@ -216,7 +216,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn syntax(err: &str) -> ErrorResponse {
+    pub fn syntax<T: Into<String>>(err: T) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),
             code: "42601".into(),

@@ -72,7 +72,7 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
     client.client().client_request.extend(request.messages);
 
     let mut context = QueryEngineContext::new(&mut client.client);
-    client.engine.parse_and_rewrite(&mut context).await?;
+    client.engine.parse_and_rewrite(&mut context)?;
     client.engine.route_query(&mut context).await?;
 
     assert!(
@@ -188,7 +188,7 @@ async fn test_row_same_shard_no_transaction() {
 
     let mut context = QueryEngineContext::new(&mut client.client);
 
-    client.engine.parse_and_rewrite(&mut context).await.unwrap();
+    client.engine.parse_and_rewrite(&mut context).unwrap();
 
     assert!(
         context
