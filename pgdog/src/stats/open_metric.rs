@@ -79,10 +79,15 @@ pub struct HistogramMeasurement {
 
 impl HistogramMeasurement {
     /// Build a measurement from per-bucket (non-cumulative) counts.
-    pub fn new(bounds: impl Into<Arc<[f64]>>, per_bucket: &[u64], sum: f64, count: u64) -> Self {
+    pub fn new(
+        bounds: impl Into<Arc<[f64]>>,
+        per_bucket: impl Into<Vec<u64>>,
+        sum: f64,
+        count: u64,
+    ) -> Self {
         Self {
             bounds: bounds.into(),
-            buckets: per_bucket.to_vec(),
+            buckets: per_bucket.into(),
             sum,
             count,
         }
@@ -425,7 +430,7 @@ mod test {
 
     fn test_histogram() -> HistogramMeasurement {
         // Per-bucket counts 1/2/0, plus 1 in the +Inf bucket.
-        HistogramMeasurement::new(vec![0.001, 0.01, 0.1], &[1, 2, 0, 1], 1.5, 4)
+        HistogramMeasurement::new(vec![0.001, 0.01, 0.1], [1, 2, 0, 1], 1.5, 4)
     }
 
     #[test]

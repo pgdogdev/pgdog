@@ -369,7 +369,7 @@ impl Pools {
                         labels: labels.clone(),
                         measurement: HistogramMeasurement::new(
                             histogram_bounds_seconds.clone(),
-                            &histogram.buckets(histogram_bounds),
+                            histogram.buckets(histogram_bounds),
                             histogram.sum().as_secs_f64(),
                             histogram.count(),
                         )

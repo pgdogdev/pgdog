@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::otel_temporality::OtelTemporalityPreference;
 
+const DEFAULT_PUSH_INTERVAL: u64 = 10_000;
+
 /// OpenTelemetry push exporter settings.
 ///
 /// When `endpoint` is set, PgDog periodically POSTs OTLP JSON metrics
@@ -120,7 +122,7 @@ impl Otel {
         env::var("OTEL_METRIC_EXPORT_INTERVAL")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(10_000)
+            .unwrap_or(DEFAULT_PUSH_INTERVAL)
     }
 
     fn temporality_preference() -> Option<OtelTemporalityPreference> {
@@ -130,7 +132,7 @@ impl Otel {
     }
 
     fn schema_default_push_interval() -> u64 {
-        10_000
+        DEFAULT_PUSH_INTERVAL
     }
 
     fn schema_default_temporality_preference() -> Option<OtelTemporalityPreference> {
@@ -180,7 +182,7 @@ mod test {
         assert!(otel.headers.is_empty());
         assert!(otel.endpoint.is_none());
         assert!(otel.datadog_api_key.is_none());
-        assert_eq!(otel.push_interval, 10_000);
+        assert_eq!(otel.push_interval, DEFAULT_PUSH_INTERVAL);
         assert!(otel.temporality_preference.is_none());
     }
 

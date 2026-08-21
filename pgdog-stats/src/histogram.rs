@@ -5,11 +5,7 @@
 //! `Copy` and free of any per-instance bound storage, so histograms can be
 //! summed element-wise without checking that their bounds agree.
 
-use std::{
-    ops::{Add, AddAssign, Sub},
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{ops::AddAssign, sync::OnceLock, time::Duration};
 
 use pgdog_config::General;
 use schemars::JsonSchema;
@@ -26,9 +22,10 @@ pub const MAX_BUCKETS: usize = 20;
 /// Exponential from 100µs to 30s, which covers everything from an index lookup
 /// on a warm buffer cache to a query about to hit `statement_timeout`.
 ///
-/// This belongs to the histogram rather than to the configuration, but this
-/// crate already depends on `pgdog-config` for the pool types, so owning the
-/// constant here would make the dependency circular.
+/// This belongs to the histogram rather than to the configuration, but owning
+/// the default here would force `pgdog-config` to depend back on `pgdog-stats`,
+/// which already depends on `pgdog-config` — so the default lives in
+/// `pgdog-config` and this crate aliases it.
 pub const DEFAULT_BOUNDS_MS: [f64; 12] = General::DEFAULT_QUERY_TIME_BUCKETS;
 
 static BOUNDS: OnceLock<LatchedBounds> = OnceLock::new();
@@ -297,32 +294,6 @@ impl AddAssign for Histogram {
     }
 }
 
-impl Add for Histogram {
-    type Output = Histogram;
-
-    fn add(mut self, rhs: Self) -> Self::Output {
-        self += rhs;
-        self
-    }
-}
-
-impl Sub for Histogram {
-    type Output = Histogram;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        let mut buckets = self.buckets;
-        for (bucket, rhs) in buckets.iter_mut().zip(rhs.buckets.iter()) {
-            *bucket = bucket.saturating_sub(*rhs);
-        }
-
-        Self {
-            buckets,
-            sum: self.sum.saturating_sub(rhs.sum),
-            count: self.count.saturating_sub(rhs.count),
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -481,7 +452,7 @@ mod test {
     }
 
     #[test]
-    fn add_merges_element_wise() {
+    fn add_assign_merges_element_wise() {
         let bounds = test_bounds();
         let mut a = Histogram::default();
         let mut b = Histogram::default();
@@ -491,41 +462,12 @@ mod test {
         b.observe_with(Duration::from_millis(5), &bounds);
         b.observe_with(Duration::from_secs(1), &bounds);
 
-        let merged = a + b;
+        let mut merged = a;
+        merged += b;
 
         assert_eq!(merged.count(), 4);
         assert_eq!(merged.buckets(&bounds), vec![1, 2, 0, 1]);
         assert_eq!(merged.sum(), a.sum() + b.sum());
-    }
-
-    #[test]
-    fn add_assign_matches_add() {
-        let bounds = test_bounds();
-        let mut a = Histogram::default();
-        a.observe_with(Duration::from_millis(5), &bounds);
-
-        let mut merged = a;
-        merged += a;
-
-        assert_eq!(merged.count(), 2);
-        assert_eq!(merged.buckets(&bounds), (a + a).buckets(&bounds));
-    }
-
-    #[test]
-    fn sub_saturates() {
-        let bounds = test_bounds();
-        let mut a = Histogram::default();
-        a.observe_with(Duration::from_millis(5), &bounds);
-
-        let mut b = Histogram::default();
-        b.observe_with(Duration::from_millis(5), &bounds);
-        b.observe_with(Duration::from_millis(5), &bounds);
-
-        let result = a - b;
-
-        assert_eq!(result.count(), 0);
-        assert_eq!(result.sum(), Duration::ZERO);
-        assert_eq!(result.buckets(&bounds), vec![0, 0, 0, 0]);
     }
 
     #[test]
