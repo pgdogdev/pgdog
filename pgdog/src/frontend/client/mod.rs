@@ -29,7 +29,10 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
 };
-use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
+use crate::net::{
+    MessageBuffer, ProtocolMessage, Stream,
+    parameter::{Parameters, application_name_with_host},
+};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
@@ -242,7 +245,7 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
-        params: Parameters,
+        mut params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
@@ -253,6 +256,11 @@ impl Client {
             return Ok(None);
         }
 
+        Self::maybe_add_application_name_host(
+            &mut params,
+            addr,
+            config.config.general.application_name_add_host,
+        );
         let (user, database) = user_database_from_params(&params);
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
@@ -433,6 +441,18 @@ impl Client {
         }))
     }
 
+    fn maybe_add_application_name_host(params: &mut Parameters, addr: SocketAddr, enabled: bool) {
+        if !enabled {
+            return;
+        }
+
+        let current = params.get_default("application_name", "");
+        params.insert(
+            "application_name",
+            application_name_with_host(current, &addr.to_string()),
+        );
+    }
+
     #[cfg(test)]
     pub fn new_test(stream: Stream, params: Parameters) -> Self {
         use crate::config::config;
@@ -442,6 +462,13 @@ impl Client {
         connect_params.insert("database", "pgdog");
         connect_params.merge(params);
 
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
+        Self::maybe_add_application_name_host(
+            &mut connect_params,
+            addr,
+            config().config.general.application_name_add_host,
+        );
+
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
         let mut prepared_statements = PreparedStatements::new();
@@ -449,7 +476,7 @@ impl Client {
 
         Self {
             stream,
-            addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
+            addr,
             key,
             comms: ClientComms::new(id),
             streaming: false,
