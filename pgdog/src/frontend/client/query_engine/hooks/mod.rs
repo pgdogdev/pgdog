@@ -1,5 +1,5 @@
 //! Query hooks.
-#![allow(unused_variables, dead_code)]
+#![allow(unused_variables, dead_code)] // used in EE
 use super::*;
 pub mod schema;
 

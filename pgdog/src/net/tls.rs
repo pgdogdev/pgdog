@@ -384,28 +384,24 @@ fn build_client_config(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[doc(hidden)]
-pub fn test_acceptor_build_count() -> usize {
+#[cfg(test)]
+pub(crate) fn test_acceptor_build_count() -> usize {
     ACCEPTOR_BUILD_COUNT.load(Ordering::SeqCst)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[doc(hidden)]
-pub fn test_reset_acceptor() {
+#[cfg(test)]
+pub(crate) fn test_reset_acceptor() {
     ACCEPTOR.store(None);
     ACCEPTOR_BUILD_COUNT.store(0, Ordering::SeqCst);
 }
 
 #[cfg(test)]
-#[doc(hidden)]
-pub fn test_connector_build_count() -> usize {
+pub(crate) fn test_connector_build_count() -> usize {
     CONNECTOR_BUILD_COUNT.load(Ordering::SeqCst)
 }
 
 #[cfg(test)]
-#[doc(hidden)]
-pub fn test_reset_connector() {
+pub(crate) fn test_reset_connector() {
     CONNECTOR.store(None);
     CONNECTOR_BUILD_COUNT.store(0, Ordering::SeqCst);
 }

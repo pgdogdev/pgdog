@@ -103,10 +103,9 @@ pub struct LsnStats {
 
 /// Schema-only mirror of `std::time::SystemTime`'s default serde representation.
 #[derive(JsonSchema)]
-#[allow(dead_code)]
-struct SystemTimeRepr {
-    secs_since_epoch: u64,
-    nanos_since_epoch: u32,
+pub struct SystemTimeRepr {
+    pub secs_since_epoch: u64,
+    pub nanos_since_epoch: u32,
 }
 
 impl LsnStats {

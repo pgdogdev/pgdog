@@ -21,10 +21,6 @@ use super::{super::Manager, Record, Records};
 pub(crate) struct Segment {
     /// Unique segment ID, monotonically increasing.
     pub(super) segment_id: u64,
-    // Keeping the version around. Allows us to switch WAL format
-    // versions later.
-    #[allow(dead_code)]
-    version: u32,
     /// Valid records in this segment.
     pub(super) records: Vec<Record>,
 }
@@ -59,7 +55,10 @@ impl Segment {
         let mut buffer = BufReader::new(segment);
 
         let counter = buffer.read_u64().await?;
-        let version = buffer.read_u32().await?;
+        // This should always be zero, until we need to make breaking changes
+        // in the future
+        let _version = buffer.read_u32().await?;
+        debug_assert_eq!(_version, 0);
         let mut records = vec![];
         let mut consumed = size_of::<u64>() + size_of::<u32>();
 
@@ -106,7 +105,6 @@ impl Segment {
 
         Ok(Self {
             segment_id: counter,
-            version,
             records,
         })
     }

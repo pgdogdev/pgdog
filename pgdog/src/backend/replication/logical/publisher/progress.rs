@@ -27,8 +27,6 @@ enum ProgressKind {
 #[derive(Debug, Clone)]
 pub struct Progress {
     inner: Arc<Inner>,
-    #[allow(dead_code)]
-    kind: ProgressKind,
 }
 
 impl Progress {
@@ -87,7 +85,7 @@ impl Progress {
             }
         });
 
-        Progress { inner, kind }
+        Progress { inner }
     }
 
     pub fn update(&self, total_bytes: usize, lsn: i64) {
