@@ -8,7 +8,6 @@ use crate::{
     net::{FrontendPid, Parameters, Stream},
 };
 
-#[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.

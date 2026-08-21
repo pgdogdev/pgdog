@@ -969,7 +969,7 @@ impl MissedRows {
     }
 
     /// Missed-row counts as `(insert, update, delete)`.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         (self.insert, self.update, self.delete)
     }

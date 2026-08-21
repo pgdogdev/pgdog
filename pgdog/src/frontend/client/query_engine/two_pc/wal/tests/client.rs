@@ -16,7 +16,6 @@ pub(super) struct TwoPcTestClient {
     cluster: Cluster,
     wal_segment_size: usize,
     checkpoint_interval: Option<Duration>,
-    #[allow(dead_code)]
     tmp: TempDir,
 }
 
