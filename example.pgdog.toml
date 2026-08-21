@@ -158,6 +158,10 @@ openmetrics_namespace = "pgdog_"
 # brackets the latencies worth alerting on. Read once at startup: changing
 # this requires a restart.
 #
+# At most 20 bounds, each finite and greater than zero. A ladder PgDog cannot
+# use is refused at startup rather than repaired, so the buckets you scrape are
+# always the ones you configured here.
+#
 # Default: [0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000]
 query_time_buckets = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0, 30000.0]
 # Log output format.

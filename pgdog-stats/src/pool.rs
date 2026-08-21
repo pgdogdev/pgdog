@@ -458,7 +458,7 @@ mod test {
 
     /// Explicit bounds, so tests don't depend on the process-wide latch.
     fn bounds() -> Bounds {
-        Bounds::from_millis(&[1.0, 10.0, 100.0])
+        Bounds::try_from_millis(&[1.0, 10.0, 100.0]).expect("valid ladder")
     }
 
     fn samples(millis: &[u64]) -> Histogram {

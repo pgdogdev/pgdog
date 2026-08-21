@@ -100,74 +100,86 @@ impl Default for Bounds {
     }
 }
 
-/// How [`Bounds::from_millis_checked`] treated its input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Normalized {
-    /// Bounds were built from the input, discarding this many values as
-    /// invalid, duplicate, or past [`MAX_BUCKETS`]. Zero means a clean input.
-    Dropped(usize),
-    /// Nothing in the input was usable, so [`DEFAULT_BOUNDS_MS`] was used.
-    FellBackToDefaults,
+/// Why a configured ladder can't be used.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BoundsError {
+    /// A value isn't a positive, finite number of milliseconds, or is too
+    /// large to be a [`Duration`].
+    Invalid(f64),
+    /// More bounds than [`MAX_BUCKETS`] allows.
+    TooMany(usize),
+    /// No bounds at all. A histogram with no explicit bounds files every
+    /// sample under `+Inf`, which is worse than having no histogram.
+    Empty,
 }
 
-impl Bounds {
-    /// Build bounds from millisecond values.
-    ///
-    /// Values that aren't finite and positive, or that overflow a
-    /// [`Duration`], are dropped; the rest are sorted and deduplicated, and
-    /// anything past [`MAX_BUCKETS`] is discarded. An input that leaves
-    /// nothing usable falls back to [`DEFAULT_BOUNDS_MS`].
-    pub fn from_millis(millis: &[f64]) -> Self {
-        Self::from_millis_checked(millis).0
-    }
-
-    /// Build bounds, reporting how the input was normalized.
-    pub fn from_millis_checked(millis: &[f64]) -> (Self, Normalized) {
-        match Self::parse(millis) {
-            Some(bounds) => (
-                bounds,
-                Normalized::Dropped(millis.len().saturating_sub(bounds.len())),
+impl std::fmt::Display for BoundsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(value) => write!(
+                f,
+                "bound {value} is not a positive, finite number of milliseconds"
             ),
-            // The defaults are valid, so this recovers a usable histogram
-            // rather than silently disabling bucketing.
-            None => (Self::defaults(), Normalized::FellBackToDefaults),
+            Self::TooMany(got) => write!(f, "has {got} bounds, at most {MAX_BUCKETS} are allowed"),
+            Self::Empty => write!(f, "is empty; remove the setting to use the defaults"),
         }
     }
+}
 
-    /// The built-in bounds, which are always usable.
-    fn defaults() -> Self {
-        Self::parse(&DEFAULT_BOUNDS_MS).expect("DEFAULT_BOUNDS_MS is a valid ladder")
-    }
+impl std::error::Error for BoundsError {}
 
-    /// Normalize millisecond bounds, or `None` if none are usable.
-    fn parse(millis: &[f64]) -> Option<Self> {
+impl Bounds {
+    /// Build bounds from millisecond values, or say why they can't be used.
+    ///
+    /// A ladder is taken whole or not at all: every value must be finite,
+    /// greater than zero, and small enough for a [`Duration`], and there must
+    /// be at least one and no more than [`MAX_BUCKETS`] of them. Dropping the
+    /// values that don't qualify would leave an operator running a histogram
+    /// whose buckets aren't the ones they wrote, with nothing in the exported
+    /// metrics to say which went missing.
+    ///
+    /// Sorting and deduplication are applied silently, since neither changes
+    /// which bounds the operator asked for.
+    pub fn try_from_millis(millis: &[f64]) -> Result<Self, BoundsError> {
+        if millis.is_empty() {
+            return Err(BoundsError::Empty);
+        }
+
+        if millis.len() > MAX_BUCKETS {
+            return Err(BoundsError::TooMany(millis.len()));
+        }
+
         let mut values = millis
             .iter()
             .copied()
-            .filter(|ms| ms.is_finite() && *ms > 0.0)
-            // Overflowing values exceed Duration::MAX; drop them like other
-            // unusable inputs instead of panicking.
-            .filter_map(|ms| Duration::try_from_secs_f64(ms / 1_000.0).ok())
-            .collect::<Vec<_>>();
+            .map(|ms| {
+                if !ms.is_finite() || ms <= 0.0 {
+                    return Err(BoundsError::Invalid(ms));
+                }
+                // Anything past Duration::MAX is unusable for the same reason
+                // a negative bound is: it can't name a latency.
+                Duration::try_from_secs_f64(ms / 1_000.0).map_err(|_| BoundsError::Invalid(ms))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         values.sort_unstable();
         // Deduplicate on the exported value, not on the Duration: past roughly
         // 10^7 seconds an f64 can't resolve nanoseconds, and two bounds that
         // render to the same `le` label fail the whole Prometheus scrape.
         values.dedup_by_key(|value| value.as_secs_f64());
-        values.truncate(MAX_BUCKETS);
-
-        if values.is_empty() {
-            return None;
-        }
 
         let mut bounds = [Duration::ZERO; MAX_BUCKETS];
         bounds[..values.len()].copy_from_slice(&values);
 
-        Some(Self {
+        Ok(Self {
             bounds,
             len: values.len(),
         })
+    }
+
+    /// The built-in bounds, which are always usable.
+    fn defaults() -> Self {
+        Self::try_from_millis(&DEFAULT_BOUNDS_MS).expect("DEFAULT_BOUNDS_MS is a valid ladder")
     }
 
     /// Upper bounds, ascending.
@@ -316,12 +328,13 @@ mod test {
     use super::*;
 
     fn test_bounds() -> Bounds {
-        Bounds::from_millis(&[1.0, 10.0, 100.0])
+        Bounds::try_from_millis(&[1.0, 10.0, 100.0]).expect("valid ladder")
     }
 
     #[test]
-    fn bounds_from_millis_sorts_and_dedups() {
-        let bounds = Bounds::from_millis(&[10.0, 1.0, 10.0, 100.0]);
+    fn bounds_are_sorted_and_deduplicated() {
+        // Neither changes which bounds were asked for, so both are silent.
+        let bounds = Bounds::try_from_millis(&[10.0, 1.0, 10.0, 100.0]).expect("valid ladder");
 
         assert_eq!(bounds.len(), 3);
         assert_eq!(
@@ -335,98 +348,83 @@ mod test {
     }
 
     #[test]
-    fn bounds_from_millis_drops_invalid_values() {
-        let bounds = Bounds::from_millis(&[f64::NAN, -1.0, 0.0, f64::INFINITY, 5.0]);
-
-        assert_eq!(bounds.as_slice(), [Duration::from_millis(5)]);
-    }
-
-    #[test]
     fn the_default_ladder_is_usable() {
         // `Bounds::defaults` panics if this ever stops holding, so state the
         // invariant here rather than degrading at runtime to a bound-less
         // histogram that files every sample under +Inf.
-        assert!(Bounds::parse(&DEFAULT_BOUNDS_MS).is_some());
+        assert!(Bounds::try_from_millis(&DEFAULT_BOUNDS_MS).is_ok());
         assert_eq!(Bounds::default().len(), DEFAULT_BOUNDS_MS.len());
     }
 
     #[test]
-    fn bounds_from_millis_falls_back_to_default() {
-        let bounds = Bounds::from_millis(&[-1.0, f64::NAN]);
-
-        assert_eq!(bounds.len(), DEFAULT_BOUNDS_MS.len());
-        assert_eq!(bounds, Bounds::default());
+    fn a_single_bad_bound_rejects_the_whole_ladder() {
+        // The point of the error: an operator who typo'd one value gets told
+        // so, rather than silently running a ladder missing that bucket.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0] {
+            match Bounds::try_from_millis(&[1.0, bad, 100.0]) {
+                // Compared by shape rather than with assert_eq!: NaN is not
+                // equal to itself, so a derived PartialEq can never match it.
+                Err(BoundsError::Invalid(value)) => assert!(
+                    value == bad || (value.is_nan() && bad.is_nan()),
+                    "rejected {bad} but reported {value}"
+                ),
+                other => panic!("{bad} should have been rejected, got {other:?}"),
+            }
+        }
     }
 
     #[test]
-    fn bounds_from_millis_drops_overflowing_values() {
-        // 1e30 ms overflows Duration: must degrade, not panic.
-        let bounds = Bounds::from_millis(&[1e30, 5.0]);
-        assert_eq!(bounds.as_slice(), [Duration::from_millis(5)]);
-
-        // Nothing usable at all falls back to the defaults.
-        let bounds = Bounds::from_millis(&[1e30]);
-        assert_eq!(bounds, Bounds::default());
+    fn a_bound_too_large_for_a_duration_is_rejected() {
+        // 1e30 ms exceeds Duration::MAX: an error, not a panic and not a drop.
+        assert_eq!(
+            Bounds::try_from_millis(&[1e30, 5.0]),
+            Err(BoundsError::Invalid(1e30))
+        );
     }
 
     #[test]
-    fn bounds_from_millis_truncates_to_max() {
-        let millis = (1..=(MAX_BUCKETS as u64 + 10))
-            .map(|ms| ms as f64)
-            .collect::<Vec<_>>();
-        let bounds = Bounds::from_millis(&millis);
-
-        assert_eq!(bounds.len(), MAX_BUCKETS);
-        assert_eq!(bounds.as_slice().last(), Some(&Duration::from_millis(20)));
-    }
-
-    #[test]
-    fn from_millis_checked_reports_a_clean_input() {
-        let (bounds, normalized) = Bounds::from_millis_checked(&[1.0, 10.0, 100.0]);
-
-        assert_eq!(bounds.len(), 3);
-        assert_eq!(normalized, Normalized::Dropped(0));
-    }
-
-    #[test]
-    fn from_millis_checked_counts_invalid_values() {
-        let (_, normalized) = Bounds::from_millis_checked(&[f64::NAN, -1.0, 0.0, 5.0]);
-
-        assert_eq!(normalized, Normalized::Dropped(3));
-    }
-
-    #[test]
-    fn from_millis_checked_counts_duplicates() {
-        let (_, normalized) = Bounds::from_millis_checked(&[10.0, 1.0, 10.0, 100.0]);
-
-        assert_eq!(normalized, Normalized::Dropped(1));
-    }
-
-    #[test]
-    fn from_millis_checked_counts_bounds_past_the_maximum() {
+    fn more_bounds_than_the_maximum_are_rejected() {
         let millis = (1..=(MAX_BUCKETS as u64 + 10))
             .map(|ms| ms as f64)
             .collect::<Vec<_>>();
 
-        let (bounds, normalized) = Bounds::from_millis_checked(&millis);
+        assert_eq!(
+            Bounds::try_from_millis(&millis),
+            Err(BoundsError::TooMany(MAX_BUCKETS + 10))
+        );
 
-        assert_eq!(bounds.len(), MAX_BUCKETS);
-        assert_eq!(normalized, Normalized::Dropped(10));
+        // Exactly at the cap is fine.
+        let millis = (1..=MAX_BUCKETS as u64)
+            .map(|ms| ms as f64)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            Bounds::try_from_millis(&millis).map(|b| b.len()),
+            Ok(MAX_BUCKETS)
+        );
     }
 
     #[test]
-    fn from_millis_checked_reports_the_fallback_separately() {
-        // An operator whose whole ladder was rejected needs to hear that the
-        // defaults are in use, not that "n bounds were dropped".
-        let (bounds, normalized) = Bounds::from_millis_checked(&[-1.0, f64::NAN]);
+    fn an_empty_ladder_is_rejected() {
+        // Silently substituting the defaults would leave the operator running
+        // buckets they explicitly asked not to have.
+        assert_eq!(Bounds::try_from_millis(&[]), Err(BoundsError::Empty));
+    }
 
-        assert_eq!(bounds, Bounds::default());
-        assert_eq!(normalized, Normalized::FellBackToDefaults);
-
-        let (bounds, normalized) = Bounds::from_millis_checked(&[]);
-
-        assert_eq!(bounds, Bounds::default());
-        assert_eq!(normalized, Normalized::FellBackToDefaults);
+    #[test]
+    fn bounds_errors_name_the_offending_value() {
+        // These render into the startup error an operator has to act on.
+        assert_eq!(
+            BoundsError::Invalid(-1.0).to_string(),
+            "bound -1 is not a positive, finite number of milliseconds"
+        );
+        assert_eq!(
+            BoundsError::TooMany(25).to_string(),
+            format!("has 25 bounds, at most {MAX_BUCKETS} are allowed")
+        );
+        assert_eq!(
+            BoundsError::Empty.to_string(),
+            "is empty; remove the setting to use the defaults"
+        );
     }
 
     #[test]
@@ -474,7 +472,7 @@ mod test {
     fn overflow_bucket_is_independent_of_bound_count() {
         // The +Inf slot is fixed, so a histogram observed under one bound count
         // still reports its overflow correctly.
-        let narrow = Bounds::from_millis(&[1.0]);
+        let narrow = Bounds::try_from_millis(&[1.0]).expect("valid ladder");
         let mut histogram = Histogram::default();
 
         histogram.observe_with(Duration::from_secs(10), &narrow);
@@ -532,7 +530,7 @@ mod test {
 
     #[test]
     fn seconds_converts_bounds() {
-        let bounds = Bounds::from_millis(&[0.1, 1.0, 1_000.0]);
+        let bounds = Bounds::try_from_millis(&[0.1, 1.0, 1_000.0]).expect("valid ladder");
 
         assert_eq!(bounds.seconds(), vec![0.0001, 0.001, 1.0]);
     }

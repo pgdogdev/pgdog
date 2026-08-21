@@ -348,10 +348,15 @@ pub struct General {
     ///
     /// Each bound emits one time series per pool, so prefer a short ladder that
     /// brackets the latencies worth alerting on. Values are sorted and
-    /// deduplicated; non-positive and non-finite values are ignored. At most 20
-    /// bounds are used and an implicit `+Inf` bucket is always appended.
+    /// deduplicated, and an implicit `+Inf` bucket is always appended. At most
+    /// 20 bounds are accepted and every one must be finite and greater than
+    /// zero; a ladder PgDog cannot use is refused at startup rather than
+    /// repaired, so the exported buckets always match what was configured.
     ///
     /// **Note:** This setting cannot be changed at runtime. Restart PgDog after changing it.
+    ///
+    /// **Note:** A malformed `PGDOG_QUERY_TIME_BUCKETS` falls back to the default
+    /// ladder instead of being refused, matching every other environment variable.
     ///
     /// _Default:_ `[0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000]`
     ///

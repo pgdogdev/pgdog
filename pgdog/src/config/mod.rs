@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
-use pgdog_stats::histogram::{self, Bounds, Latch, Normalized};
+use pgdog_stats::histogram::{self, Bounds, Latch};
 use tracing::warn;
 
 static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
@@ -74,7 +74,7 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
         // And also moved outside the configuration to the place of
         table.load_centroids()?;
     }
-    set_histogram_bounds(&config);
+    set_histogram_bounds(&config)?;
     CONFIG.store(Arc::new(config.clone()));
     Ok(config)
 }
@@ -85,18 +85,21 @@ pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
 /// histograms are indexed by position, so re-bucketing at runtime would
 /// silently reinterpret every existing sample. A reload that changes them is
 /// ignored with a warning.
-fn set_histogram_bounds(config: &ConfigAndUsers) {
-    let (configured, normalized) =
-        Bounds::from_millis_checked(&config.config.general.query_time_buckets);
-    match normalized {
-        Normalized::Dropped(0) => (),
-        Normalized::Dropped(dropped) => {
-            warn!("\"query_time_buckets\" ignored {dropped} invalid, duplicate, or excess bound(s)")
-        }
-        Normalized::FellBackToDefaults => {
-            warn!("\"query_time_buckets\" has no usable bounds, using the defaults")
-        }
-    }
+///
+/// A ladder PgDog can't use is a hard error rather than something to repair.
+/// Dropping a bad bound and carrying on leaves an operator with a histogram
+/// whose buckets don't match what they wrote, and nothing in the exported
+/// metrics says which one went missing. Refusing at startup — or refusing the
+/// reload, leaving the running configuration untouched — is the only outcome
+/// they can act on.
+///
+/// This covers `pgdog.toml` only. A malformed `PGDOG_QUERY_TIME_BUCKETS` falls
+/// back to the defaults without complaint, because every environment variable
+/// in `General` does: they are read through serde defaults, which have no way
+/// to report a failure.
+fn set_histogram_bounds(config: &ConfigAndUsers) -> Result<(), Error> {
+    let configured = Bounds::try_from_millis(&config.config.general.query_time_buckets)
+        .map_err(|err| Error::ParseError(format!("\"query_time_buckets\" {err}")))?;
 
     match histogram::set_bounds(configured) {
         Latch::AlreadySet(current) if current != configured => {
@@ -112,6 +115,8 @@ fn set_histogram_bounds(config: &ConfigAndUsers) {
         // because an earlier load latched the same bounds.
         Latch::Set | Latch::AlreadySet(_) | Latch::DefaultedByRead(_) => (),
     }
+
+    Ok(())
 }
 
 /// Validate sharding key lookup queries with the SQL parser:
@@ -615,5 +620,62 @@ hasher = "sha1"
         let config = config_with_query("SELECT parent FROM tenants WHERE x = $2");
         let err = validate_lookup_queries(&config).unwrap_err();
         assert!(err.to_string().contains("$1"));
+    }
+}
+
+#[cfg(test)]
+mod histogram_bounds_tests {
+    use super::*;
+
+    fn config_from(source: &str) -> ConfigAndUsers {
+        ConfigAndUsers {
+            config: toml::from_str(source).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    /// Every case here is rejected before `histogram::set_bounds` is reached,
+    /// so these never touch the process-wide latch and stay order-independent.
+    fn rejection(buckets: &str) -> String {
+        let config = config_from(&format!("[general]\nquery_time_buckets = {buckets}\n"));
+        set_histogram_bounds(&config)
+            .expect_err("should have been rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn test_rejects_a_negative_bound() {
+        let err = rejection("[1.0, -3.0, 4.0]");
+        assert!(err.contains("query_time_buckets"), "{err}");
+        assert!(err.contains("-3"), "{err}");
+    }
+
+    #[test]
+    fn test_rejects_a_zero_bound() {
+        assert!(rejection("[0.0, 1.0]").contains("0 is not a positive"));
+    }
+
+    #[test]
+    fn test_rejects_an_empty_ladder() {
+        assert!(rejection("[]").contains("is empty"));
+    }
+
+    #[test]
+    fn test_rejects_more_bounds_than_the_maximum() {
+        let many = (1..=30)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(rejection(&format!("[{many}]")).contains("at most"));
+    }
+
+    #[test]
+    fn test_error_names_the_setting_so_an_operator_can_find_it() {
+        // The whole point of failing at startup is an actionable message.
+        let err = rejection("[1.0, -3.0]");
+        assert!(
+            err.starts_with("parse error: \"query_time_buckets\""),
+            "{err}"
+        );
     }
 }
