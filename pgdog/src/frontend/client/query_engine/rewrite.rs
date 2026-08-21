@@ -46,17 +46,9 @@ impl QueryEngine {
                     return Ok(false);
                 }
             };
+
+            context.rewrite_result = Some(ast.rewrite_plan.apply(context.client_request)?);
             context.client_request.ast = Some(ast);
-        }
-
-        let plan = context
-            .client_request
-            .ast
-            .as_ref()
-            .map(|ast| ast.rewrite_plan.clone());
-
-        if let Some(plan) = plan {
-            context.rewrite_result = Some(plan.apply(context.client_request)?);
         }
 
         Ok(true)
