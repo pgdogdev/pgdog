@@ -102,7 +102,7 @@ mod test {
     }
 
     #[test]
-    fn test_changed_returns_false_when_lsn_stats_invalid() {
+    fn test_changed_revokes_primary_when_lsn_stats_invalid() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(primary.as_ref(), &replicas);
@@ -110,6 +110,7 @@ mod test {
         let mut detector = RoleDetector::new(&shard);
 
         assert!(detector.enabled());
+        assert!(detector.changed());
         assert!(!detector.changed());
     }
 

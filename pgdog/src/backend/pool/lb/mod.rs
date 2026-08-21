@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -80,6 +81,18 @@ impl Target {
     pub(super) fn health(&self) -> &TargetHealth {
         &self.pool.inner().health
     }
+
+    fn is_qualified_primary(&self) -> bool {
+        if self.role() != Role::Primary {
+            return false;
+        }
+        if self.pool.addr().configured_role != Role::Auto {
+            return true;
+        }
+
+        let stats = self.pool.lsn_stats();
+        stats.valid() && !stats.replica
+    }
 }
 
 /// Load balancer.
@@ -97,6 +110,8 @@ pub(crate) struct LoadBalancer {
     pub(super) maintenance: CancellationToken,
     /// Pool elected as primary by automatic role detection.
     pub(super) elected_primary: Arc<watch::Sender<Option<Pool>>>,
+    /// Automatic-role election lock.
+    election: Arc<Mutex<()>>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -148,6 +163,7 @@ impl LoadBalancer {
             lb_strategy,
             maintenance: CancellationToken::new(),
             elected_primary: Arc::new(watch::Sender::new(None)),
+            election: Arc::new(Mutex::new(())),
             rw_split,
         }
     }
@@ -171,12 +187,16 @@ impl LoadBalancer {
     /// Detect database roles from pg_is_in_recovery() and
     /// return new primary (if any), and replicas.
     pub(crate) fn redetect_roles(&self) -> bool {
-        let mut promoted = false;
+        let _election = self.election.lock();
+        let previous_primary = self
+            .primary_target()
+            .filter(|target| target.pool.addr().configured_role == Role::Auto)
+            .map(|target| target.pool.id());
 
         let mut targets = self
             .targets
-            .clone()
-            .into_iter()
+            .iter()
+            .filter(|target| target.pool.addr().configured_role == Role::Auto)
             .map(|target| (target.pool.lsn_stats(), target))
             .collect::<Vec<_>>();
 
@@ -193,13 +213,15 @@ impl LoadBalancer {
         let primary = targets
             .iter()
             .position(|target| !target.0.replica && target.0.valid());
+        let current_primary = primary.map(|index| targets[index].1.pool.id());
+        let primary_changed = previous_primary != current_primary;
 
         self.elected_primary.send_replace(None);
 
         if let Some(primary) = primary {
-            promoted = targets[primary].1.set_role(Role::Primary);
+            targets[primary].1.set_role(Role::Primary);
 
-            if promoted {
+            if primary_changed {
                 warn!("new primary chosen: {}", targets[primary].1.pool.addr());
             }
 
@@ -211,16 +233,18 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
-        } else if targets.iter().all(|target| target.0.valid()) {
-            // All targets are replicas until we get a primary.
+        } else {
             targets.iter().for_each(|target| {
                 target.1.set_role(Role::Replica);
             });
         }
 
-        self.elected_primary.send_replace(self.primary().cloned());
+        self.elected_primary.send_replace(
+            self.qualified_primary_target()
+                .map(|target| target.pool.clone()),
+        );
 
-        promoted
+        primary_changed
     }
 
     /// Launch replica pools and start the monitor.
@@ -324,15 +348,25 @@ impl LoadBalancer {
         result
     }
 
-    /// Wait until automatic role detection elects a primary.
-    ///
-    /// Fails with [`Error::CheckoutTimeout`] if no election happens in time.
+    fn qualified_primary_target(&self) -> Option<&Target> {
+        self.targets
+            .iter()
+            .rev()
+            .find(|target| target.is_qualified_primary())
+    }
+
+    /// Wait until automatic role detection elects a qualified primary.
     async fn wait_primary(&self) -> Result<Pool, Error> {
         let mut receiver = self.elected_primary.subscribe();
 
-        safe_timeout(self.checkout_timeout, receiver.wait_for(|p| p.is_some()))
+        receiver
+            .wait_for(|primary| {
+                primary.as_ref().is_some_and(|pool| {
+                    let stats = pool.lsn_stats();
+                    stats.valid() && !stats.replica
+                })
+            })
             .await
-            .map_err(|_| Error::CheckoutTimeout)?
             .ok()
             .and_then(|elected| elected.as_ref().cloned())
             .ok_or(Error::NoPrimary)
@@ -343,8 +377,14 @@ impl LoadBalancer {
     /// In automatic mode, the caller waits for an election. Static
     /// replica-only configurations fail immediately with [`Error::NoPrimary`].
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
-        if let Some(pool) = self.primary() {
-            return pool.get(request).await;
+        safe_timeout(self.checkout_timeout, self.get_primary_internal(request))
+            .await
+            .map_err(|_| Error::CheckoutTimeout)?
+    }
+
+    async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(target) = self.qualified_primary_target() {
+            return target.pool.get(request).await;
         }
 
         if !self.role_detection_enabled() {
