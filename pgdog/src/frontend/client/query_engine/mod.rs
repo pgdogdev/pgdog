@@ -126,8 +126,14 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        if !self.parse_and_rewrite(context).await? {
-            return Ok(());
+        match self.parse_and_rewrite(context) {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(e) => {
+                self.error_response(context, ErrorResponse::syntax(e.to_string()))
+                    .await?;
+                return Ok(());
+            }
         }
 
         // Intercept commands we don't have to forward to a server.
