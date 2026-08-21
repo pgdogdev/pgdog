@@ -20,13 +20,13 @@ pub(super) struct Row {
 
 #[derive(Debug)]
 pub(crate) struct UpdateMulti<'a> {
-    pub(super) rewrite: ShardingKeyUpdate,
+    pub(super) rewrite: &'a ShardingKeyUpdate,
     pub(super) engine: &'a mut QueryEngine,
 }
 
 impl<'a> UpdateMulti<'a> {
     /// Create new sharding key update handler.
-    pub(crate) fn new(engine: &'a mut QueryEngine, rewrite: ShardingKeyUpdate) -> Self {
+    pub(crate) fn new(engine: &'a mut QueryEngine, rewrite: &'a ShardingKeyUpdate) -> Self {
         Self { rewrite, engine }
     }
 
