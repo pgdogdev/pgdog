@@ -187,7 +187,9 @@ pub fn hash_password(password: &str) {
 /// Run an api task to completion in the foreground, cancelling it on Ctrl-C so
 /// it can wind down (e.g. stop replication) instead of the process being
 /// hard-killed. Returns the task output, or its error/cancellation outcome.
-async fn run_to_completion<T: Task>(task: T) -> Result<T::Output, Box<dyn std::error::Error>>
+async fn run_to_completion<T: Task + 'static>(
+    task: T,
+) -> Result<T::Output, Box<dyn std::error::Error>>
 where
     T::Error: std::error::Error + 'static,
 {

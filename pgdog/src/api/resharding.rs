@@ -11,18 +11,18 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::api::async_task::AsyncTaskContext;
 use crate::api::copy_data::CopyDataTask;
 use crate::api::replication::ReplicationTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
 /// Run the full migration from a source database to a target: schema sync
 /// (pre-data tables, then post-data indexes around the bulk copy), data copy,
 /// then replication. With `auto_cutover` it also performs the cutover.
-#[derive(Display, Debug, bon::Builder)]
-#[display("reshard {orchestrator}")]
+#[derive(Debug, bon::Builder)]
 pub(crate) struct ReshardTask {
     pub orchestrator: Orchestrator,
     /// Skip the pre- and post-data schema sync.
@@ -40,24 +40,6 @@ pub(crate) struct ReshardTask {
     pub auto_cutover: bool,
 }
 
-/// Stages of the migration, reported as the task's status. The fine-grained
-/// schema-sync, copy, and replication stages live on the child tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub(crate) enum ReshardStatus {
-    /// Running the pre-data schema-sync child task.
-    #[display("syncing schema")]
-    SchemaSync,
-    /// Running the data-copy child task.
-    #[display("syncing data")]
-    SyncingData,
-    /// Running the post-data schema-sync child task (indexes, constraints).
-    #[display("finalizing schema")]
-    FinalizingSchema,
-    /// Running the replication child task.
-    #[display("replicating")]
-    Replication,
-}
-
 impl Task for ReshardTask {
     type Status = ReshardStatus;
     type Output = ();
@@ -67,7 +49,17 @@ impl Task for ReshardTask {
         Duration::from_secs(60)
     }
 
-    async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<(), MigrationError> {
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        ReshardDefinition {
+            databases: self.orchestrator.databases(),
+            skip_schema_sync: self.skip_schema_sync,
+            replicate_only: self.replicate_only,
+            sync_only: self.sync_only,
+            auto_cutover: self.auto_cutover,
+        }
+    }
+
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         // Take the cancellation token so a `STOP_TASK` winds the children down
         // cooperatively (they'd otherwise outlive this task).
         let _token = ctx.cancellation_token();

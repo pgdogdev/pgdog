@@ -176,7 +176,7 @@ traffic immediately via `maintenance_mode::stop()` and returns an error. Steps i
 5. `schema_sync_post_cutover()` — applies `SyncState::PostCutover` (removes blockers that would
    prevent reverse replication, such as unique constraints on sequence columns).
 6. `orchestrator.replicate()` — starts reverse replication (new cluster → old cluster) as a
-   background `AsyncTasks` task. This enables rollback without data loss.
+   background `crate::api` task. This enables rollback without data loss.
 7. `maintenance_mode::stop()` — releases the barrier; queued and new queries flow to the new cluster.
 
 ---
