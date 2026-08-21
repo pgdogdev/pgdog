@@ -80,8 +80,7 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         match context.rewrite_result.take() {
             Some(RewriteResult::InsertSplit(requests)) => {
-                multi_step::InsertMulti::from_engine(self, requests)
-                    .execute(context)
+                Box::pin(multi_step::InsertMulti::from_engine(self, requests).execute(context))
                     .await?;
             }
 
@@ -100,8 +99,7 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
-                multi_step::UpdateMulti::new(self, &sharding_key_update)
-                    .execute(context)
+                Box::pin(multi_step::UpdateMulti::new(self, &sharding_key_update).execute(context))
                     .await?;
             }
         }
