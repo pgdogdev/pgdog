@@ -140,10 +140,10 @@ impl PreparedStatements {
     }
 
     /// Get a globally unique [`Prepare`] message using the client name as key.
-    pub(crate) fn prepare_and_rewrite(&self, name: &str) -> Option<(Prepare, Arc<RewritePlan>)> {
+    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<(Prepare, u16)> {
         self.local
             .get(name)
-            .and_then(|name| self.global.read().prepare_and_rewrite(name))
+            .and_then(|name| self.global.read().prepare_and_unique_ids(name))
     }
 
     /// Number of prepared statements in the client's cache.

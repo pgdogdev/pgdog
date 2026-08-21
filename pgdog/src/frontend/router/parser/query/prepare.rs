@@ -51,9 +51,9 @@ impl QueryParser {
         //
         // INVARIANT 1: The prepared statements rewriter places it there.
         // INVARIANT 2: The rewriter renamed the EXECUTE statement to its global name.
-        let (prepare, _) = PreparedStatements::global()
+        let prepare = PreparedStatements::global()
             .read()
-            .prepare_and_rewrite(stmt.name().expect("execute to have a name"))
+            .prepare(stmt.name().expect("execute to have a name"))
             .ok_or(Error::ExecuteRequiresFull)?;
 
         // Make sure we never store unique statement names
