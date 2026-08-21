@@ -1408,6 +1408,84 @@ pub mod test {
         }
     }
 
+    pub(crate) async fn automatic_role_server(value: Option<&'static str>) -> Server {
+        automatic_role_server_response(value.map(AutomaticRoleResponse::Value)).await
+    }
+
+    pub(crate) async fn automatic_role_error_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Error)).await
+    }
+
+    pub(crate) async fn automatic_role_empty_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Empty)).await
+    }
+
+    pub(crate) async fn automatic_role_disconnect_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Disconnect)).await
+    }
+
+    enum AutomaticRoleResponse {
+        Value(&'static str),
+        Error,
+        Empty,
+        Disconnect,
+    }
+
+    async fn automatic_role_server_response(response: Option<AutomaticRoleResponse>) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = tokio::net::TcpStream::connect(listener.local_addr().unwrap());
+        let (client, accepted) = tokio::join!(connect, listener.accept());
+        let mut socket = accepted.unwrap().0;
+        tokio::spawn(async move {
+            let code = socket.read_u8().await.unwrap();
+            let len = socket.read_i32().await.unwrap();
+            assert_eq!(code, b'Q');
+            let mut payload = vec![0; len as usize - 4];
+            socket.read_exact(&mut payload).await.unwrap();
+
+            let Some(response) = response else {
+                std::future::pending::<()>().await;
+                return;
+            };
+
+            let mut bytes = BytesMut::new();
+            match response {
+                AutomaticRoleResponse::Value(value) => {
+                    let mut row = DataRow::new();
+                    row.add(value);
+                    bytes.extend_from_slice(
+                        &RowDescription::new(&[Field::bool("pg_is_in_recovery")]).to_bytes(),
+                    );
+                    bytes.extend_from_slice(&row.to_bytes());
+                    bytes.extend_from_slice(&CommandComplete::new("SELECT 1").to_bytes());
+                }
+                AutomaticRoleResponse::Error => {
+                    bytes.extend_from_slice(
+                        &ErrorResponse {
+                            code: "XX000".into(),
+                            message: "backend role query failed".into(),
+                            ..Default::default()
+                        }
+                        .to_bytes(),
+                    );
+                }
+                AutomaticRoleResponse::Empty => {
+                    bytes.extend_from_slice(
+                        &RowDescription::new(&[Field::bool("pg_is_in_recovery")]).to_bytes(),
+                    );
+                    bytes.extend_from_slice(&CommandComplete::new("SELECT 0").to_bytes());
+                }
+                AutomaticRoleResponse::Disconnect => return,
+            }
+            bytes.extend_from_slice(&ReadyForQuery::idle().to_bytes());
+            socket.write_all(&bytes).await.unwrap();
+        });
+
+        let mut server = Server::default();
+        server.stream = Some(Stream::plain(client.unwrap(), 4096));
+        server
+    }
+
     pub(crate) async fn test_server() -> Server {
         Server::connect(
             &Address::new_test(),

@@ -72,7 +72,7 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
         ..Default::default()
     }
     .into();
-    *target.pool.inner().lsn_stats.write() = stats;
+    target.pool.publish_lsn_stats(stats);
 }
 
 impl LoadBalancer {
@@ -1503,7 +1503,10 @@ async fn test_auto_mode_waits_for_primary_election() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Err(Error::CheckoutTimeout));
+    assert_eq!(
+        lb.get_primary(&Request::default()).await.unwrap_err(),
+        Error::CheckoutTimeout
+    );
 }
 
 #[tokio::test]
@@ -1520,11 +1523,11 @@ async fn test_auto_mode_primary_election_releases_writes() {
 
     tokio::spawn(async move {
         sleep(Duration::from_millis(10)).await;
-        election.targets[0].set_role(Role::Primary);
-        election.role_detection.notify_one();
+        set_lsn_stats(&election.targets[0], false, 100);
+        election.redetect_roles();
     });
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
+    assert!(lb.wait_primary_target().await.is_ok());
     assert!(lb.primary().is_some());
 }
 
@@ -1539,11 +1542,86 @@ async fn test_static_replica_only_does_not_wait_for_primary() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
     assert!(matches!(
         lb.get_primary(&Request::default()).await,
         Err(Error::NoPrimary)
     ));
+}
+
+#[test]
+fn test_automatic_primary_requires_valid_writer_evidence() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[create_auto_test_pool_config("127.0.0.1", 5432)],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    let target = &lb.targets[0];
+
+    target.set_role(Role::Primary);
+    assert!(!target.is_qualified_primary());
+
+    set_lsn_stats(target, false, 100);
+    assert!(target.is_qualified_primary());
+
+    target.pool.revoke_automatic_primary_evidence();
+    assert!(!target.is_qualified_primary());
+}
+
+#[test]
+fn test_redetect_roles_demotes_primary_after_evidence_revocation() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[create_auto_test_pool_config("127.0.0.1", 5432)],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    let target = &lb.targets[0];
+
+    set_lsn_stats(target, false, 100);
+    assert!(lb.redetect_roles());
+    assert_eq!(target.role(), Role::Primary);
+
+    target.pool.revoke_automatic_primary_evidence();
+    assert!(lb.redetect_roles());
+    assert_eq!(target.role(), Role::Replica);
+}
+
+#[test]
+fn test_concurrent_role_detection_keeps_one_qualified_primary() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[
+            create_auto_test_pool_config("127.0.0.1", 5432),
+            create_auto_test_pool_config("localhost", 5432),
+        ],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    set_lsn_stats(&lb.targets[0], false, 100);
+    set_lsn_stats(&lb.targets[1], false, 200);
+
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let lb = lb.clone();
+            scope.spawn(move || {
+                for _ in 0..100 {
+                    lb.redetect_roles();
+                }
+            });
+        }
+    });
+
+    let primaries = lb
+        .targets
+        .iter()
+        .filter(|target| target.is_qualified_primary())
+        .collect::<Vec<_>>();
+    assert_eq!(primaries.len(), 1);
+    assert_eq!(primaries[0].pool.id(), lb.targets[1].pool.id());
 }
 
 #[tokio::test]

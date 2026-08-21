@@ -104,6 +104,41 @@ impl Pool {
         self.inner.health.healthy()
     }
 
+    pub(super) fn revoke_automatic_primary_evidence(&self) {
+        if !self.config().role_detection {
+            return;
+        }
+
+        let was_valid = {
+            let mut stats = self.inner.lsn_stats.write();
+            let was_valid = stats.valid();
+            if was_valid {
+                *stats = Default::default();
+            }
+            was_valid
+        };
+
+        if was_valid {
+            self.inner.lsn_role_change.notify_one();
+        }
+    }
+
+    pub(super) fn publish_lsn_stats(&self, stats: LsnStats) {
+        let notify = {
+            let mut current = self.inner.lsn_stats.write();
+            let current_valid = current.valid();
+            let stats_valid = stats.valid();
+            let notify = current_valid != stats_valid
+                || (current_valid && stats_valid && current.replica != stats.replica);
+            *current = stats;
+            notify
+        };
+
+        if notify {
+            self.inner.lsn_role_change.notify_one();
+        }
+    }
+
     /// Launch the maintenance loop, bringing the pool online.
     pub fn launch(&self) {
         let mut guard = self.lock();

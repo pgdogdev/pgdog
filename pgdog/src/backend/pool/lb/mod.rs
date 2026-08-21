@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use tokio::sync::Notify;
 use tracing::warn;
@@ -79,6 +80,18 @@ impl Target {
     pub(super) fn health(&self) -> &TargetHealth {
         &self.pool.inner().health
     }
+
+    fn is_qualified_primary(&self) -> bool {
+        if self.role() != Role::Primary {
+            return false;
+        }
+        if self.pool.addr().configured_role != Role::Auto {
+            return true;
+        }
+
+        let stats = self.pool.lsn_stats();
+        stats.valid() && !stats.replica
+    }
 }
 
 /// Load balancer.
@@ -96,6 +109,8 @@ pub struct LoadBalancer {
     pub(super) maintenance: Arc<Notify>,
     /// Role detection waiter.
     pub(super) role_detection: Arc<Notify>,
+    /// Automatic-role election lock.
+    election: Arc<Mutex<()>>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -147,6 +162,7 @@ impl LoadBalancer {
             lb_strategy,
             maintenance: Arc::new(Notify::new()),
             role_detection: Arc::new(Notify::new()),
+            election: Arc::new(Mutex::new(())),
             rw_split,
         }
     }
@@ -170,12 +186,16 @@ impl LoadBalancer {
     /// Detect database roles from pg_is_in_recovery() and
     /// return new primary (if any), and replicas.
     pub fn redetect_roles(&self) -> bool {
-        let mut promoted = false;
+        let _election = self.election.lock();
+        let previous_primary = self
+            .primary_target()
+            .filter(|target| target.pool.addr().configured_role == Role::Auto)
+            .map(|target| target.pool.id());
 
         let mut targets = self
             .targets
-            .clone()
-            .into_iter()
+            .iter()
+            .filter(|target| target.pool.addr().configured_role == Role::Auto)
             .map(|target| (target.pool.lsn_stats(), target))
             .collect::<Vec<_>>();
 
@@ -192,11 +212,13 @@ impl LoadBalancer {
         let primary = targets
             .iter()
             .position(|target| !target.0.replica && target.0.valid());
+        let current_primary = primary.map(|index| targets[index].1.pool.id());
+        let primary_changed = previous_primary != current_primary;
 
         if let Some(primary) = primary {
-            promoted = targets[primary].1.set_role(Role::Primary);
+            targets[primary].1.set_role(Role::Primary);
 
-            if promoted {
+            if primary_changed {
                 warn!("new primary chosen: {}", targets[primary].1.pool.addr());
             }
 
@@ -208,18 +230,17 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
-        } else if targets.iter().all(|target| target.0.valid()) {
-            // All targets are replicas until we get a primary.
+        } else {
             targets.iter().for_each(|target| {
                 target.1.set_role(Role::Replica);
             });
         }
 
-        if promoted {
-            self.role_detection.notify_one();
+        if current_primary.is_some() || primary_changed {
+            self.role_detection.notify_waiters();
         }
 
-        promoted
+        primary_changed
     }
 
     /// Launch replica pools and start the monitor.
@@ -323,37 +344,39 @@ impl LoadBalancer {
         result
     }
 
-    /// Block until automatic role detection elects a primary.
-    ///
-    /// Static replica-only configurations return immediately. In automatic
-    /// mode, callers wait until a primary is elected or checkout times out.
-    async fn wait_primary(&self) -> Result<(), Error> {
-        if self.primary_target().is_none() && self.role_detection_enabled() {
-            if safe_timeout(self.checkout_timeout, self.role_detection.notified())
-                .await
-                .is_err()
-            {
-                return Err(Error::CheckoutTimeout);
-            };
-            // Chain the wakeup so any other waiter that arrived after us
-            // also gets released without needing another promotion event.
-            self.role_detection.notify_one();
+    fn qualified_primary_target(&self) -> Option<&Target> {
+        self.targets
+            .iter()
+            .rev()
+            .find(|target| target.is_qualified_primary())
+    }
+
+    async fn wait_primary_target(&self) -> Result<&Target, Error> {
+        if !self.role_detection_enabled() {
+            return self.qualified_primary_target().ok_or(Error::NoPrimary);
         }
 
-        Ok(())
+        loop {
+            let notified = self.role_detection.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if let Some(target) = self.qualified_primary_target() {
+                return Ok(target);
+            }
+
+            notified.await;
+        }
     }
 
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_primary_internal(request).await
+        safe_timeout(self.checkout_timeout, self.get_primary_internal(request))
+            .await
+            .map_err(|_| Error::CheckoutTimeout)?
     }
 
     async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
-        self.wait_primary().await?;
-        self.primary_target()
-            .ok_or(Error::NoPrimary)?
-            .pool
-            .get(request)
-            .await
+        self.wait_primary_target().await?.pool.get(request).await
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
