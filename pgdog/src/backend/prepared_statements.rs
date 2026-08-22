@@ -77,15 +77,19 @@ impl Prepare {
     }
 }
 
+/// Payloads are boxed so the enum stays pointer-sized. It is returned from
+/// [`PreparedStatements::handle`] for every protocol message, and the answer is
+/// `Forward` for anything that isn't a named prepared statement; carrying the
+/// variants inline made that 528 bytes to move per message.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum HandleResult {
     Drop,
     Forward,
-    Rewrite(ProtocolMessage),
-    Prepend(Prepare),
+    Rewrite(Box<ProtocolMessage>),
+    Prepend(Box<Prepare>),
     PrependRewrite {
-        prepend: Prepare,
-        rewrite: ProtocolMessage,
+        prepend: Box<Prepare>,
+        rewrite: Box<ProtocolMessage>,
     },
 }
 
@@ -186,11 +190,11 @@ impl PreparedStatements {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
                                 return Ok(HandleResult::PrependRewrite {
-                                    prepend: message,
-                                    rewrite: ProtocolMessage::Bind(bind),
+                                    prepend: Box::new(message),
+                                    rewrite: Box::new(ProtocolMessage::Bind(bind)),
                                 });
                             } else {
-                                return Ok(HandleResult::Prepend(message));
+                                return Ok(HandleResult::Prepend(Box::new(message)));
                             }
                         }
 
@@ -199,7 +203,9 @@ impl PreparedStatements {
                             if self.config.level.rewrite_anonymous() {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
-                                return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
+                                return Ok(HandleResult::Rewrite(Box::new(ProtocolMessage::Bind(
+                                    bind,
+                                ))));
                             }
                         }
                     }
@@ -231,11 +237,11 @@ impl PreparedStatements {
                                 let mut describe = describe.clone();
                                 describe.anonymize();
                                 return Ok(HandleResult::PrependRewrite {
-                                    prepend: message,
-                                    rewrite: ProtocolMessage::Describe(describe),
+                                    prepend: Box::new(message),
+                                    rewrite: Box::new(ProtocolMessage::Describe(describe)),
                                 });
                             } else {
-                                return Ok(HandleResult::Prepend(message));
+                                return Ok(HandleResult::Prepend(Box::new(message)));
                             }
                         }
 
@@ -247,8 +253,8 @@ impl PreparedStatements {
                             if self.config.level.rewrite_anonymous() {
                                 let mut describe = describe.clone();
                                 describe.anonymize();
-                                return Ok(HandleResult::Rewrite(ProtocolMessage::Describe(
-                                    describe,
+                                return Ok(HandleResult::Rewrite(Box::new(
+                                    ProtocolMessage::Describe(describe),
                                 )));
                             }
                         }
@@ -297,7 +303,9 @@ impl PreparedStatements {
 
                 self.state.add('1');
                 if rewritten {
-                    return Ok(HandleResult::Rewrite(ProtocolMessage::Parse(parse)));
+                    return Ok(HandleResult::Rewrite(Box::new(ProtocolMessage::Parse(
+                        parse,
+                    ))));
                 }
             }
 
@@ -670,6 +678,17 @@ pub(crate) mod test {
     };
     use pgdog_config::PreparedStatements as PreparedStatementsLevel;
 
+    /// Returned by value for every protocol message, so it is moved on the
+    /// hot path whether or not it carries a payload. It was 528 bytes when
+    /// the variants held `Prepare`/`ProtocolMessage` inline, which was
+    /// visible as `memcpy` under `Server::send_one` in profiles.
+    #[test]
+    fn test_handle_result_stays_small() {
+        let size = size_of::<HandleResult>();
+        println!("HandleResult = {} bytes", size);
+        assert!(size <= 32, "HandleResult grew to {} bytes", size);
+    }
+
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
     fn new_extended_anonymous() -> PreparedStatements {
         new_with_level(PreparedStatementsLevel::ExtendedAnonymous)
@@ -939,13 +958,14 @@ pub(crate) mod test {
         let mut ps = new_extended_anonymous();
         let parse = Parse::named("stmt1", "SELECT 1");
         let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
-        match result {
-            HandleResult::Rewrite(ProtocolMessage::Parse(p)) => {
-                assert!(p.anonymous(), "Parse should be anonymized");
-                assert_eq!(p.query(), "SELECT 1");
-            }
-            other => panic!("expected Rewrite(Parse), got {:?}", other),
-        }
+        let HandleResult::Rewrite(msg) = &result else {
+            panic!("expected Rewrite(Parse), got {:?}", result);
+        };
+        let ProtocolMessage::Parse(p) = &**msg else {
+            panic!("expected Rewrite(Parse), got {:?}", result);
+        };
+        assert!(p.anonymous(), "Parse should be anonymized");
+        assert_eq!(p.query(), "SELECT 1");
     }
 
     #[test]
@@ -995,12 +1015,13 @@ pub(crate) mod test {
         let mut ps = new_extended_anonymous();
         let bind = Bind::new_statement("stmt1");
         let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
-        match result {
-            HandleResult::Rewrite(ProtocolMessage::Bind(b)) => {
-                assert!(b.anonymous(), "Bind should be anonymized");
-            }
-            other => panic!("expected Rewrite(Bind), got {:?}", other),
-        }
+        let HandleResult::Rewrite(msg) = &result else {
+            panic!("expected Rewrite(Bind), got {:?}", result);
+        };
+        let ProtocolMessage::Bind(b) = &**msg else {
+            panic!("expected Rewrite(Bind), got {:?}", result);
+        };
+        assert!(b.anonymous(), "Bind should be anonymized");
     }
 
     #[test]
@@ -1045,7 +1066,7 @@ pub(crate) mod test {
                     panic!("expected prepend to be Parse");
                 }
                 // The rewritten Bind should be anonymized.
-                if let ProtocolMessage::Bind(b) = &rewrite {
+                if let ProtocolMessage::Bind(b) = &*rewrite {
                     assert!(b.anonymous(), "rewritten Bind should be anonymous");
                 } else {
                     panic!("expected rewrite to be Bind");
@@ -1064,12 +1085,13 @@ pub(crate) mod test {
         let mut ps = new_extended_anonymous();
         let describe = Describe::new_statement("stmt1");
         let result = ps.handle(&ProtocolMessage::Describe(describe)).unwrap();
-        match result {
-            HandleResult::Rewrite(ProtocolMessage::Describe(d)) => {
-                assert!(d.anonymous(), "Describe should be anonymized");
-            }
-            other => panic!("expected Rewrite(Describe), got {:?}", other),
-        }
+        let HandleResult::Rewrite(msg) = &result else {
+            panic!("expected Rewrite(Describe), got {:?}", result);
+        };
+        let ProtocolMessage::Describe(d) = &**msg else {
+            panic!("expected Rewrite(Describe), got {:?}", result);
+        };
+        assert!(d.anonymous(), "Describe should be anonymized");
     }
 
     #[test]
@@ -1085,7 +1107,7 @@ pub(crate) mod test {
                 } else {
                     panic!("expected prepend to be Parse");
                 }
-                if let ProtocolMessage::Describe(d) = &rewrite {
+                if let ProtocolMessage::Describe(d) = &*rewrite {
                     assert!(d.anonymous(), "rewritten Describe should be anonymous");
                 } else {
                     panic!("expected rewrite to be Describe");
@@ -1180,12 +1202,13 @@ pub(crate) mod test {
         // Parse
         let parse = Parse::named("stmt1", "SELECT $1");
         let result = ps.handle(&ProtocolMessage::Parse(parse)).unwrap();
-        match &result {
-            HandleResult::Rewrite(ProtocolMessage::Parse(p)) => {
-                assert!(p.anonymous());
-            }
-            other => panic!("expected Rewrite(Parse), got {:?}", other),
-        }
+        let HandleResult::Rewrite(msg) = &result else {
+            panic!("expected Rewrite(Parse), got {:?}", result);
+        };
+        let ProtocolMessage::Parse(p) = &**msg else {
+            panic!("expected Rewrite(Parse), got {:?}", result);
+        };
+        assert!(p.anonymous());
 
         // Bind
         let bind = Bind::new_params(
@@ -1196,12 +1219,13 @@ pub(crate) mod test {
             }],
         );
         let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
-        match &result {
-            HandleResult::Rewrite(ProtocolMessage::Bind(b)) => {
-                assert!(b.anonymous());
-            }
-            other => panic!("expected Rewrite(Bind), got {:?}", other),
-        }
+        let HandleResult::Rewrite(msg) = &result else {
+            panic!("expected Rewrite(Bind), got {:?}", result);
+        };
+        let ProtocolMessage::Bind(b) = &**msg else {
+            panic!("expected Rewrite(Bind), got {:?}", result);
+        };
+        assert!(b.anonymous());
 
         // Execute
         let result = ps
@@ -1252,7 +1276,7 @@ pub(crate) mod test {
         let expected = parse.with_data_types(&[10001, 10002]);
         assert_eq!(
             result,
-            HandleResult::Rewrite(ProtocolMessage::Parse(expected))
+            HandleResult::Rewrite(Box::new(ProtocolMessage::Parse(expected)))
         );
     }
 

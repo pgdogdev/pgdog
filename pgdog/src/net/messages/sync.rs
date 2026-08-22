@@ -27,9 +27,12 @@ impl FromBytes for Sync {
     }
 }
 
+/// Sync has no payload, so its encoding is the constant 'S' + length 4.
+static ENCODED: &[u8] = &[b'S', 0, 0, 0, 4];
+
 impl ToBytes for Sync {
     fn to_bytes(&self) -> Bytes {
-        Payload::named('S').freeze()
+        Bytes::from_static(ENCODED)
     }
 }
 
@@ -46,5 +49,6 @@ mod test {
     #[test]
     fn test_sync() {
         assert_eq!(Sync.len(), Sync.to_bytes().len());
+        assert_eq!(Sync.to_bytes(), Payload::named('S').freeze());
     }
 }
