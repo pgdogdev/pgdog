@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::Error;
 use super::FromDataType;
 use super::Vector;
+use super::c_string_bytes;
 use super::code;
 use super::prelude::*;
 use bytes::BytesMut;
@@ -186,8 +187,8 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(&mut self, name: impl ToString) {
-        self.statement = Bytes::from(name.to_string() + "\0");
+    pub fn rename(&mut self, name: impl AsRef<str>) {
+        self.statement = c_string_bytes(name.as_ref());
         self.original = None;
     }
 
@@ -227,14 +228,14 @@ impl Bind {
 
     pub fn new_statement(name: &str) -> Self {
         Self {
-            statement: Bytes::from(name.to_string() + "\0"),
+            statement: c_string_bytes(name),
             ..Default::default()
         }
     }
 
     pub fn new_params(name: &str, params: &[Parameter]) -> Self {
         Self {
-            statement: Bytes::from(name.to_string() + "\0"),
+            statement: c_string_bytes(name),
             params: params.to_vec(),
             ..Default::default()
         }
@@ -242,15 +243,15 @@ impl Bind {
 
     pub fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
-            statement: Bytes::from(name.to_string() + "\0"),
-            portal: Bytes::from(portal.to_string() + "\0"),
+            statement: c_string_bytes(name),
+            portal: c_string_bytes(portal),
             ..Default::default()
         }
     }
 
     pub fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
         Self {
-            statement: Bytes::from(name.to_string() + "\0"),
+            statement: c_string_bytes(name),
             codes: codes.to_vec(),
             params: params.to_vec(),
             ..Default::default()

@@ -24,9 +24,9 @@ impl Password {
         }
     }
 
-    pub fn new_password(response: impl ToString) -> Self {
+    pub fn new_password(response: impl AsRef<str>) -> Self {
         Self::PasswordMessage {
-            response: response.to_string() + "\0",
+            response: [response.as_ref(), "\0"].concat(),
         }
     }
 

@@ -11,9 +11,7 @@ use std::str::from_utf8_unchecked;
 use super::code;
 use super::prelude::*;
 
-fn c_string(value: &str) -> Bytes {
-    Bytes::from([value.as_bytes(), b"\0"].concat())
-}
+use super::c_string_bytes;
 
 /// Parse (F) message.
 #[derive(Clone, Hash, Eq, PartialEq, Default)]
@@ -48,17 +46,17 @@ impl Parse {
     pub fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
-            query: c_string(query),
+            query: c_string_bytes(query),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
     }
 
     /// New prepared statement.
-    pub fn named(name: impl ToString, query: impl ToString) -> Self {
+    pub fn named(name: impl AsRef<str>, query: impl AsRef<str>) -> Self {
         Self {
-            name: c_string(&name.to_string()),
-            query: c_string(&query.to_string()),
+            name: c_string_bytes(name.as_ref()),
+            query: c_string_bytes(query.as_ref()),
             data_types: Bytes::copy_from_slice(&0i16.to_be_bytes()),
             original: None,
         }
@@ -90,7 +88,7 @@ impl Parse {
         // won't pin any original buffers (allowing to modify them without new allocation)
         // and the new allocation memory size will be just limited by the actual data, not buffers
         Parse {
-            name: c_string(name),
+            name: c_string_bytes(name),
             query: Bytes::copy_from_slice(&self.query),
             data_types: Bytes::copy_from_slice(&self.data_types),
             original: None,
@@ -98,8 +96,8 @@ impl Parse {
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename(&mut self, name: &str) {
-        self.name = c_string(name);
+    pub fn rename(&mut self, name: impl AsRef<str>) {
+        self.name = c_string_bytes(name.as_ref());
         self.original = None;
     }
 
@@ -116,7 +114,7 @@ impl Parse {
 
     /// Update the SQL for this prepared statement.
     pub fn set_query(&mut self, query: &str) {
-        self.query = c_string(query);
+        self.query = c_string_bytes(query);
         self.original = None;
     }
 

@@ -26,9 +26,9 @@ impl Query {
     }
 
     /// Create new query.
-    pub fn new(query: impl ToString) -> Self {
+    pub fn new(query: impl AsRef<str>) -> Self {
         let mut payload = Payload::named('Q');
-        payload.put_string(&query.to_string());
+        payload.put_string(query.as_ref());
         let payload = payload.freeze();
 
         Self { payload }
@@ -74,7 +74,7 @@ impl Protocol for Query {
     }
 }
 
-impl<T: ToString> From<T> for Query {
+impl<T: AsRef<str>> From<T> for Query {
     fn from(value: T) -> Self {
         Query::new(value)
     }

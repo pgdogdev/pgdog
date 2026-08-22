@@ -219,10 +219,10 @@ impl Parameters {
     /// Lowercase all param names.
     pub fn insert(
         &mut self,
-        name: impl ToString,
+        name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
     ) -> Option<ParameterValue> {
-        let name = name.to_string().to_lowercase();
+        let name = name.as_ref().to_lowercase();
         let result = self.params.insert(name, value.into());
 
         self.hash = Self::compute_hash(&self.params);
@@ -255,11 +255,11 @@ impl Parameters {
     /// Insert a parameter, but only for the duration of the transaction.
     pub fn insert_transaction(
         &mut self,
-        name: impl ToString,
+        name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
         local: bool,
     ) -> Option<ParameterValue> {
-        let name = name.to_string().to_lowercase();
+        let name = name.as_ref().to_lowercase();
         if local {
             self.transaction_local_params.insert(name, value.into())
         } else {
@@ -269,8 +269,8 @@ impl Parameters {
 
     /// Remove parameter from params temporarily. The transaction
     /// is comitted, it will be removed permanently.
-    pub fn reset(&mut self, name: impl ToString) {
-        let name = name.to_string().to_lowercase();
+    pub fn reset(&mut self, name: impl AsRef<str>) {
+        let name = name.as_ref().to_lowercase();
 
         if let Some(value) = self.params.remove(&name) {
             self.reset_params.insert(name.clone(), value);

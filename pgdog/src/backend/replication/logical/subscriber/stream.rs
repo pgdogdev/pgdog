@@ -87,7 +87,7 @@ impl Statement {
     fn new(query: &str) -> Result<Self, Error> {
         let name = statement_name();
         Ok(Self {
-            parse: Parse::named(name, query.to_string()),
+            parse: Parse::named(name, query),
         })
     }
 }

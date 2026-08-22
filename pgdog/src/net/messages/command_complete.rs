@@ -79,8 +79,8 @@ impl CommandComplete {
         Self::from_str("COMMIT")
     }
 
-    pub fn new(command: impl ToString) -> Self {
-        Self::from_str(command.to_string().as_str())
+    pub fn new(command: impl AsRef<str>) -> Self {
+        Self::from_str(command.as_ref())
     }
 }
 
