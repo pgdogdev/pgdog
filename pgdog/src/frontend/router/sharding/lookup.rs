@@ -340,6 +340,33 @@ impl LookupStats {
         self.lookup_time_us
             .fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
     }
+
+    /// Zero all counters, used by the RESET STATS command.
+    pub(crate) fn reset(&self) {
+        for counter in [
+            &self.hits,
+            &self.misses,
+            &self.evictions,
+            &self.lookups,
+            &self.lookup_time_us,
+        ] {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Add another snapshot of counters into this one, used when a config
+    /// reload carries lookup statistics over to the new cluster's cache.
+    pub(crate) fn accumulate(&self, other: &LookupStats) {
+        for (to, from) in [
+            (&self.hits, &other.hits),
+            (&self.misses, &other.misses),
+            (&self.evictions, &other.evictions),
+            (&self.lookups, &other.lookups),
+            (&self.lookup_time_us, &other.lookup_time_us),
+        ] {
+            to.fetch_add(from.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+    }
 }
 
 /// Sharding key lookup cache. Bounded by approximate memory use;

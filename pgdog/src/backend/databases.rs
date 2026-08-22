@@ -417,6 +417,18 @@ impl Databases {
         Ok(moved)
     }
 
+    /// Reset statistics on all clusters (including mirrors) and their pools,
+    /// used by the RESET STATS command.
+    pub(crate) fn reset_stats(&self) {
+        for cluster in self.databases.values() {
+            cluster.reset_stats();
+        }
+
+        for cluster in self.mirrors.values().flatten() {
+            cluster.reset_stats();
+        }
+    }
+
     /// Shutdown all pools.
     fn shutdown(&self) {
         for cluster in self.all().values() {
