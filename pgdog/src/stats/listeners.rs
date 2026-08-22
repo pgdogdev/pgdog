@@ -1,4 +1,4 @@
-use crate::backend::pub_sub::listener;
+use crate::{backend::pub_sub::listener, stats::OpenMetricType};
 
 use super::{Measurement, Metric, OpenMetric};
 
@@ -40,19 +40,19 @@ impl Listeners {
                 name: "pub_sub_listeners".into(),
                 measurements: listeners,
                 help: "Current number of clients listening on a pub/sub channel.".into(),
-                metric_type: "gauge".into(),
+                metric_type: OpenMetricType::Gauge,
             }),
             Metric::new(ListenerMetric {
                 name: "pub_sub_listener_received".into(),
                 measurements: received,
                 help: "Total number of notifications received by pub/sub listeners.".into(),
-                metric_type: "counter".into(),
+                metric_type: OpenMetricType::Counter,
             }),
             Metric::new(ListenerMetric {
                 name: "pub_sub_listener_dropped".into(),
                 measurements: dropped,
                 help: "Total number of notifications dropped by lagging pub/sub listeners.".into(),
-                metric_type: "counter".into(),
+                metric_type: OpenMetricType::Counter,
             }),
         ]
     }
@@ -62,7 +62,7 @@ struct ListenerMetric {
     name: String,
     measurements: Vec<Measurement>,
     help: String,
-    metric_type: String,
+    metric_type: OpenMetricType,
 }
 
 impl OpenMetric for ListenerMetric {
@@ -78,8 +78,8 @@ impl OpenMetric for ListenerMetric {
         Some(self.help.clone())
     }
 
-    fn metric_type(&self) -> String {
-        self.metric_type.clone()
+    fn metric_type(&self) -> OpenMetricType {
+        self.metric_type
     }
 }
 
@@ -100,8 +100,8 @@ mod tests {
                 "pub_sub_listener_dropped",
             ]
         );
-        assert_eq!(metrics[0].metric_type(), "gauge");
-        assert_eq!(metrics[1].metric_type(), "counter");
-        assert_eq!(metrics[2].metric_type(), "counter");
+        assert_eq!(metrics[0].metric_type(), OpenMetricType::Gauge);
+        assert_eq!(metrics[1].metric_type(), OpenMetricType::Counter);
+        assert_eq!(metrics[2].metric_type(), OpenMetricType::Counter);
     }
 }

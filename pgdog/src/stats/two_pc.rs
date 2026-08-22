@@ -2,7 +2,7 @@
 
 use crate::frontend::client::query_engine::two_pc::Manager;
 
-use super::{Measurement, Metric, OpenMetric};
+use super::{Measurement, Metric, OpenMetric, OpenMetricType};
 
 pub struct TwoPc {
     recovered_total: u64,
@@ -22,8 +22,8 @@ impl OpenMetric for TwoPc {
         "two_pc_recovered_total".into()
     }
 
-    fn metric_type(&self) -> String {
-        "counter".into()
+    fn metric_type(&self) -> OpenMetricType {
+        OpenMetricType::Counter
     }
 
     fn help(&self) -> Option<String> {
