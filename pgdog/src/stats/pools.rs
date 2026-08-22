@@ -103,7 +103,7 @@ impl Pools {
                     let labels = vec![
                         ("user".into(), user.user.clone()),
                         ("database".into(), user.database.clone()),
-                        ("host".into(), pool.addr().host.clone()),
+                        ("host".into(), pool.addr().host.to_string()),
                         ("port".into(), pool.addr().port.to_string()),
                         ("shard".into(), shard_num.to_string()),
                         ("role".into(), role.to_string()),

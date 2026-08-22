@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
+use crate::backend::pool::{Address, Config, Error, PoolConfig, Request, transport::Transport};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use itertools::*;
@@ -1355,7 +1355,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     let new_target_for_existing = lb_new
         .targets
         .iter()
-        .find(|t| t.pool.addr().host == "127.0.0.1")
+        .find(|t| t.pool.addr().host == Transport::new("127.0.0.1"))
         .expect("should have target for 127.0.0.1");
     assert_eq!(new_target_for_existing.role(), Role::Primary);
 
@@ -1363,7 +1363,7 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     let new_target_for_added = lb_new
         .targets
         .iter()
-        .find(|t| t.pool.addr().host == "localhost")
+        .find(|t| t.pool.addr().host == Transport::new("localhost"))
         .expect("should have target for localhost");
     assert_eq!(new_target_for_added.role(), Role::Replica);
 

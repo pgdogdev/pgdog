@@ -12,13 +12,14 @@ use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
+use crate::backend::pool::transport::{Transport, unix_socket_path};
 use crate::config::{Database, ServerAuth, User, config};
 
 /// Server address.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Address {
     /// Server host.
-    pub host: String,
+    pub host: Transport,
     /// Server port.
     pub port: u16,
     /// PostgreSQL database name.
@@ -45,10 +46,29 @@ pub struct Address {
     pub configured_role: Role,
 }
 
+impl Default for Address {
+    /// Local development defaults: `pgdog` on `127.0.0.1:5432`. `
+    fn default() -> Self {
+        Address {
+            host: Transport::TCP("127.0.0.1".to_string()),
+            port: 5432,
+            user: "pgdog".into(),
+            passwords: vec!["pgdog".into()],
+            database_name: "pgdog".into(),
+            server_auth: ServerAuth::Password,
+            server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
+            database_number: 0,
+            configured_role: Role::Primary,
+        }
+    }
+}
+
 impl From<Address> for pgdog_stats::Address {
     fn from(value: Address) -> Self {
         pgdog_stats::Address {
-            host: value.host,
+            host: value.host.to_string(),
             port: value.port,
             database_name: value.database_name,
             user: value.user,
@@ -64,9 +84,10 @@ impl Address {
     /// Create new address from config values.
     pub(crate) fn new(database: &Database, user: &User, database_number: usize) -> Self {
         let server_auth = user.server_auth;
+        let host = database.host.clone();
 
         Address {
-            host: database.host.clone(),
+            host: host.into(),
             port: database.port,
             database_name: if let Some(database_name) = database.database_name.clone() {
                 database_name
@@ -168,9 +189,10 @@ impl Address {
     ///
     pub(crate) async fn addr(&self) -> Result<SocketAddr, Error> {
         let dns_cache_override_enabled = config().config.general.dns_ttl().is_some();
+        let host = self.host.tcp()?;
 
         if dns_cache_override_enabled {
-            let ip = DnsCache::global().resolve(&self.host).await?;
+            let ip = DnsCache::global().resolve(host).await?;
             return Ok(SocketAddr::new(ip, self.port));
         }
 
@@ -179,7 +201,7 @@ impl Address {
 
         socket_addrs
             .next()
-            .ok_or(Error::DnsResolutionFailed(self.host.clone()))
+            .ok_or(Error::DnsResolutionFailed(host.to_string()))
     }
 
     /// A replacement for [`PartialEq`] which accounts for
@@ -196,34 +218,23 @@ impl Address {
             true
         }
     }
-
-    /// Test convention: `new_test()` represents a primary. Tests that need
-    /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
-    #[cfg(test)]
-    pub fn new_test() -> Self {
-        Self {
-            host: "127.0.0.1".into(),
-            port: 5432,
-            user: "pgdog".into(),
-            passwords: vec!["pgdog".into()],
-            database_name: "pgdog".into(),
-            server_auth: ServerAuth::Password,
-            server_iam_region: None,
-            vault_path: None,
-            vault_refresh_percent: None,
-            database_number: 0,
-            configured_role: Role::Primary,
-        }
-    }
 }
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}@{}:{}/{}",
-            self.user, self.host, self.port, self.database_name
-        )
+        match &self.host {
+            Transport::TCP(host) => {
+                write!(
+                    f,
+                    "{}@{}:{}/{}",
+                    self.user, host, self.port, self.database_name
+                )
+            }
+            Transport::Unix(dir) => {
+                let file = unix_socket_path(dir, &self.port);
+                write!(f, "{}", file.display())
+            }
+        }
     }
 }
 
@@ -237,17 +248,21 @@ impl TryFrom<Url> for Address {
         let password = value.password().ok_or(())?.to_string();
         let database_name = value.path().replace("/", "").to_string();
 
-        // A URL says nothing about role; fall through to `Role::Auto`
-        // via the derived `Default`. The PROBE command (the only caller)
-        // never reads `configured_role` anyway.
+        // A URL says nothing about role; fall through to the explicit
+        // `Role::Auto` below. The PROBE command (the only caller) never
+        // reads `configured_role` anyway.
         Ok(Self {
-            host,
+            host: host.into(),
             port,
             passwords: vec![password.into()],
             user,
             database_name,
             server_auth: ServerAuth::Password,
-            ..Default::default()
+            server_iam_region: None,
+            vault_path: None,
+            vault_refresh_percent: None,
+            database_number: 0,
+            configured_role: Role::Auto,
         })
     }
 }
@@ -256,7 +271,7 @@ impl TryFrom<Url> for Address {
 mod test {
     use std::time::{Duration, Instant, SystemTime};
 
-    use crate::config;
+    use crate::{backend::pool::transport::unix_socket_path, config};
 
     use super::*;
 
@@ -280,7 +295,7 @@ mod test {
 
         let address = Address::new(&database, &user, 0);
 
-        assert_eq!(address.host, "127.0.0.1");
+        assert_eq!(address.host.to_string(), "127.0.0.1");
         assert_eq!(address.port, 6432);
         assert_eq!(address.database_name, "pgdog");
         assert_eq!(address.user, "pgdog");
@@ -361,7 +376,7 @@ mod test {
         let addr =
             Address::try_from(Url::parse("postgres://user:password@127.0.0.1:6432/pgdb").unwrap())
                 .unwrap();
-        assert_eq!(addr.host, "127.0.0.1");
+        assert_eq!(addr.host.to_string(), "127.0.0.1");
         assert_eq!(addr.port, 6432);
         assert_eq!(addr.database_name, "pgdb");
         assert_eq!(addr.user, "user");
@@ -372,7 +387,7 @@ mod test {
 
     #[test]
     fn test_compatible_ignores_password_changes() {
-        let address = Address::new_test();
+        let address = Address::default();
         let mut rotated = address.clone();
         rotated.passwords = vec!["rotated".into()];
 
@@ -381,7 +396,7 @@ mod test {
 
     #[test]
     fn test_compatible_rejects_other_field_changes() {
-        let address = Address::new_test();
+        let address = Address::default();
         let mut moved = address.clone();
         moved.port += 1;
 
@@ -392,13 +407,13 @@ mod test {
 
     #[tokio::test]
     async fn test_auth_secret_password_mode() {
-        let addr = Address::new_test();
+        let addr = Address::default();
         assert_eq!(addr.auth_secrets().await.unwrap().first().unwrap(), "pgdog");
     }
 
     #[tokio::test]
     async fn test_auth_secrets_returns_valid_password_first() {
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid1: Password = "invalid1".into();
         let invalid2: Password = "invalid2".into();
         let valid: Password = "valid".into();
@@ -412,7 +427,7 @@ mod test {
         assert!(secrets.first().unwrap().is_valid());
 
         // Even if the valid password is last, it should still come first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid1: Password = "invalid1".into();
         let invalid2: Password = "invalid2".into();
         let valid: Password = "valid".into();
@@ -424,7 +439,7 @@ mod test {
         assert_eq!(secrets.first().unwrap(), "valid");
 
         // With multiple valid passwords, a valid one is still first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let invalid: Password = "invalid".into();
         invalid.valid(false);
         addr.passwords = vec![invalid, "valid_a".into(), "valid_b".into()];
@@ -435,7 +450,7 @@ mod test {
         assert!(head == "valid_a" || head == "valid_b");
 
         // Flipping validity at runtime changes which password comes first.
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         let first: Password = "first".into();
         let second: Password = "second".into();
         addr.passwords = vec![first.clone(), second.clone()];
@@ -565,7 +580,7 @@ mod test {
 
     #[tokio::test]
     async fn test_auth_credentials_password_mode_uses_configured_user() {
-        let addr = Address::new_test();
+        let addr = Address::default();
         let (user, secrets) = addr.auth_credentials().await.unwrap();
         assert_eq!(user, "pgdog");
         assert_eq!(secrets.first().unwrap(), "pgdog");
@@ -697,7 +712,7 @@ mod test {
         let addr = Address {
             host: hostname.into(),
             port: 15432,
-            ..Address::new_test()
+            ..Default::default()
         };
 
         let socket_addr = addr.addr().await.expect("resolve address");
@@ -706,6 +721,34 @@ mod test {
         assert_eq!(
             cache.cached_ip_for_testing(hostname),
             Some(socket_addr.ip())
+        );
+    }
+
+    #[test]
+    fn test_transport_parsing() {
+        // Absolute paths are Unix socket directories.
+        assert!(matches!(Transport::new("/tmp"), Transport::Unix(_)));
+        assert!(matches!(
+            Transport::new("/var/run/postgresql"),
+            Transport::Unix(_)
+        ));
+        // Everything else is a TCP hostname.
+        assert!(matches!(Transport::new("127.0.0.1"), Transport::TCP(_)));
+        assert!(matches!(Transport::new("localhost"), Transport::TCP(_)));
+    }
+
+    #[test]
+    fn test_unix_socket_path() {
+        let dir = std::path::PathBuf::from("/tmp");
+        assert_eq!(
+            unix_socket_path(&dir, &5432),
+            std::path::PathBuf::from("/tmp/.s.PGSQL.5432")
+        );
+
+        // Any port formats into the socket file name.
+        assert_eq!(
+            unix_socket_path(&dir, &54321),
+            std::path::PathBuf::from("/tmp/.s.PGSQL.54321")
         );
     }
 }

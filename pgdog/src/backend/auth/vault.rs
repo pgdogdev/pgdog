@@ -151,6 +151,7 @@ mod tests {
 
     use super::*;
     use crate::auth::vault::{VAULT_TOKEN, VaultToken};
+    use crate::backend::pool::transport::Transport;
     use crate::config::ConfigAndUsers;
 
     fn setup() {

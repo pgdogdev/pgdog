@@ -89,7 +89,7 @@ impl Pool {
     #[cfg(test)]
     pub fn new_test() -> Self {
         let config = PoolConfig {
-            address: Address::new_test(),
+            address: Address::default(),
             config: Config::default(),
         };
 

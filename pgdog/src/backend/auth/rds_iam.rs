@@ -37,7 +37,8 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
         return Ok(region.clone());
     }
 
-    infer_region_from_rds_host(&addr.host).ok_or_else(|| {
+    let host = addr.host.tcp()?;
+    infer_region_from_rds_host(host).ok_or_else(|| {
         Error::RdsIamToken(format!(
             "unable to infer AWS region from host \"{}\"; set \"server_iam_region\"",
             addr.host
@@ -53,9 +54,10 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
     let region = resolve_region(&addr)?;
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let host = addr.host.tcp()?;
 
     let config = AuthTokenConfig::builder()
-        .hostname(addr.host.as_str())
+        .hostname(host)
         .port(addr.port.into())
         .username(addr.user.as_str())
         .region(Region::new(region.clone()))
@@ -88,6 +90,7 @@ mod tests {
     use pgdog_config::Role;
 
     use super::*;
+    use crate::backend::pool::transport::Transport;
     use crate::config::ServerAuth;
     use crate::test_utils::set_env_var;
 
