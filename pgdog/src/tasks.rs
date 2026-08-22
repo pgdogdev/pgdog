@@ -56,11 +56,6 @@ pub fn shutdown_signal() -> CancellationToken {
     TASKS.shutdown.clone()
 }
 
-/// True once process background tasks have been asked to stop.
-pub fn shutting_down() -> bool {
-    TASKS.shutting_down.load(Ordering::Relaxed)
-}
-
 /// Ask all tracked background tasks to stop and wait for them.
 pub async fn shutdown() {
     TASKS.shutting_down.store(true, Ordering::Relaxed);

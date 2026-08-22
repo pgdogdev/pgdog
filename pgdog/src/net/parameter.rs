@@ -58,12 +58,6 @@ impl<T: ToString> From<(T, T)> for Parameter {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MergeResult {
-    pub queries: Vec<Query>,
-    pub changed_params: usize,
-}
-
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub enum ParameterValue {
     String(String),

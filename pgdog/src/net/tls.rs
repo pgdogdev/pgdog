@@ -126,18 +126,6 @@ pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String
         .map(String::from)
 }
 
-/// Create new TLS connector using the current configuration.
-pub fn connector() -> Result<TlsConnector, Error> {
-    let config = config();
-    let general = &config.config.general;
-    connector_with_verify_mode(
-        general.tls_verify,
-        general.tls_server_ca_certificate.as_ref(),
-        general.tls_server_certificate.as_ref(),
-        general.tls_server_private_key.as_ref(),
-    )
-}
-
 /// Preload TLS at startup.
 pub fn load() -> Result<(), Error> {
     reload()

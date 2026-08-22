@@ -1,6 +1,9 @@
 use super::{code, prelude::*};
 
 #[derive(Debug, Copy, Clone, Default)]
+// Never decoded into directly; kept for parity with the rest of the
+// protocol message types, each of which implements the same traits.
+#[allow(dead_code)]
 pub struct EmptyQueryResponse;
 
 impl FromBytes for EmptyQueryResponse {

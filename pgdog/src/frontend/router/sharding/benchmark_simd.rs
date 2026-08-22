@@ -1,7 +1,7 @@
 #![allow(clippy::print_stdout)]
 
-use crate::frontend::router::sharding::distance_simd_rust;
 use crate::net::messages::{Vector, data_types::Float};
+use pgdog_vector::distance_simd_rust;
 use std::time::{Duration, Instant};
 
 fn benchmark_implementation(name: &str, p: &[Float], q: &[Float], iterations: usize) -> Duration {
@@ -101,14 +101,13 @@ pub fn run_benchmark() {
 
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = crate::frontend::router::sharding::vector::Distance::Euclidean(&v1, &v2).distance();
+        let _ = pgdog_vector::Distance::Euclidean(&v1, &v2).distance();
     }
     let simd_vector_time = start.elapsed();
 
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = crate::frontend::router::sharding::vector::Distance::Euclidean(&v1, &v2)
-            .distance_scalar();
+        let _ = pgdog_vector::Distance::Euclidean(&v1, &v2).distance_scalar();
     }
     let scalar_vector_time = start.elapsed();
 

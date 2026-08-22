@@ -34,10 +34,6 @@ impl ReadyForQuery {
         ReadyForQuery { status: 'E' }
     }
 
-    pub fn is_transaction_aborted(&self) -> bool {
-        self.status == 'E'
-    }
-
     /// Get transaction state.
     pub fn state(&self) -> Result<TransactionState, Error> {
         match self.status {
@@ -72,5 +68,16 @@ impl FromBytes for ReadyForQuery {
 impl Protocol for ReadyForQuery {
     fn code(&self) -> char {
         'Z'
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::ReadyForQuery;
+
+    impl ReadyForQuery {
+        pub fn is_transaction_aborted(&self) -> bool {
+            self.status == 'E'
+        }
     }
 }

@@ -53,40 +53,45 @@ pub fn varchar(s: &[u8]) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
 }
 
-/// Shard a value that's coming out of the query text directly.
 #[cfg(test)]
-pub(crate) fn shard_value(
-    value: &str,
-    data_type: &crate::config::DataType,
-    shards: usize,
-    centroids: &Vec<crate::net::vector::Vector>,
-    centroid_probes: usize,
-) -> super::parser::Shard {
-    use super::parser::Shard;
+pub(crate) use test_impls::shard_value;
+#[cfg(test)]
+mod test_impls {
+    use super::{Centroids, bigint, uuid, varchar};
     use crate::config::DataType;
-    use crate::net::vector::str_to_vector;
+    use crate::frontend::router::parser::Shard;
+    use crate::net::{messages::Vector, vector::str_to_vector};
 
-    match data_type {
-        DataType::Bigint => value
-            .parse()
-            .map(|v| bigint(v) as usize % shards)
-            .ok()
-            .map(Shard::Direct)
-            .unwrap_or(Shard::All),
-        DataType::Uuid => value
-            .parse()
-            .map(|v| uuid(v) as usize % shards)
-            .ok()
-            .map(Shard::Direct)
-            .unwrap_or(Shard::All),
-        DataType::Vector => str_to_vector(value)
-            .ok()
-            .map(|v| {
-                Centroids::from(centroids)
-                    .shard(&v, shards, centroid_probes)
-                    .into()
-            })
-            .unwrap_or(Shard::All),
-        DataType::Varchar => Shard::Direct(varchar(value.as_bytes()) as usize % shards),
+    /// Shard a value that's coming out of the query text directly.
+    pub(crate) fn shard_value(
+        value: &str,
+        data_type: &DataType,
+        shards: usize,
+        centroids: &Vec<Vector>,
+        centroid_probes: usize,
+    ) -> Shard {
+        match data_type {
+            DataType::Bigint => value
+                .parse()
+                .map(|v| bigint(v) as usize % shards)
+                .ok()
+                .map(Shard::Direct)
+                .unwrap_or(Shard::All),
+            DataType::Uuid => value
+                .parse()
+                .map(|v| uuid(v) as usize % shards)
+                .ok()
+                .map(Shard::Direct)
+                .unwrap_or(Shard::All),
+            DataType::Vector => str_to_vector(value)
+                .ok()
+                .map(|v| {
+                    Centroids::from(centroids)
+                        .shard(&v, shards, centroid_probes)
+                        .into()
+                })
+                .unwrap_or(Shard::All),
+            DataType::Varchar => Shard::Direct(varchar(value.as_bytes()) as usize % shards),
+        }
     }
 }

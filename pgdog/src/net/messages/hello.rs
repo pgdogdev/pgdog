@@ -128,16 +128,6 @@ impl Startup {
         }
     }
 
-    /// Get a startup parameter by name.
-    ///
-    /// If no such parameter exists, `None` is returned.
-    pub fn parameter(&self, name: &str) -> Option<&str> {
-        match self {
-            Startup::Ssl | Startup::GssEnc | Startup::Cancel { .. } => None,
-            Startup::Startup { params, .. } => params.get(name).and_then(|s| s.as_str()),
-        }
-    }
-
     /// Create new startup message from config.
     pub fn new(user: &str, database: &str, params: Vec<Parameter>) -> Self {
         Self::new_with_protocol_version(ProtocolVersion::V3_0, user, database, params)
@@ -170,11 +160,6 @@ impl Startup {
     /// Create new startup TLS request.
     pub fn tls() -> Self {
         Self::Ssl
-    }
-
-    /// Create new GSSENC request.
-    pub fn gss_enc() -> Self {
-        Self::GssEnc
     }
 }
 
@@ -297,6 +282,12 @@ fn search_path(value: &str) -> ParameterValue {
 
 #[cfg(test)]
 mod test {
+    impl Startup {
+        fn gss_enc() -> Self {
+            Self::GssEnc
+        }
+    }
+
     use crate::net::FrontendPid;
     use crate::net::messages::{BackendKeyData, ProtocolVersion, ToBytes};
 

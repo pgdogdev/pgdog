@@ -30,14 +30,6 @@ impl Message {
         Message::deserialize(&mut Deserializer::new(buf))
     }
 
-    /// Healthcheck message.
-    pub fn healthcheck(node_id: u64) -> Self {
-        Self {
-            node_id,
-            payload: Payload::Healthcheck,
-        }
-    }
-
     /// Collect statistics.
     pub fn stats(node_id: u64) -> Self {
         let clients = comms().len() as u64;
