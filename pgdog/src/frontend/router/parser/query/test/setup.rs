@@ -166,7 +166,7 @@ impl QueryParserTest {
     /// Set a parameter value.
     pub(crate) fn with_param(
         mut self,
-        name: impl ToString,
+        name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
     ) -> Self {
         self.params.insert(name, value);

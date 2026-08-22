@@ -83,6 +83,11 @@ use crate::{net::Error, stats::memory::MemoryUsage};
 
 use bytes::Bytes;
 
+/// Encode a string as a NULL-terminated C string in a single allocation.
+pub(crate) fn c_string_bytes(value: &str) -> Bytes {
+    Bytes::from([value.as_bytes(), b"\0"].concat())
+}
+
 /// Convert a Rust struct to a PostgreSQL wire protocol message.
 pub trait ToBytes {
     /// Create the protocol message as an array of bytes.
