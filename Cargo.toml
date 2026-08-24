@@ -11,7 +11,9 @@ members = [
   "pgdog-postgres-types",
   "pgdog-stats",
   "pgdog-vector",
-  "plugins/pgdog-example-plugin", "plugins/pgdog-primary-only-tables",
+  "plugins/pgdog-example-plugin",
+  "plugins/pgdog-google-auth",
+  "plugins/pgdog-primary-only-tables",
   "scripts/*",
 ]
 

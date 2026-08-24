@@ -1,0 +1,5 @@
+[[users]]
+name = "alice@example.com"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
