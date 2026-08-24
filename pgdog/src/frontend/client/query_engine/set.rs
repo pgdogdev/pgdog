@@ -56,7 +56,7 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            self.execute(context).await?;
+            self.execute(context, None).await?;
         } else {
             let values_to_return =
                 behave_like_select.then(|| params.iter().map(|p| p.value.as_ref()));
@@ -99,7 +99,7 @@ impl QueryEngine {
         context.params.reset_all();
 
         if self.backend.connected() {
-            self.execute(context).await?;
+            self.execute(context, None).await?;
         } else {
             self.fake_command_response(context, "RESET", None::<Option<_>>)
                 .await?;

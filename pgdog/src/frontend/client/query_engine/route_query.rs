@@ -70,6 +70,7 @@ impl QueryEngine {
     pub(super) async fn route_query(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        rewrite_result: Option<&RewriteResult>,
     ) -> Result<bool, Error> {
         // Check that we can route this transaction at all.
         if self.backend.pooler_mode() == PoolerMode::Statement && context.client_request.is_begin()
@@ -151,7 +152,7 @@ impl QueryEngine {
                 );
 
                 // Apply post-parser rewrites, e.g. offset/limit.
-                if let Some(rewrite_result) = &context.rewrite_result {
+                if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_parser(context.client_request)?;
                 }
 

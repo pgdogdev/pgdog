@@ -45,6 +45,7 @@ pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
+use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 
 /// Implements the entire client/server message exchange.
 /// State here is preserved between requests.
@@ -126,15 +127,14 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        match self.parse_and_rewrite(context) {
-            Ok(true) => {}
-            Ok(false) => return Ok(()),
+        let rewrite_result = match self.parse_and_rewrite(context) {
+            Ok(rewrite_result) => rewrite_result,
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))
                     .await?;
                 return Ok(());
             }
-        }
+        };
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
@@ -143,7 +143,7 @@ impl QueryEngine {
         }
 
         // Route transaction to the right servers.
-        if !self.route_query(context).await? {
+        if !self.route_query(context, rewrite_result.as_ref()).await? {
             self.update_stats(context);
             debug!("query has nowhere to go");
             return Ok(());
@@ -221,11 +221,11 @@ impl QueryEngine {
 
                 context.params.rollback();
             }
-            Command::Query(_) => self.execute(context).await?,
+            Command::Query(_) => self.execute(context, rewrite_result).await?,
             Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
                 if self.backend.session_mode() =>
             {
-                self.execute(context).await?
+                self.execute(context, rewrite_result).await?
             }
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
@@ -251,7 +251,7 @@ impl QueryEngine {
             Command::ResetAll => {
                 self.reset_all(context).await?;
             }
-            Command::Copy(_) => self.execute(context).await?,
+            Command::Copy(_) => self.execute(context, rewrite_result).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
         }

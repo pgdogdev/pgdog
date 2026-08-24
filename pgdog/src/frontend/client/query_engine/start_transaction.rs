@@ -20,7 +20,7 @@ impl QueryEngine {
         context.transaction = Some(transaction_type);
 
         if self.backend.connected() {
-            self.execute(context).await?;
+            self.execute(context, None).await?;
         } else {
             let bytes_sent = if extended {
                 self.extended_transaction_reply(context, true, false)

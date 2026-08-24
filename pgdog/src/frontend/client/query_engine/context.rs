@@ -3,7 +3,6 @@ use crate::{
     frontend::{
         Client, ClientRequest, PreparedStatements,
         client::{Sticky, TransactionType, timeouts::Timeouts},
-        router::parser::rewrite::statement::plan::RewriteResult,
     },
     net::{FrontendPid, Parameters, Stream},
 };
@@ -36,8 +35,6 @@ pub struct QueryEngineContext<'a> {
     pub(super) rollback: bool,
     /// Sticky config:
     pub(super) sticky: Sticky,
-    /// Rewrite result.
-    pub(super) rewrite_result: Option<RewriteResult>,
     /// Log queries to stdout.
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
@@ -62,7 +59,6 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             sticky: client.sticky,
-            rewrite_result: None,
             query_log_stdout: client.query_log_stdout,
             query_size_limit: client.query_size_limit,
         }
@@ -90,7 +86,6 @@ impl<'a> QueryEngineContext<'a> {
             requests_left: 0,
             rollback: false,
             sticky: Sticky::new(),
-            rewrite_result: None,
             query_log_stdout: false,
             query_size_limit: None,
         }
