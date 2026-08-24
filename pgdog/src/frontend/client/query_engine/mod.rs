@@ -40,12 +40,12 @@ pub mod two_pc;
 
 use self::query::ExplainResponseState;
 use self::query_log_stdout::log_query_stdout;
+use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
-use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 
 /// Implements the entire client/server message exchange.
 /// State here is preserved between requests.

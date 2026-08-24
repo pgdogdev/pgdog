@@ -60,7 +60,11 @@ impl QueryEngine {
         }
 
         let query_timeout = context.timeouts.query_timeout(&State::Active);
-        let result = safe_timeout(query_timeout, self.client_server_exchange(context, query_planner)).await;
+        let result = safe_timeout(
+            query_timeout,
+            self.client_server_exchange(context, query_planner),
+        )
+        .await;
 
         match result {
             Ok(response) => response?,

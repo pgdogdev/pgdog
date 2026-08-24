@@ -22,7 +22,7 @@ impl QueryEngine {
     /// Parse client request and rewrite it, if necessary.
     pub(super) fn parse_and_rewrite(
         &mut self,
-        context: & mut QueryEngineContext<'_>,
+        context: &mut QueryEngineContext<'_>,
     ) -> Result<Option<RewriteResult>, Error> {
         let use_parser = self
             .backend
@@ -45,8 +45,7 @@ impl QueryEngine {
             context.client_request.ast = Some(ast);
             Ok(Some(rewrite_result))
         } else {
-
-        Ok(None)
-            }
+            Ok(None)
+        }
     }
 }
