@@ -627,6 +627,10 @@ impl Config {
             );
         }
 
+        if !raw_query_parser {
+            warn!(r#""query_parser_engine" is deprecated and uses the "pg_query_raw" option now"#)
+        }
+
         if !self.sharded_mappings.is_empty() {
             warn!(
                 "`[[sharded_mappings]]` config is deprecated, use `[[sharded_tables.mapping]]` instead"

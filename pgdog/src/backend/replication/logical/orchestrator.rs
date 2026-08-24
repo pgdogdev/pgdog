@@ -79,11 +79,7 @@ impl Orchestrator {
     /// Replace the publisher entirely (discards LSN state).  Only valid
     /// when starting a fresh replication phase, e.g. after cutover.
     fn refresh_publisher(&mut self) {
-        let publisher = Publisher::new(
-            &self.publication,
-            config().config.general.query_parser_engine,
-            self.replication_slot.clone(),
-        );
+        let publisher = Publisher::new(&self.publication, self.replication_slot.clone());
         self.publisher = Arc::new(Mutex::new(publisher));
     }
 
@@ -562,11 +558,7 @@ mod tests {
             let cluster = Cluster::new_test(config);
             let publication = "test_pub".to_owned();
             let replication_slot = "test_slot".to_owned();
-            let publisher = Publisher::new(
-                &publication,
-                config.config.general.query_parser_engine,
-                replication_slot.clone(),
-            );
+            let publisher = Publisher::new(&publication, replication_slot.clone());
             Self {
                 source: cluster.clone(),
                 destination: cluster,

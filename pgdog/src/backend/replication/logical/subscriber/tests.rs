@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use pgdog_config::QueryParserEngine;
 use pgdog_postgres_types::Oid;
 use rand::Rng;
 
@@ -79,7 +78,6 @@ fn make_sharded_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -113,7 +111,6 @@ fn make_sharded_test_b_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -907,7 +904,6 @@ fn make_posts_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -1284,7 +1280,6 @@ fn make_full_identity_sharded_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -1327,7 +1322,6 @@ fn make_full_identity_omni_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -2259,7 +2253,6 @@ fn make_settings_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: pgdog_config::QueryParserEngine::default(),
     }
 }
 

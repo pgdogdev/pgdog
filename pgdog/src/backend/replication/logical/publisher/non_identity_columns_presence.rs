@@ -96,7 +96,6 @@ mod test {
     use crate::net::messages::replication::logical::tuple_data::{
         TupleData, text_col, toasted_col,
     };
-    use pgdog_config::QueryParserEngine;
     use pgdog_postgres_types::Oid;
 
     fn make_table(columns: Vec<(&str, bool)>) -> Table {
@@ -124,7 +123,6 @@ mod test {
                 })
                 .collect(),
             lsn: Lsn::default(),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 

@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
-use pgdog_config::QueryParserEngine;
 use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -51,8 +50,6 @@ pub struct Publisher {
     tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
-    /// Query parser engine.
-    query_parser_engine: QueryParserEngine,
     /// Replication lag.
     replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
     /// Last transaction.
@@ -62,16 +59,11 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    pub fn new(
-        publication: &str,
-        query_parser_engine: QueryParserEngine,
-        slot_name: String,
-    ) -> Self {
+    pub fn new(publication: &str, slot_name: String) -> Self {
         Self {
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
-            query_parser_engine,
             replication_lag: Arc::new(Mutex::new(HashMap::new())),
             last_transaction: Arc::new(Mutex::new(None)),
             slot_name,
@@ -126,8 +118,7 @@ impl Publisher {
         for (number, shard) in source.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
-            let tables =
-                Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
+            let tables = Table::load(&self.publication, &mut primary).await?;
 
             // For data sync, split omni tables evenly between shards.
             if data_sync {
@@ -562,7 +553,6 @@ mod test {
                 identity: true,
             }],
             lsn: Lsn::from_i64(lsn),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 
@@ -594,7 +584,7 @@ mod test {
     fn distribute_omnisharded_tables_initializes_missing_shards() {
         let config = config();
         let cluster = Cluster::new_test(&config);
-        let mut publisher = Publisher::new("test", QueryParserEngine::default(), "slot".into());
+        let mut publisher = Publisher::new("test", "slot".into());
         let table = make_table("public", "omni_only", 0);
 
         publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]), &cluster);
@@ -638,11 +628,7 @@ mod test {
         source.launch();
         let dest = Cluster::new_test(&config());
 
-        let mut publisher = Publisher::new(
-            "publication_no_pk_validation",
-            QueryParserEngine::default(),
-            "sync_test_slot".into(),
-        );
+        let mut publisher = Publisher::new("publication_no_pk_validation", "sync_test_slot".into());
 
         // Validation must fire before the copy begins.
         let result = publisher
@@ -700,11 +686,8 @@ mod test {
         source.launch();
         let dest = Cluster::new_test(&config());
 
-        let mut publisher = Publisher::new(
-            "publication_sync_only_no_pk",
-            QueryParserEngine::default(),
-            "sync_only_no_pk_slot".into(),
-        );
+        let mut publisher =
+            Publisher::new("publication_sync_only_no_pk", "sync_only_no_pk_slot".into());
 
         let cancel = CancellationToken::new();
         cancel.cancel();
@@ -752,7 +735,6 @@ mod test {
 
         let mut publisher = Publisher::new(
             "pub_full_identity_nothing_test",
-            QueryParserEngine::default(),
             "pub_full_identity_nothing_slot".into(),
         );
 
