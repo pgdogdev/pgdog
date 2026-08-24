@@ -195,14 +195,6 @@ impl Cache {
         );
     }
 
-    /// Resize cache to a count capacity, keeping the memory and idle limits.
-    pub fn resize(capacity: usize) {
-        let mut guard = CACHE.inner.lock();
-        guard.count_limit = capacity.max(1);
-        guard.enforce();
-        debug!("ast cache size set to {}", capacity);
-    }
-
     /// Run the idle-expiry sweep. Called periodically by maintenance.
     pub fn sweep() {
         CACHE.inner.lock().sweep();
@@ -562,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_and_resize_apply_limits_to_global_cache() {
+    fn configure_applies_limits_to_global_cache() {
         // The cache is a process-wide singleton, so save the live limits and
         // put them back at the end; assertions on entry counts are `<=` since
         // other tests may share the cache.
@@ -584,20 +576,15 @@ mod tests {
             assert!(guard.queries.len() <= 3, "configure() caps are enforced");
         }
 
-        Cache::resize(1);
+        Cache::configure(1, 0, 0);
         {
             let guard = CACHE.inner.lock();
             assert_eq!(guard.count_limit, 1);
             assert!(
                 guard.queries.len() <= 1,
-                "resize() evicts down to the new capacity"
+                "a smaller count limit evicts down to it"
             );
         }
-
-        // Zero means "unlimited" in configure(), but resize() keeps at least
-        // one entry.
-        Cache::resize(0);
-        assert_eq!(CACHE.inner.lock().count_limit, 1);
 
         Cache::configure(
             count,
