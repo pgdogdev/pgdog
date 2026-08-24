@@ -26,6 +26,8 @@ use super::sharding::{OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, Users};
 use super::vault::Vault;
 
+use crate::FromToml;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigAndUsers {
     /// parsed pgdog.toml or default [Config]
@@ -49,10 +51,9 @@ impl ConfigAndUsers {
     pub fn load(config_path: &Path, users_path: &Path) -> Result<Self, Error> {
         let config_text = read_to_string(config_path).ok();
         let mut config: Config = if let Some(text) = &config_text {
-            let config = match toml::from_str(text) {
+            let config = match Config::from_toml(text) {
                 Ok(config) => config,
-                Err(err) => {
-                    let error = Error::config(text, err);
+                Err(error) => {
                     error!("failed to load {}: {}", config_path.display(), error);
                     return Err(error);
                 }
@@ -73,10 +74,9 @@ impl ConfigAndUsers {
 
         let users_text = read_to_string(users_path).ok();
         let mut users: Users = if let Some(text) = &users_text {
-            let users: Users = match toml::from_str(text) {
+            let users: Users = match Users::from_toml(text) {
                 Ok(config) => config,
-                Err(err) => {
-                    let error = Error::config(text, err);
+                Err(error) => {
                     error!("failed to load {}: {}", users_path.display(), error);
                     return Err(error);
                 }

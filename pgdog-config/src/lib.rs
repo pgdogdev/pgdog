@@ -4,6 +4,7 @@ pub mod core;
 pub mod data_types;
 pub mod database;
 pub mod error;
+pub mod expand;
 pub mod general;
 pub mod memory;
 pub mod networking;
@@ -30,6 +31,7 @@ pub use database::{
     Database, EnumeratedDatabase, LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, Role,
 };
 pub use error::Error;
+pub use expand::{FromToml, expand};
 pub use general::{General, LogFormat, QuerySizeLimitAction};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
