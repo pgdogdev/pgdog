@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use pg_raw_parse::nodes;
+use pg_raw_parse::{deparse, nodes};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -215,7 +215,8 @@ impl Cache {
     ///
     pub fn record_normalized(&self, query: &nodes::RawStmt, route: &Route) -> Result<(), Error> {
         let normalized = normalize(query);
-        let normalized = normalized.stmt().as_str().ok_or(Error::EmptyQuery)?;
+        let normalized = deparse(normalized.stmt())?;
+        let normalized = normalized.as_str();
 
         {
             let mut guard = self.inner.lock();
