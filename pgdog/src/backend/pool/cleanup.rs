@@ -29,7 +29,6 @@ static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 /// client modifications.
 pub struct Cleanup {
     queries: Cow<'static, [Query]>,
-    reset: bool,
     dirty: bool,
     close: Vec<Close>,
 }
@@ -38,7 +37,6 @@ impl Default for Cleanup {
     fn default() -> Self {
         Self {
             queries: Cow::Borrowed(&NONE),
-            reset: false,
             dirty: false,
             close: vec![],
         }
