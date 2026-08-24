@@ -262,10 +262,7 @@ impl QueryParser {
             }
         }
 
-        let statement = context
-            .router_context
-            .ast
-            .ok_or(Error::EmptyQuery)?;
+        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
 
         if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
