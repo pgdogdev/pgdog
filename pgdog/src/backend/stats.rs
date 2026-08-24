@@ -167,7 +167,6 @@ impl Stats {
         self.local.last_checkout.prepared_statements += 1;
     }
 
-    /// Prepared statements are gone from the server, so the cache is empty.
     pub(crate) fn clear_prepared_statements(&mut self) {
         self.local.total.prepared_statements = 0;
         self.sync_to_shared();
