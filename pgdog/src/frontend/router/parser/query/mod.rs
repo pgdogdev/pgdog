@@ -340,7 +340,7 @@ impl QueryParser {
         }
 
         if context.router_context.cluster.server_role().is_some()
-            && let Some(name) = set_config::role_escape_target(&**stmts)
+            && let Some(name) = set_config::role_escape_target(stmts)
         {
             return Ok(Command::RoleLocked { name });
         }

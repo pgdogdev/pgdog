@@ -123,8 +123,8 @@ struct Collected {
 /// Consult the plugins. First non-Skip decision wins.
 ///
 /// Plugins that do not implement `authenticate` return Skip via the trait
-/// default, so no capability check is needed. Iteration order follows the
-/// plugin registry (a map), matching how routing consults plugins.
+/// default, so no capability check is needed. Iteration order follows
+/// `[[plugins]]` configuration order, matching how routing consults plugins.
 fn run(
     user: &str,
     database: &str,

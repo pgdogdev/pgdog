@@ -1036,10 +1036,6 @@ mod test {
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
         }
-
-        pub fn set_server_role(&mut self, server_role: Option<String>) {
-            self.server_role = server_role;
-        }
     }
 
     #[test]

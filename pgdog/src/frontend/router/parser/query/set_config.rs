@@ -44,10 +44,10 @@ pub(super) fn role_escape_target(stmts: &pg_raw_parse::StmtList) -> Option<Strin
             }
             Node::SelectStmt(stmt) => {
                 if let Some(fcall) = extract_set_config(stmt)
-                    && let Some(name) = fcall.args().first().and_then(Node::as_str)
-                    && is_role_escape(name)
+                    && let Some(name) = fcall.args().first().and_then(parse_config_name)
+                    && is_role_escape(&name)
                 {
-                    return Some(name.to_string());
+                    return Some(name);
                 }
             }
             _ => {}
@@ -93,5 +93,48 @@ fn parse_is_local(arg: Node<'_>) -> Option<bool> {
     match arg {
         Node::A_Const(c) => c.val()?.bool_value(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn role_escape(query: &str) -> Option<String> {
+        let statements = pg_raw_parse::parse(query).expect("parse query");
+        role_escape_target(&statements)
+    }
+
+    #[test]
+    fn detects_role_escape_statements() {
+        for (query, expected) in [
+            ("SET ROLE reporting", "role"),
+            ("RESET ROLE", "role"),
+            (
+                "SET SESSION AUTHORIZATION reporting",
+                "session_authorization",
+            ),
+            ("SELECT 1; SET ROLE reporting", "role"),
+            (
+                "SELECT set_config('role', 'report' || 'ing', false)",
+                "role",
+            ),
+            (
+                "SELECT set_config('session_authorization', current_user, false)",
+                "session_authorization",
+            ),
+        ] {
+            assert_eq!(role_escape(query).as_deref(), Some(expected), "{query}");
+        }
+    }
+
+    #[test]
+    fn allows_session_reset_to_startup_defaults() {
+        assert_eq!(role_escape("RESET ALL"), None);
+        assert_eq!(role_escape("DISCARD ALL"), None);
+        assert_eq!(
+            role_escape("SELECT set_config('work_mem', '8MB', false)"),
+            None
+        );
     }
 }
