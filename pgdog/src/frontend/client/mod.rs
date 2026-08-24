@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pgdog_config::users::PasswordKind;
-use timeouts::Timeouts;
+use request_settings::ClientRequestSettings;
 use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
@@ -38,6 +38,8 @@ use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
 pub mod query_engine;
+pub(crate) mod request_settings;
+pub(crate) use request_settings::ClientRequestSettings;
 pub mod sticky;
 pub mod timeouts;
 pub mod transaction_type;
@@ -76,10 +78,8 @@ pub struct Client {
     prepared_statements: PreparedStatements,
     // Client transaction state.
     transaction: Option<TransactionType>,
-    // Current timeouts to use for client/server communication.
-    // These change based on client state, e.g. if client is running query,
-    // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
-    timeouts: Timeouts,
+    // Per-request settings snapshot, refreshed in [`Self::buffer`].
+    request_settings: ClientRequestSettings,
     // Stateful buffer containing the current whole client request.
     // This can be a query or just a `Parse` and `Flush`, but in either case, the client
     // will expect a response immediately and we need to handle it.
@@ -92,10 +92,6 @@ pub struct Client {
     sticky: Sticky,
     /// Client database.
     database: String,
-    /// Log queries to stdout.
-    query_log_stdout: bool,
-    /// Maximum query message size before a warning is logged.
-    query_size_limit: Option<usize>,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -428,7 +424,7 @@ impl Client {
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
-            timeouts: Timeouts::from_config(&config.config.general),
+            request_settings: ClientRequestSettings::from_general(&config.config.general),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 config.config.memory.message_buffer,
@@ -436,8 +432,6 @@ impl Client {
             ),
             sticky: Sticky::from_params(&params),
             database: database.to_string(),
-            query_log_stdout: false,
-            query_size_limit: None,
         }))
     }
 
@@ -483,7 +477,7 @@ impl Client {
             prepared_statements,
             admin: false,
             transaction: None,
-            timeouts: Timeouts::from_config(&config().config.general),
+            request_settings: ClientRequestSettings::from_general(&config().config.general),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 4096,
@@ -492,8 +486,6 @@ impl Client {
             sticky: Sticky::from_params(&connect_params),
             params: connect_params,
             database: "pgdog".to_string(),
-            query_log_stdout: false,
-            query_size_limit: None,
         }
     }
 
@@ -660,14 +652,13 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
-        self.timeouts = Timeouts::from_config(&config.config.general);
-        self.query_log_stdout = config.config.general.query_log_stdout;
-        self.query_size_limit = config.config.general.query_size_limit;
+        self.request_settings = ClientRequestSettings::from_general(&config.config.general);
         self.stream_buffer
-            .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
+            .set_size_limit_block(self.request_settings.frontend_query_size_limit_block);
 
         while !self.client_request.is_complete() {
             let idle_timeout = self
+                .request_settings
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 

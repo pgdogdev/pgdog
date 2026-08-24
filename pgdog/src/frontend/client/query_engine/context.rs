@@ -2,7 +2,7 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         Client, ClientRequest, PreparedStatements,
-        client::{Sticky, TransactionType, timeouts::Timeouts},
+        client::{ClientRequestSettings, Sticky, TransactionType},
         router::parser::rewrite::statement::plan::RewriteResult,
     },
     net::{FrontendPid, Parameters, Stream},
@@ -26,8 +26,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
     pub(super) transaction: Option<TransactionType>,
-    /// Timeouts
-    pub(super) timeouts: Timeouts,
+    /// Per-request settings snapshot.
+    pub(super) request_settings: ClientRequestSettings,
     /// Cross shard  queries are disabled.
     pub(super) cross_shard_disabled: Option<bool>,
     /// Client memory usage.
@@ -40,10 +40,6 @@ pub struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Rewrite result.
     pub(super) rewrite_result: Option<RewriteResult>,
-    /// Log queries to stdout.
-    pub(super) query_log_stdout: bool,
-    /// Maximum query message size before a warning is logged.
-    pub(super) query_size_limit: Option<usize>,
     /// Client TCP address, used for `application_name_add_host`.
     pub(super) client_addr: SocketAddr,
 }
@@ -59,7 +55,7 @@ impl<'a> QueryEngineContext<'a> {
             client_request: &mut client.client_request,
             stream: &mut client.stream,
             transaction: client.transaction,
-            timeouts: client.timeouts,
+            request_settings: client.request_settings,
             cross_shard_disabled: None,
             memory_stats,
             admin: client.admin,
@@ -67,8 +63,6 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
-            query_log_stdout: client.query_log_stdout,
-            query_size_limit: client.query_size_limit,
             client_addr: client.addr,
         }
     }
@@ -88,7 +82,10 @@ impl<'a> QueryEngineContext<'a> {
             client_request: buffer,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
-            timeouts: mirror.timeouts,
+            request_settings: ClientRequestSettings {
+                timeouts: mirror.timeouts,
+                ..ClientRequestSettings::default()
+            },
             cross_shard_disabled: None,
             memory_stats: MemoryStats::default(),
             admin: false,
@@ -96,8 +93,6 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
-            query_log_stdout: false,
-            query_size_limit: None,
             client_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
         }
     }

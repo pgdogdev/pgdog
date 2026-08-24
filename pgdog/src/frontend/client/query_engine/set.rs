@@ -1,4 +1,3 @@
-use crate::config::config;
 use crate::frontend::ClientRequest;
 use crate::frontend::SetParam;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
@@ -26,7 +25,7 @@ impl QueryEngine {
         }
 
         let mut params = params.to_vec();
-        if config().config.general.application_name_add_host {
+        if context.request_settings.application_name_add_host {
             let host = context.client_addr.to_string();
             for param in &mut params {
                 if param.name.eq_ignore_ascii_case("application_name")

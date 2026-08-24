@@ -56,7 +56,10 @@ impl QueryEngine {
             // Wait for boot-time maintenance before we throw traffic at the cluster.
             if let Ok(cluster) = self.backend.cluster() {
                 safe_timeout(
-                    context.timeouts.query_timeout(&State::Active),
+                    context
+                        .request_settings
+                        .timeouts
+                        .query_timeout(&State::Active),
                     cluster.wait_ready(),
                 )
                 .await
