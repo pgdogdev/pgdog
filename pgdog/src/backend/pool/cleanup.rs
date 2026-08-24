@@ -84,7 +84,6 @@ impl Cleanup {
         clean
     }
 
-    /// Append more queries to run during the same cleanup.
     fn add(&mut self, queries: &'static [Query]) {
         self.queries.to_mut().extend_from_slice(queries);
     }

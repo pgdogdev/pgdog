@@ -1085,7 +1085,6 @@ impl Server {
         self.clear_prepared_statements();
     }
 
-    /// Drop the prepared statements cache, and the stat that counts them.
     #[inline]
     fn clear_prepared_statements(&mut self) {
         self.prepared_statements.clear();
