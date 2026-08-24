@@ -5,18 +5,14 @@
 //!
 use tokio::select;
 use tokio::spawn;
-use tokio::sync::{
-    Notify,
-    mpsc::{Receiver, Sender, channel},
-};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio_util::sync::CancellationToken;
 
 use crate::backend::pool::Address;
 use crate::{
     backend::Server,
     net::{Message, ProtocolMessage},
 };
-
-use std::sync::Arc;
 
 use super::super::Error;
 
@@ -42,7 +38,7 @@ enum ParallelReply {
 pub struct ParallelConnection {
     tx: Sender<ParallelMessage>,
     rx: Receiver<ParallelReply>,
-    stop: Arc<Notify>,
+    stop: CancellationToken,
     address: Address,
 }
 
@@ -87,7 +83,7 @@ impl ParallelConnection {
         // can use a lot of memory if this is high.
         let (tx1, rx1) = channel(4096);
         let (tx2, rx2) = channel(4096);
-        let stop = Arc::new(Notify::new());
+        let stop = CancellationToken::new();
         let address = server.addr().clone();
 
         let listener = Listener {
@@ -114,7 +110,7 @@ impl ParallelConnection {
     // Get the connection back from the async task. This will
     // only work if the connection is idle (ReadyForQuery received, no more traffic expected).
     pub async fn reattach(mut self) -> Result<Server, Error> {
-        self.stop.notify_one();
+        self.stop.cancel();
         let server = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
         match server {
             ParallelReply::Server(server) => Ok(*server),
@@ -127,7 +123,7 @@ impl ParallelConnection {
 // Prevents leaks in case the connection is not "reattached".
 impl Drop for ParallelConnection {
     fn drop(&mut self) {
-        self.stop.notify_one();
+        self.stop.cancel();
     }
 }
 
@@ -136,7 +132,7 @@ struct Listener {
     rx: Receiver<ParallelMessage>,
     tx: Sender<ParallelReply>,
     server: Option<Box<Server>>,
-    stop: Arc<Notify>,
+    stop: CancellationToken,
 }
 
 impl Listener {
@@ -192,7 +188,7 @@ impl Listener {
                     self.tx.send(ParallelReply::Message(reply)).await.map_err(|_| Error::ParallelConnection)?;
                 }
 
-                _ = self.stop.notified() => {
+                _ = self.stop.cancelled() => {
                     self.return_server().await?;
                     break;
                 }
