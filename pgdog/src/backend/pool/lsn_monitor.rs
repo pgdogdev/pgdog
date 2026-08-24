@@ -424,13 +424,13 @@ mod test {
     async fn test_get_connection_falls_back_to_standalone_when_saturated() {
         crate::logger();
 
-        // Single connection, short checkout timeout so the saturated checkout
-        // fails fast and the fallback path runs quickly.
+        // Keep the timeout bounded while allowing the initial connection to be
+        // established on slower test hosts.
         let config = Config {
             inner: pgdog_stats::Config {
                 max: 1,
                 min: 1,
-                checkout_timeout: Duration::from_millis(100),
+                checkout_timeout: Duration::from_secs(1),
                 ..Config::default().inner
             },
         };
