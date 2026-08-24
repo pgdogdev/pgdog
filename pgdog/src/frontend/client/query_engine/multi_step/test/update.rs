@@ -1,5 +1,3 @@
-use rand::{Rng, rng};
-
 use crate::{
     backend::pool::connection::binding::Binding,
     expect_message,
