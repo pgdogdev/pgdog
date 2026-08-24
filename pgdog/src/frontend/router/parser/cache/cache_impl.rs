@@ -60,7 +60,6 @@ pub(super) struct Inner {
     count_limit: usize,
     /// Approximate memory budget in bytes (0 = unlimited).
     byte_limit: usize,
-    /// Sum of `Entry::size` across all cached entries.
     bytes: usize,
     /// Idle expiry: entries untouched for longer than this are swept (None = off).
     idle_timeout: Option<Duration>,
@@ -69,8 +68,7 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    /// Insert (or replace) an entry and enforce the count and memory limits.
-    /// `size` is the measured byte footprint (0 falls back to an estimate).
+    /// `size` is the measured byte footprint; 0 falls back to an estimate.
     fn insert(&mut self, key: Arc<str>, ast: Ast, size: usize) {
         let size = if size > 0 { size } else { ast.approx_size() };
         if let Some(old) = self.queries.put(
@@ -87,7 +85,6 @@ impl Inner {
         self.enforce();
     }
 
-    /// Evict least-recently-used entries until both limits are satisfied.
     fn enforce(&mut self) {
         while (self.count_limit > 0 && self.queries.len() > self.count_limit)
             || (self.byte_limit > 0 && self.bytes > self.byte_limit)
@@ -99,7 +96,6 @@ impl Inner {
         }
     }
 
-    /// Drop entries not accessed within the idle window.
     fn sweep(&mut self) {
         let Some(idle_timeout) = self.idle_timeout else {
             return;
@@ -195,7 +191,6 @@ impl Cache {
         );
     }
 
-    /// Run the idle-expiry sweep. Called periodically by maintenance.
     pub fn sweep() {
         CACHE.inner.lock().sweep();
     }
@@ -531,7 +526,6 @@ mod tests {
 
     #[test]
     fn sweep_keeps_fresh_entries() {
-        // Idle window far larger than the entries' age: nothing is idle yet.
         let mut c = inner(0, 0, Some(Duration::from_secs(3600)));
         for i in 0..3 {
             c.insert(format!("q{i}").into(), ast(), 5);
@@ -543,7 +537,6 @@ mod tests {
 
     #[test]
     fn sweep_drops_idle_entries_and_updates_bytes() {
-        // Zero idle window: every entry is at or past it.
         let mut c = inner(0, 0, Some(Duration::ZERO));
         for i in 0..3 {
             c.insert(format!("q{i}").into(), ast(), 5);
