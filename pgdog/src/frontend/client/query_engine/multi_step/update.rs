@@ -95,6 +95,15 @@ impl<'a> UpdateMulti<'a> {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<Option<()>, Error> {
+        if !context.in_transaction() || !self.engine.backend.is_multishard()
+        // Do this check at the last possible moment.
+        // Just in case we change how transactions are
+        // routed in the future.
+        {
+            self.engine.cleanup_backend(context)?;
+            return Err(UpdateError::TransactionRequired.into());
+        }
+
         if self.has_destructive_on_delete_reference(context)? {
             return Err(UpdateError::ForeignKeyOnDelete.into());
         }
@@ -118,15 +127,6 @@ impl<'a> UpdateMulti<'a> {
                 .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
                 .await?;
             return Ok(Some(()));
-        }
-
-        if !context.in_transaction() || !self.engine.backend.is_multishard()
-        // Do this check at the last possible moment.
-        // Just in case we change how transactions are
-        // routed in the future.
-        {
-            self.engine.cleanup_backend(context)?;
-            return Err(UpdateError::TransactionRequired.into());
         }
 
         self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
