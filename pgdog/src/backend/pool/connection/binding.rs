@@ -443,7 +443,6 @@ impl Binding {
         }
     }
 
-    /// Record a client parameter change on every server we hold.
     pub fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
         match self {
             Binding::Direct(server, ..) => server.record_params(params, in_transaction),
@@ -454,7 +453,6 @@ impl Binding {
         }
     }
 
-    /// Record a client `RESET ALL` on every server we hold.
     pub fn record_reset_all(&mut self, in_transaction: bool) {
         match self {
             Binding::Direct(server, ..) => server.record_reset_all(in_transaction),
