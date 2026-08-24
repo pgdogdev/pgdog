@@ -2969,7 +2969,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=6870860#68708609b9bf6b0569257026b2e6d4c1b1748fef"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=86acb50#86acb506272a38c3fd0b12ae559be6de61d1e50e"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
