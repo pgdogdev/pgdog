@@ -262,11 +262,7 @@ impl QueryParser {
             }
         }
 
-        let statement = context
-            .router_context
-            .ast
-            .clone()
-            .ok_or(Error::EmptyQuery)?;
+        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
 
         if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
@@ -388,7 +384,7 @@ impl QueryParser {
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
                     )));
                 } else {
-                    self.select(&statement, stmt, context)
+                    self.select(statement, stmt, context)
                 }
             }
 
@@ -444,7 +440,7 @@ impl QueryParser {
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
-            Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
 
             Node::DiscardStmt { .. } => {
                 return Ok(Command::Discard {
@@ -479,7 +475,7 @@ impl QueryParser {
         // Run plugins, if any.
         self.plugins(
             context,
-            &statement,
+            statement,
             match &command {
                 Command::Query(query) => query.is_read(),
                 _ => false,
