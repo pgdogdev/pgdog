@@ -1,10 +1,10 @@
 use crate::{
-    frontend::{ClientRequest, client::TransactionType},
+    frontend::{ClientRequest, client::Transaction},
     net::Query,
 };
 
 pub enum QueryEngineResult {
-    Done(Option<TransactionType>),
+    Done(Option<Transaction>),
     ReplaySplit {
         requests: Vec<ClientRequest>,
         extended: bool,

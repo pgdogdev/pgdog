@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransactionType {
     ReadOnly,
@@ -6,6 +8,42 @@ pub enum TransactionType {
     Implicit,
     ErrorReadWrite,
     ErrorReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Transaction {
+    pub transaction_type: TransactionType,
+    pub source: TransactionSource,
+}
+
+impl Transaction {
+    pub fn is_automatic(&self) -> bool {
+        self.source == TransactionSource::Automatic
+    }
+}
+
+impl Deref for Transaction {
+    type Target = TransactionType;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transaction_type
+    }
+}
+
+impl From<TransactionType> for Transaction {
+    fn from(value: TransactionType) -> Self {
+        Self {
+            transaction_type: value,
+            source: TransactionSource::Client,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransactionSource {
+    #[default]
+    Client,
+    Automatic,
 }
 
 impl TransactionType {

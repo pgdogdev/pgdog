@@ -7,7 +7,7 @@ use crate::{
     config::{self, ReadWriteStrategy, config},
     frontend::{
         ClientRequest, Command, PreparedStatements, RouterContext,
-        client::{Sticky, TransactionType},
+        client::{Sticky, Transaction, TransactionType},
         router::{
             QueryParser,
             parser::{AstContext, Cache, Error},
@@ -22,7 +22,7 @@ pub(super) use crate::net::*;
 pub(crate) struct QueryParserTest {
     cluster: Cluster,
     params: Parameters,
-    transaction: Option<TransactionType>,
+    transaction: Option<Transaction>,
     sticky: Sticky,
     prepared: PreparedStatements,
     pub(crate) parser: QueryParser,
@@ -92,7 +92,7 @@ impl QueryParserTest {
     /// Set whether we're in a transaction.
     pub(crate) fn in_transaction(mut self, in_tx: bool) -> Self {
         self.transaction = if in_tx {
-            Some(TransactionType::ReadWrite)
+            Some(TransactionType::ReadWrite.into())
         } else {
             None
         };

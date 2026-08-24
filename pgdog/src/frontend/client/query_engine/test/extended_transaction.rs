@@ -84,7 +84,7 @@ async fn begin_multiple_describes() {
 #[tokio::test]
 async fn commit_statement_describe() {
     let mut client = TestClient::new_replicas(Parameters::default()).await;
-    client.client.transaction = Some(TransactionType::ReadWrite);
+    client.client.transaction = Some(TransactionType::ReadWrite.into());
     client.client.client_request = ClientRequest::from(vec![
         Parse::named("c", "COMMIT").into(),
         Bind::new_statement("c").into(),

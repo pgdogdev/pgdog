@@ -17,7 +17,7 @@ impl QueryEngine {
         transaction_type: TransactionType,
         extended: bool,
     ) -> Result<(), Error> {
-        context.transaction = Some(transaction_type);
+        context.transaction = Some(transaction_type.into());
 
         if self.backend.connected() {
             self.execute(context).await?;

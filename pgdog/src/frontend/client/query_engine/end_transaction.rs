@@ -145,7 +145,7 @@ mod tests {
         // Create a test client with DevNull stream (doesn't require real I/O)
         let mut client =
             crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
-        client.transaction = Some(TransactionType::ReadWrite);
+        client.transaction = Some(TransactionType::ReadWrite.into());
 
         // Create a default query engine (avoids backend connection)
         let mut engine = QueryEngine::from_client(&client).unwrap();

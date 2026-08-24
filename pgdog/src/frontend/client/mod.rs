@@ -40,7 +40,7 @@ pub mod timeouts;
 pub mod transaction_type;
 
 pub(crate) use sticky::Sticky;
-pub use transaction_type::TransactionType;
+pub use transaction_type::*;
 
 /// PostgreSQL client.
 ///
@@ -72,7 +72,7 @@ pub struct Client {
     // Client prepared statements cache.
     prepared_statements: PreparedStatements,
     // Client transaction state.
-    transaction: Option<TransactionType>,
+    transaction: Option<Transaction>,
     // Current timeouts to use for client/server communication.
     // These change based on client state, e.g. if client is running query,
     // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
@@ -599,7 +599,8 @@ impl Client {
                 let mut reqs = requests.into_iter();
 
                 if extended {
-                    self.transaction.get_or_insert(TransactionType::Implicit);
+                    self.transaction
+                        .get_or_insert(TransactionType::Implicit.into());
                 }
 
                 while let Some(mut req) = reqs.next() {

@@ -2,7 +2,7 @@ use tracing::{info, trace};
 
 use crate::{
     frontend::{
-        client::TransactionType,
+        client::{Transaction, TransactionSource, TransactionType},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
@@ -166,27 +166,47 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    context.transaction = match context.transaction {
-                        Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
-                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(TransactionType::ErrorReadWrite)
+                    context.transaction = if let Some(transaction) = context.transaction {
+                        match transaction.transaction_type {
+                            TransactionType::ReadOnly => Some(Transaction {
+                                source: transaction.source,
+                                transaction_type: TransactionType::ErrorReadOnly,
+                            }),
+                            TransactionType::ReadWrite | TransactionType::Implicit => {
+                                Some(Transaction {
+                                    transaction_type: TransactionType::ErrorReadWrite,
+                                    source: transaction.source,
+                                })
+                            }
+
+                            _ => None,
                         }
-                        _ => None,
+                    } else {
+                        None
                     };
 
-                    let end_two_pc = self.two_pc.is_auto();
-                    let end_multi_query = context.in_multi_query_request;
+                    let is_automatic = context
+                        .transaction
+                        .as_ref()
+                        .map(|txn| txn.is_automatic())
+                        .unwrap_or_default();
 
-                    if end_two_pc {
-                        self.end_two_pc(true).await?;
-                        replace_rfq = true;
-                    } else if end_multi_query {
-                        self.backend.execute("ROLLBACK").await?;
-                        replace_rfq = true;
-                    }
+                    // Only automatically rollback transactions if they were started by the client.
+                    if is_automatic {
+                        let end_two_pc = self.two_pc.is_auto();
+                        let end_multi_query = context.in_multi_query_request;
 
-                    if end_multi_query {
-                        self.pipeline_error = true;
+                        if end_two_pc {
+                            self.end_two_pc(true).await?;
+                            replace_rfq = true;
+                        } else if end_multi_query {
+                            self.backend.execute("ROLLBACK").await?;
+                            replace_rfq = true;
+                        }
+
+                        if end_multi_query {
+                            self.pipeline_error = true;
+                        }
                     }
                 }
 
@@ -208,20 +228,35 @@ impl QueryEngine {
                         replace_rfq = true;
                     }
 
-                    match context.transaction {
+                    let source = if self.two_pc.is_auto() || context.in_multi_query_request {
+                        TransactionSource::Automatic
+                    } else {
+                        TransactionSource::Client
+                    };
+
+                    match context.transaction.as_deref() {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
                         None => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction = Some(Transaction {
+                                transaction_type: TransactionType::ReadWrite,
+                                source,
+                            });
                         }
 
                         // Restore transaction state after rollback to savepoint.
                         Some(TransactionType::ErrorReadOnly) => {
-                            context.transaction = Some(TransactionType::ReadOnly);
+                            context.transaction = Some(Transaction {
+                                transaction_type: TransactionType::ReadOnly,
+                                source,
+                            });
                         }
 
                         Some(TransactionType::ErrorReadWrite) => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction = Some(Transaction {
+                                transaction_type: TransactionType::ReadWrite,
+                                source,
+                            });
                         }
 
                         _ => (),

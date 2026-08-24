@@ -76,7 +76,7 @@ macro_rules! command {
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
         client_request.ast = Some(ast);
         let transaction = if $in_transaction {
-            Some(TransactionType::ReadWrite)
+            Some(TransactionType::ReadWrite.into())
         } else {
             None
         };
@@ -130,7 +130,7 @@ macro_rules! query_parser {
         client_request.ast = Some(ast);
 
         let maybe_transaction = if $in_transaction {
-            Some(TransactionType::ReadWrite)
+            Some(TransactionType::ReadWrite.into())
         } else {
             None
         };
@@ -467,7 +467,7 @@ fn test_set() {
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
-    let transaction = Some(TransactionType::ReadWrite);
+    let transaction = Some(TransactionType::ReadWrite.into());
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
@@ -612,7 +612,7 @@ WHERE t2.account = (
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
-    let transaction = Some(TransactionType::ReadWrite);
+    let transaction = Some(TransactionType::ReadWrite.into());
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();

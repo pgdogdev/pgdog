@@ -11,7 +11,7 @@ use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
 use crate::config::{ConfigAndUsers, config};
-use crate::frontend::client::TransactionType;
+use crate::frontend::client::Transaction;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
 use crate::frontend::{ClientComms, PreparedStatements};
@@ -45,7 +45,7 @@ pub struct Mirror {
     /// Stream that absorbs all data.
     pub stream: Stream,
     /// Transaction state.
-    pub transaction: Option<TransactionType>,
+    pub transaction: Option<Transaction>,
 }
 
 impl Mirror {
