@@ -30,7 +30,7 @@ pub struct RouterContext<'a> {
     /// Sticky omnisharded index.
     pub(super) sticky: Sticky,
     /// AST.
-    pub(super) ast: Option<Ast>,
+    pub(super) ast: Option<&'a Ast>,
     /// Schema.
     pub(super) schema: Schema,
     /// Sharding key translations resolved for this statement. Routing
@@ -61,7 +61,7 @@ impl<'a> RouterContext<'a> {
             two_pc: cluster.two_pc_enabled(),
             sticky,
             query,
-            ast: buffer.ast.clone(),
+            ast: buffer.ast.as_ref(),
             schema: cluster.schema(),
             resolved_lookups: ResolvedLookups::default(),
         })
