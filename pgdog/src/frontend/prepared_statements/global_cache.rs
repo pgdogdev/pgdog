@@ -830,8 +830,6 @@ mod test {
         let spike_capacity = cache.capacity();
         assert!(spike_capacity >= 10_000);
 
-        // The table allocates capacity, not len; the accounting
-        // must report that memory.
         let table_floor = spike_capacity * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
         let usage = cache.memory_usage();
         assert!(usage >= table_floor);
@@ -857,7 +855,6 @@ mod test {
         assert!(shrunk_capacity < spike_capacity / 8);
         assert!(cache.memory_usage() < spike_memory / 8);
 
-        // Statements that survived the sweep are still usable.
         let survivors: Vec<String> = cache.names().keys().cloned().collect();
         assert_eq!(survivors.len(), 100);
         for name in survivors {
@@ -879,7 +876,6 @@ mod test {
         }
         cache.close_unused(10);
 
-        // Small tables are not worth rehashing.
         assert!(cache.capacity() >= capacity / 2);
     }
 
