@@ -20,7 +20,7 @@ impl QueryEngine {
     }
 
     /// Parse client request and rewrite it, if necessary.
-    pub(super) async fn parse_and_rewrite(
+    pub(super) fn parse_and_rewrite(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
@@ -38,25 +38,10 @@ impl QueryEngine {
         if let Some(query) = query {
             let cluster = self.backend.cluster()?;
             let ast_ctx = AstContext::from_cluster(cluster, context.params);
-            let ast = match Cache::get().query(&query, &ast_ctx, context.prepared_statements) {
-                Ok(ast) => ast,
-                Err(err) => {
-                    self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))
-                        .await?;
-                    return Ok(false);
-                }
-            };
+            let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
+
+            context.rewrite_result = Some(ast.rewrite_plan.apply(context.client_request)?);
             context.client_request.ast = Some(ast);
-        }
-
-        let plan = context
-            .client_request
-            .ast
-            .as_ref()
-            .map(|ast| ast.rewrite_plan.clone());
-
-        if let Some(plan) = plan {
-            context.rewrite_result = Some(plan.apply(context.client_request)?);
         }
 
         Ok(true)

@@ -110,33 +110,33 @@ impl QueryParser {
                     route.set_shard(context.shards_calculator.shard());
                 }
 
-                // Search path routing used for schema sharding.
-                // FIXME(lev): It's duplicative, since we explicitely
-                // check for presence of schema sharding below.
+                // Used in connect.rs to determine if we're routing via search_path.
+                // Even if we're only using schema_sharding, what if there's a SELECT from all?
                 let is_search_path = context.shards_calculator.is_search_path();
                 route.set_search_path_driven(is_search_path);
 
-                // Was there, at any point in time, a `ShardSource::SearchPath` shard?
-                // We use this for a check in schema sharding for `SearchPath` + `manual_routing`
-                // within the cross-shard omni check.
-                let contains_search_path = context.shards_calculator.contains_search_path();
-                route.set_contains_search_path(contains_search_path);
+                // Are we using `sharded_schemas` and NOT using `sharded_tables`?
+                // If we're using both: there's no way to know right now if a query
+                // that doesn't have SearchPath specified (e.g. using a SET) might mess with an
+                // omnisharded configuration for a sharded schema.
+                // TODO: We should consider in the future what should happen
+                //       if people are using multiple sharding functions.
+                route.sharded_schema_only =
+                    !context.sharding_schema.schemas.is_empty() && !context.sharded_tables;
 
+                // Note: this is dependent on route.sharded_schema_only being set first.
                 let full_shard_coverage = route.requires_full_shard_coverage();
-                let schema_sharding = !context.sharding_schema.schemas.is_empty();
 
                 let manual_routing = matches!(
                     route.shard_with_priority().source(),
                     ShardSource::Comment | ShardSource::Set
                 );
 
-                route.set_manual_routing(manual_routing);
-
                 // This means we are serving the request, not just extracting
                 // which keys we need to lookup in the routing table.
                 let have_lookups = !context.bare_key_lookups.is_empty();
 
-                if full_shard_coverage && (manual_routing || have_lookups) && !schema_sharding {
+                if full_shard_coverage && (manual_routing || have_lookups) {
                     return Err(Error::OmniWriteWithDirective);
                 }
 

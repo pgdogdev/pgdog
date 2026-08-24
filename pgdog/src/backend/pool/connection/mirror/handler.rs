@@ -188,12 +188,6 @@ impl MirrorHandler {
         let mut stats = self.stats.lock();
         stats.mirror.queue_length += 1;
     }
-
-    /// Decrement the queue length.
-    pub fn decrement_queue_length(&self) {
-        let mut stats = self.stats.lock();
-        stats.mirror.queue_length = stats.mirror.queue_length.saturating_sub(1);
-    }
 }
 
 #[cfg(test)]

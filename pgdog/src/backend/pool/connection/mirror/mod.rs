@@ -46,8 +46,6 @@ pub struct Mirror {
     pub stream: Stream,
     /// Transaction state.
     pub transaction: Option<TransactionType>,
-    /// Cross-shard queries.
-    pub cross_shard_disabled: bool,
 }
 
 impl Mirror {
@@ -62,7 +60,6 @@ impl Mirror {
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
             transaction: None,
-            cross_shard_disabled: config.config.general.cross_shard_disabled,
         }
     }
 

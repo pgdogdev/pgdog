@@ -9,7 +9,6 @@ use crate::{
 };
 use std::net::SocketAddr;
 
-#[allow(dead_code)]
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.

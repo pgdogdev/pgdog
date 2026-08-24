@@ -3,14 +3,18 @@ use std::{collections::HashSet, str::from_utf8};
 use pgdog_config::ShardedTableConfig;
 use rand::seq::SliceRandom;
 
-use crate::config::{
-    ShardedMappingConfig, ShardedMappingDeprecated, ShardedMappingKindDeprecated,
-    ShardedMappingList, ShardedMappingRange,
-};
 use crate::{
     backend::{ShardingSchema, server::test::test_server},
-    config::FlexibleType,
-    net::{Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter},
+    config::DataType,
+    frontend::router::parser::Shard,
+    net::{
+        Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter,
+        messages::Format,
+    },
+};
+use pgdog_config::sharding::{
+    FlexibleType, ShardedMappingConfig, ShardedMappingDeprecated, ShardedMappingKindDeprecated,
+    ShardedMappingList, ShardedMappingRange,
 };
 
 use super::*;

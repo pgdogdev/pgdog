@@ -1,4 +1,4 @@
-use super::{code, prelude::*};
+use super::{c_string_bytes, code, prelude::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CopyFail {
@@ -6,10 +6,9 @@ pub struct CopyFail {
 }
 
 impl CopyFail {
-    pub fn new(error: impl ToString) -> Self {
-        let error = error.to_string();
+    pub fn new(error: impl AsRef<str>) -> Self {
         Self {
-            error: Bytes::from(format!("{}\0", error)),
+            error: c_string_bytes(error.as_ref()),
         }
     }
 }

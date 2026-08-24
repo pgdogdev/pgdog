@@ -3,7 +3,7 @@ use crate::net::{CommandComplete, DataRow, Message};
 use super::prelude::*;
 use super::*;
 
-async fn query(client: &mut TestClient, sql: impl ToString) -> Vec<Message> {
+async fn query(client: &mut TestClient, sql: impl AsRef<str>) -> Vec<Message> {
     client.send_simple(Query::new(sql)).await;
     client.read_until('Z').await.unwrap()
 }

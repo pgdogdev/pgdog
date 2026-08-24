@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use crate::{frontend::RewritePlan, net::Prepare, stats::memory::MemoryUsage};
+use crate::{net::Prepare, stats::memory::MemoryUsage};
 
 use super::prelude::*;
 
@@ -20,7 +18,12 @@ pub(crate) enum StatementType {
 
     Prepare {
         prepare: Prepare,
-        rewrite_plan: Arc<RewritePlan>,
+        /// The number of calls to `pgdog.unique_id` which were previously
+        /// rewritten. If this value is greater than zero, it is expected
+        /// that the query in the [`Parse`] message referenced by
+        /// [`Self::prepare`] was previously rewritten to replace those calls
+        /// with bind parameter placeholder numbered after all others
+        unique_ids: u16,
     },
 }
 
@@ -60,12 +63,12 @@ impl Statement {
         }
     }
 
-    pub(super) fn prepare_and_rewrite(&self) -> Option<(Prepare, Arc<RewritePlan>)> {
-        match self.stmt {
+    pub(super) fn prepare_and_unique_ids(&self) -> Option<(Prepare, u16)> {
+        match &self.stmt {
             StatementType::Prepare {
-                ref prepare,
-                ref rewrite_plan,
-            } => Some((prepare.clone(), rewrite_plan.clone())),
+                prepare,
+                unique_ids,
+            } => Some((prepare.clone(), *unique_ids)),
             _ => None,
         }
     }
@@ -77,6 +80,7 @@ impl Statement {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn query(&self) -> &str {
         match self.stmt {
             StatementType::Parse { ref parse, .. } => parse.query(),

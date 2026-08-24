@@ -25,10 +25,8 @@ static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
 /// Queries used to clean up server connections after
 /// client modifications.
-#[allow(dead_code)]
 pub struct Cleanup {
     queries: &'static Vec<Query>,
-    reset: bool,
     dirty: bool,
     deallocate: bool,
     close: Vec<Close>,
@@ -38,7 +36,6 @@ impl Default for Cleanup {
     fn default() -> Self {
         Self {
             queries: &*NONE,
-            reset: false,
             dirty: false,
             deallocate: false,
             close: vec![],
@@ -104,7 +101,6 @@ impl Cleanup {
     /// Cleanup everything.
     pub fn all() -> Self {
         Self {
-            reset: true,
             dirty: true,
             deallocate: true,
             queries: &*ALL,

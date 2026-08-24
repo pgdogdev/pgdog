@@ -1,7 +1,6 @@
 use pgdog_config::PoolerMode;
 use tracing::trace;
 
-use crate::backend::Cluster;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
 use crate::frontend::router::sharding::lookup;
@@ -16,7 +15,7 @@ pub enum ClusterCheck {
 }
 
 impl QueryEngine {
-    /// Get mutable reference to the backend connection.
+    #[cfg(test)]
     pub fn backend(&mut self) -> &mut Connection {
         &mut self.backend
     }
@@ -163,20 +162,15 @@ impl QueryEngine {
                 // a query. Bare protocol-control batches (e.g. a lone Sync or Flush)
                 // route to a default/cross-shard target but must still be forwarded
                 // to the already-connected backend to finish the exchange.
-                if context.client_request.is_executable() {
-                    if Self::is_omnishard_unsafe(&self.backend, command, cluster) {
-                        self.error_response(context, ErrorResponse::omni_in_direct_to_shard())
-                            .await?;
-                        return Ok(false);
-                    }
-
-                    if Self::is_shard_switch(command, &self.backend) {
-                        self.error_response(context, ErrorResponse::direct_shard_mismatch())
-                            .await?;
-                        return Ok(false);
-                    }
+                if context.client_request.is_executable()
+                    && Self::is_shard_switch(command, &self.backend)
+                {
+                    self.error_response(context, ErrorResponse::direct_shard_mismatch())
+                        .await?;
+                    return Ok(false);
                 }
             }
+
             Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {
                 self.error_response(context, ErrorResponse::omni_write_with_directive())
                     .await?;
@@ -203,14 +197,6 @@ impl QueryEngine {
         }
 
         Ok(true)
-    }
-
-    // Make sure we don't send an omni write to a direct-to-shard route.
-    // This will cause omni data inconsistency.
-    fn is_omnishard_unsafe(backend: &Connection, command: &Command, cluster: &Cluster) -> bool {
-        command.route().requires_full_shard_coverage()
-            && backend.connected() // FIXME(lev): I wish there was a way to say >0 and <n in one shot.
-            && backend.connected_servers() < cluster.shards().len()
     }
 
     // Caller switched shards mid-transaction and the transaction is pinned

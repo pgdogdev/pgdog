@@ -1,6 +1,7 @@
 use rand::{Rng, rng};
 
 use crate::{
+    backend::pool::connection::binding::Binding,
     expect_message,
     frontend::{
         ClientRequest,
@@ -71,7 +72,7 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
     client.client().client_request.extend(request.messages);
 
     let mut context = QueryEngineContext::new(&mut client.client);
-    client.engine.parse_and_rewrite(&mut context).await?;
+    client.engine.parse_and_rewrite(&mut context)?;
     client.engine.route_query(&mut context).await?;
 
     assert!(
@@ -81,20 +82,13 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
 
     client.engine.connect(&mut context, None).await?;
 
-    assert!(
-        client.engine.backend.is_direct(),
-        "backend should be connected with Binding::Direct"
-    );
+    std::assert_matches!(&*client.engine.backend, Binding::Direct(..));
 
-    let rewrite = context
-        .client_request
-        .ast
-        .as_ref()
-        .expect("ast to exist")
+    let ast = context.client_request.ast.clone().expect("ast was set");
+    let rewrite = ast
         .rewrite_plan
-        .clone()
         .sharding_key_update
-        .clone()
+        .as_ref()
         .expect("sharding key update to exist");
 
     let mut update = UpdateMulti::new(&mut client.engine, rewrite);
@@ -191,7 +185,7 @@ async fn test_row_same_shard_no_transaction() {
 
     let mut context = QueryEngineContext::new(&mut client.client);
 
-    client.engine.parse_and_rewrite(&mut context).await.unwrap();
+    client.engine.parse_and_rewrite(&mut context).unwrap();
 
     assert!(
         context

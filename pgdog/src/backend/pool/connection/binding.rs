@@ -468,18 +468,6 @@ impl Binding {
         }
     }
 
-    /// Reset changed params on all servers, disabling parameter tracking
-    /// for this request.
-    pub fn reset_changed_params(&mut self) {
-        match self {
-            Binding::Direct(server, ..) => server.reset_changed_params(),
-            Binding::MultiShard(servers, _) => servers
-                .iter_mut()
-                .for_each(|server| server.reset_changed_params()),
-            _ => (),
-        }
-    }
-
     pub(super) fn dirty(&mut self) {
         match self {
             Binding::Direct(server, ..) => server.mark_dirty(true),
@@ -528,10 +516,6 @@ impl Binding {
             Binding::MultiShard(servers, _) => !servers.is_empty(),
             _ => false,
         }
-    }
-
-    pub fn is_direct(&self) -> bool {
-        matches!(self, Binding::Direct(_, _))
     }
 
     /// If connected to one shard only, get that shard number.

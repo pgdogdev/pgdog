@@ -62,10 +62,10 @@ impl Describe {
         self.kind() != 'S' || self.statement().is_empty()
     }
 
-    pub fn rename(&mut self, name: impl ToString) {
+    pub fn rename(&mut self, name: impl AsRef<str>) {
         let mut payload = Payload::named('D');
         payload.put_u8(self.kind() as u8);
-        payload.put_string(&name.to_string());
+        payload.put_string(name.as_ref());
         self.payload = payload.freeze();
         self.original = None;
     }

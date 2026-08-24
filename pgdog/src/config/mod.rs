@@ -18,28 +18,29 @@ pub mod users;
 pub use core::{Config, ConfigAndUsers};
 pub use database::{Database, Role};
 pub use error::Error;
-pub use general::{General, LogFormat};
+pub use general::General;
 pub use memory::*;
-pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
+pub use networking::{MultiTenant, TlsVerifyMode};
 pub use overrides::Overrides;
 use pgdog_config::LookupResult;
-use pgdog_config::ShardedTableConfig;
-pub use pgdog_config::auth::{AuthType, PassthroughAuth};
+pub use pgdog_config::auth::AuthType;
+#[cfg(test)]
+pub(crate) use pgdog_config::auth::PassthroughAuth;
 pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
-pub use rewrite::{Rewrite, RewriteMode};
+pub use rewrite::RewriteMode;
 use std::path::Path;
-pub use users::{Admin, Plugin, ServerAuth, User, Users};
+#[cfg(test)]
+pub(crate) use users::Users;
+pub use users::{ServerAuth, User};
 
 // Re-export from sharding module
-pub use sharding::{
-    DataType, FlexibleType, Hasher, OmnishardedTables, ShardedMappingConfig,
-    ShardedMappingDeprecated, ShardedMappingKindDeprecated, ShardedMappingList,
-    ShardedMappingRange,
-};
+pub use sharding::{DataType, Hasher, ShardedMappingDeprecated};
 
 // Re-export from replication module
-pub use replication::{MirrorConfig, Mirroring, ReplicaLag, Replication};
+pub use replication::MirrorConfig;
+#[cfg(test)]
+pub(crate) use replication::Mirroring;
 
 use parking_lot::Mutex;
 use std::env;
@@ -245,11 +246,6 @@ pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
 }
 
 #[cfg(test)]
-pub fn load_test_with_user(user: &str) {
-    load_test_with_user_and_pooler_mode(user, PoolerMode::Transaction, Role::Primary)
-}
-
-#[cfg(test)]
 fn load_test_with_user_and_pooler_mode(user: &str, pooler_mode: PoolerMode, role: Role) {
     use crate::backend::databases::init;
 
@@ -314,12 +310,14 @@ pub fn load_test_sharded() {
 }
 
 /// Load 3-shard test configuration.
+#[cfg(test)]
 pub fn load_test_sharded_3() {
     load_test_sharded_n(3);
 }
 
+#[cfg(test)]
 fn load_test_sharded_n(num_shards: usize) {
-    use pgdog_config::{OmnishardedTables, ShardedSchema};
+    use pgdog_config::{OmnishardedTables, ShardedSchema, ShardedTableConfig};
 
     use crate::backend::databases::init;
 

@@ -15,7 +15,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine.parse_and_rewrite(&mut context).unwrap();
 
     match context.rewrite_result {
         Some(RewriteResult::InPlace { offset }) => offset,
@@ -102,7 +102,7 @@ async fn test_offset_limit_not_sharded() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine.parse_and_rewrite(&mut context).unwrap();
 
     assert!(context.rewrite_result.is_none());
 }
@@ -127,7 +127,7 @@ async fn test_offset_with_unique_id_simple() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine.parse_and_rewrite(&mut context).unwrap();
 
     // After parse_and_rewrite, the Query message should have unique_id replaced.
     let rewritten_sql = match &context.client_request.messages[0] {
@@ -199,7 +199,7 @@ async fn test_offset_with_unique_id_extended() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine.parse_and_rewrite(&mut context).unwrap();
 
     // After parse_and_rewrite, Parse should have unique_id rewritten to $4::bigint.
     let rewritten_sql = match &context.client_request.messages[0] {

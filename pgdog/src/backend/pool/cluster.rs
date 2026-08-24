@@ -13,15 +13,13 @@ use crate::backend::server::ServerRequest;
 use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
-        Schema, ShardedTables,
-        databases::{User as DatabaseUser, databases},
-        replication::{ReplicationConfig, ShardedSchemas},
+        Schema, ShardedTables, databases::User as DatabaseUser, replication::ShardedSchemas,
     },
     config::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
     frontend::{ClientRequest, RegexParser, router::round_robin},
-    net::{Query, bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
+    net::{bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
 };
 
 use super::{
@@ -55,7 +53,6 @@ pub struct Cluster {
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
     sharded_schemas: ShardedSchemas,
-    replication_sharding: Option<String>,
     multi_tenant: Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
@@ -69,9 +66,7 @@ pub struct Cluster {
     prepared_statements: PreparedStatements,
     dry_run: bool,
     expanded_explain: bool,
-    pub_sub_channel_size: usize,
     query_parser: QueryParserLevel,
-    connection_recovery: ConnectionRecovery,
     client_connection_recovery: ConnectionRecovery,
     query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
@@ -108,7 +103,6 @@ impl Default for Cluster {
             pooler_mode: Default::default(),
             sharded_tables: Default::default(),
             sharded_schemas: Default::default(),
-            replication_sharding: Default::default(),
             multi_tenant: Default::default(),
             rw_strategy: Default::default(),
             rw_split: Default::default(),
@@ -122,9 +116,7 @@ impl Default for Cluster {
             prepared_statements: Default::default(),
             dry_run: Default::default(),
             expanded_explain: Default::default(),
-            pub_sub_channel_size: Default::default(),
             query_parser: Default::default(),
-            connection_recovery: Default::default(),
             client_connection_recovery: Default::default(),
             query_parser_engine: Default::default(),
             log_min_duration_parse: Default::default(),
@@ -201,7 +193,6 @@ pub struct ClusterConfig<'a> {
     passwords: Vec<PasswordKind>,
     pooler_mode: PoolerMode,
     sharded_tables: ShardedTables,
-    replication_sharding: Option<String>,
     multi_tenant: &'a Option<MultiTenant>,
     rw_strategy: ReadWriteStrategy,
     rw_split: ReadWriteSplit,
@@ -214,12 +205,10 @@ pub struct ClusterConfig<'a> {
     prepared_statements: &'a PreparedStatements,
     dry_run: bool,
     expanded_explain: bool,
-    pub_sub_channel_size: usize,
     query_parser: QueryParserLevel,
     query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
-    connection_recovery: ConnectionRecovery,
     client_connection_recovery: ConnectionRecovery,
     lsn_check_interval: Duration,
     reload_schema_on_ddl: bool,
@@ -266,7 +255,6 @@ impl<'a> ClusterConfig<'a> {
             name: &user.database,
             passwords: user.passwords(),
             user: &user.name,
-            replication_sharding: user.replication_sharding.clone(),
             pooler_mode,
             lb_strategy: general.load_balancing_strategy,
             shards,
@@ -287,12 +275,10 @@ impl<'a> ClusterConfig<'a> {
             prepared_statements: &general.prepared_statements,
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
-            pub_sub_channel_size: general.pub_sub_channel_size,
             query_parser: query_parser.level,
             query_parser_engine: query_parser.engine,
             log_min_duration_parse: general.log_min_duration_parse(),
             log_query_sample_length: general.log_query_sample_length,
-            connection_recovery: general.connection_recovery,
             client_connection_recovery: general.client_connection_recovery,
             lsn_check_interval: Duration::from_millis(general.lsn_check_interval),
             reload_schema_on_ddl: general.reload_schema_on_ddl,
@@ -326,7 +312,6 @@ impl Cluster {
             passwords,
             pooler_mode,
             sharded_tables,
-            replication_sharding,
             multi_tenant,
             rw_strategy,
             rw_split,
@@ -339,9 +324,7 @@ impl Cluster {
             prepared_statements,
             dry_run,
             expanded_explain,
-            pub_sub_channel_size,
             query_parser,
-            connection_recovery,
             client_connection_recovery,
             lsn_check_interval,
             query_parser_engine,
@@ -398,7 +381,6 @@ impl Cluster {
             pooler_mode,
             sharded_tables,
             sharded_schemas,
-            replication_sharding,
             multi_tenant: multi_tenant.clone(),
             rw_strategy,
             rw_split,
@@ -412,9 +394,7 @@ impl Cluster {
             prepared_statements: *prepared_statements,
             dry_run,
             expanded_explain,
-            pub_sub_channel_size,
             query_parser,
-            connection_recovery,
             client_connection_recovery,
             query_parser_engine,
             log_min_duration_parse,
@@ -546,10 +526,6 @@ impl Cluster {
         &self.prepared_statements
     }
 
-    pub fn connection_recovery(&self) -> &ConnectionRecovery {
-        &self.connection_recovery
-    }
-
     pub fn client_connection_recovery(&self) -> &ConnectionRecovery {
         &self.client_connection_recovery
     }
@@ -560,10 +536,6 @@ impl Cluster {
 
     pub fn expanded_explain(&self) -> bool {
         self.expanded_explain
-    }
-
-    pub fn pub_sub_enabled(&self) -> bool {
-        self.pub_sub_channel_size > 0
     }
 
     /// A cluster is read_only if zero shards have a primary,
@@ -634,13 +606,6 @@ impl Cluster {
     /// Multi-tenant config.
     pub fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
-    }
-
-    /// Get replication configuration for this cluster.
-    pub fn replication_sharding_config(&self) -> Option<ReplicationConfig> {
-        self.replication_sharding
-            .as_ref()
-            .and_then(|database| databases().replication(database))
     }
 
     /// Get all data required for sharding.
@@ -751,20 +716,6 @@ impl Cluster {
         try_join_all(pools.iter().map(|pool| pool.cancel_all()))
             .await
             .map_err(|_| Error::FastShutdown)?;
-
-        Ok(())
-    }
-
-    /// Execute a query on every primary in the cluster.
-    pub async fn execute(
-        &self,
-        query: impl Into<Query> + Clone,
-    ) -> Result<(), crate::backend::Error> {
-        let query: Query = query.into();
-        for shard in 0..self.shards.len() {
-            let mut server = self.primary(shard, &Request::default()).await?;
-            server.execute(query.clone()).await?;
-        }
 
         Ok(())
     }
