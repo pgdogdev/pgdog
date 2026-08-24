@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pgdog_config::users::PasswordKind;
-use request_settings::ClientRequestSettings;
 use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
@@ -39,11 +38,11 @@ use crate::util::{safe_timeout, user_database_from_params};
 
 pub mod query_engine;
 pub(crate) mod request_settings;
-pub(crate) use request_settings::ClientRequestSettings;
 pub mod sticky;
 pub mod timeouts;
 pub mod transaction_type;
 
+pub(crate) use request_settings::ClientRequestSettings;
 pub(crate) use sticky::Sticky;
 pub use transaction_type::TransactionType;
 
@@ -754,7 +753,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
-            + std::mem::size_of::<Timeouts>()
+            + std::mem::size_of::<ClientRequestSettings>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
     }

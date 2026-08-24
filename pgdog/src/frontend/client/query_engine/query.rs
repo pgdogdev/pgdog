@@ -9,7 +9,6 @@ use crate::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
-    state::State,
     util::safe_timeout,
 };
 
