@@ -123,8 +123,6 @@ impl ShardingKeyUpdate {
 
 #[derive(Debug)]
 pub(crate) struct Inner {
-    /// Fetch the whole old row.
-    pub(crate) select: Statement,
     /// Check that the row actually moves shards.
     pub(crate) check: Statement,
     /// Delete old row from shard.
@@ -350,22 +348,6 @@ fn create_stmts<'a>(
     });
 
     let mut params = IndexSet::new();
-    let select = owned(|mem| {
-        let mut select_stmt = mem.make_unique(&*select_star);
-        select_stmt
-            .as_mut()
-            .set_where_clause(mem.make_unique(stmt.where_clause()));
-        params = rewrite_params(select_stmt.as_mut().into());
-        mem.make_list(&[mem.make_raw_stmt(select_stmt.uncast())])
-    });
-
-    let select = Statement {
-        stmt: deparse(select.first().unwrap())?.as_str().to_owned(),
-        ast: Ast::from_raw_stmts(select),
-        params,
-    };
-
-    let mut params = IndexSet::new();
     let delete = owned(|mem| {
         let mut delete = mem.make_node::<nodes::DeleteStmt>();
         delete
@@ -374,6 +356,21 @@ fn create_stmts<'a>(
         delete
             .as_mut()
             .set_where_clause(mem.make_unique(stmt.where_clause()));
+        delete.as_mut().set_returning_clause(
+            mem.make_returning_clause(
+                mem.make_list(&[mem
+                    .make_res_target(
+                        None,
+                        mem.empty(),
+                        mem.make_column_ref(
+                            mem.make_list(&[mem.make_node::<nodes::A_Star>().uncast()]),
+                        )
+                        .uncast(),
+                    )
+                    .uncast()]),
+            )
+            .as_option(),
+        );
         params = rewrite_params(delete.as_mut().into());
         mem.make_list(&[mem.make_raw_stmt(delete.uncast())])
     });
@@ -409,7 +406,6 @@ fn create_stmts<'a>(
 
     Ok(ShardingKeyUpdate {
         inner: Arc::new(Inner {
-            select,
             delete,
             check,
             from_update: owned(|mem| mem.make_unique(stmt)),
@@ -490,8 +486,11 @@ mod test {
             .unwrap();
 
         // SELECT should have WHERE clause with param renumbered to $1
-        assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 RETURNING *"
+        );
+        assert_eq!(result.delete.params, indexset![2]);
 
         let schema = default_schema();
         let tables = schema.tables.tables();
@@ -506,10 +505,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 AND name = $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
         assert!(!result.is_returning());
     }
 
@@ -523,10 +522,10 @@ mod test {
         .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 AND name = $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![3, 5]);
+        assert_eq!(result.delete.params, indexset![3, 5]);
     }
 
     #[test]
@@ -535,8 +534,11 @@ mod test {
             .unwrap()
             .unwrap();
 
-        assert_eq!(result.select.stmt, "SELECT * FROM sharded WHERE email = $1");
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 RETURNING *"
+        );
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -545,7 +547,10 @@ mod test {
             .unwrap()
             .unwrap();
 
-        assert_eq!(result.delete.stmt, "DELETE FROM sharded WHERE email = $1");
+        assert_eq!(
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 RETURNING *"
+        );
 
         assert!(result.sharded_table(&[]).is_none());
         assert!(
@@ -576,7 +581,7 @@ mod test {
 
         assert_eq!(
             result.delete.stmt,
-            "DELETE FROM sharded WHERE email = $1 AND name = $2"
+            "DELETE FROM sharded WHERE email = $1 AND name = $2 RETURNING *"
         );
     }
 
@@ -587,10 +592,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = 'test@example.com'"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = 'test@example.com' RETURNING *"
         );
-        assert!(result.select.params.is_empty());
+        assert!(result.delete.params.is_empty());
     }
 
     #[test]
@@ -600,10 +605,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email IN ($1, $2, $3)"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email IN ($1, $2, $3) RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3, 4]);
+        assert_eq!(result.delete.params, indexset![2, 3, 4]);
     }
 
     #[test]
@@ -613,10 +618,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE count > $1 AND count < $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE count > $1 AND count < $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
     }
 
     #[test]
@@ -626,10 +631,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 OR name = $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 OR name = $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
     }
 
     #[test]
@@ -639,10 +644,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND name = $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 AND name = $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![20, 30]);
+        assert_eq!(result.delete.params, indexset![20, 30]);
     }
 
     #[test]
@@ -659,10 +664,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email LIKE $1"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email LIKE $1 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -672,10 +677,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 AND deleted_at IS NULL"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 AND deleted_at IS NULL RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -685,10 +690,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE created_at BETWEEN $1 AND $2"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE created_at BETWEEN $1 AND $2 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
     }
 
     #[test]
@@ -700,11 +705,11 @@ mod test {
 
         // Both occurrences should be renumbered to $1
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email = $1 OR name = $1"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email = $1 OR name = $1 RETURNING *"
         );
         // Only one unique param in the mapping
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -715,10 +720,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE a = $1 AND b = $1 AND c = $1"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE a = $1 AND b = $1 AND c = $1 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2]);
+        assert_eq!(result.delete.params, indexset![2]);
     }
 
     #[test]
@@ -729,10 +734,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE a = $1 AND b = $2 AND c = $1"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE a = $1 AND b = $2 AND c = $1 RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
     }
 
     #[test]
@@ -743,10 +748,10 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            result.select.stmt,
-            "SELECT * FROM sharded WHERE email IN ($1, $2, $1)"
+            result.delete.stmt,
+            "DELETE FROM sharded WHERE email IN ($1, $2, $1) RETURNING *"
         );
-        assert_eq!(result.select.params, indexset![2, 3]);
+        assert_eq!(result.delete.params, indexset![2, 3]);
     }
 
     #[test]
@@ -757,7 +762,7 @@ mod test {
 
         assert_eq!(
             result.delete.stmt,
-            "DELETE FROM sharded WHERE email = $1 OR name = $1"
+            "DELETE FROM sharded WHERE email = $1 OR name = $1 RETURNING *"
         );
         assert_eq!(result.delete.params, indexset![2]);
     }
