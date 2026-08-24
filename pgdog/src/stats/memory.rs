@@ -84,7 +84,6 @@ impl<K: MemoryUsage, V: MemoryUsage> MemoryUsage for BTreeMap<K, V> {
 impl<V: MemoryUsage, S> MemoryUsage for HashSet<V, S> {
     #[inline(always)]
     fn memory_usage(&self) -> usize {
-        // Same as HashMap: count allocated slots, not just live entries.
         self.capacity() * (std::mem::size_of::<V>() + 1)
             + self.iter().map(|v| v.memory_usage()).sum::<usize>()
     }
