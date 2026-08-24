@@ -1,4 +1,5 @@
 use super::{PreparedStatements, prelude::*};
+use crate::frontend::router::parser::Cache;
 use crate::tasks::{shutdown_signal, spawn};
 
 use std::time::Duration;
@@ -25,4 +26,5 @@ pub fn start_maintenance() {
 fn run_maintenance() {
     let capacity = config().config.general.prepared_statements_limit;
     PreparedStatements::global().write().close_unused(capacity);
+    Cache::sweep();
 }
