@@ -25,7 +25,6 @@ impl QueryParser {
     }
 }
 
-/// Returns None if the arguments could not be parsed
 fn parse_args(
     fcall: &nodes::FuncCall,
     params: Option<StatementParameters<'_>>,
