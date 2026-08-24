@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use pg_raw_parse::nodes;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -212,19 +213,20 @@ impl Cache {
     /// Used by dry run mode to keep stats on what queries are routed correctly,
     /// and which are not.
     ///
-    pub fn record_normalized(&self, query: &str, route: &Route) -> Result<(), Error> {
-        let normalized = normalize(query)?;
+    pub fn record_normalized(&self, query: &nodes::RawStmt, route: &Route) -> Result<(), Error> {
+        let normalized = normalize(query);
+        let normalized = normalized.stmt().as_str().ok_or(Error::EmptyQuery)?;
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(normalized.as_str()) {
+            if let Some(entry) = guard.queries.get(normalized) {
                 entry.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
             }
         }
 
-        let entry = Ast::new_record(&normalized)?;
+        let entry = Ast::new_record(normalized)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
