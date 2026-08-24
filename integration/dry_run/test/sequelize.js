@@ -38,7 +38,7 @@ describe("sequelize", async function () {
     let found = false;
     for (let i = 0; i < cache.rows.length; i++) {
       let row = cache.rows[i];
-      if (row.query.startsWith('SELECT "id", "email", "createdAt"')) {
+      if (row.query.startsWith('SELECT id, email, "createdAt"')) {
         assert(parseInt(row.direct) > 0);
         found = true;
       }
