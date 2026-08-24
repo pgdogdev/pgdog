@@ -88,16 +88,18 @@ mod tests {
 
     #[test]
     fn from_general_copies_all_snapshotted_fields() {
-        let mut general = General::default();
-        general.query_timeout = 1_000;
-        general.client_idle_timeout = 2_000;
-        general.client_idle_in_transaction_timeout = 3_000;
-        general.query_log_stdout = true;
-        general.query_size_limit = Some(4096);
-        general.query_size_limit_action = QuerySizeLimitAction::Block;
-        general.application_name_add_host = true;
-        general.expanded_explain = true;
-        general.log_query_sample_length = 42;
+        let general = General {
+            query_timeout: 1_000,
+            client_idle_timeout: 2_000,
+            client_idle_in_transaction_timeout: 3_000,
+            query_log_stdout: true,
+            query_size_limit: Some(4096),
+            query_size_limit_action: QuerySizeLimitAction::Block,
+            application_name_add_host: true,
+            expanded_explain: true,
+            log_query_sample_length: 42,
+            ..Default::default()
+        };
 
         let settings = ClientRequestSettings::from_general(&general);
 
@@ -127,9 +129,11 @@ mod tests {
 
     #[test]
     fn from_general_omits_block_limit_when_action_is_warn() {
-        let mut general = General::default();
-        general.query_size_limit = Some(1024);
-        general.query_size_limit_action = QuerySizeLimitAction::Warn;
+        let general = General {
+            query_size_limit: Some(1024),
+            query_size_limit_action: QuerySizeLimitAction::Warn,
+            ..Default::default()
+        };
 
         let settings = ClientRequestSettings::from_general(&general);
 
