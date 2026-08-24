@@ -790,7 +790,6 @@ impl Server {
         self.params_recorded = true;
     }
 
-    /// Record a client's `RESET ALL`.
     pub fn record_reset_all(&mut self, in_transaction: bool) {
         if in_transaction {
             self.client_params.reset_all_transaction();

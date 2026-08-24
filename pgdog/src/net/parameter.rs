@@ -301,7 +301,6 @@ impl Parameters {
         }
     }
 
-    /// Reset all tracked parameters until the transaction ends.
     pub fn reset_all_transaction(&mut self) {
         for key in self.resettable_keys() {
             self.reset_transaction(&key);
