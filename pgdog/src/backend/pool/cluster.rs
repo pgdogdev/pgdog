@@ -3,8 +3,8 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
-    RewriteMode, users::PasswordKind,
+    LoadSchema, PreparedStatements, QueryParser, QueryParserLevel, Rewrite, RewriteMode,
+    users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -68,7 +68,6 @@ pub struct Cluster {
     expanded_explain: bool,
     query_parser: QueryParserLevel,
     client_connection_recovery: ConnectionRecovery,
-    query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
     reload_schema_on_ddl: bool,
@@ -118,7 +117,6 @@ impl Default for Cluster {
             expanded_explain: Default::default(),
             query_parser: Default::default(),
             client_connection_recovery: Default::default(),
-            query_parser_engine: Default::default(),
             log_min_duration_parse: Default::default(),
             log_query_sample_length: Default::default(),
             reload_schema_on_ddl: Default::default(),
@@ -150,8 +148,6 @@ pub struct ShardingSchema {
     pub schemas: ShardedSchemas,
     /// Rewrite config.
     pub rewrite: Rewrite,
-    /// Query parser engine.
-    pub query_parser_engine: QueryParserEngine,
     pub log_min_duration_parse: Option<Duration>,
     pub log_query_sample_length: usize,
 }
@@ -206,7 +202,6 @@ pub struct ClusterConfig<'a> {
     dry_run: bool,
     expanded_explain: bool,
     query_parser: QueryParserLevel,
-    query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
     client_connection_recovery: ConnectionRecovery,
@@ -276,7 +271,6 @@ impl<'a> ClusterConfig<'a> {
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
             query_parser: query_parser.level,
-            query_parser_engine: query_parser.engine,
             log_min_duration_parse: general.log_min_duration_parse(),
             log_query_sample_length: general.log_query_sample_length,
             client_connection_recovery: general.client_connection_recovery,
@@ -327,7 +321,6 @@ impl Cluster {
             query_parser,
             client_connection_recovery,
             lsn_check_interval,
-            query_parser_engine,
             log_min_duration_parse,
             log_query_sample_length,
             reload_schema_on_ddl,
@@ -396,7 +389,6 @@ impl Cluster {
             expanded_explain,
             query_parser,
             client_connection_recovery,
-            query_parser_engine,
             log_min_duration_parse,
             log_query_sample_length,
             reload_schema_on_ddl,
@@ -615,7 +607,6 @@ impl Cluster {
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
-            query_parser_engine: self.query_parser_engine,
             log_min_duration_parse: self.log_min_duration_parse,
             log_query_sample_length: self.log_query_sample_length,
         }

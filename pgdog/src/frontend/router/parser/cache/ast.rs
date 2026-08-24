@@ -1,5 +1,4 @@
 use pg_raw_parse::{Node, Owned, StmtList, make};
-use pgdog_config::QueryParserEngine;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Instant;
@@ -28,8 +27,6 @@ pub struct Ast {
     pub comment_shard: Option<ShardOrLookup>,
     /// Role.
     pub comment_role: Option<Role>,
-    /// Parser query engine used.
-    pub query_parser_engine: QueryParserEngine,
     /// Sharding Key.
     pub comment_sharding_key: Option<String>,
     /// Inner sync.
@@ -120,7 +117,6 @@ impl Ast {
             cached: true,
             comment_shard: None,
             comment_role: None,
-            query_parser_engine: schema.query_parser_engine,
             comment_sharding_key: None,
             inner: Arc::new(AstInner {
                 stats: Mutex::new(stats),
@@ -156,7 +152,6 @@ impl Ast {
             comment_role: None,
             comment_shard: None,
             comment_sharding_key: None,
-            query_parser_engine: QueryParserEngine::default(),
             inner: Arc::new(AstInner::new(ast.into_inner())),
         })
     }
@@ -167,7 +162,6 @@ impl Ast {
             cached: true,
             comment_role: None,
             comment_shard: None,
-            query_parser_engine: QueryParserEngine::default(),
             comment_sharding_key: None,
             inner: Arc::new(AstInner::new(stmts)),
         }

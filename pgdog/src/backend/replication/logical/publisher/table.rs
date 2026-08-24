@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use pgdog_config::QueryParserEngine;
 use tokio::select;
 use tracing::error;
 
@@ -38,8 +37,6 @@ pub struct Table {
     pub columns: Vec<PublicationTableColumn>,
     /// Table data as of this LSN.
     pub lsn: Lsn,
-    /// Query parser engine.
-    pub query_parser_engine: QueryParserEngine,
 }
 
 /// An enumerated view over a subset of a table's columns.
@@ -141,11 +138,7 @@ where
 }
 
 impl Table {
-    pub async fn load(
-        publication: &str,
-        server: &mut Server,
-        query_parser_engine: QueryParserEngine,
-    ) -> Result<Vec<Self>, Error> {
+    pub async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
         let tables = PublicationTable::load(publication, server).await?;
         let mut results = vec![];
 
@@ -159,7 +152,6 @@ impl Table {
                 identity,
                 columns,
                 lsn: Lsn::default(),
-                query_parser_engine,
             });
         }
 
@@ -526,7 +518,6 @@ mod test {
     };
     use pg_raw_parse::parse;
 
-    use crate::config::config;
     use crate::net::messages::replication::logical::tuple_data::{
         TupleData, text_col, toasted_col,
     };
@@ -558,7 +549,6 @@ mod test {
                 })
                 .collect(),
             lsn: Lsn::default(),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 
@@ -834,13 +824,9 @@ mod test {
         crate::logger();
 
         let mut publication = setup_publication().await;
-        let tables = Table::load(
-            "publication_test",
-            &mut publication.server,
-            config().config.general.query_parser_engine,
-        )
-        .await
-        .unwrap();
+        let tables = Table::load("publication_test", &mut publication.server)
+            .await
+            .unwrap();
 
         assert_eq!(tables.len(), 2);
 
@@ -878,7 +864,6 @@ mod test {
             identity,
             columns,
             lsn: Lsn::default(),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 

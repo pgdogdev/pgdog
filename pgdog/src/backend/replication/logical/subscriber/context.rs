@@ -112,7 +112,6 @@ mod test {
             Column, Identifier, TupleData, text_col, toasted_col,
         },
     };
-    use pgdog_config::QueryParserEngine;
     use pgdog_postgres_types::{Format, Oid};
 
     use super::*;
@@ -142,7 +141,6 @@ mod test {
                 })
                 .collect(),
             lsn: Default::default(),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 

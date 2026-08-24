@@ -473,10 +473,10 @@ pub enum QueryParserLevel {
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryParserEngine {
-    /// Use the protobuf parse tree from `pg_query` (default).
-    #[default]
+    /// Use the protobuf parse tree from `pg_query`.
     PgQueryProtobuf,
-    /// Use the raw JSON parse tree from `pg_query`.
+    /// Use the raw JSON parse tree from `pg_query` (default).
+    #[default]
     PgQueryRaw,
 }
 
@@ -727,7 +727,7 @@ database = "production"
         assert_eq!(config.query_parsers[0].level, QueryParserLevel::Auto);
         assert_eq!(
             config.query_parsers[0].engine,
-            QueryParserEngine::PgQueryProtobuf
+            QueryParserEngine::PgQueryRaw
         );
     }
 }
