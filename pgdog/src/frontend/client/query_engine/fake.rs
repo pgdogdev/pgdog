@@ -51,15 +51,15 @@ impl QueryEngine {
                 ProtocolMessage::Bind(_) => context.stream.send(&BindComplete).await?,
                 ProtocolMessage::Describe(describe) => {
                     if describe.is_statement() {
-                        if let Some(fake_response) = fake_response.as_ref() {
-                            context
-                                .stream
-                                .send(&ParameterDescription::default())
-                                .await?
-                                + context.stream.send(&fake_response.row_description).await?
-                        } else {
-                            context.stream.send(&NoData).await?
-                        }
+                        context
+                            .stream
+                            .send(&ParameterDescription::default())
+                            .await?
+                            + if let Some(fake_response) = fake_response.as_ref() {
+                                context.stream.send(&fake_response.row_description).await?
+                            } else {
+                                context.stream.send(&NoData).await?
+                            }
                     } else {
                         context.stream.send(&NoData).await?
                     }
