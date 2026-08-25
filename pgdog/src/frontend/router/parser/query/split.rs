@@ -7,7 +7,7 @@ impl QueryParser {
     ///
     /// If that's the case, return it back to the query engine for separate
     /// re-execution.
-    pub(super) fn check_multi_statement(
+    pub(super) fn check_multi_query_statement(
         &self,
         ast: &Ast,
         context: &QueryParserContext<'_>,
@@ -18,7 +18,9 @@ impl QueryParser {
 
         // In session mode, you can do whatever you want.
         if context.is_session_mode() {
-            return Ok(None);
+            return Ok(Some(Command::Query(Route::write(
+                context.shards_calculator.shard(),
+            ))));
         }
 
         let stmts = &ast.ast;
@@ -32,7 +34,10 @@ impl QueryParser {
                 // thing to a replica, causing an error.
                 //
                 // Extended protocol containing multiple statements will be rejected by Postgres.
-                if context.shards == 1 || context.router_context.extended {
+                if context.shards == 1
+                    || context.router_context.extended
+                    || (context.shards > 1 && context.shards_calculator.shard().is_direct())
+                {
                     Ok(None)
                 } else if Self::split_execution_no_transaction_safe(ast) {
                     Ok(Some(Self::split(ast)?))
