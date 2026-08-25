@@ -22,7 +22,7 @@ struct TokenInfo {
     #[serde(alias = "sub")]
     user_id: Option<String>,
     scope: Option<String>,
-    expires_in: Option<i64>,
+    expires_in: Option<String>,
     email: Option<String>,
     #[serde(alias = "email_verified")]
     verified_email: Option<bool>,
@@ -85,7 +85,12 @@ fn validate(
     startup_user: &str,
     token_info: TokenInfo,
 ) -> Result<String, AuthenticationError> {
-    if token_info.expires_in.is_none_or(|seconds| seconds <= 0) {
+    let parsed_secs: i64 = token_info.expires_in
+        .as_deref()
+        .unwrap_or("0")
+        .parse()
+        .unwrap();
+    if parsed_secs <= 0 {
         return Err(AuthenticationError::Expired);
     }
 
@@ -266,7 +271,7 @@ mod tests {
             issued_to: None,
             user_id: Some("1234567890".into()),
             scope: Some("scope-a scope-b".into()),
-            expires_in: Some(3_600),
+            expires_in: Some("3600".into()),
             email: Some("alice@example.com".into()),
             verified_email: Some(true),
         }
@@ -332,7 +337,7 @@ mod tests {
     #[test]
     fn rejects_expired_token() {
         let mut token = token_info();
-        token.expires_in = Some(0);
+        token.expires_in = Some("0".into());
 
         assert!(matches!(
             validate(&settings(), "alice@example.com", token),
@@ -404,7 +409,7 @@ mod tests {
                 "azp": "authorized-party",
                 "sub": "1234567890",
                 "scope": "scope-a",
-                "expires_in": 3600,
+                "expires_in": "3600",
                 "email": "alice@example.com",
                 "email_verified": true
             }"#,
@@ -423,7 +428,7 @@ mod tests {
             "audience": "gcloud-client",
             "user_id": "1234567890",
             "scope": "scope-a scope-b",
-            "expires_in": 3600,
+            "expires_in": "3600",
             "email": "alice@example.com",
             "verified_email": true
         }"#;

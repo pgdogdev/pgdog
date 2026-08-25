@@ -13,7 +13,7 @@ TOKEN_RESPONSES = {
     audience: 'gcloud-client',
     user_id: '1234567890',
     scope: 'openid email https://www.googleapis.com/auth/cloud-platform',
-    expires_in: 3600,
+    expires_in: '3600',
     email: 'alice@example.com',
     verified_email: true
   },
@@ -21,7 +21,7 @@ TOKEN_RESPONSES = {
     audience: 'gcloud-client',
     user_id: '1234567890',
     scope: 'https://www.googleapis.com/auth/cloud-platform',
-    expires_in: 0,
+    expires_in: '0',
     email: 'alice@example.com',
     verified_email: true
   },
@@ -29,7 +29,7 @@ TOKEN_RESPONSES = {
     audience: 'gcloud-client',
     user_id: '9876543210',
     scope: 'https://www.googleapis.com/auth/cloud-platform',
-    expires_in: 3600,
+    expires_in: '3600',
     email: 'bob@example.com',
     verified_email: true
   },
@@ -37,7 +37,7 @@ TOKEN_RESPONSES = {
     audience: 'gcloud-client',
     user_id: '1234567890',
     scope: 'openid email',
-    expires_in: 3600,
+    expires_in: '3600',
     email: 'alice@example.com',
     verified_email: true
   }
