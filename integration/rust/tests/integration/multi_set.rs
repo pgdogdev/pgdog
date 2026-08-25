@@ -48,8 +48,7 @@ async fn test_multi_set_with_timezone_interval() {
 #[tokio::test]
 async fn test_multi_set_mixed_works() {
     for conn in connections_tokio().await {
-        let _ = conn
-            .batch_execute("SET statement_timeout TO '10s'; SELECT 1")
+        conn.batch_execute("SET statement_timeout TO '10s'; SELECT 1")
             .await
             .unwrap();
     }
