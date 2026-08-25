@@ -24,8 +24,21 @@ struct TokenInfo {
     scope: Option<String>,
     expires_in: Option<String>,
     email: Option<String>,
-    #[serde(alias = "email_verified")]
+    #[serde(alias = "email_verified", deserialize_with = "deserialize_str_bool")]
     verified_email: Option<bool>,
+}
+
+fn deserialize_str_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    let s: &str = serde::de::Deserialize::deserialize(deserializer)?;
+
+    match s {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(serde::de::Error::unknown_variant(s, &["true", "false"])),
+    }
 }
 
 pub(crate) fn authenticate(
@@ -411,7 +424,7 @@ mod tests {
                 "scope": "scope-a",
                 "expires_in": "3600",
                 "email": "alice@example.com",
-                "email_verified": true
+                "email_verified": "true"
             }"#,
         )
         .expect("parse tokeninfo response");
@@ -425,12 +438,15 @@ mod tests {
     #[test]
     fn calls_tokeninfo_without_leaking_token_in_errors() {
         let body = r#"{
-            "audience": "gcloud-client",
-            "user_id": "1234567890",
-            "scope": "scope-a scope-b",
-            "expires_in": "3600",
-            "email": "alice@example.com",
-            "verified_email": true
+          "azp": "42789329387.apps.googleusercontent.com",
+          "aud": "42789329387.apps.googleusercontent.com",
+          "sub": "427893293874278932938",
+          "scope": "email https://www.googleapis.com/auth/accounts.reauth https://www.googleapis.com/auth/appengine.admin https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/compute https://www.googleapis.com/auth/sqlservice.login https://www.googleapis.com/auth/userinfo.email openid",
+          "exp": "1787664074",
+          "expires_in": "2865",
+          "email": "marco.palmisano@examplecompany.com",
+          "email_verified": "true",
+          "access_type": "offline"
         }"#;
         let (url, request) = mock_server("200 OK", body);
         let runtime = RuntimeConfig::from_settings(Settings {
@@ -443,7 +459,7 @@ mod tests {
         let token = "ya29.a+b/c?";
 
         let grant = authenticate(&runtime, "ignored", token, false).expect("authenticate");
-        assert_eq!(grant.derived_user.as_deref(), Some("alice@example.com"));
+        assert_eq!(grant.derived_user.as_deref(), Some("marco.palmisano@examplecompany.com"));
 
         let request = request.join().expect("join mock server");
         assert!(request.starts_with("GET /tokeninfo?access_token="));
