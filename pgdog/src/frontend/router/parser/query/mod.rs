@@ -528,8 +528,10 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                let query = context.query()?.query();
-                Cache::get().record_normalized(query, command.route())?;
+                Cache::get().record_normalized(
+                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    command.route(),
+                )?;
             }
             Ok(command.dry_run())
         } else {
