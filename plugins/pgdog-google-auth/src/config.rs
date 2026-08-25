@@ -158,6 +158,40 @@ impl RuntimeConfig {
     }
 }
 
+impl Settings {
+    /// Whether the startup user belongs to the Google-authenticated namespace.
+    ///
+    /// A full email startup user can be routed before token introspection when
+    /// the token-derived email must match it. Other identity modes need the
+    /// token response before ownership can be determined, so the plugin claims
+    /// them and preserves fail-closed behavior.
+    pub(crate) fn claims_user(&self, user: &str) -> bool {
+        if !self.require_user_match
+            || self.username_claim != UsernameClaim::Email
+            || self.strip_email_domain
+        {
+            return true;
+        }
+
+        let normalized = user.to_ascii_lowercase();
+        let Some((local, domain)) = normalized.rsplit_once('@') else {
+            return false;
+        };
+        if local.is_empty() || domain.is_empty() {
+            return false;
+        }
+
+        if self.allowed_domains.is_empty() && self.allowed_emails.is_empty() {
+            return true;
+        }
+
+        self.allowed_emails
+            .iter()
+            .any(|allowed| allowed == &normalized)
+            || self.allowed_domains.iter().any(|allowed| allowed == domain)
+    }
+}
+
 fn normalize_list(
     values: &mut [String],
     field: &'static str,
@@ -311,5 +345,37 @@ required_scopes = ["scope-a"]
         assert_eq!(runtime.settings.username_claim, UsernameClaim::UserId);
         assert_eq!(runtime.settings.allowed_domains, ["example.com"]);
         assert_eq!(runtime.settings.required_scopes, ["scope-a"]);
+    }
+
+    #[test]
+    fn routes_only_matching_full_email_users_when_possible() {
+        let settings = Settings {
+            allowed_domains: vec!["example.com".into()],
+            allowed_emails: vec!["specific@other.test".into()],
+            ..Default::default()
+        };
+
+        assert!(settings.claims_user("alice@example.com"));
+        assert!(settings.claims_user("specific@other.test"));
+        assert!(!settings.claims_user("postgres"));
+        assert!(!settings.claims_user("alice@other.test"));
+
+        let derived_identity = Settings {
+            require_user_match: false,
+            ..settings.clone()
+        };
+        assert!(derived_identity.claims_user("postgres"));
+
+        let stripped_email = Settings {
+            strip_email_domain: true,
+            ..settings.clone()
+        };
+        assert!(stripped_email.claims_user("alice"));
+
+        let user_id = Settings {
+            username_claim: UsernameClaim::UserId,
+            ..settings
+        };
+        assert!(user_id.claims_user("1234567890"));
     }
 }

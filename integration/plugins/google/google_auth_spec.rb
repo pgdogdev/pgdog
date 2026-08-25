@@ -119,6 +119,12 @@ describe 'Google access-token authentication plugin' do
     conn.close
   end
 
+  it 'skips excluded users so PostgreSQL passthrough can authenticate them' do
+    conn = connect('pgdog', 'pgdog')
+    expect(conn.exec('SELECT 1 AS n')[0]['n'].to_i).to eq(1)
+    conn.close
+  end
+
   it 'rejects a token Google does not recognize with a generic error' do
     expect { connect('alice@example.com', 'invalid-google-token') }
       .to raise_error(PG::ConnectionBad, GENERIC_AUTH_ERROR)

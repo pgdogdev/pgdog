@@ -17,6 +17,10 @@ require_verified_email = true
 allowed_domains = ["example.com"]
 allowed_emails = []
 
+# With the defaults above, startup users outside the allowed full-email
+# namespace (for example, "postgres") return Skip without sending their
+# credential to Google. PgDog can then use password or passthrough fallback.
+
 # Optional OAuth client and scope restrictions.
 allowed_audiences = []
 required_scopes = ["https://www.googleapis.com/auth/cloud-platform"]

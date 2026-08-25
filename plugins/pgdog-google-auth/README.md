@@ -38,6 +38,29 @@ config = "google-auth.toml"
 Start from [`config.example.toml`](config.example.toml). At minimum, restrict
 the accepted principals with `allowed_domains` or `allowed_emails`.
 
+To let selected users authenticate with PostgreSQL passwords, enable PgDog's
+password or passthrough fallback:
+
+```toml
+# pgdog.toml
+[general]
+auth_type = "plugin"
+passthrough_auth = "enabled"
+tls_client_required = true
+```
+
+With `username_claim = "email"`, `strip_email_domain = false`, and
+`require_user_match = true`, the plugin claims only full email startup users
+matching `allowed_domains` or `allowed_emails`. A non-email user such as
+`postgres` returns `Skip` without sending its password to Google. Invalid Google
+tokens for claimed email users still return `Deny`, so they cannot downgrade to
+password authentication. For true backend passthrough, do not define the
+non-email user in `users.toml`.
+
+When `require_user_match = false`, `strip_email_domain = true`, or
+`username_claim = "user_id"`, PgDog cannot route by the startup email namespace.
+The plugin therefore claims the credential and preserves fail-closed behavior.
+
 By default, the verified Google email becomes the PostgreSQL user and must
 match the startup user. For example:
 

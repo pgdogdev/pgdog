@@ -44,6 +44,10 @@ impl Plugin for GoogleAuthPlugin {
             return AuthDecision::Deny("Google authentication plugin is not configured".into());
         };
 
+        if !runtime.settings.claims_user(&context.user) {
+            return AuthDecision::Skip;
+        }
+
         match token_info::authenticate(&runtime, &context.user, &context.credential, context.tls) {
             Ok(grant) => AuthDecision::Allow(grant),
             Err(err) => AuthDecision::Deny(err.to_string()),
