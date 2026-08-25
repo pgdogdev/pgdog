@@ -31,7 +31,8 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
-        behave_like_select: bool,
+        /// `SELECT set_config(...)`, not `SET`: Postgres has to answer it.
+        is_select: bool,
     },
     ResetAll,
     InternalField {

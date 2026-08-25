@@ -267,9 +267,22 @@ impl Parameters {
         }
     }
 
-    /// Remove parameter from params temporarily. The transaction
-    /// is comitted, it will be removed permanently.
+    /// Remove a parameter permanently.
     pub fn reset(&mut self, name: impl AsRef<str>) {
+        let name = name.as_ref().to_lowercase();
+
+        if self.params.remove(&name).is_some() {
+            self.hash = Self::compute_hash(&self.params);
+        }
+
+        self.transaction_params.remove(&name);
+        self.transaction_local_params.remove(&name);
+        // Nothing left to restore on a rollback.
+        self.reset_params.remove(&name);
+    }
+
+    /// Remove a parameter until the transaction ends: a ROLLBACK brings it back.
+    pub fn reset_transaction(&mut self, name: impl AsRef<str>) {
         let name = name.as_ref().to_lowercase();
 
         if let Some(value) = self.params.remove(&name) {
@@ -283,17 +296,31 @@ impl Parameters {
 
     /// Reset all tracked parameters.
     pub fn reset_all(&mut self) {
-        let mut keys: Vec<String> = self.params.keys().cloned().collect();
-        keys.extend(self.transaction_params.keys().cloned());
-        keys.extend(self.transaction_local_params.keys().cloned());
+        for key in self.resettable_keys() {
+            self.reset(&key);
+        }
+    }
+
+    pub fn reset_all_transaction(&mut self) {
+        for key in self.resettable_keys() {
+            self.reset_transaction(&key);
+        }
+    }
+
+    fn resettable_keys(&self) -> Vec<String> {
+        // Lifted out first: resetting borrows the maps we'd be iterating.
+        let mut keys: Vec<String> = self
+            .params
+            .keys()
+            .chain(self.transaction_params.keys())
+            .chain(self.transaction_local_params.keys())
+            .filter(|key| !UNTRACKED_PARAMS.contains(key))
+            .cloned()
+            .collect();
         keys.sort();
         keys.dedup();
 
-        for key in keys {
-            if !UNTRACKED_PARAMS.contains(&key) {
-                self.reset(&key);
-            }
-        }
+        keys
     }
 
     /// Commit params we saved during the transaction.
@@ -998,11 +1025,37 @@ mod test {
     }
 
     #[test]
-    fn test_reset_rollback_restores_param() {
+    fn test_reset_outside_transaction_is_permanent() {
         let mut params = Parameters::default();
         params.insert("search_path", "public");
 
         params.reset("search_path");
+
+        // A later transaction has nothing to do with that RESET.
+        params.rollback();
+
+        assert_eq!(params.get("search_path"), None);
+    }
+
+    #[test]
+    fn test_reset_all_outside_transaction_is_permanent() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+        params.insert("timezone", "UTC");
+
+        params.reset_all();
+        params.rollback();
+
+        assert_eq!(params.get("search_path"), None);
+        assert_eq!(params.get("timezone"), None);
+    }
+
+    #[test]
+    fn test_reset_rollback_restores_param() {
+        let mut params = Parameters::default();
+        params.insert("search_path", "public");
+
+        params.reset_transaction("search_path");
         assert_eq!(params.get("search_path"), None);
 
         params.rollback();
@@ -1104,7 +1157,7 @@ mod test {
         params.insert("search_path", "public");
         params.insert("timezone", "UTC");
 
-        params.reset_all();
+        params.reset_all_transaction();
         assert_eq!(params.get("search_path"), None);
         assert_eq!(params.get("timezone"), None);
 
