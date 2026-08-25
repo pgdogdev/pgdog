@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::time::Duration;
+use tokio::task::yield_now;
 use tokio::time::sleep;
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
@@ -45,6 +46,7 @@ fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
     let mut config = create_test_pool_config(host, port);
     config.address.configured_role = Role::Auto;
     config.config.inner.role_detection = true;
+    config.config.inner.checkout_timeout = Duration::from_millis(200);
     config
 }
 
@@ -1517,12 +1519,76 @@ async fn test_auto_mode_primary_election_releases_writes() {
 
     tokio::spawn(async move {
         sleep(Duration::from_millis(10)).await;
-        election.targets[0].set_role(Role::Primary);
-        election.role_detection.notify_one();
+        set_lsn_stats(&election.targets[0], false, 100);
+        assert!(election.redetect_roles());
     });
 
     assert_eq!(lb.wait_primary().await, Ok(()));
     assert!(lb.primary().is_some());
+}
+
+#[tokio::test]
+async fn test_auto_mode_waits_for_each_new_primary() {
+    let first = create_auto_test_pool_config("127.0.0.1", 5432);
+    let second = create_auto_test_pool_config("localhost", 5432);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[first, second],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    lb.targets.iter().for_each(|target| target.pool.launch());
+
+    // primary is not defined initially
+    assert!(lb.primary().is_none());
+    // spawn the task that will wait for primary to resolve
+    let spawned = {
+        let lb = lb.clone();
+
+        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+    };
+
+    // assert that the background wait is in progress
+    yield_now().await;
+    assert!(!spawned.is_finished());
+
+    // set the first target to primary and redetect roles
+    set_lsn_stats(&lb.targets[0], false, 100);
+    set_lsn_stats(&lb.targets[1], true, 90);
+    assert!(lb.redetect_roles());
+
+    // primary should be resolved to first primary
+    let primary = spawned.await.unwrap().unwrap();
+    assert_eq!(primary.pool.addr().host, "127.0.0.1");
+    drop(primary);
+
+    // remove primary from first
+    set_lsn_stats(&lb.targets[0], true, 100);
+    lb.redetect_roles();
+    assert!(lb.primary().is_none());
+
+    // spawn another task that should wait for new primary
+    let spawned = {
+        let lb = lb.clone();
+
+        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+    };
+
+    yield_now().await;
+    assert!(!spawned.is_finished());
+
+    set_lsn_stats(&lb.targets[1], false, 200);
+    assert!(lb.redetect_roles());
+    assert!(lb.primary().is_some());
+
+    // primary should be resolved to second target
+    let primary = spawned.await.unwrap().unwrap();
+    assert_eq!(primary.pool.addr().host, "localhost");
+    drop(primary);
+
+    lb.shutdown();
 }
 
 #[tokio::test]
