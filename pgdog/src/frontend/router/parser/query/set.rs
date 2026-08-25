@@ -27,7 +27,7 @@ impl QueryParser {
             Ok(Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                set_config: false,
             })
         }
     }
@@ -65,7 +65,7 @@ impl QueryParser {
     /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
     /// all multi-statement queries are forwarded to the server verbatim.
     pub(super) fn try_multi_set<'a>(
-        &mut self,
+        &self,
         stmts: impl IntoIterator<Item = &'a nodes::RawStmt>,
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {
@@ -99,7 +99,7 @@ impl QueryParser {
             Ok(Some(Command::Set {
                 params,
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                set_config: false,
             }))
         }
     }

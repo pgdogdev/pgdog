@@ -12,6 +12,7 @@ pub struct SetParam {
     pub local: bool,
 }
 
+/// Query parser result.
 #[derive(Debug, Clone)]
 pub enum Command {
     Query(Route),
@@ -31,8 +32,9 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
-        behave_like_select: bool,
+        set_config: bool,
     },
+    Split(#[allow(unused)] Vec<String>),
     ResetAll,
     InternalField {
         name: String,
