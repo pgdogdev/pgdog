@@ -1280,7 +1280,7 @@ async fn test_move_conns_to_carries_stats_over() {
         guard.stats.calc_averages(Duration::from_secs(1));
     }
 
-    assert!(source.can_move_conns_to(&destination));
+    assert!(source.has_compatible_address_with(&destination));
     source.move_conns_to(&destination).unwrap();
 
     let stats = destination.lock().stats;
