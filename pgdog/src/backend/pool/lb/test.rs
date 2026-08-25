@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::task::yield_now;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
@@ -1502,7 +1502,10 @@ async fn test_auto_mode_waits_for_primary_election() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Err(Error::CheckoutTimeout));
+    assert!(matches!(
+        lb.get_primary(&Request::default()).await,
+        Err(Error::CheckoutTimeout)
+    ));
 }
 
 #[tokio::test]
@@ -1515,16 +1518,21 @@ async fn test_auto_mode_primary_election_releases_writes() {
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
+    lb.targets[0].pool.launch();
     let election = lb.clone();
 
-    tokio::spawn(async move {
+    let election = tokio::spawn(async move {
         sleep(Duration::from_millis(10)).await;
         set_lsn_stats(&election.targets[0], false, 100);
         assert!(election.redetect_roles());
     });
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
-    assert!(lb.primary().is_some());
+    let primary = lb.get_primary(&Request::default()).await.unwrap();
+    assert_eq!(primary.pool.addr().host, "127.0.0.1");
+    drop(primary);
+    election.await.unwrap();
+
+    lb.shutdown();
 }
 
 #[tokio::test]
@@ -1581,6 +1589,7 @@ async fn test_auto_mode_waits_for_each_new_primary() {
 
     set_lsn_stats(&lb.targets[1], false, 200);
     assert!(lb.redetect_roles());
+    assert!(!lb.redetect_roles());
     assert!(lb.primary().is_some());
 
     // primary should be resolved to second target
@@ -1602,11 +1611,12 @@ async fn test_static_replica_only_does_not_wait_for_primary() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
+    let started = Instant::now();
     assert!(matches!(
         lb.get_primary(&Request::default()).await,
         Err(Error::NoPrimary)
     ));
+    assert!(started.elapsed() < Duration::from_millis(100));
 }
 
 #[tokio::test]

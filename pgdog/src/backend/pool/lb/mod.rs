@@ -9,7 +9,7 @@ use std::{
 };
 
 use rand::seq::SliceRandom;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -95,8 +95,8 @@ pub struct LoadBalancer {
     pub(super) lb_strategy: LoadBalancingStrategy,
     /// Shutdown signal for the replicas monitor.
     pub(super) maintenance: CancellationToken,
-    /// Role detection waiter.
-    pub(super) role_detection: Arc<Notify>,
+    /// Pool elected as primary by automatic role detection.
+    pub(super) elected_primary: Arc<watch::Sender<Option<Pool>>>,
     /// Read/write split.
     pub(super) rw_split: ReadWriteSplit,
 }
@@ -147,7 +147,7 @@ impl LoadBalancer {
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
             maintenance: CancellationToken::new(),
-            role_detection: Arc::new(Notify::new()),
+            elected_primary: Arc::new(watch::Sender::new(None)),
             rw_split,
         }
     }
@@ -194,6 +194,8 @@ impl LoadBalancer {
             .iter()
             .position(|target| !target.0.replica && target.0.valid());
 
+        self.elected_primary.send_replace(None);
+
         if let Some(primary) = primary {
             promoted = targets[primary].1.set_role(Role::Primary);
 
@@ -216,9 +218,7 @@ impl LoadBalancer {
             });
         }
 
-        if promoted {
-            self.role_detection.notify_one();
-        }
+        self.elected_primary.send_replace(self.primary().cloned());
 
         promoted
     }
@@ -324,37 +324,30 @@ impl LoadBalancer {
         result
     }
 
-    /// Block until automatic role detection elects a primary.
+    /// Check out a connection from the primary.
     ///
-    /// Static replica-only configurations return immediately. In automatic
-    /// mode, callers wait until a primary is elected or checkout times out.
-    async fn wait_primary(&self) -> Result<(), Error> {
-        if self.primary_target().is_none() && self.role_detection_enabled() {
-            if safe_timeout(self.checkout_timeout, self.role_detection.notified())
-                .await
-                .is_err()
-            {
-                return Err(Error::CheckoutTimeout);
-            };
-            // Chain the wakeup so any other waiter that arrived after us
-            // also gets released without needing another promotion event.
-            self.role_detection.notify_one();
+    /// In automatic mode, the caller waits until role detection elects a
+    /// primary, or until the checkout times out. Static replica-only
+    /// configurations fail immediately with [`Error::NoPrimary`].
+    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
+        if let Some(pool) = self.primary() {
+            return pool.get(request).await;
         }
 
-        Ok(())
-    }
+        if !self.role_detection_enabled() {
+            return Err(Error::NoPrimary);
+        }
 
-    pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
-        self.get_primary_internal(request).await
-    }
+        let mut receiver = self.elected_primary.subscribe();
 
-    async fn get_primary_internal(&self, request: &Request) -> Result<Guard, Error> {
-        self.wait_primary().await?;
-        self.primary_target()
-            .ok_or(Error::NoPrimary)?
-            .pool
-            .get(request)
+        let primary = safe_timeout(self.checkout_timeout, receiver.wait_for(|p| p.is_some()))
             .await
+            .map_err(|_| Error::CheckoutTimeout)?
+            .ok()
+            .and_then(|elected| elected.as_ref().cloned())
+            .ok_or(Error::NoPrimary)?;
+
+        primary.get(request).await
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
