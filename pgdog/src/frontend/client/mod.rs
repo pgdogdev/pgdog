@@ -602,7 +602,7 @@ impl Client {
                     match query_engine
                         .handle(
                             &mut QueryEngineContext::new(self)
-                                .spliced(&mut request, requests.len()),
+                                .extended_pipeline(&mut request, requests.len()),
                         )
                         .await?
                     {

@@ -27,6 +27,6 @@ impl QueryEngine {
     pub(super) fn extended_in_sync_check(&self, context: &QueryEngineContext<'_>) -> bool {
         self.backend.out_of_sync()
             && !context.client_request.is_sync_only()
-            && context.requests_left > 0
+            && context.extended_pipeline_requests_left > 0
     }
 }
