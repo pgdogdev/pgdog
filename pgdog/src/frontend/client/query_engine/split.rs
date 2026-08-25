@@ -25,6 +25,8 @@ impl QueryEngine {
     /// back to normal state.
     ///
     pub(super) fn extended_in_sync_check(&self, context: &QueryEngineContext<'_>) -> bool {
-        self.backend.out_of_sync() && !context.client_request.is_sync_only()
+        self.backend.out_of_sync()
+            && !context.client_request.is_sync_only()
+            && context.requests_left > 0
     }
 }
