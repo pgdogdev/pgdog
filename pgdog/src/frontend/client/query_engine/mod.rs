@@ -23,14 +23,17 @@ pub mod hooks;
 pub mod incomplete_requests;
 pub mod internal_values;
 pub mod lock;
+pub mod maintenance_mode;
 pub mod multi_step;
 pub mod notify_buffer;
 pub mod pub_sub;
 pub mod query;
 mod query_log_stdout;
+pub mod result;
 pub mod rewrite;
 pub mod route_query;
 pub mod set;
+pub mod split;
 pub mod start_transaction;
 #[cfg(test)]
 mod test;
@@ -43,6 +46,7 @@ use self::query_log_stdout::log_query_stdout;
 pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
+pub(crate) use result::QueryEngineResult;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
 
@@ -111,10 +115,21 @@ impl QueryEngine {
     }
 
     /// Handle client request.
-    pub async fn handle(&mut self, context: &mut QueryEngineContext<'_>) -> Result<(), Error> {
+    pub async fn handle(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<QueryEngineResult, Error> {
+        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
+            return Ok(result);
+        }
+
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
+
+        if self.extended_in_sync_check(context) {
+            return Ok(QueryEngineResult::Done(context.transaction()));
+        }
 
         log_query_stdout(context);
 
@@ -122,31 +137,31 @@ impl QueryEngine {
         self.rewrite_extended(context)?;
 
         if let ClusterCheck::Offline = self.cluster_check(context).await? {
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Rewrite statement if necessary.
         match self.parse_and_rewrite(context) {
             Ok(true) => {}
-            Ok(false) => return Ok(()),
+            Ok(false) => return Ok(QueryEngineResult::Done(context.transaction())),
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))
                     .await?;
-                return Ok(());
+                return Ok(QueryEngineResult::Done(context.transaction()));
             }
         }
 
         // Intercept commands we don't have to forward to a server.
         if self.intercept_incomplete(context).await? {
             self.update_stats(context);
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Route transaction to the right servers.
         if !self.route_query(context).await? {
             self.update_stats(context);
             debug!("query has nowhere to go");
-            return Ok(());
+            return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         self.hooks.before_execution(context)?;
@@ -268,7 +283,7 @@ impl QueryEngine {
 
         self.update_stats(context);
 
-        Ok(())
+        Ok(QueryEngineResult::Done(context.transaction()))
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {
@@ -290,17 +305,10 @@ impl QueryEngine {
         self.comms.update_stats(self.stats);
     }
 
-    pub fn set_state(&mut self, state: State) {
+    /// Set client execution state and update
+    /// it immediately in the global store.
+    fn set_state(&mut self, state: State) {
         self.stats.state = state;
         self.comms.update_stats(self.stats);
-    }
-
-    pub fn get_state(&self) -> State {
-        self.stats.state
-    }
-
-    /// Check if the backend protocol is out of sync due to an error in extended protocol.
-    pub fn out_of_sync(&self) -> bool {
-        self.backend.out_of_sync()
     }
 }
