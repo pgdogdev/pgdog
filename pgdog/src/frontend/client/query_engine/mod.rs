@@ -256,12 +256,10 @@ impl QueryEngine {
             }
             Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
             Command::Set {
-                params,
-                behave_like_select,
-                ..
+                params, set_config, ..
             } => {
                 let params = params.clone();
-                self.set(context, &params, *behave_like_select).await?;
+                self.set(context, &params, *set_config).await?;
             }
             Command::ResetAll => {
                 self.reset_all(context).await?;
@@ -269,6 +267,14 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::Split(_) => {
+                use crate::frontend::router::parser::Error as ParserError;
+                self.error_response(
+                    context,
+                    ErrorResponse::from_err(&Error::Parser(ParserError::MultiStatementMixedSet)),
+                )
+                .await?;
+            }
         }
 
         self.hooks.after_execution(context)?;

@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use pg_raw_parse::{Node, Owned, StmtList, make};
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -93,7 +94,8 @@ impl Ast {
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut ast = mem.parse(query.query_without_comment)?;
-            if let Some(stmt) = ast.as_mut().into_iter().next() {
+            // Parser should not receive multi-query requests.
+            if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
             Ok::<_, Error>(ast)
