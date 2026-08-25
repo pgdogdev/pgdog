@@ -336,7 +336,7 @@ impl QueryParser {
             .run()?;
         }
 
-        if let Some(command) = self.split_simple_check(context, &statement)? {
+        if let Some(command) = self.split_simple_check(context, statement)? {
             return Ok(command);
         }
 
