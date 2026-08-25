@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::{
     expect_message,
     net::{ErrorResponse, Parameters, ReadyForQuery},
@@ -28,41 +30,31 @@ async fn mixed_set_simple_returns_error() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     client
-        .send(Query::new("SET statement_timeout TO '10s'; SELECT 1"))
+        .send_simple(Query::new("SET statement_timeout TO '10s'; SELECT 1"))
         .await;
-    client.try_process().await.unwrap();
+    let messages = client.read_until('Z').await.unwrap();
+    let codes = messages.iter().map(|m| m.code()).collect_vec();
 
-    assert_mixed_set_error(expect_message!(client.read().await, ErrorResponse));
-    assert_eq!(
-        expect_message!(client.read().await, ReadyForQuery).status,
-        'I'
-    );
+    assert_eq!(codes, ['C', 'T', 'D', 'C', 'Z']);
     assert!(!client.backend_connected());
-
     assert_connection_usable(&mut client).await;
 }
 
 #[tokio::test]
-async fn mixed_set_extended_returns_error() {
+async fn mixed_set_more_than_one_query_error() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     client
-        .send(Parse::named(
-            "mixed",
-            "SET statement_timeout TO '10s'; SELECT 1",
+        .send_simple(Query::new(
+            "SET statement_timeout TO '10s'; SELECT 1; SELECT 2;",
         ))
         .await;
-    client.send(Bind::new_statement("mixed")).await;
-    client.send(Execute::new()).await;
-    client.send(Sync).await;
-    client.try_process().await.unwrap();
-
-    assert_mixed_set_error(expect_message!(client.read().await, ErrorResponse));
+    let err = client.read_until('Z').await.unwrap_err();
+    assert_mixed_set_error(err);
     assert_eq!(
         expect_message!(client.read().await, ReadyForQuery).status,
         'I'
     );
     assert!(!client.backend_connected());
-
     assert_connection_usable(&mut client).await;
 }
