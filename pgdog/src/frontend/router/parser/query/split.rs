@@ -16,16 +16,30 @@ impl QueryParser {
             return Ok(None);
         }
 
-        let stmts = &ast.ast;
-
-        if !Self::split_execution_safe(ast) {
-            return Err(Error::MultiStatementSafety);
+        // In session mode, you can do whatever you want.
+        if context.is_session_mode() {
+            return Ok(None);
         }
+
+        let stmts = &ast.ast;
 
         match self.try_multi_set(&**stmts, context) {
             Ok(Some(set)) => Ok(Some(set)),
-            Err(Error::MultiStatementMixedSet) | Ok(None) => {
-                if !Self::split_execution_safe(ast) {
+            Ok(None) => {
+                // TODO(lev): We can still mis-route things here, e.g.,
+                // SELECT 1; INSERT INTO [...];
+                // will use the first statement for routing and send the whole
+                // thing to a replica, causing an error.
+                if context.shards == 1 {
+                    Ok(None)
+                } else if Self::split_execution_no_transaction_safe(ast) {
+                    Ok(Some(Self::split(ast)?))
+                } else {
+                    Err(Error::MultiStatementSafety)
+                }
+            }
+            Err(Error::MultiStatementMixedSet) => {
+                if !Self::split_execution_no_transaction_safe(ast) {
                     Err(Error::MultiStatementSafety)
                 } else {
                     let queries = stmts
@@ -44,12 +58,26 @@ impl QueryParser {
         }
     }
 
+    fn split(ast: &Ast) -> Result<Command, Error> {
+        let stmts = &ast.ast;
+
+        let queries = stmts
+            .stmts()
+            .map(|stmt| {
+                let query = deparse(stmt)?;
+                Ok::<_, Error>(query.as_str().to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Command::Split(queries))
+    }
+
     // Check that all statements in the request are safe to be executed
     // without a transactional guarantee.
     //
     // TODO(lev): start implicit transaction for multi-statement queries.
     //
-    fn split_execution_safe(ast: &Ast) -> bool {
+    fn split_execution_no_transaction_safe(ast: &Ast) -> bool {
         let mut stmts = 0;
         let mut txn_stmts = 0;
         let mut inside_txn = false;

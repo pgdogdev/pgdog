@@ -7,7 +7,7 @@ use crate::{
 
 use super::prelude::*;
 
-const MIXED_SET_ERROR: &str = "multi-statement queries cannot mix SET with other commands";
+const MIXED_SET_ERROR: &str = "multi-query statement cannot be safely executed";
 
 fn assert_mixed_set_error(error: ErrorResponse) {
     assert!(

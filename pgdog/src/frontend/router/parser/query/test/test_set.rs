@@ -49,7 +49,7 @@ fn test_mixed_set_multiple_queries_error() {
         ])
         .unwrap_err();
 
-    assert!(matches!(result, Error::MultiStatementMixedSet));
+    assert!(matches!(result, Error::MultiStatementSafety));
 }
 
 #[test]
@@ -154,13 +154,23 @@ fn test_set_multi_statement_mixed_returns_split() {
 
 #[test]
 fn test_multi_statement_no_set_falls_through() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new_single_shard(&config());
 
     let command = test.execute(vec![Query::new("SELECT 1; SELECT 2").into()]);
     assert!(
         matches!(command, Command::Query(_)),
         "multi-statement without SET should fall through, got {command:#?}",
     );
+}
+
+#[test]
+fn test_multi_statement_no_set_cross_shard_requires_transaction() {
+    let mut test = QueryParserTest::new();
+
+    let result = test
+        .try_execute(vec![Query::new("SELECT 1; SELECT 2").into()])
+        .unwrap_err();
+    assert!(matches!(result, Error::MultiStatementSafety))
 }
 
 #[test]
