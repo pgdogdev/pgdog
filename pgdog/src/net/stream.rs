@@ -453,6 +453,16 @@ mod tests {
         (Stream::plain(ours, 4096), peer.await.unwrap())
     }
 
+    async fn wait_for_liveness(stream: &mut Stream, expected: Liveness) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while stream.liveness() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("socket did not reach expected liveness state");
+    }
+
     #[tokio::test]
     async fn test_liveness_clean_when_peer_idle() {
         let (mut stream, _peer) = connected_pair().await;
@@ -479,9 +489,8 @@ mod tests {
 
         peer.write_all(b"E").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut stream, Liveness::DataPending).await;
     }
 
     #[tokio::test]
@@ -489,9 +498,8 @@ mod tests {
         let (mut stream, peer) = connected_pair().await;
 
         drop(peer);
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::Closed);
+        wait_for_liveness(&mut stream, Liveness::Closed).await;
     }
 
     #[tokio::test]
@@ -500,9 +508,8 @@ mod tests {
 
         peer.write_all(b"hello").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut stream, Liveness::DataPending).await;
         assert_eq!(stream.liveness(), Liveness::DataPending);
 
         let mut buf = [0u8; 5];

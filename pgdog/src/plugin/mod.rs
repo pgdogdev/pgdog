@@ -1,17 +1,17 @@
 //! pgDog plugins.
 
+use indexmap::IndexMap;
 use once_cell::sync::OnceCell;
 use pgdog_config::{Config, LogFormat};
 use pgdog_plugin::libloading;
 use pgdog_plugin::libloading::Library;
 use pgdog_plugin::{Config as PdConfig, PdStr, PluginVtable};
 use semver::Version;
-use std::collections::HashMap;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
-static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
-pub static PLUGINS: OnceCell<HashMap<String, &'static PluginVtable>> = OnceCell::new();
+static LIBS: OnceCell<Vec<Option<Library>>> = OnceCell::new();
+pub static PLUGINS: OnceCell<IndexMap<String, &'static PluginVtable>> = OnceCell::new();
 
 // Compare semantic versions by major and minor only (ignore patch/bugfix).
 fn same_major_minor(a: &str, b: &str) -> bool {
@@ -39,7 +39,7 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
 
     let libs = plugins
         .iter()
-        .filter_map(|plugin| {
+        .map(|plugin| {
             PluginVtable::library(&plugin.name)
                 .map_err(|err| error!("plugin \"{}\" failed to load: {:#?}", plugin.name, err))
                 .ok()
@@ -51,8 +51,12 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
     let rustc_version = pgdog_plugin::RUSTC_VERSION;
     let pgdog_plugin_api_version = pgdog_plugin::VERSION;
 
-    let plugin_libs = plugins.iter().enumerate().filter_map(|(i, plugin)| {
-        if let Some(lib) = LIBS.get().unwrap().get(i) {
+    let Some(libs) = LIBS.get() else {
+        return Ok(());
+    };
+
+    let plugin_libs = plugins.iter().zip(libs).filter_map(|(plugin, lib)| {
+        if let Some(lib) = lib {
             let now = Instant::now();
             let Some(plugin_lib) = PluginVtable::load(lib) else {
                 warn!(
@@ -140,11 +144,11 @@ pub fn shutdown() {
 
 /// Get plugin by name.
 pub fn plugin(name: &str) -> Option<&PluginVtable> {
-    PLUGINS.get().unwrap().get(name).copied()
+    PLUGINS.get().and_then(|plugins| plugins.get(name).copied())
 }
 
 /// Get all loaded plugins.
-pub fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {
+pub fn plugins() -> Option<&'static IndexMap<String, &'static PluginVtable>> {
     PLUGINS.get()
 }
 

@@ -11,7 +11,9 @@ members = [
   "pgdog-postgres-types",
   "pgdog-stats",
   "pgdog-vector",
-  "plugins/pgdog-example-plugin", "plugins/pgdog-primary-only-tables",
+  "plugins/pgdog-example-plugin",
+  "plugins/pgdog-google-auth",
+  "plugins/pgdog-primary-only-tables",
   "scripts/*",
 ]
 
@@ -19,7 +21,7 @@ members = [
 edition = "2024"
 
 [workspace.dependencies]
-pgdog-plugin = { path = "./pgdog-plugin", version = "0.4.0", default-features = false }
+pgdog-plugin = { path = "./pgdog-plugin", version = "0.5.0", default-features = false }
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
 pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "c5b3b75" }

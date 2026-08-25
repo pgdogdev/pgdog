@@ -621,7 +621,7 @@ async fn test_checkout_timeout() {
         inner: pgdog_stats::Config {
             max: 1,
             min: 1,
-            checkout_timeout: Duration::from_millis(100),
+            checkout_timeout: Duration::from_secs(1),
             ..Config::default().inner
         },
     };

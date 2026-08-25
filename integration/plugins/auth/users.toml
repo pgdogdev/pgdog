@@ -1,0 +1,25 @@
+#
+# Users for the authentication-plugin suite.
+#
+# Plugin-authenticated clients use `server_user`/`server_password` for the
+# backend pool. The `alice` entry also has a client password to exercise the
+# fallback used when every plugin skips.
+#
+# Impersonation users (e.g. `impersonate:reporting`) are not listed here: the
+# plugin derives them and PgDog auto-provisions their pools.
+
+# Plain allow via `secret-alice`, no derivation, read-write.
+[[users]]
+name = "alice"
+database = "pgdog"
+password = "postgres-alice"
+server_user = "pgdog"
+server_password = "pgdog"
+
+# Read-only pool: `INSERT` must fail with a read-only error.
+[[users]]
+name = "readonly"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+read_only = true

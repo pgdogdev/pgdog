@@ -1,0 +1,35 @@
+# Google OAuth 2.0 token validation endpoint.
+tokeninfo_url = "https://oauth2.googleapis.com/tokeninfo"
+timeout_ms = 5000
+
+# Access tokens are credentials. Keep this enabled outside isolated loopback
+# tests so the PostgreSQL password exchange is encrypted.
+require_tls = true
+
+# Derive the PostgreSQL user from "email" or "user_id".
+username_claim = "email"
+strip_email_domain = false
+require_user_match = true
+require_verified_email = true
+
+# Restrict which Google identities may authenticate. If both lists are set,
+# matching either an exact email or a domain is sufficient.
+allowed_domains = ["example.com"]
+allowed_emails = []
+
+# With the defaults above, startup users outside the allowed full-email
+# namespace (for example, "postgres") return Skip without sending their
+# credential to Google. PgDog can then use password or passthrough fallback.
+
+# Optional OAuth client and scope restrictions.
+allowed_audiences = []
+required_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+# Existing users.toml entries do not need provisioning. To create pools for
+# validated Google identities, enable provision and inject the backend password
+# into PgDog's environment from the approved secret manager.
+provision = false
+impersonate = true
+# server_user = "pgdog_service"
+# server_password_env = "PGDOG_GOOGLE_AUTH_SERVER_PASSWORD"
+# read_only = false
