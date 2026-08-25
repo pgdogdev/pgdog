@@ -170,11 +170,8 @@ impl Stats {
         self.local.last_checkout.prepared_statements += 1;
     }
 
-    /// Overwrite how many prepared statements we have in the cache for stats.
-    pub fn set_prepared_statements(&mut self, size: usize) {
-        self.local.total.prepared_statements = size;
-        self.local.total.prepared_sync += 1;
-        self.local.last_checkout.prepared_sync += 1;
+    pub fn clear_prepared_statements(&mut self) {
+        self.local.total.prepared_statements = 0;
         self.sync_to_shared();
     }
 
