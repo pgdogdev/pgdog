@@ -30,7 +30,9 @@ impl QueryParser {
                 // SELECT 1; INSERT INTO [...];
                 // will use the first statement for routing and send the whole
                 // thing to a replica, causing an error.
-                if context.shards == 1 {
+                //
+                // Extended protocol containing multiple statements will be rejected by Postgres.
+                if context.shards == 1 || context.router_context.extended {
                     Ok(None)
                 } else if Self::split_execution_no_transaction_safe(ast) {
                     Ok(Some(Self::split(ast)?))
