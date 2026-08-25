@@ -287,7 +287,6 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    stats_logger.shutdown();
     tasks::shutdown().await;
 
     // Any shutdown routines go below.

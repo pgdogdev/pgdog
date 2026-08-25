@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::{select, sync::Notify, time::Instant};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -58,8 +59,7 @@ impl Manager {
             notify: Arc::new(InnerNotify {
                 notify: Notify::new(),
                 offline: AtomicBool::new(false),
-                done_flag: AtomicBool::new(false),
-                done: Notify::new(),
+                done: CancellationToken::new(),
             }),
             stats: Arc::new(TwoPcStats::default()),
             wal: Arc::new(ArcSwapOption::empty()),
@@ -321,8 +321,7 @@ impl Manager {
                 notify.notify.notify_one();
             } else if notify.offline.load(Ordering::Relaxed) {
                 // No more transactions to cleanup.
-                notify.done_flag.store(true, Ordering::Relaxed);
-                notify.done.notify_waiters();
+                notify.done.cancel();
 
                 if let Some(wal) = manager.wal.load_full() {
                     wal.shutdown();
@@ -397,18 +396,17 @@ impl Manager {
     /// Once the monitor has drained the cleanup queue, the WAL is shut
     /// down too so any final End records make it to disk before exit.
     pub async fn shutdown(&self) {
-        if self.notify.done_flag.load(Ordering::Relaxed) {
+        if self.notify.done.is_cancelled() {
             return;
         }
 
-        let waiter = self.notify.done.notified();
         self.notify.offline.store(true, Ordering::Relaxed);
         self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
         info!("[2pc] cleaning up {} two-phase transactions", transactions);
 
-        waiter.await;
+        self.notify.done.cancelled().await;
 
         info!("[2pc] manager shutdown successful");
     }
@@ -431,6 +429,5 @@ struct Inner {
 struct InnerNotify {
     notify: Notify,
     offline: AtomicBool,
-    done_flag: AtomicBool,
-    done: Notify,
+    done: CancellationToken,
 }

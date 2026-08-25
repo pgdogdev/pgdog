@@ -880,7 +880,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
 }
 
 #[tokio::test]
-async fn test_monitor_shuts_down_on_notify() {
+async fn test_monitor_shuts_down_immediately() {
     let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
     let pool_config2 = create_test_pool_config("localhost", 5432);
 
@@ -897,9 +897,6 @@ async fn test_monitor_shuts_down_on_notify() {
         .iter()
         .for_each(|target| target.pool.launch());
     let monitor_handle = Monitor::spawn(&replicas);
-
-    // Give monitor time to start and register notified() future
-    sleep(Duration::from_millis(10)).await;
 
     replicas.shutdown();
 

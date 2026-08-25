@@ -10,6 +10,7 @@ use std::{
 
 use rand::seq::SliceRandom;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{config::config, net::messages::FrontendPid};
@@ -92,8 +93,8 @@ pub struct LoadBalancer {
     pub(super) round_robin: Arc<AtomicUsize>,
     /// Chosen load balancing strategy.
     pub(super) lb_strategy: LoadBalancingStrategy,
-    /// Maintenance. notification.
-    pub(super) maintenance: Arc<Notify>,
+    /// Shutdown signal for the replicas monitor.
+    pub(super) maintenance: CancellationToken,
     /// Role detection waiter.
     pub(super) role_detection: Arc<Notify>,
     /// Read/write split.
@@ -145,7 +146,7 @@ impl LoadBalancer {
             checkout_timeout,
             round_robin: Arc::new(AtomicUsize::new(0)),
             lb_strategy,
-            maintenance: Arc::new(Notify::new()),
+            maintenance: CancellationToken::new(),
             role_detection: Arc::new(Notify::new()),
             rw_split,
         }
@@ -471,7 +472,7 @@ impl LoadBalancer {
             target.pool.shutdown();
         }
 
-        self.maintenance.notify_waiters();
+        self.maintenance.cancel();
     }
 
     fn require_healthcheck_for_new_targets(&self, old_targets: &[Target]) {
