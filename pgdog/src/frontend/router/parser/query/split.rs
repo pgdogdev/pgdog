@@ -5,8 +5,9 @@ use super::*;
 impl QueryParser {
     /// Check if the statement contains multiple queries.
     ///
-    /// If that's the case, return it back to the query engine for separate
-    /// re-execution.
+    /// If that's the case, check that we can execute it safely, and if we can,
+    /// either return it as-is or ask the query engine to re-execute statements separately.
+    ///
     pub(super) fn check_multi_query_statement(
         &self,
         ast: &Ast,
@@ -49,15 +50,7 @@ impl QueryParser {
                 if !Self::split_execution_no_transaction_safe(ast) {
                     Err(Error::MultiStatementSafety)
                 } else {
-                    let queries = stmts
-                        .stmts()
-                        .map(|stmt| {
-                            let query = deparse(stmt)?;
-                            Ok::<_, Error>(query.as_str().to_owned())
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    Ok(Some(Command::Split(queries)))
+                    Ok(Some(Self::split(ast)?))
                 }
             }
 
