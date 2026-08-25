@@ -39,6 +39,12 @@ describe 'authentication plugin' do
     conn.close
   end
 
+  it 'falls back to the configured password when every plugin skips' do
+    conn = connect('alice', 'postgres-alice')
+    expect(conn.exec('SELECT 1 AS n')[0]['n'].to_i).to eq(1)
+    conn.close
+  end
+
   it 'rejects a wrong credential with a generic auth error' do
     expect { connect('alice', 'secret-bob') }
       .to raise_error(PG::ConnectionBad, GENERIC_AUTH_ERROR)
@@ -71,7 +77,7 @@ describe 'authentication plugin' do
     conn.close
   end
 
-  it 'denies an unknown credential when every plugin skips' do
+  it 'rejects an unknown credential when plugin and password authentication fail' do
     expect { connect('alice', 'no-such-credential') }
       .to raise_error(PG::ConnectionBad, GENERIC_AUTH_ERROR)
   end

@@ -29,3 +29,60 @@ pub fn generate_hash(password: &str, iterations: std::num::NonZeroU32, salt: &[u
         BASE64_STANDARD.encode(server_key.as_ref()),
     )
 }
+
+/// Verify a plaintext password against a PostgreSQL SCRAM-SHA-256 verifier.
+pub fn verify_password(password: &str, verifier: &str) -> bool {
+    use std::num::NonZeroU32;
+
+    use base64::prelude::*;
+
+    let Some(rest) = verifier.strip_prefix("SCRAM-SHA-256$") else {
+        return false;
+    };
+    let Some((iterations_and_salt, _keys)) = rest.split_once('$') else {
+        return false;
+    };
+    let Some((iterations, salt)) = iterations_and_salt.split_once(':') else {
+        return false;
+    };
+    let Ok(iterations) = iterations.parse::<u32>() else {
+        return false;
+    };
+    let Some(iterations) = NonZeroU32::new(iterations) else {
+        return false;
+    };
+    let Ok(salt) = BASE64_STANDARD.decode(salt) else {
+        return false;
+    };
+
+    let candidate = generate_hash(password, iterations, &salt);
+    crate::util::constant_time_eq(candidate.as_bytes(), verifier.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use super::{generate_hash, verify_password};
+
+    #[test]
+    fn verifies_plaintext_against_scram_verifier() {
+        let verifier = generate_hash(
+            "correct-password",
+            NonZeroU32::new(4096).expect("iterations are non-zero"),
+            b"pgdog_test_salt!",
+        );
+
+        assert!(verify_password("correct-password", &verifier));
+        assert!(!verify_password("wrong-password", &verifier));
+    }
+
+    #[test]
+    fn rejects_invalid_scram_verifier() {
+        assert!(!verify_password("password", "not-a-scram-verifier"));
+        assert!(!verify_password(
+            "password",
+            "SCRAM-SHA-256$0:c2FsdA==$stored:server"
+        ));
+    }
+}

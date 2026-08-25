@@ -11,7 +11,8 @@
 //!   client connects to its pre-configured pool.
 //! - `"impersonate:<role>"` => [`AuthDecision::Allow`] deriving `<role>`,
 //!   impersonating it via `server_role`, and asking PgDog to provision a pool.
-//! - anything else          => [`AuthDecision::Skip`] (all-skip => PgDog denies).
+//! - anything else          => [`AuthDecision::Skip`] so PgDog tries its
+//!   configured password or passthrough authentication.
 
 use pgdog_plugin::{AuthContext, AuthDecision, AuthGrant, PdStr, Plugin, plugin};
 

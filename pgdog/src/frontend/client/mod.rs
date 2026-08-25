@@ -223,23 +223,100 @@ impl Client {
                     .await?;
                 let response = stream.read().await?;
                 let response = Password::from_bytes(response.to_bytes())?;
-                let is_match = response.password().is_some_and(|provided| {
-                    passwords.iter().any(|p| {
-                        crate::util::constant_time_eq(p.as_str().as_bytes(), provided.as_bytes())
+                response
+                    .password()
+                    .map_or(AuthResult::NoPasswordMatch, |provided| {
+                        Self::check_cleartext_password(passwords, provided)
                     })
-                });
-
-                if is_match {
-                    AuthResult::Ok
-                } else {
-                    AuthResult::NoPasswordMatch
-                }
             }
 
             AuthType::Trust => AuthResult::Ok,
         };
 
         Ok(result)
+    }
+
+    /// Verify a credential already received through a cleartext password
+    /// exchange. This is used when all authentication plugins skip, because a
+    /// second MD5 or SCRAM exchange cannot be started on the same connection.
+    fn check_cleartext_password(passwords: &[PasswordKind], provided: &str) -> AuthResult {
+        if passwords.is_empty() {
+            return AuthResult::NoPasswordConfig;
+        }
+
+        let is_match = passwords.iter().any(|password| match password {
+            PasswordKind::Plain(password) => {
+                crate::util::constant_time_eq(password.as_bytes(), provided.as_bytes())
+            }
+            PasswordKind::Hashed(verifier) => {
+                crate::auth::scram::verify_password(provided, verifier)
+            }
+            PasswordKind::VaultStaticRole(_) => false,
+        });
+
+        if is_match {
+            AuthResult::Ok
+        } else {
+            AuthResult::NoPasswordMatch
+        }
+    }
+
+    /// Fall back after every authentication plugin returned `Skip`.
+    ///
+    /// Passthrough authentication keeps its existing precedence. Otherwise the
+    /// credential is checked against the configured user without initiating a
+    /// second wire-protocol authentication exchange.
+    async fn plugin_fallback(
+        stream: &Stream,
+        user: &str,
+        database: &str,
+        credential: &str,
+        passthrough: bool,
+        client_ca_configured: bool,
+    ) -> Result<AuthResult, Error> {
+        if let Ok(cluster) = databases::databases().cluster((user, database)) {
+            if let Some(identity) = cluster.identity() {
+                return Ok(if stream.tls_identity() == Some(identity) {
+                    AuthResult::Ok
+                } else {
+                    AuthResult::NoIdentity
+                });
+            }
+
+            if (ClientCertificateCheck {
+                client_ca_configured,
+                is_tls: stream.is_tls(),
+                required: cluster.tls_client_certificate_required(),
+                presented: stream.tls_client_certificate(),
+            })
+            .rejected()
+            {
+                return Ok(AuthResult::NoClientCertificate);
+            }
+
+            // Do not let passthrough turn a plugin-only user backed by service
+            // credentials into an account that accepts its first arbitrary
+            // password. Passthrough users are either discovered dynamically or
+            // have a configured client password.
+            if cluster.passwords().is_empty() {
+                return Ok(AuthResult::NoPasswordConfig);
+            }
+
+            if !passthrough {
+                let passwords = crate::auth::vault::resolve_passwords(cluster.passwords()).await;
+                return Ok(Self::check_cleartext_password(&passwords, credential));
+            }
+        } else if !passthrough {
+            return Ok(AuthResult::NoUserOrDatabase);
+        }
+
+        let user = config::User {
+            name: user.to_string(),
+            database: database.to_string(),
+            password: Some(credential.to_string()),
+            ..Default::default()
+        };
+        Ok(databases::add(user)?)
     }
 
     /// Create new frontend client from the given TCP stream.
@@ -287,7 +364,8 @@ impl Client {
             // Plugin authentication: request a cleartext credential from the
             // client (same wire flow as passthrough), then hand it to the
             // authentication plugins. Allow can derive a user and provision a
-            // pool; Deny/all-Skip reject the client without a password fallback.
+            // pool; Deny rejects the client; all-Skip falls back to configured
+            // password or passthrough authentication.
             stream
                 .send_flush(&Authentication::ClearTextPassword)
                 .await?;
@@ -305,33 +383,45 @@ impl Client {
                 )
                 .await;
 
-                if outcome.result.is_ok() {
-                    if let Some(grant) = outcome.grant {
-                        derived_user = grant.derived_user.clone();
-                        let effective = derived_user.as_deref().unwrap_or(user);
+                match outcome.result {
+                    AuthResult::Ok => {
+                        if let Some(grant) = outcome.grant {
+                            derived_user = grant.derived_user.clone();
+                            let effective = derived_user.as_deref().unwrap_or(user);
 
-                        // Auto-provision a pool for the derived user when the
-                        // plugin asked for it and no cluster exists yet.
-                        if grant.provision
-                            && databases::databases()
-                                .cluster((effective, database))
-                                .is_err()
-                        {
-                            let provisioned = config::User {
-                                name: effective.to_string(),
-                                database: database.to_string(),
-                                server_user: grant.server_user.clone(),
-                                server_password: grant.server_password.clone(),
-                                server_role: grant.server_role.clone(),
-                                read_only: grant.read_only,
-                                ..Default::default()
-                            };
-                            databases::add_authenticated(provisioned)?;
+                            // Auto-provision a pool for the derived user when the
+                            // plugin asked for it and no cluster exists yet.
+                            if grant.provision
+                                && databases::databases()
+                                    .cluster((effective, database))
+                                    .is_err()
+                            {
+                                let provisioned = config::User {
+                                    name: effective.to_string(),
+                                    database: database.to_string(),
+                                    server_user: grant.server_user.clone(),
+                                    server_password: grant.server_password.clone(),
+                                    server_role: grant.server_role.clone(),
+                                    read_only: grant.read_only,
+                                    ..Default::default()
+                                };
+                                databases::add_authenticated(provisioned)?;
+                            }
                         }
+                        AuthResult::Ok
                     }
-                    AuthResult::Ok
-                } else {
-                    outcome.result
+                    AuthResult::PluginNoDecision => {
+                        Self::plugin_fallback(
+                            &stream,
+                            user,
+                            database,
+                            credential,
+                            passthrough,
+                            client_ca_configured,
+                        )
+                        .await?
+                    }
+                    result => result,
                 }
             } else {
                 AuthResult::NoPasswordMessage

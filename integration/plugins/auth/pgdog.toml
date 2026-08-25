@@ -1,8 +1,8 @@
 #
 # Authentication-plugin integration suite.
 #
-# `auth_type = "plugin"` routes every non-admin login through the loaded
-# authentication plugins. `test_plugin_auth` (see
+# `auth_type = "plugin"` tries the loaded authentication plugins before
+# configured password authentication. `test_plugin_auth` (see
 # test-plugins/test-plugin-auth) makes the decisions the specs assert on.
 #
 [general]

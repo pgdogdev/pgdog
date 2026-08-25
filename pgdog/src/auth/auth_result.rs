@@ -23,8 +23,8 @@ pub enum AuthResult {
     NoPasswordMessage,
     /// An authentication plugin explicitly denied the client.
     PluginDenied,
-    /// No authentication plugin made a decision (all skipped). Treated as a
-    /// denial: `auth_type = "plugin"` is explicit, there is no password fallback.
+    /// No authentication plugin made a decision (all skipped). The frontend
+    /// uses this result to fall back to password or passthrough authentication.
     PluginNoDecision,
 }
 

@@ -49,7 +49,8 @@ pub enum AuthType {
     Trust,
     /// Plaintext password.
     Plain,
-    /// Delegate client authentication to a loaded plugin exposing the `pgdog_authenticate` hook.
+    /// Delegate client authentication to loaded plugins, falling back to the
+    /// configured password or passthrough authentication when every plugin skips.
     Plugin,
 }
 

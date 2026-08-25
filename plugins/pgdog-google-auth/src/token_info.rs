@@ -98,7 +98,8 @@ fn validate(
     startup_user: &str,
     token_info: TokenInfo,
 ) -> Result<String, AuthenticationError> {
-    let parsed_secs: i64 = token_info.expires_in
+    let parsed_secs: i64 = token_info
+        .expires_in
         .as_deref()
         .unwrap_or("0")
         .parse()
@@ -459,7 +460,10 @@ mod tests {
         let token = "ya29.a+b/c?";
 
         let grant = authenticate(&runtime, "ignored", token, false).expect("authenticate");
-        assert_eq!(grant.derived_user.as_deref(), Some("marco.palmisano@examplecompany.com"));
+        assert_eq!(
+            grant.derived_user.as_deref(),
+            Some("marco.palmisano@examplecompany.com")
+        );
 
         let request = request.join().expect("join mock server");
         assert!(request.starts_with("GET /tokeninfo?access_token="));
