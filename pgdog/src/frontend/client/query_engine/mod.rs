@@ -47,6 +47,7 @@ pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
+pub(crate) use split::Pipeline;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
 
@@ -267,14 +268,7 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
-            Command::Split(_) => {
-                use crate::frontend::router::parser::Error as ParserError;
-                self.error_response(
-                    context,
-                    ErrorResponse::from_err(&Error::Parser(ParserError::MultiStatementMixedSet)),
-                )
-                .await?;
-            }
+            Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 
         self.hooks.after_execution(context)?;
