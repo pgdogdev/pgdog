@@ -32,15 +32,17 @@ pub struct GlobalCache {
     names: HashMap<String, Statement>,
     unused: HashSet<Counter>,
     counter: Counter,
+    content_bytes: usize,
 }
 
 impl MemoryUsage for GlobalCache {
     #[inline]
     fn memory_usage(&self) -> usize {
-        self.statements.memory_usage()
-            + self.names.memory_usage()
+        self.statements.capacity() * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1)
+            + self.names.capacity() * (std::mem::size_of::<(String, Statement)>() + 1)
+            + self.unused.capacity() * (std::mem::size_of::<Counter>() + 1)
             + self.counter.memory_usage()
-            + self.unused.capacity() * 1usize.memory_usage()
+            + self.content_bytes
     }
 }
 
@@ -119,18 +121,32 @@ impl GlobalCache {
 
     /// Rewrite prepared statement in the global cache.
     pub(crate) fn rewrite(&mut self, parse: &Parse) {
-        if let Some(stmt) = self.names.get_mut(parse.name()) {
+        let delta = self.names.get_mut(parse.name()).map(|stmt| {
+            let before = stmt.content_bytes();
             stmt.set_rewrite(parse);
+            (before, stmt.content_bytes())
+        });
+
+        if let Some((before, after)) = delta {
+            self.content_bytes = self.content_bytes.saturating_sub(before) + after;
         }
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
     pub fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
-        if let Some(entry) = self.names.get_mut(name)
-            && entry.row_description.is_none()
-        {
-            entry.row_description = Some(row_description);
+        let added = self
+            .names
+            .get_mut(name)
+            .filter(|entry| entry.row_description.is_none())
+            .map(|entry| {
+                let added = row_description.memory_usage();
+                entry.row_description = Some(row_description);
+                added
+            });
+
+        if let Some(added) = added {
+            self.content_bytes += added;
         }
     }
     /// Get the Parse message for a globally unique prepared statement
@@ -186,6 +202,12 @@ impl GlobalCache {
         self.statements.len()
     }
 
+    /// Number of slots allocated by the statements table. A capacity far
+    /// above `len` means the cache is holding on to memory from a past spike.
+    pub fn capacity(&self) -> usize {
+        self.statements.capacity()
+    }
+
     /// True if the local cache is empty.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
@@ -233,6 +255,8 @@ impl GlobalCache {
         // unused will hold the remaining elements that was not extracted above
         self.unused = unused;
 
+        self.maybe_shrink();
+
         removed
     }
 
@@ -246,9 +270,36 @@ impl GlobalCache {
         &self.statements
     }
 
+    /// Return table memory to the allocator after a spike of unique
+    /// statements. Hysteresis (mostly-empty table, above a minimum size)
+    /// avoids rehashing on every sweep.
+    fn maybe_shrink(&mut self) {
+        const SHRINK_FACTOR: usize = 8;
+        const MIN_CAPACITY: usize = 4096;
+
+        if self.statements.capacity() > MIN_CAPACITY
+            && self.statements.capacity() > self.statements.len() * SHRINK_FACTOR
+        {
+            self.statements.shrink_to_fit();
+            self.names.shrink_to_fit();
+            self.unused.shrink_to_fit();
+        }
+    }
+
+    #[cfg(test)]
+    fn recomputed_content_bytes(&self) -> usize {
+        self.names
+            .iter()
+            .map(|(k, v)| k.capacity() + v.content_bytes())
+            .sum()
+    }
+
     /// Remove statement from global cache.
     fn remove(&mut self, name: &str) {
         if let Some(stmt) = self.names.remove(name) {
+            self.content_bytes = self
+                .content_bytes
+                .saturating_sub(name.len() + stmt.content_bytes());
             self.statements.remove(stmt.cache_key());
         }
     }
@@ -279,7 +330,9 @@ impl GlobalCache {
                 used: 1,
             },
         );
-        self.names.insert(name.to_owned(), statement);
+        let key = name.to_owned();
+        self.content_bytes += key.capacity() + statement.content_bytes();
+        self.names.insert(key, statement);
     }
 }
 
@@ -611,5 +664,118 @@ mod test {
         assert!(cache.statements.is_empty());
         assert!(cache.names.is_empty());
         assert!(cache.unused.is_empty());
+    }
+
+    #[test]
+    fn test_memory_usage_counts_table_capacity() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let spike_capacity = cache.capacity();
+        assert!(spike_capacity >= 10_000);
+
+        let table_floor = spike_capacity * (std::mem::size_of::<(CacheKey, CachedStmt)>() + 1);
+        let usage = cache.memory_usage();
+        assert!(usage >= table_floor);
+    }
+
+    #[test]
+    fn test_close_unused_shrinks_tables_after_spike() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let spike_capacity = cache.capacity();
+        let spike_memory = cache.memory_usage();
+
+        for i in 1..=10_000 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(100);
+        assert_eq!(cache.len(), 100);
+
+        let shrunk_capacity = cache.capacity();
+        assert!(shrunk_capacity < spike_capacity / 8);
+        assert!(cache.memory_usage() < spike_memory / 8);
+
+        let survivors: Vec<String> = cache.names().keys().cloned().collect();
+        assert_eq!(survivors.len(), 100);
+        for name in survivors {
+            assert!(cache.parse(&name).is_some());
+        }
+    }
+
+    #[test]
+    fn test_no_shrink_below_min_capacity() {
+        let mut cache = GlobalCache::default();
+        for i in 0..1_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let capacity = cache.capacity();
+
+        for i in 1..=1_000 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(10);
+
+        assert!(cache.capacity() >= capacity / 2);
+    }
+
+    #[test]
+    fn test_no_shrink_when_mostly_full() {
+        let mut cache = GlobalCache::default();
+        for i in 0..10_000 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+        }
+        let capacity = cache.capacity();
+
+        cache.close_unused(20_000);
+
+        assert_eq!(cache.len(), 10_000);
+        assert!(cache.capacity() >= capacity / 2);
+    }
+
+    #[test]
+    fn test_content_bytes_tracks_all_mutations() {
+        use crate::net::messages::Field;
+
+        let mut cache = GlobalCache::default();
+        for i in 0..500 {
+            let parse = Parse::named("s", format!("SELECT {}", i));
+            cache.insert(&parse);
+            cache.insert(&parse);
+        }
+        for i in 0..50 {
+            cache.insert_prepare(
+                Bytes::from(format!("SELECT 'v{}'", i)),
+                &RewritePlan::default(),
+            );
+        }
+        let rewrite = Parse::named("__pgdog_1", "SELECT 1, 2, 3");
+        cache.rewrite(&rewrite);
+        cache.rewrite(&rewrite);
+        let row_description = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
+        cache.insert_row_description("__pgdog_2", row_description.clone());
+        cache.insert_row_description("__pgdog_2", row_description);
+        assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
+
+        for i in 1..=500 {
+            cache.close(&global_name(i));
+            cache.close(&global_name(i));
+        }
+        for i in 501..=550 {
+            cache.close(&global_name(i));
+        }
+        cache.close_unused(10);
+        assert_eq!(cache.len(), 10);
+        assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
+
+        cache.close_unused(0);
+        assert_eq!(cache.content_bytes, 0);
     }
 }
