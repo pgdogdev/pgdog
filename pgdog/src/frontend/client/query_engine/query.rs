@@ -323,10 +323,11 @@ impl QueryEngine {
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
                 let add_host = context.request_settings.application_name_add_host;
-                let host = context.client_addr.to_string();
                 for (name, value) in changed_params.iter() {
                     let value = if add_host && name.eq_ignore_ascii_case("application_name") {
-                        value.clone().with_client_host(&host)
+                        value
+                            .clone()
+                            .with_client_host(&context.client_addr.to_string())
                     } else {
                         value.clone()
                     };
