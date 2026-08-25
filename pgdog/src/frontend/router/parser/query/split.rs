@@ -1,4 +1,4 @@
-use pg_raw_parse::deparse;
+use pg_raw_parse::{deparse, raw::TransactionStmtKind::*};
 
 use super::*;
 
@@ -18,11 +18,16 @@ impl QueryParser {
 
         let stmts = &ast.ast;
 
+        if !Self::split_execution_safe(ast) {
+            return Err(Error::MultiStatementSafety);
+        }
+
         match self.try_multi_set(&**stmts, context) {
             Ok(Some(set)) => Ok(Some(set)),
-            Ok(None) => Ok(None),
-            Err(Error::MultiStatementMixedSet) => {
-                if Self::no_transaction_safe(ast) {
+            Err(Error::MultiStatementMixedSet) | Ok(None) => {
+                if !Self::split_execution_safe(ast) {
+                    Err(Error::MultiStatementSafety)
+                } else {
                     let queries = stmts
                         .stmts()
                         .map(|stmt| {
@@ -32,8 +37,6 @@ impl QueryParser {
                         .collect::<Result<Vec<_>, _>>()?;
 
                     Ok(Some(Command::Split(queries)))
-                } else {
-                    Err(Error::MultiStatementMixedSet)
                 }
             }
 
@@ -44,28 +47,40 @@ impl QueryParser {
     // Check that all statements in the request are safe to be executed
     // without a transactional guarantee.
     //
-    // Implementation is simple: caller can execute as many `SET`, `RESET` and `SHOW`
-    // commands as they want, but only _one_ real query, e.g., `SELECT`.
-    //
-    // The state mutations done by `SET` and `RESET` are tracked by the query engine, and we're
-    // able to restore the client and server state back to what it was. `SHOW` is harmless.
-    //
-    // All other statements can modify the database and require transactional guarantees, so we
-    // can only execute one of them at a time (for now).
-    //
     // TODO(lev): start implicit transaction for multi-statement queries.
     //
-    fn no_transaction_safe(ast: &Ast) -> bool {
+    fn split_execution_safe(ast: &Ast) -> bool {
         let mut stmts = 0;
+        let mut txn_stmts = 0;
+        let mut inside_txn = false;
 
         for stmt in ast.ast.stmts() {
             match stmt {
+                Node::TransactionStmt(stmt) => {
+                    if matches!(stmt.kind, TRANS_STMT_BEGIN | TRANS_STMT_START) {
+                        inside_txn = true;
+                        txn_stmts += 1;
+                    }
+
+                    if matches!(stmt.kind, TRANS_STMT_ROLLBACK | TRANS_STMT_COMMIT) {
+                        inside_txn = false;
+                        txn_stmts += 1
+                    }
+                }
+
                 Node::VariableSetStmt(_) => (),
                 Node::VariableShowStmt(_) => (),
-                _ => stmts += 1,
+                Node::DeallocateStmt(_) => (),
+                Node::VacuumRelation(_) | Node::VacuumStmt(_) => (),
+                Node::PrepareStmt(_) => (), // We intercept prepared statements and handle them ourselves.
+                _ => {
+                    if !inside_txn {
+                        stmts += 1;
+                    }
+                }
             }
         }
 
-        stmts < 2
+        stmts <= 1 && txn_stmts % 2 == 0
     }
 }
