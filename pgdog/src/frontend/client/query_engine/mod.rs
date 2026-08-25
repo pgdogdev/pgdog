@@ -119,6 +119,10 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
+        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
+            return Ok(result);
+        }
+
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
@@ -134,10 +138,6 @@ impl QueryEngine {
 
         if let ClusterCheck::Offline = self.cluster_check(context).await? {
             return Ok(QueryEngineResult::Done(context.transaction()));
-        }
-
-        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
-            return Ok(result);
         }
 
         // Rewrite statement if necessary.
