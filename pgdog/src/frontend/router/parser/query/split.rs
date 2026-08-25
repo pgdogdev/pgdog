@@ -33,7 +33,7 @@ impl QueryParser {
                 Ok(Some(Command::Split(queries)))
             }
 
-            Err(err) => return Err(err),
+            Err(err) => Err(err),
         }
     }
 }

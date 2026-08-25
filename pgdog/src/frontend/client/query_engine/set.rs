@@ -62,7 +62,7 @@ impl QueryEngine {
         } else {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))
-                .and_then(|values| Some(FakeResponse::new_params(&["set_config"], values)));
+                .map(|values| FakeResponse::new_params(&["set_config"], values));
             self.fake_command_response(context, fake_command, fake_response)
                 .await?;
         }

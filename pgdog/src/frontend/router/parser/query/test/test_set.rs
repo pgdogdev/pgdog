@@ -29,16 +29,13 @@ fn test_mixed_set_passthrough_in_session_mode() {
 }
 
 #[test]
-fn test_mixed_set_rejected_in_transaction_mode() {
+fn test_mixed_set_split_in_transaction_mode() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
     ]);
-    assert!(
-        result.is_err(),
-        "expected error for mixed SET in transaction mode, got {result:#?}",
-    );
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
 }
 
 #[test]
@@ -119,13 +116,14 @@ fn test_set_multi_statement_mixed_local() {
 }
 
 #[test]
-fn test_set_multi_statement_mixed_returns_error() {
+fn test_set_multi_statement_mixed_returns_split() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET statement_timeout TO 1; SELECT 1").into(),
     ]);
-    assert!(result.is_err());
+
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
 }
 
 #[test]
