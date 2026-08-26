@@ -58,3 +58,24 @@ async fn mixed_set_more_than_one_query_error() {
     assert!(!client.backend_connected());
     assert_connection_usable(&mut client).await;
 }
+
+#[tokio::test]
+async fn simple_split_stops_after_transaction_error() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new(
+            "BEGIN; SET pgdog.shard TO 0; SELECT 1 / 0; COMMIT;",
+        ))
+        .await;
+
+    let error = client.read_until('Z').await.unwrap_err();
+    assert_eq!(error.code, "22012");
+    assert_eq!(
+        expect_message!(client.read().await, ReadyForQuery).status,
+        'E'
+    );
+    assert!(!client.backend_connected());
+
+    assert_connection_usable(&mut client).await;
+}

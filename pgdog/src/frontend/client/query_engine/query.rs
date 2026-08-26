@@ -29,6 +29,12 @@ impl QueryEngine {
             return Ok(());
         }
 
+        // Skip statements inside a simple pipeline
+        // if we are inside an errored-out transaction.
+        if self.simple_pipeline_check(context) {
+            return Ok(());
+        }
+
         // Check if we need to do 2pc automatically
         // for single-statement writes.
         self.two_pc_check(context);
@@ -240,8 +246,10 @@ impl QueryEngine {
 
         // Pipelined requests only return
         // one ReadyForQuery message.
-        let drop_message =
-            message.code() == 'Z' && !context.pipeline.is_done() && context.pipeline.is_simple();
+        let drop_message = message.code() == 'Z'
+            && !context.pipeline.is_done()
+            && context.pipeline.is_simple()
+            && !context.in_error(); // On error, pipeline is done executing.
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
