@@ -25,6 +25,7 @@ pub mod state;
 pub mod stats;
 pub mod taken;
 pub mod token_cache;
+pub mod transport;
 pub mod waiting;
 
 pub use address::Address;

@@ -91,6 +91,7 @@ pub(super) struct Waiter {
 mod tests {
     use super::*;
     use crate::backend::pool::Pool;
+    use crate::backend::pool::transport::Transport;
     use crate::net::messages::FrontendPid;
     use tokio::time::{Duration, sleep, timeout};
 
@@ -157,7 +158,7 @@ mod tests {
                 database_name: "pgdog".into(),
                 user: "pgdog".into(),
                 passwords: vec!["pgdog".into()],
-                ..Default::default()
+                ..crate::backend::pool::Address::default()
             },
             config,
         });

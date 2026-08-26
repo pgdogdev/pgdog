@@ -6,7 +6,7 @@ use bytes::{BufMut, BytesMut};
 use rustls_pki_types::ServerName;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpStream, UnixStream},
     spawn,
     time::Instant,
 };
@@ -19,7 +19,10 @@ use super::{
 };
 use crate::{
     auth::{md5, scram::Client},
-    backend::pool::stats::MemoryStats,
+    backend::pool::{
+        stats::MemoryStats,
+        transport::{Transport, unix_socket_path},
+    },
     config::AuthType,
     frontend::ClientRequest,
     net::{
@@ -239,22 +242,34 @@ impl Server {
         oids: Arc<Oids>,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
+        let mut stream = match &addr.host {
+            Transport::TCP(_) => {
+                let socket = addr.addr().await?;
+                let tcp = TcpStream::connect(socket).await?;
 
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
-            warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
-            );
-        }
-
-        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+                if let Err(err) = tweak(&tcp, &config.config.tcp) {
+                    warn!(
+                        "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                        config.config.tcp, err, addr,
+                    );
+                }
+                Stream::plain(tcp, config.config.memory.net_buffer)
+            }
+            Transport::Unix(dir) => {
+                let path = unix_socket_path(dir, &addr.port);
+                debug!("connecting to Unix socket {}", path.display());
+                Stream::unix(
+                    UnixStream::connect(&path).await?,
+                    config.config.memory.net_buffer,
+                )
+            }
+        };
 
         let tls_mode = config.config.general.tls_verify;
 
-        // Only attempt TLS if not in Disabled mode
-        if tls_mode != TlsVerifyMode::Disabled {
+        // Only attempt TLS if not in Disabled mode and its not connecting to a unix socket
+        if tls_mode != TlsVerifyMode::Disabled && matches!(addr.host, Transport::TCP(_)) {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
                 tls_mode, addr,
@@ -279,7 +294,8 @@ impl Server {
                 )?;
                 let plain = stream.take()?;
 
-                let server_name = ServerName::try_from(addr.host.clone())?;
+                let host = addr.host.tcp()?.to_owned();
+                let server_name = ServerName::try_from(host)?;
                 debug!("connecting with TLS to server name: {:?}", server_name);
 
                 match connector.connect(server_name.clone(), plain).await {
@@ -451,7 +467,18 @@ impl Server {
 
     /// Request query cancellation for the given backend server identifier.
     pub async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(addr.addr().await?).await?;
+        let mut stream = match &addr.host {
+            Transport::TCP(_) => {
+                let tcp = TcpStream::connect(addr.addr().await?).await?;
+                Stream::plain(tcp, config().config.memory.net_buffer)
+            }
+            Transport::Unix(dir) => {
+                let path = unix_socket_path(dir, &addr.port);
+                let unix = UnixStream::connect(&path).await?;
+                Stream::unix(unix, config().config.memory.net_buffer)
+            }
+        };
+
         stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
 
@@ -1333,7 +1360,7 @@ pub mod test {
     use pgdog_stats::PreparedStatementsConfig;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
+        net::{TcpListener, UnixListener},
     };
 
     use crate::{
@@ -1410,7 +1437,7 @@ pub mod test {
 
     pub(crate) async fn test_server() -> Server {
         Server::connect(
-            &Address::new_test(),
+            &Address::default(),
             ServerOptions::default(),
             ConnectReason::Other,
             Default::default(),
@@ -1426,7 +1453,7 @@ pub mod test {
         Server::connect(
             &Address {
                 database_name: "pgdog1".into(),
-                ..Address::new_test()
+                ..Default::default()
             },
             ServerOptions::default(),
             ConnectReason::Other,
@@ -1438,7 +1465,7 @@ pub mod test {
 
     pub async fn test_replication_server() -> Server {
         Server::connect(
-            &Address::new_test(),
+            &Address::default(),
             ServerOptions::new_replication(),
             ConnectReason::Replication,
             Default::default(),
@@ -1531,7 +1558,7 @@ pub mod test {
             }
         });
 
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         addr.port = port;
         addr.server_auth = crate::config::ServerAuth::RdsIam;
         addr.server_iam_region = Some("us-east-1".into());
@@ -1598,7 +1625,7 @@ pub mod test {
             }
         });
 
-        let mut addr = Address::new_test();
+        let mut addr = Address::default();
         addr.port = port;
         addr.server_auth = crate::config::ServerAuth::AzureWorkloadIdentity;
         addr.passwords = vec!["wrong-password".into()];
@@ -1620,6 +1647,65 @@ pub mod test {
         let server = result.unwrap();
         drop(server);
         server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connect_over_unix_socket() {
+        let dir = std::env::temp_dir().join(format!("pgdog-unix-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let port = 6543;
+        let socket_path = dir.join(format!(".s.PGSQL.{}", port));
+
+        // Bind the listener at the path pgdog derives from the socket
+        // directory and port. If the derivation is wrong, connect fails.
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+
+            // TLS is skipped for Unix sockets: the first packet must be the
+            // Startup message, never an SSLRequest.
+            let startup = Startup::from_stream(&mut socket).await.unwrap();
+            assert!(
+                matches!(startup, Startup::Startup { .. }),
+                "expected Startup, got {:?}",
+                startup
+            );
+
+            // Peer/trust auth replies: no password is ever exchanged.
+            socket
+                .write_all(&Authentication::Ok.to_bytes())
+                .await
+                .unwrap();
+            socket
+                .write_all(&BackendKeyData::random_legacy().to_bytes())
+                .await
+                .unwrap();
+            socket
+                .write_all(&ReadyForQuery::idle().to_bytes())
+                .await
+                .unwrap();
+        });
+
+        let addr = Address {
+            host: Transport::new(dir.to_str().unwrap()),
+            port,
+            ..Address::default()
+        };
+
+        let server = Server::connect(
+            &addr,
+            ServerOptions::default(),
+            ConnectReason::Other,
+            Default::default(),
+        )
+        .await
+        .expect("connect over unix socket");
+
+        drop(server);
+        server_task.await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

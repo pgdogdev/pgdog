@@ -13,6 +13,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::backend::ConnectReason;
 use crate::backend::pool::token_cache::TokenCache;
+use crate::backend::pool::transport::Transport;
 use crate::net::ProtocolMessage;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
@@ -627,7 +628,7 @@ async fn test_checkout_timeout() {
     };
 
     let pool = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     pool.launch();
@@ -724,13 +725,13 @@ async fn test_move_conns_all_idle() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -771,13 +772,13 @@ async fn test_move_conns_all_checked_out() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -826,13 +827,13 @@ async fn test_move_conns_destination_serves_after_launch() {
     };
 
     let source = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
     source.launch();
 
     let destination = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 
@@ -1007,7 +1008,7 @@ async fn test_lsn_monitor() {
     };
 
     let pool = Pool::new(&PoolConfig {
-        address: Address::new_test(),
+        address: Address::default(),
         config,
     });
 

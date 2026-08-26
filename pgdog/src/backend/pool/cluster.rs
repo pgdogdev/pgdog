@@ -767,13 +767,13 @@ mod test {
                 database: "pgdog".into(),
             });
             let primary = Some(&PoolConfig {
-                address: Address::new_test(),
+                address: Address::default(),
                 config: Config::default(),
             });
             let replicas = &[PoolConfig {
                 address: Address {
                     configured_role: Role::Replica,
-                    ..Address::new_test()
+                    ..Default::default()
                 },
                 config: Config::default(),
             }];
@@ -912,7 +912,7 @@ mod test {
                 primary: Some(&PoolConfig {
                     address: Address {
                         database_name: "pgdog1".into(),
-                        ..Address::new_test()
+                        ..Default::default()
                     },
                     config: Config::default(),
                 }),
@@ -920,7 +920,7 @@ mod test {
                     address: Address {
                         database_name: "pgdog1".into(),
                         configured_role: Role::Replica,
-                        ..Address::new_test()
+                        ..Default::default()
                     },
                     config: Config::default(),
                 }],
@@ -940,7 +940,7 @@ mod test {
             Cluster {
                 shards: vec![Shard::new(ShardConfig {
                     primary: Some(&PoolConfig {
-                        address: Address::new_test(),
+                        address: Address::default(),
                         config: Config::default(),
                     }),
                     identifier: identifier.clone(),
@@ -971,7 +971,7 @@ mod test {
                 replicas: &[PoolConfig {
                     address: Address {
                         configured_role: Role::Replica,
-                        ..Address::new_test()
+                        ..Default::default()
                     },
                     config: Config::default(),
                 }],

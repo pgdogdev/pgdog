@@ -3,17 +3,37 @@
 use bytes::{BufMut, BytesMut};
 use futures::FutureExt;
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
+use tokio::net::{TcpStream, UnixStream, unix};
 use tracing::trace;
 
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
-use std::ops::Deref;
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Context;
 
 use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery};
+
+fn unix_peek(stream: &UnixStream, buffer: &mut [u8]) -> Option<std::io::Result<usize>> {
+    let n = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            libc::MSG_PEEK,
+        )
+    };
+
+    if n >= 0 {
+        Some(Ok(n as usize))
+    } else if io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
+        None
+    } else {
+        Some(Err(io::Error::last_os_error()))
+    }
+}
 
 /// Inner stream types.
 #[pin_project(project = StreamInnerProjection)]
@@ -23,6 +43,7 @@ enum StreamInner {
     Plain(#[pin] BufStream<TcpStream>),
     Tls(#[pin] BufStream<tokio_rustls::TlsStream<TcpStream>>),
     DevNull,
+    UnixSockets(#[pin] BufStream<UnixStream>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +75,7 @@ impl AsyncRead for Stream {
         match project.inner.project() {
             StreamInnerProjection::Plain(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_read(cx, buf),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_read(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
@@ -70,6 +92,7 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::Tls(stream) => stream.poll_write(cx, buf),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(buf.len())),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_write(cx, buf),
         }
     }
 
@@ -82,6 +105,7 @@ impl AsyncWrite for Stream {
             StreamInnerProjection::Plain(stream) => stream.poll_flush(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_flush(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_flush(cx),
         }
     }
 
@@ -93,6 +117,7 @@ impl AsyncWrite for Stream {
         match project.inner.project() {
             StreamInnerProjection::Plain(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::Tls(stream) => stream.poll_shutdown(cx),
+            StreamInnerProjection::UnixSockets(stream) => stream.poll_shutdown(cx),
             StreamInnerProjection::DevNull => std::task::Poll::Ready(Ok(())),
         }
     }
@@ -108,6 +133,17 @@ impl Stream {
     pub fn plain(stream: TcpStream, capacity: usize) -> Self {
         Self {
             inner: StreamInner::Plain(BufStream::with_capacity(capacity, capacity, stream)),
+            io_in_progress: false,
+            capacity,
+            tls_identity: None,
+            tls_client_certificate: false,
+        }
+    }
+
+    /// Wrap a unix socket stream.
+    pub fn unix(stream: UnixStream, capacity: usize) -> Self {
+        Self {
+            inner: StreamInner::UnixSockets(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
             capacity,
             tls_identity: None,
@@ -158,13 +194,14 @@ impl Stream {
         matches!(self.inner, StreamInner::Tls(_))
     }
 
-    /// Get peer address if any. We're not using UNIX sockets (yet)
+    /// Get peer address/unix socket if any.
     /// so the peer address should always be available.
     pub fn peer_addr(&self) -> PeerAddr {
         match &self.inner {
-            StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
-            StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
-            StreamInner::DevNull => PeerAddr { addr: None },
+            StreamInner::Plain(stream) => stream.get_ref().peer_addr().into(),
+            StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().into(),
+            StreamInner::DevNull => PeerAddr::Empty,
+            StreamInner::UnixSockets(stream) => stream.get_ref().peer_addr().into(),
         }
     }
 
@@ -175,6 +212,10 @@ impl Stream {
             StreamInner::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
             StreamInner::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
             StreamInner::DevNull => 0,
+            StreamInner::UnixSockets(stream) => match unix_peek(stream.get_ref(), &mut buf) {
+                None => 0,
+                Some(res) => eof(res)?,
+            },
         };
 
         Ok(())
@@ -186,6 +227,7 @@ impl Stream {
             StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
             StreamInner::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).now_or_never(),
             StreamInner::DevNull => return Liveness::Clean,
+            StreamInner::UnixSockets(stream) => unix_peek(stream.get_ref(), &mut buf),
         };
 
         match peeked {
@@ -216,6 +258,7 @@ impl Stream {
                 StreamInner::Plain(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::Tls(stream) => eof(stream.write_all(&bytes).await)?,
                 StreamInner::DevNull => (),
+                StreamInner::UnixSockets(stream) => eof(stream.write_all(&bytes).await)?,
             }
 
             #[cfg(debug_assertions)]
@@ -365,30 +408,44 @@ pub fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
 
 /// Wrapper around SocketAddr
 /// to make it easier to debug.
-pub struct PeerAddr {
-    addr: Option<SocketAddr>,
+pub enum PeerAddr {
+    /// TCP peer: Ip and Port
+    TCP(SocketAddr),
+    /// Unix Socket file path
+    Unix(PathBuf),
+    /// No Identifiable Peer
+    Empty,
 }
 
-impl Deref for PeerAddr {
-    type Target = Option<SocketAddr>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.addr
+impl From<io::Result<SocketAddr>> for PeerAddr {
+    fn from(addr: io::Result<SocketAddr>) -> Self {
+        match addr {
+            Ok(addr) => PeerAddr::TCP(addr),
+            Err(_) => PeerAddr::Empty,
+        }
     }
 }
 
-impl From<Option<SocketAddr>> for PeerAddr {
-    fn from(value: Option<SocketAddr>) -> Self {
-        Self { addr: value }
+impl From<io::Result<unix::SocketAddr>> for PeerAddr {
+    fn from(addr: io::Result<unix::SocketAddr>) -> Self {
+        match addr {
+            Ok(addr) => {
+                let Some(path) = addr.as_pathname() else {
+                    return PeerAddr::Empty;
+                };
+                PeerAddr::Unix(path.into())
+            }
+            Err(_) => PeerAddr::Empty,
+        }
     }
 }
 
 impl std::fmt::Debug for PeerAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(addr) = &self.addr {
-            write!(f, "[{}]", addr)
-        } else {
-            write!(f, "")
+        match self {
+            PeerAddr::TCP(addr) => write!(f, "[{}]", addr),
+            PeerAddr::Unix(file_path) => write!(f, "{}", file_path.display()),
+            PeerAddr::Empty => write!(f, "No address"),
         }
     }
 }
@@ -398,7 +455,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::AsyncWriteExt,
+        net::{TcpListener, UnixListener, UnixStream},
+    };
 
     #[tokio::test]
     async fn test_io_in_progress_initially_false() {
@@ -515,5 +575,214 @@ mod tests {
         let mut stream = Stream::dev_null();
 
         assert_eq!(stream.liveness(), Liveness::Clean);
+    }
+
+    // ── Unix domain socket streams ──────────────────────────────────────────
+
+    /// Bind a Unix socket pair and wrap the *connecting* end in a [`Stream`]
+    /// (pgdog is the connecting client; the listener is the Postgres side).
+    async fn unix_pair(name: &str) -> (Stream, UnixStream, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("pgdog-stream-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (accepted, _) = listener.accept().await.unwrap();
+            accepted
+        });
+        let client = UnixStream::connect(&path).await.unwrap();
+        let stream = Stream::unix(client, 4096);
+        (stream, server.await.unwrap(), dir)
+    }
+
+    #[tokio::test]
+    async fn test_unix_stream_peer_addr() {
+        let (stream, _peer, dir) = unix_pair("peer").await;
+
+        let peer_addr = stream.peer_addr();
+        let expected = dir.join("test.sock");
+        match &peer_addr {
+            PeerAddr::Unix(path) => assert_eq!(path, &expected),
+            other => panic!("expected PeerAddr::Unix({:?}), got {:?}", expected, other),
+        }
+
+        drop(stream);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_stream_liveness() {
+        let (mut stream, mut peer, dir) = unix_pair("liveness").await;
+
+        // Idle: the socket is open but has no data.
+        assert_eq!(stream.liveness(), Liveness::Clean);
+
+        // Unsolicited data is visible to liveness without consuming it.
+        peer.write_all(b"x").await.unwrap();
+        peer.flush().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(stream.liveness(), Liveness::DataPending);
+
+        // The peek must not consume the byte.
+        let mut buf = [0u8; 1];
+        stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"x");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_stream_shutdown() {
+        let (mut stream, _peer, dir) = unix_pair("shutdown").await;
+
+        // Graceful shutdown polls the UnixSockets shutdown arm.
+        stream.shutdown().await.unwrap();
+
+        drop(stream);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── unix_peek edge cases ────────────────────────────────────────────────
+
+    /// Raw Unix socket pair (connecting end, accepted end) for direct
+    /// [`unix_peek`] tests.
+    async fn unix_stream_pair(name: &str) -> (UnixStream, UnixStream, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pgdog-peek-{}-{}", name, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (accepted, _) = listener.accept().await.unwrap();
+            accepted
+        });
+        let client = UnixStream::connect(&path).await.unwrap();
+        (client, server.await.unwrap(), dir)
+    }
+
+    #[tokio::test]
+    async fn test_unix_peek_no_data_is_none() {
+        let (client, _server, dir) = unix_stream_pair("no-data").await;
+
+        // Idle non-blocking socket: recv returns WouldBlock → None.
+        let mut buf = [0u8; 1];
+        assert!(unix_peek(&client, &mut buf).is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_peek_reports_data_without_consuming() {
+        let (mut client, mut server, dir) = unix_stream_pair("peek").await;
+
+        server.write_all(b"hello").await.unwrap();
+        server.flush().await.unwrap();
+        tokio::task::yield_now().await;
+
+        let mut buf = [0u8; 1];
+        assert!(matches!(unix_peek(&client, &mut buf), Some(Ok(1))));
+
+        // MSG_PEEK must not consume: a full read still gets everything.
+        let mut out = [0u8; 5];
+        client.read_exact(&mut out).await.unwrap();
+        assert_eq!(&out, b"hello");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_peek_limited_by_buffer_size() {
+        let (mut client, mut server, dir) = unix_stream_pair("limit").await;
+
+        server.write_all(&[0u8; 100]).await.unwrap();
+        server.flush().await.unwrap();
+        tokio::task::yield_now().await;
+
+        // Peek returns min(available, buffer length), not the full payload.
+        let mut buf = [0u8; 10];
+        assert!(matches!(unix_peek(&client, &mut buf), Some(Ok(10))));
+
+        // And the remaining 90 bytes are still there.
+        let mut out = vec![0u8; 100];
+        client.read_exact(&mut out).await.unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_peek_eof_after_peer_close() {
+        let (client, server, dir) = unix_stream_pair("eof").await;
+        drop(server);
+        tokio::task::yield_now().await;
+
+        // Peer closed: recv returns 0 → Some(Ok(0)) → liveness() = Closed.
+        let mut buf = [0u8; 1];
+        assert!(matches!(unix_peek(&client, &mut buf), Some(Ok(0))));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unix_peek_error_on_bad_fd() {
+        let (client, _server, dir) = unix_stream_pair("bad-fd").await;
+
+        // Close the fd behind the stream's back: recv then fails with EBADF,
+        // exercising the Err branch of unix_peek.
+        unsafe { libc::close(client.as_raw_fd()) };
+
+        let mut buf = [0u8; 1];
+        let result = unix_peek(&client, &mut buf);
+        assert!(
+            matches!(result, Some(Err(ref e)) if e.raw_os_error() == Some(libc::EBADF)),
+            "expected Some(Err(EBADF)), got {:?}",
+            result
+        );
+
+        // The fd is already closed; forget the stream so its Drop doesn't
+        // close a possibly-reused fd number.
+        std::mem::forget(client);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_peer_addr_conversions() {
+        let addr: SocketAddr = "127.0.0.1:5432".parse().unwrap();
+        assert!(matches!(PeerAddr::from(Ok(addr)), PeerAddr::TCP(_)));
+
+        let tcp_err: io::Result<SocketAddr> = Err(io::Error::new(io::ErrorKind::Other, "no peer"));
+        assert!(matches!(PeerAddr::from(tcp_err), PeerAddr::Empty));
+
+        let unix_err: io::Result<tokio::net::unix::SocketAddr> =
+            Err(io::Error::new(io::ErrorKind::Other, "no peer"));
+        assert!(matches!(PeerAddr::from(unix_err), PeerAddr::Empty));
+
+        // A Unix socket whose peer has no pathname (e.g. the accepted end of
+        // an unbound connecting client) maps to Empty, not Unix.
+        let dir = std::env::temp_dir().join(format!("pgdog-stream-conv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (accepted, _) = listener.accept().await.unwrap();
+            accepted.peer_addr().unwrap()
+        });
+        let _client = UnixStream::connect(&path).await.unwrap();
+        let unnamed = server.await.unwrap();
+        assert!(unnamed.as_pathname().is_none());
+        assert!(matches!(PeerAddr::from(Ok(unnamed)), PeerAddr::Empty));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_peer_addr_debug() {
+        let addr: SocketAddr = "127.0.0.1:5432".parse().unwrap();
+        assert_eq!(format!("{:?}", PeerAddr::TCP(addr)), "[127.0.0.1:5432]");
+        assert_eq!(format!("{:?}", PeerAddr::Empty), "No address");
+
+        let path = PathBuf::from("/var/run/postgresql/.s.PGSQL.5432");
+        assert_eq!(
+            format!("{:?}", PeerAddr::Unix(path)),
+            "/var/run/postgresql/.s.PGSQL.5432"
+        );
     }
 }
