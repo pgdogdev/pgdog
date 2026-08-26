@@ -41,8 +41,8 @@ pub(crate) mod sticky;
 pub(crate) mod timeouts;
 pub(crate) mod transaction_type;
 
-pub(crate) use request_settings::ClientRequestSettings;
 use query_engine::QueryEngine;
+pub(crate) use request_settings::ClientRequestSettings;
 pub(crate) use sticky::Sticky;
 pub(crate) use transaction_type::TransactionType;
 
@@ -459,7 +459,7 @@ impl Client {
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
         Self::maybe_add_application_name_host(
-            &mut connect_params,
+            &mut params,
             addr,
             config().config.general.application_name_add_host,
         );
