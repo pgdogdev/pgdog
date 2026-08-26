@@ -15,11 +15,6 @@ pub enum ClusterCheck {
 }
 
 impl QueryEngine {
-    #[cfg(test)]
-    pub fn backend(&mut self) -> &mut Connection {
-        &mut self.backend
-    }
-
     /// Check that the cluster is still valid and online.
     pub async fn cluster_check(
         &mut self,
@@ -228,5 +223,19 @@ impl QueryEngine {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::backend::pool::Connection;
+
+    use super::QueryEngine;
+
+    impl QueryEngine {
+        /// Get mutable reference to the backend connection.
+        pub fn backend(&mut self) -> &mut Connection {
+            &mut self.backend
+        }
     }
 }

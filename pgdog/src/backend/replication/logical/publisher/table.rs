@@ -279,7 +279,7 @@ impl Table {
     /// The ordering of columns corresponds with the whole column ordering after filtering
     /// the unchanged-toasted fields.
     ///
-    /// Paired with [`Update::partial_new`](crate::net::messages::replication::Update::partial_new) to
+    /// Paired with [`Update::partial_new`](crate::net::messages::replication::logical::update::Update::partial_new) to
     /// generate proper [bind](crate::net::messages::replication::TupleData::to_bind) with proper order.
     pub fn update_partial(&self, present: &NonIdentityColumnsPresence) -> String {
         debug_assert!(

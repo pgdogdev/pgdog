@@ -1,6 +1,13 @@
+mod benchmark_simd;
+mod distance_simd_rust;
+mod vector;
+
 use std::{collections::HashSet, str::from_utf8};
 
-use pgdog_config::ShardedTableConfig;
+use pgdog_config::{
+    FlexibleType, ShardedMappingConfig, ShardedMappingDeprecated, ShardedMappingKindDeprecated,
+    ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
+};
 use rand::seq::SliceRandom;
 
 use crate::{
@@ -11,10 +18,6 @@ use crate::{
         Bind, DataRow, Execute, FromBytes, Parse, Protocol, Query, Sync, bind::Parameter,
         messages::Format,
     },
-};
-use pgdog_config::sharding::{
-    FlexibleType, ShardedMappingConfig, ShardedMappingDeprecated, ShardedMappingKindDeprecated,
-    ShardedMappingList, ShardedMappingRange,
 };
 
 use super::*;

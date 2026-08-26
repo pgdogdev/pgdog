@@ -43,7 +43,7 @@ pub mod terminate;
 pub use auth::{Authentication, Password};
 pub use backend_key::BackendKeyData;
 pub use backend_pid::BackendPid;
-pub use bind::{Bind, Format, Parameter, ParameterWithFormat};
+pub use bind::{Bind, Format, ParameterWithFormat};
 pub use bind_complete::BindComplete;
 pub use buffer::MessageBuffer;
 pub use close::Close;

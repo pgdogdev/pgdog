@@ -21,6 +21,6 @@ pub use listeners::Listeners;
 pub use logger::Logger as StatsLogger;
 pub use lookup::LookupMetrics;
 pub use mirror_stats::MirrorStatsMetrics;
-pub use pools::{PoolMetric, Pools};
+pub use pools::Pools;
 pub use query_cache::QueryCache;
 pub use two_pc::TwoPc;

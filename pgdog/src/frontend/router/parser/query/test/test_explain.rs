@@ -1,5 +1,5 @@
 use crate::frontend::router::parser::Shard;
-use crate::net::messages::Parameter;
+use crate::net::messages::bind::Parameter;
 
 use super::setup::{QueryParserTest, *};
 

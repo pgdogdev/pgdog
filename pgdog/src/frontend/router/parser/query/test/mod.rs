@@ -4,7 +4,7 @@ use crate::{
     config::config,
     net::{
         Close, Format, Parameters, Sync,
-        messages::{Parameter, parse::Parse},
+        messages::{bind::Parameter, parse::Parse},
     },
 };
 use bytes::Bytes;

@@ -168,18 +168,6 @@ impl Stream {
         }
     }
 
-    /// Check socket is okay while we wait for something else.
-    pub async fn check(&mut self) -> Result<(), crate::net::Error> {
-        let mut buf = [0u8; 1];
-        match &mut self.inner {
-            StreamInner::Plain(plain) => eof(plain.get_mut().peek(&mut buf).await)?,
-            StreamInner::Tls(tls) => eof(tls.get_mut().get_mut().0.peek(&mut buf).await)?,
-            StreamInner::DevNull => 0,
-        };
-
-        Ok(())
-    }
-
     pub fn liveness(&mut self) -> Liveness {
         let mut buf = [0u8; 1];
         let peeked = match &mut self.inner {

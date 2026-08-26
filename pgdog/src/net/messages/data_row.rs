@@ -3,9 +3,7 @@
 use crate::net::Decoder;
 use std::collections::BTreeSet;
 
-use super::{
-    Datum, Double, Float, Format, FromDataType, Numeric, RowDescription, code, prelude::*,
-};
+use super::{Datum, Double, Float, Format, FromDataType, Numeric, code, prelude::*};
 pub use pgdog_postgres_types::{Data, ToDataRowColumn};
 use pgdog_stats::Lsn;
 
@@ -149,22 +147,6 @@ impl DataRow {
             .ok_or(Error::RequiredColumnMissing(idx))
     }
 
-    /// Render the data row.
-    pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
-        let mut row = vec![];
-
-        for (index, field) in rd.fields.iter().enumerate() {
-            if let Some(data) = self.columns.get(index) {
-                row.push(Column {
-                    name: field.name.as_str(),
-                    value: Datum::new(&data.data, field.data_type(), field.format(), data.is_null)?,
-                });
-            }
-        }
-
-        Ok(row)
-    }
-
     /// How many columns in the data row.
     pub fn len(&self) -> usize {
         self.columns.len()
@@ -241,7 +223,7 @@ impl From<DataRow> for Lsn {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{Decoder, Field};
+    use crate::net::{Decoder, Field, RowDescription};
     use std::assert_matches;
 
     #[test]

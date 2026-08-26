@@ -1,5 +1,4 @@
-#![cfg(test)]
-pub use pgdog_vector::distance_simd_rust::*;
+use pgdog_vector::distance_simd_rust::*;
 use pgdog_vector::{Float, Vector};
 
 #[test]
