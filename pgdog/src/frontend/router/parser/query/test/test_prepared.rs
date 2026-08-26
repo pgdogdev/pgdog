@@ -27,9 +27,15 @@ fn test_prepared_execute_with_type_cast() {
         Query::new("PREPARE __stmt_1 AS SELECT * FROM sharded WHERE id = $1").into(),
     ]);
 
-    let command = test.execute(vec![Query::new("EXECUTE __stmt_1(11::bigint)").into()]);
-    assert!(command.route().is_read());
-    assert_eq!(command.route().shard(), &Shard::Direct(1));
+    for query in [
+        "EXECUTE __stmt_1(11::bigint)",
+        "EXECUTE __stmt_1('11'::int)",
+        "EXECUTE __stmt_1(CAST('11' AS bigint))",
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(command.route().is_read());
+        assert_eq!(command.route().shard(), &Shard::Direct(1));
+    }
 }
 
 #[test]

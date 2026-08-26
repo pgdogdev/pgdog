@@ -125,7 +125,10 @@ mod test {
             "EXECUTE __pgdog_1 (
                 1, 'test', 1.5, true, false, NULL, B'101', now(),
                 2::bigint, 'x'::text, 3.5::float8, false::bool,
-                NULL::int, (4::int)::bigint
+                NULL::int, (4::int)::bigint,
+                '3'::int, 1::bool,
+                '123e4567-e89b-12d3-a456-426614174000'::uuid,
+                CAST('5' AS bigint)
             )",
         )
         .unwrap();
@@ -157,5 +160,20 @@ mod test {
         assert_eq!(params.parameter(11).unwrap().unwrap().text().unwrap(), "f");
         assert!(params.parameter(12).unwrap().unwrap().is_null());
         assert_eq!(params.parameter(13).unwrap().unwrap().bigint().unwrap(), 4);
+        // EXECUTE parameters remain in text format. PgDog unwraps the cast
+        // node but leaves PostgreSQL to perform the actual type coercion.
+        assert_eq!(params.parameter(14).unwrap().unwrap().text().unwrap(), "3");
+        assert_eq!(params.parameter(15).unwrap().unwrap().text().unwrap(), "1");
+        assert_eq!(
+            params
+                .parameter(16)
+                .unwrap()
+                .unwrap()
+                .uuid()
+                .unwrap()
+                .to_string(),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(params.parameter(17).unwrap().unwrap().bigint().unwrap(), 5);
     }
 }
