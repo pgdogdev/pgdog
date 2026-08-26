@@ -121,53 +121,41 @@ mod test {
 
     #[test]
     fn test_exec_parameter() {
-        let stmt = pg_raw_parse::parse("EXECUTE __pgdog_1 (1, 'test', now())").unwrap();
-        let stmt_1 = stmt.stmts().next().unwrap();
-        match stmt_1 {
-            Node::ExecuteStmt(execute) => {
-                let exec_params = ExecuteParams::new(execute);
-                let params = StatementParameters::Execute(&exec_params);
-                let first = params.parameter(0).unwrap().unwrap().bigint().unwrap();
-                assert_eq!(first, 1);
-            }
+        let stmt = pg_raw_parse::parse(
+            "EXECUTE __pgdog_1 (
+                1, 'test', 1.5, true, false, NULL, B'101', now(),
+                2::bigint, 'x'::text, 3.5::float8, false::bool,
+                NULL::int, (4::int)::bigint
+            )",
+        )
+        .unwrap();
+        let Node::ExecuteStmt(execute) = stmt.stmts().next().unwrap() else {
+            panic!("not an execute stmt");
+        };
+        let exec_params = ExecuteParams::new(execute);
+        let params = StatementParameters::Execute(&exec_params);
 
-            _ => panic!("not an execute stmt"),
-        }
-    }
+        assert_eq!(params.parameter(0).unwrap().unwrap().bigint().unwrap(), 1);
+        assert_eq!(
+            params.parameter(1).unwrap().unwrap().text().unwrap(),
+            "test"
+        );
+        assert_eq!(params.parameter(2).unwrap().unwrap().text().unwrap(), "1.5");
+        assert_eq!(params.parameter(3).unwrap().unwrap().text().unwrap(), "t");
+        assert_eq!(params.parameter(4).unwrap().unwrap().text().unwrap(), "f");
+        assert!(params.parameter(5).unwrap().unwrap().is_null());
+        // BitString / function calls are not extractable for routing.
+        assert!(params.parameter(6).unwrap().unwrap().is_null());
+        assert!(params.parameter(7).unwrap().unwrap().is_null());
 
-    #[test]
-    fn test_exec_parameter_with_type_cast() {
-        let stmt = pg_raw_parse::parse("EXECUTE __pgdog_1 (1::bigint, 'test'::text)").unwrap();
-        let stmt_1 = stmt.stmts().next().unwrap();
-        match stmt_1 {
-            Node::ExecuteStmt(execute) => {
-                let exec_params = ExecuteParams::new(execute);
-                let params = StatementParameters::Execute(&exec_params);
-                let first = params.parameter(0).unwrap().unwrap().bigint().unwrap();
-                assert_eq!(first, 1);
-
-                let second_param = params.parameter(1).unwrap().unwrap();
-                assert_eq!(second_param.text().unwrap(), "test");
-            }
-
-            _ => panic!("not an execute stmt"),
-        }
-    }
-
-    #[test]
-    fn test_exec_parameter_with_nested_type_cast() {
-        // Double cast still peels to the underlying constant.
-        let stmt = pg_raw_parse::parse("EXECUTE __pgdog_1 ((1::int)::bigint)").unwrap();
-        let stmt_1 = stmt.stmts().next().unwrap();
-        match stmt_1 {
-            Node::ExecuteStmt(execute) => {
-                let exec_params = ExecuteParams::new(execute);
-                let params = StatementParameters::Execute(&exec_params);
-                let first = params.parameter(0).unwrap().unwrap().bigint().unwrap();
-                assert_eq!(first, 1);
-            }
-
-            _ => panic!("not an execute stmt"),
-        }
+        assert_eq!(params.parameter(8).unwrap().unwrap().bigint().unwrap(), 2);
+        assert_eq!(params.parameter(9).unwrap().unwrap().text().unwrap(), "x");
+        assert_eq!(
+            params.parameter(10).unwrap().unwrap().text().unwrap(),
+            "3.5"
+        );
+        assert_eq!(params.parameter(11).unwrap().unwrap().text().unwrap(), "f");
+        assert!(params.parameter(12).unwrap().unwrap().is_null());
+        assert_eq!(params.parameter(13).unwrap().unwrap().bigint().unwrap(), 4);
     }
 }
