@@ -89,7 +89,7 @@ async fn test_checkout_replaces_connection_closed_by_server() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
 
@@ -105,7 +105,7 @@ async fn test_server_closed_does_not_mark_pool_unhealthy() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
     drop(conn);

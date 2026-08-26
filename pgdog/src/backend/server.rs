@@ -967,18 +967,6 @@ impl Server {
             .collect::<Result<Vec<T>, _>>()?)
     }
 
-    /// Execute a query with text-format parameters using the extended
-    /// protocol and return all rows. Parameters are bound by the server,
-    /// so values don't need to be escaped.
-    pub async fn fetch_all_params<T: From<DataRow>>(
-        &mut self,
-        query: &str,
-        params: &[BindParameter],
-    ) -> Result<Vec<T>, Error> {
-        self.fetch_all(ServerRequest::parameterized(query, params))
-            .await
-    }
-
     /// Perform a healthcheck on this connection using the provided query.
     pub async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
         debug!("running healthcheck \"{}\" [{}]", query, self.addr);
@@ -1150,13 +1138,6 @@ impl Server {
         instant.duration_since(self.stats().created_at())
     }
 
-    /// Set this connection's lifetime cap directly. Bypasses jitter
-    /// sampling; mainly useful in tests.
-    #[inline]
-    pub fn set_max_age(&mut self, max_age: Duration) {
-        self.max_age = Some(max_age);
-    }
-
     /// Sample and apply a per-connection `max_age` uniformly from
     /// `[base - jitter, base + jitter]`, breaking up synchronized
     /// retirement of connection cohorts. Saturates at zero on
@@ -1274,6 +1255,7 @@ impl Server {
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
     }
@@ -1701,52 +1683,6 @@ pub mod test {
         }
 
         assert!(server.done());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_all_params() {
-        use crate::net::bind::Parameter;
-        let mut server = test_server().await;
-
-        let rows = server
-            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(b"hello")])
-            .await
-            .unwrap();
-        assert_eq!(rows, vec!["hello".to_string()]);
-        assert!(server.done());
-
-        // Values are bound by the server, not spliced into the query.
-        let injection = "'; DROP TABLE users; --";
-        let rows = server
-            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(injection.as_bytes())])
-            .await
-            .unwrap();
-        assert_eq!(rows, vec![injection.to_string()]);
-        assert!(server.done());
-
-        // No rows.
-        let rows = server
-            .fetch_all_params::<String>(
-                "SELECT relname::text FROM pg_class WHERE relname = $1",
-                &[Parameter::new(b"no_such_table_fetch_all_params")],
-            )
-            .await
-            .unwrap();
-        assert!(rows.is_empty());
-        assert!(server.done());
-
-        // Errors are returned and the connection stays usable.
-        let err = server
-            .fetch_all_params::<String>("SELECT no_such_column", &[])
-            .await;
-        assert!(err.is_err());
-        assert!(server.done());
-
-        let rows = server
-            .fetch_all_params::<String>("SELECT $1::text", &[Parameter::new(b"still works")])
-            .await
-            .unwrap();
-        assert_eq!(rows, vec!["still works".to_string()]);
     }
 
     #[tokio::test]
@@ -2778,7 +2714,6 @@ pub mod test {
                     limit: 3,
                     ..Default::default()
                 });
-            assert_eq!(server.prepared_statements.capacity(), 3);
 
             server
                 .send(
@@ -4491,7 +4426,7 @@ pub mod test {
     #[test]
     fn test_effective_max_age_uses_stored_value() {
         let mut server = Server::default();
-        server.set_max_age(Duration::from_millis(1500));
+        server.max_age = Some(Duration::from_millis(1500));
         let base = Duration::from_secs(60);
         // Stored value wins regardless of the supplied base.
         assert_eq!(Duration::from_millis(1500), server.effective_max_age(base));

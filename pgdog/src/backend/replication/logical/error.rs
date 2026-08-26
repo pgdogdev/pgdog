@@ -325,9 +325,6 @@ mod tests {
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
         assert!(Error::Backend(BE::Io(io)).is_retryable());
 
-        // Read timeout mid-stream.
-        assert!(Error::Backend(BE::ReadTimeout).is_retryable());
-
         // Pool couldn't hand out a connection.
         assert!(Error::Backend(BE::Pool(PE::CheckoutTimeout)).is_retryable());
         assert!(Error::Backend(BE::Pool(PE::NoPrimary)).is_retryable());

@@ -78,9 +78,6 @@ pub enum Error {
     #[error("rollback left server in inconsistent state")]
     RollbackFailed,
 
-    #[error("read timeout")]
-    ReadTimeout,
-
     #[error("router error: {0}")]
     Router(String),
 
@@ -138,7 +135,6 @@ impl Error {
             // These are recoverable errors.
             Error::Pool(PoolError::CheckoutTimeout) => true,
             Error::Pool(PoolError::AllReplicasDown) => true,
-            Error::Pool(PoolError::Banned) => true,
             _ => false,
         }
     }
@@ -160,8 +156,6 @@ impl Error {
             | Self::MultiShardNotConnected
             | Self::CopyNotConnected
             | Self::ClusterNotConnected => true,
-            // Server stopped responding mid-stream.
-            Self::ReadTimeout => true,
             _ => false,
         }
     }

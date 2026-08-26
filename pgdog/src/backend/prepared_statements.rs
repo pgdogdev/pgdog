@@ -143,13 +143,9 @@ impl PreparedStatements {
     }
 
     /// Current prepared statement settings.
+    #[cfg(test)]
     pub fn config(&self) -> PreparedStatementsConfig {
         self.config
-    }
-
-    /// Get prepared statements capacity.
-    pub fn capacity(&self) -> usize {
-        self.config.limit
     }
 
     /// Force the server to ignore the response to this message.

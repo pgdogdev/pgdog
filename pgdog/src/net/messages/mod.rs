@@ -277,6 +277,8 @@ impl Message {
         self.source
     }
 
+    #[cfg(test)]
+    // FIXME(sage): This and transaction_error should use ReadyForQuery's code
     pub fn in_transaction(&self) -> bool {
         self.code() == 'Z' && matches!(self.payload[5] as char, 'T' | 'E')
     }

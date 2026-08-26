@@ -37,6 +37,7 @@ impl Execute {
         }
     }
 
+    #[cfg(test)]
     pub fn new_portal(name: &str) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
@@ -49,6 +50,7 @@ impl Execute {
 
     /// Create an Execute message for a named portal with a row limit.
     /// A limit of 0 means fetch all rows.
+    #[cfg(test)]
     pub fn new_portal_limit(name: &str, max_rows: i32) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
@@ -69,12 +71,6 @@ impl Execute {
             }; // -1 for terminating NULL.
         let buf = &self.payload[start..end];
         from_utf8(buf).unwrap_or("")
-    }
-
-    /// Number of rows to return.
-    pub fn max_rows(&self) -> i32 {
-        let mut buf = &self.payload[5 + self.portal_len..];
-        buf.get_i32()
     }
 
     pub fn len(&self) -> usize {
@@ -118,7 +114,6 @@ mod test {
 
         let execute = Execute::from_bytes(msg).unwrap();
         assert_eq!(execute.portal(), "test");
-        assert_eq!(execute.max_rows(), 25);
 
         let exec = Execute::new_portal("test1");
         assert_eq!(exec.portal(), "test1");

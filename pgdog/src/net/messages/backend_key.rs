@@ -25,6 +25,7 @@ pub struct SecretKey {
 
 impl SecretKey {
     /// 3.0-compatible secret from a 4-byte integer.
+    #[cfg(test)]
     pub fn legacy(secret: i32) -> Self {
         Self {
             bytes: SmallVec::from_slice(&secret.to_be_bytes()),
@@ -67,10 +68,6 @@ impl SecretKey {
     pub fn constant_time_eq(&self, other: &SecretKey) -> bool {
         crate::util::constant_time_eq(self.as_slice(), other.as_slice())
     }
-
-    pub fn len(&self) -> usize {
-        self.bytes.len()
-    }
 }
 
 /// BackendKeyData (B) — pid + cancel secret on the wire.
@@ -110,6 +107,7 @@ impl BackendKeyData {
         }
     }
 
+    #[cfg(test)]
     pub fn legacy(pid: i32, secret: i32) -> Self {
         Self {
             pid,
@@ -168,7 +166,7 @@ mod tests {
         let key = BackendKeyData::legacy(42, 1234);
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 4);
+        assert_eq!(roundtrip.secret.bytes.len(), 4);
     }
 
     #[test]
@@ -179,7 +177,7 @@ mod tests {
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 32);
+        assert_eq!(roundtrip.secret.bytes.len(), 32);
     }
 
     #[test]
@@ -190,7 +188,7 @@ mod tests {
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 256);
+        assert_eq!(roundtrip.secret.bytes.len(), 256);
     }
 
     #[test]
@@ -198,12 +196,14 @@ mod tests {
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new())
                 .secret
+                .bytes
                 .len(),
             4
         );
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new())
                 .secret
+                .bytes
                 .len(),
             32
         );

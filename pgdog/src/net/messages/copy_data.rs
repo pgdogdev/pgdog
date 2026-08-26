@@ -24,11 +24,6 @@ impl CopyData {
         }
     }
 
-    /// New copy data from bytes.
-    pub fn bytes(data: Bytes) -> Self {
-        Self { data }
-    }
-
     /// Get copy data.
     pub fn data(&self) -> &[u8] {
         &self.data[..]

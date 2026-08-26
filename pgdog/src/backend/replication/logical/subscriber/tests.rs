@@ -45,7 +45,7 @@ fn xlog_copy_data(payload: Bytes) -> CopyData {
         system_clock: 0,
         bytes: payload,
     };
-    CopyData::bytes(xlog.to_bytes())
+    CopyData::new(&xlog.to_bytes())
 }
 
 fn make_sharded_table() -> Table {

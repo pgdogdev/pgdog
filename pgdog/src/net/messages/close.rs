@@ -30,6 +30,7 @@ impl Close {
         }
     }
 
+    #[cfg(test)]
     pub fn portal(name: &str) -> Self {
         let mut payload = Payload::named('C');
         payload.put_u8(b'P');
