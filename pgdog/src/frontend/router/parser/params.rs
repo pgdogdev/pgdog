@@ -165,13 +165,7 @@ mod test {
         assert_eq!(params.parameter(14).unwrap().unwrap().text().unwrap(), "3");
         assert_eq!(params.parameter(15).unwrap().unwrap().text().unwrap(), "1");
         assert_eq!(
-            params
-                .parameter(16)
-                .unwrap()
-                .unwrap()
-                .uuid()
-                .unwrap()
-                .to_string(),
+            params.parameter(16).unwrap().unwrap().text().unwrap(),
             "123e4567-e89b-12d3-a456-426614174000"
         );
         assert_eq!(params.parameter(17).unwrap().unwrap().bigint().unwrap(), 5);
