@@ -29,25 +29,32 @@ impl QueryParser {
         match self.try_multi_set(&**stmts, context) {
             Ok(Some(set)) => Ok(Some(set)),
             Ok(None) => {
+                let check = Self::split_execution_no_transaction_safe(ast);
                 // TODO(lev): We can still mis-route things here, e.g.,
                 // SELECT 1; INSERT INTO [...];
                 // will use the first statement for routing and send the whole
                 // thing to a replica, causing an error.
-                //
-                // Extended protocol containing multiple statements will be rejected by Postgres.
-                if context.shards == 1
-                    || context.router_context.extended
-                    || (context.shards > 1 && context.shards_calculator.shard().is_direct())
-                {
+                let no_sharding = context.shards == 1;
+                // Postgres will abort a multi-statement extended protocol execution,
+                // we don't need to worry about it.
+                let extended = context.router_context.extended;
+
+                // /* pgdog_shard */ manual override makes this a safe, direct-to-shard query
+                // without splitting.
+                let comment_override =
+                    context.shards > 1 && context.shards_calculator.shard().is_direct();
+
+                if no_sharding || extended || comment_override {
                     Ok(None)
-                } else if Self::split_execution_no_transaction_safe(ast) {
+                } else if check.no_txn_dml == 0 && !check.open_txn {
                     Ok(Some(Self::split(ast)?))
                 } else {
                     Err(Error::MultiStatementSafety)
                 }
             }
             Err(Error::MultiStatementMixedSet) => {
-                if !Self::split_execution_no_transaction_safe(ast) {
+                let check = Self::split_execution_no_transaction_safe(ast);
+                if check.statements() != 0 {
                     Err(Error::MultiStatementSafety)
                 } else {
                     Ok(Some(Self::split(ast)?))
@@ -77,8 +84,8 @@ impl QueryParser {
     //
     // TODO(lev): start implicit transaction for multi-statement queries.
     //
-    fn split_execution_no_transaction_safe(ast: &Ast) -> bool {
-        let mut stmts = 0;
+    fn split_execution_no_transaction_safe(ast: &Ast) -> CheckResult {
+        let mut check = CheckResult::default();
         let mut txn_stmts = 0;
         let mut inside_txn = false;
 
@@ -101,14 +108,40 @@ impl QueryParser {
                 Node::DeallocateStmt(_) => (),
                 Node::VacuumRelation(_) | Node::VacuumStmt(_) => (),
                 Node::PrepareStmt(_) => (), // We intercept prepared statements and handle them ourselves.
+                Node::SelectStmt(_)
+                | Node::InsertStmt(_)
+                | Node::UpdateStmt(_)
+                | Node::DeleteStmt(_) => {
+                    if !inside_txn {
+                        check.no_txn_dml += 1;
+                    }
+                }
                 _ => {
                     if !inside_txn {
-                        stmts += 1;
+                        check.no_txn_ddl += 1;
                     }
                 }
             }
         }
 
-        stmts <= 1 && txn_stmts % 2 == 0
+        check.open_txn = txn_stmts % 2 != 0;
+
+        check
+    }
+}
+
+#[derive(Default)]
+struct CheckResult {
+    no_txn_dml: u32,
+    no_txn_ddl: u32,
+    open_txn: bool,
+}
+
+impl CheckResult {
+    // Any statements executed outside an explicit
+    // transaction cannot be safely replayed without us
+    // starting another transaction.
+    fn statements(&self) -> u32 {
+        self.no_txn_dml + self.no_txn_ddl
     }
 }
