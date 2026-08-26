@@ -24,7 +24,6 @@ use crate::backend::{
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
-use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext, QueryEngineResult};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
@@ -39,6 +38,7 @@ pub mod sticky;
 pub mod timeouts;
 pub mod transaction_type;
 
+use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
 pub use transaction_type::TransactionType;
 
@@ -559,6 +559,8 @@ impl Client {
         query_engine: &mut QueryEngine,
         message: Message,
     ) -> Result<(), Error> {
+        use query_engine::QueryEngineContext;
+
         let mut context = QueryEngineContext::new(self);
         query_engine
             .process_server_message(&mut context, message)
@@ -589,6 +591,7 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        use query_engine::{Pipeline, QueryEngineContext, QueryEngineResult};
         self.check_maintenance_mode(query_engine).await;
 
         match query_engine
@@ -596,15 +599,17 @@ impl Client {
             .await?
         {
             QueryEngineResult::Done(transaction) => self.transaction = transaction,
-            QueryEngineResult::Split(requests) => {
+            QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
-                self.transaction.get_or_insert(TransactionType::Implicit);
+                if extended {
+                    self.transaction.get_or_insert(TransactionType::Implicit);
+                }
 
                 while let Some(mut request) = requests.next() {
                     match query_engine
                         .handle(
                             &mut QueryEngineContext::new(self)
-                                .extended_pipeline(&mut request, requests.len()),
+                                .pipelined(&mut request, Pipeline::new(requests.len(), extended)),
                         )
                         .await?
                     {

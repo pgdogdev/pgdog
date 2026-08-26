@@ -76,15 +76,9 @@ async fn test_multi_set_mixed_returns_error() {
     for pool in connections_sqlx().await {
         let mut conn = pool.acquire().await.unwrap();
 
-        let err = conn
-            .execute("SET statement_timeout TO '10s'; SELECT 1")
+        conn.execute("SET statement_timeout TO '10s'; SELECT 1")
             .await
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("multi-statement queries cannot mix SET with other commands"),
-            "unexpected error: {err}",
-        );
+            .unwrap();
 
         // Connection should still be usable after the error.
         let val: String = sqlx::query_scalar("SHOW server_version")

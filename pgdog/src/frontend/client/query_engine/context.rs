@@ -8,6 +8,8 @@ use crate::{
     net::{FrontendPid, Parameters, Stream},
 };
 
+use super::split::Pipeline;
+
 /// Context passed to the query engine to execute a query.
 pub struct QueryEngineContext<'a> {
     /// Client ID running the query.
@@ -19,7 +21,7 @@ pub struct QueryEngineContext<'a> {
     /// Request.
     pub(super) client_request: &'a mut ClientRequest,
     /// How many requests are left to execute in an extended pipeline.
-    pub(super) extended_pipeline_requests_left: usize,
+    pub(super) pipeline: Pipeline,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -59,7 +61,7 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats,
             admin: client.admin,
-            extended_pipeline_requests_left: 0,
+            pipeline: Pipeline::None,
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
@@ -70,13 +72,9 @@ impl<'a> QueryEngineContext<'a> {
 
     /// The request is an extended protocol pipeline
     /// with a counter of how many requests are left to process.
-    pub(crate) fn extended_pipeline(
-        mut self,
-        req: &'a mut ClientRequest,
-        request_left: usize,
-    ) -> Self {
+    pub(crate) fn pipelined(mut self, req: &'a mut ClientRequest, pipeline: Pipeline) -> Self {
         self.client_request = req;
-        self.extended_pipeline_requests_left = request_left;
+        self.pipeline = pipeline;
         self
     }
 
@@ -93,7 +91,7 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats: MemoryStats::default(),
             admin: false,
-            extended_pipeline_requests_left: 0,
+            pipeline: Pipeline::None,
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,

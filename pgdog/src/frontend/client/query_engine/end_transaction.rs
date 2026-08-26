@@ -24,7 +24,10 @@ impl QueryEngine {
                 vec![]
             };
             messages.push(cmd.message());
-            messages.push(ReadyForQuery::idle().message());
+
+            if context.pipeline.is_done() || !context.pipeline.is_simple() {
+                messages.push(ReadyForQuery::idle().message());
+            }
 
             context.stream.send_many(&messages).await?
         };

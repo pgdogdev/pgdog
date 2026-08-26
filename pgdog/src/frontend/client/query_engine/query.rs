@@ -29,6 +29,12 @@ impl QueryEngine {
             return Ok(());
         }
 
+        // Skip statements inside a simple pipeline
+        // if we are inside an errored-out transaction.
+        if self.in_simple_pipeline_error(context) {
+            return Ok(());
+        }
+
         // Check if we need to do 2pc automatically
         // for single-statement writes.
         self.two_pc_check(context);
@@ -238,12 +244,20 @@ impl QueryEngine {
         // Do this before flushing, because flushing can take time.
         self.cleanup_backend(context)?;
 
-        trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
+        // Pipelined requests only return
+        // one ReadyForQuery message.
+        let drop_message = message.code() == 'Z'
+            && !context.pipeline.is_done()
+            && context.pipeline.is_simple()
+            && !context.in_error(); // On error, pipeline is done executing.
+        if !drop_message {
+            trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
-        if flush {
-            context.stream.send_flush(&message).await?;
-        } else {
-            context.stream.send(&message).await?;
+            if flush {
+                context.stream.send_flush(&message).await?;
+            } else {
+                context.stream.send(&message).await?;
+            }
         }
 
         if code == 'Z' {
@@ -291,7 +305,7 @@ impl QueryEngine {
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
-            if !self.backend.session_mode() && context.extended_pipeline_requests_left == 0 {
+            if !self.backend.session_mode() && context.pipeline.is_done() {
                 self.backend.disconnect();
             }
 

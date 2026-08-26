@@ -47,6 +47,7 @@ pub(crate) use advisory_lock::AdvisoryLocks;
 pub use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
+pub(crate) use split::Pipeline;
 use two_pc::TwoPc;
 pub use two_pc::phase::TwoPcPhase;
 
@@ -119,7 +120,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
-        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
+        if let Some(result) = Self::check_extended_pipeline_rewrite(context.client_request)? {
             return Ok(result);
         }
 
@@ -127,7 +128,7 @@ impl QueryEngine {
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
-        if self.extended_in_sync_check(context) {
+        if self.in_extended_pipeline_error(context) {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
@@ -267,14 +268,7 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
-            Command::Split(_) => {
-                use crate::frontend::router::parser::Error as ParserError;
-                self.error_response(
-                    context,
-                    ErrorResponse::from_err(&Error::Parser(ParserError::MultiStatementMixedSet)),
-                )
-                .await?;
-            }
+            Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 
         self.hooks.after_execution(context)?;

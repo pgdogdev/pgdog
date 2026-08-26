@@ -336,7 +336,7 @@ impl QueryParser {
             .run()?;
         }
 
-        if let Some(command) = self.check_multi_statement(statement, context)? {
+        if let Some(command) = self.check_multi_query_statement(statement, context)? {
             return Ok(command);
         }
 
