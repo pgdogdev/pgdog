@@ -36,7 +36,7 @@ impl QueryEngine {
                     param.value = Some(value.with_client_host(&host));
                 }
             }
-            if !behave_like_select {
+            if !set_config {
                 rewrite_application_name_query(context.client_request, &params);
             }
         }
