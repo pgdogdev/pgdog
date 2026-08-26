@@ -41,12 +41,16 @@ impl QueryParser {
 
                 // /* pgdog_shard */ manual override makes this a safe, direct-to-shard query
                 // without splitting.
-                let comment_override =
+                let direct_to_shard =
                     context.shards > 1 && context.shards_calculator.shard().is_direct();
 
-                if no_sharding || extended || comment_override {
+                let safe_not_to_split =
+                    no_sharding || extended || direct_to_shard || check.only_ddl();
+
+                if safe_not_to_split {
+                    // Safe to use the first statement for routing.
                     Ok(None)
-                } else if check.no_txn_dml == 0 && !check.open_txn {
+                } else if check.no_txn_dml <= 1 && !check.open_txn {
                     Ok(Some(Self::split(ast)?))
                 } else {
                     Err(Error::MultiStatementSafety)
@@ -54,7 +58,7 @@ impl QueryParser {
             }
             Err(Error::MultiStatementMixedSet) => {
                 let check = Self::split_execution_no_transaction_safe(ast);
-                if check.statements() != 0 {
+                if check.statements() > 1 {
                     Err(Error::MultiStatementSafety)
                 } else {
                     Ok(Some(Self::split(ast)?))
@@ -126,16 +130,18 @@ impl QueryParser {
         }
 
         check.open_txn = txn_stmts % 2 != 0;
+        check.txn = txn_stmts / 2;
 
         check
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CheckResult {
     no_txn_dml: u32,
     no_txn_ddl: u32,
     open_txn: bool,
+    txn: u32,
 }
 
 impl CheckResult {
@@ -144,5 +150,13 @@ impl CheckResult {
     // starting another transaction.
     fn statements(&self) -> u32 {
         self.no_txn_dml + self.no_txn_ddl
+    }
+
+    fn no_transactions(&self) -> bool {
+        self.txn == 0 && !self.open_txn
+    }
+
+    fn only_ddl(&self) -> bool {
+        self.no_txn_dml == 0 && self.no_transactions()
     }
 }
