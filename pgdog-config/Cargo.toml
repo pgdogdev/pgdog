@@ -16,6 +16,7 @@ pgdog-vector = { path = "../pgdog-vector" }
 once_cell = "*"
 schemars.workspace = true
 indexmap.workspace = true
+serde_with.workspace = true
 derive_more = { workspace = true, features = ["from_str"] }
 
 [dev-dependencies]

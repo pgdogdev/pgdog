@@ -200,7 +200,7 @@ impl TestClient {
 
     pub(crate) fn with_full_prepared_statements(self) -> Self {
         let mut config = config().deref().clone();
-        config.config.general.prepared_statements = pgdog_config::PreparedStatements::Full;
+        config.config.general.prepared_statements = pgdog_config::PreparedStatementsLevel::Full;
         set(config).unwrap();
         reload_from_existing().unwrap();
         self

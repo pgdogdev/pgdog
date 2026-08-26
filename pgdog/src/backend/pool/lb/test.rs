@@ -31,22 +31,20 @@ fn test_addr(host: &str, port: u16) -> Address {
     }
 }
 
-fn test_config(config: pgdog_stats::Config) -> Config {
+fn test_config(config: Config) -> Config {
     Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            checkout_timeout: Duration::from_millis(1000),
-            ban_timeout: Duration::from_millis(100),
-            ..config
-        },
+        max: 1,
+        checkout_timeout: Duration::from_millis(1000),
+        ban_timeout: Duration::from_millis(100),
+        ..config
     }
 }
 
 fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
     let mut config = create_test_pool_config(host, port);
     config.address.configured_role = Role::Auto;
-    config.config.inner.role_detection = true;
-    config.config.inner.checkout_timeout = Duration::from_millis(50);
+    config.config.role_detection = true;
+    config.config.checkout_timeout = Duration::from_millis(50);
     config
 }
 
@@ -991,12 +989,10 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -1010,12 +1006,10 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -1492,7 +1486,7 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
 #[tokio::test]
 async fn test_auto_mode_waits_for_primary_election() {
     let mut config = create_auto_test_pool_config("127.0.0.1", 5432);
-    config.config.inner.checkout_timeout = Duration::from_millis(10);
+    config.config.checkout_timeout = Duration::from_millis(10);
 
     let lb = LoadBalancer::new(
         &None,
@@ -1721,13 +1715,11 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::from_millis(100),
-                lb_weight,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::from_millis(100),
+            lb_weight,
+            ..Config::default()
         },
     }
 }
@@ -2141,12 +2133,10 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -2160,12 +2150,10 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -2499,7 +2487,7 @@ async fn ban_new_targets_until_health_check() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
         address: test_addr("localhost", 2345),
-        config: test_config(pgdog_stats::Config {
+        config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()
         }),
@@ -2544,7 +2532,7 @@ async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
         address: test_addr("localhost", 2345),
-        config: test_config(pgdog_stats::Config {
+        config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()
         }),

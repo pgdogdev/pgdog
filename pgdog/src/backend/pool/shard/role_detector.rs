@@ -68,10 +68,8 @@ mod test {
                 ..Default::default()
             },
             config: Config {
-                inner: pgdog_stats::Config {
-                    role_detection,
-                    ..Config::default().inner
-                },
+                role_detection,
+                ..Config::default()
             },
         }
     }
