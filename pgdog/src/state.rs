@@ -1,3 +1,3 @@
 //! Connection state.
 
-pub use pgdog_stats::state::State;
+pub(crate) use pgdog_stats::state::State;

@@ -6,7 +6,7 @@ use super::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::sharding;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("Error parsing query: {0}")]
     Parse(#[from] pg_raw_parse::Error),
 

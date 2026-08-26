@@ -4,7 +4,7 @@ use crate::backend::replication::logical::Error as ReplicationError;
 
 use super::prelude::*;
 
-pub struct Cutover {
+pub(crate) struct Cutover {
     task_id: Option<TaskId>,
 }
 

@@ -14,12 +14,12 @@ use tracing::warn;
 
 use crate::net::Parameters; // 0.8
 
-pub fn format_time(time: DateTime<Local>) -> String {
+pub(crate) fn format_time(time: DateTime<Local>) -> String {
     time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
 }
 
 /// Convert Duration to milliseconds with 3 decimal places precision.
-pub fn millis(duration: Duration) -> f64 {
+pub(crate) fn millis(duration: Duration) -> f64 {
     (duration.as_secs_f64() * 1_000_000.0).round() / 1000.0
 }
 
@@ -33,13 +33,13 @@ pub fn millis(duration: Duration) -> f64 {
 /// byte by byte (cf. PostgreSQL CVE-2026-6478, the MD5 password comparison).
 ///
 /// Length is not treated as secret: a length mismatch returns `false` early.
-pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     aws_lc_rs::constant_time::verify_slices_are_equal(a, b).is_ok()
 }
 
 /// Get a human-readable duration for amounts that
 /// a human would use.
-pub fn human_duration(duration: Duration) -> String {
+pub(crate) fn human_duration(duration: Duration) -> String {
     let second = 1000;
     let minute = second * 60;
     let hour = minute * 60;
@@ -73,7 +73,7 @@ pub fn human_duration(duration: Duration) -> String {
 
 /// Get a human-readable duration split into days and hh:mm:ss:ms.
 /// Example: "2d 03:15:42:100" or "00:05:30:250"
-pub fn human_duration_display(duration: Duration) -> String {
+pub(crate) fn human_duration_display(duration: Duration) -> String {
     let total_secs = duration.as_secs();
     let days = total_secs / 86400;
     let hours = (total_secs % 86400) / 3600;
@@ -95,7 +95,7 @@ pub fn human_duration_display(duration: Duration) -> String {
 static POSTGRES_EPOCH: i64 = 946684800000000000;
 
 /// Number of microseconds since Postgres epoch.
-pub fn postgres_now() -> i64 {
+pub(crate) fn postgres_now() -> i64 {
     let start = DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset();
     let now = Utc::now().fixed_offset();
     // Panic if overflow.
@@ -103,7 +103,7 @@ pub fn postgres_now() -> i64 {
 }
 
 /// Generate a random string of length n.
-pub fn random_string(n: usize) -> String {
+pub(crate) fn random_string(n: usize) -> String {
     rand::rng()
         .sample_iter(&Alphanumeric)
         .take(n)
@@ -128,7 +128,7 @@ static INSTANCE_ID: Lazy<String> = Lazy::new(|| {
 
 /// Get the instance ID for this pgdog instance.
 /// This is generated once at startup and persists for the lifetime of the process.
-pub fn instance_id() -> &'static str {
+pub(crate) fn instance_id() -> &'static str {
     &INSTANCE_ID
 }
 
@@ -140,7 +140,7 @@ pub fn instance_id() -> &'static str {
 ///
 /// Returns `None` when `NODE_ID` is unset, or when it does not end in a
 /// number.
-pub fn node_id() -> Option<u64> {
+pub(crate) fn node_id() -> Option<u64> {
     let node_id = env::var("NODE_ID").ok()?;
     let digits = node_id
         .rsplit_once('-')
@@ -166,17 +166,17 @@ static HOSTNAME: Lazy<String> = Lazy::new(|| {
     if hostname.is_empty() { host } else { hostname }
 });
 
-pub fn hostname() -> &'static str {
+pub(crate) fn hostname() -> &'static str {
     &HOSTNAME
 }
 
 /// Escape PostgreSQL identifiers by doubling any embedded quotes.
-pub fn escape_identifier(s: &str) -> String {
+pub(crate) fn escape_identifier(s: &str) -> String {
     s.replace("\"", "\"\"")
 }
 
 /// Get PgDog's version string.
-pub fn pgdog_version() -> String {
+pub(crate) fn pgdog_version() -> String {
     format!(
         "v{} [main@{}, pgdog-plugin {}, {}]",
         env!("CARGO_PKG_VERSION"),
@@ -188,7 +188,7 @@ pub fn pgdog_version() -> String {
 
 /// Format a number with commas for readability.
 /// Example: 1234567 -> "1,234,567"
-pub fn number_human(n: u64) -> String {
+pub(crate) fn number_human(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
     for (i, c) in s.chars().rev().enumerate() {
@@ -201,7 +201,7 @@ pub fn number_human(n: u64) -> String {
 }
 
 /// Format a byte count into a human-readable string.
-pub fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
@@ -232,7 +232,7 @@ pub fn format_bytes(bytes: u64) -> String {
 ///
 /// Tuple of (user, database).
 ///
-pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
+pub(crate) fn user_database_from_params(params: &Parameters) -> (&str, &str) {
     let user = params.get_default("user", "postgres");
     let database = params.get_default("database", user);
 
@@ -246,7 +246,7 @@ pub fn user_database_from_params(params: &Parameters) -> (&str, &str) {
 /// errors under load. Raising the soft limit on startup avoids this.
 /// Raise the NOFILE soft limit to the hard limit and return the new value.
 #[cfg(unix)]
-pub fn raise_nofile_limit() -> u64 {
+pub(crate) fn raise_nofile_limit() -> u64 {
     use libc::{RLIMIT_NOFILE, getrlimit, rlimit, setrlimit};
     use tracing::warn;
 
@@ -281,13 +281,13 @@ pub fn raise_nofile_limit() -> u64 {
 }
 
 #[cfg(not(unix))]
-pub fn raise_nofile_limit() -> u64 {
+pub(crate) fn raise_nofile_limit() -> u64 {
     0
 }
 
 /// Truncate `s` to at most `limit` bytes, rounding down to the nearest UTF-8
 /// character boundary so the result is always valid UTF-8.
-pub fn truncate_utf8(s: &str, limit: usize) -> &str {
+pub(crate) fn truncate_utf8(s: &str, limit: usize) -> &str {
     &s[..s.floor_char_boundary(limit)]
 }
 
@@ -295,7 +295,7 @@ pub fn truncate_utf8(s: &str, limit: usize) -> &str {
 /// `limit` bytes on a UTF-8 character boundary and replace control
 /// characters (including newlines) with spaces so attacker-controlled
 /// bytes can't forge or flood log lines.
-pub fn sanitize_log_sample(s: &str, limit: usize) -> String {
+pub(crate) fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
 }
 

@@ -6,7 +6,7 @@ use std::time::Duration;
 /// Run prepared statements maintenance task every second.
 ///
 /// Public because it's used in main.rs.
-pub fn start_maintenance() {
+pub(crate) fn start_maintenance() {
     spawn("prepared statements cache", async move {
         debug!("prepared statements cache maintenance started");
         let shutdown = shutdown_signal();

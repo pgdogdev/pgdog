@@ -1,10 +1,10 @@
 //! Query hooks.
 #![allow(unused_variables, dead_code)] // used in EE
 use super::*;
-pub mod schema;
+pub(crate) mod schema;
 
 #[derive(Debug)]
-pub struct QueryEngineHooks;
+pub(crate) struct QueryEngineHooks;
 
 impl Default for QueryEngineHooks {
     fn default() -> Self {

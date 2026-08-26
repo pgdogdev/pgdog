@@ -17,23 +17,23 @@ use crate::frontend::router::cli::RouterCli;
 /// PgDog is a PostgreSQL pooler, proxy, load balancer and query router.
 #[derive(Parser, Debug)]
 #[command(name = "", version = concat!("PgDog v", env!("GIT_HASH")))]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Path to the configuration file. Default: "pgdog.toml"
     #[arg(short, long, default_value = "pgdog.toml")]
-    pub config: PathBuf,
+    pub(crate) config: PathBuf,
     /// Path to the users.toml file. Default: "users.toml"
     #[arg(short, long, default_value = "users.toml")]
-    pub users: PathBuf,
+    pub(crate) users: PathBuf,
     /// Connection URL.
     #[arg(short, long)]
-    pub database_url: Option<Vec<String>>,
+    pub(crate) database_url: Option<Vec<String>>,
     /// Subcommand.
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub(crate) command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Start PgDog.
     Run {
         /// Size of the connection pool.
@@ -173,7 +173,7 @@ pub enum Commands {
 
 /// Generate and print a SCRAM-SHA-256 hash from a plaintext password.
 #[allow(clippy::print_stdout)]
-pub fn hash_password(password: &str) {
+pub(crate) fn hash_password(password: &str) {
     use rand::Rng;
 
     let salt: [u8; 16] = rand::rng().random();
@@ -209,7 +209,9 @@ where
 }
 
 /// FOR TESTING PURPOSES ONLY.
-pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn replicate_and_cutover(
+    commands: Commands,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::ReplicateAndCutover {
         from_database,
         to_database,
@@ -236,7 +238,7 @@ pub async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std
     Ok(())
 }
 
-pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::DataSync {
         from_database,
         to_database,
@@ -264,7 +266,7 @@ pub async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::SchemaSync {
         from_database,
         to_database,
@@ -301,7 +303,7 @@ pub async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
     let databases = databases();
     let schema_owner = databases.schema_owner(database)?;
 
@@ -310,7 +312,7 @@ pub async fn setup(database: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn route(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn route(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::Route {
         user,
         database,

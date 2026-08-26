@@ -1,17 +1,17 @@
-pub mod copy_statement;
-pub mod ee;
-pub mod error;
-pub mod orchestrator;
-pub mod publisher;
-pub mod status;
-pub mod subscriber;
+pub(crate) mod copy_statement;
+pub(crate) mod ee;
+pub(crate) mod error;
+pub(crate) mod orchestrator;
+pub(crate) mod publisher;
+pub(crate) mod status;
+pub(crate) mod subscriber;
 
-pub use copy_statement::CopyStatement;
-pub use error::*;
+pub(crate) use copy_statement::CopyStatement;
+pub(crate) use error::*;
 
 use ee::*;
 use orchestrator::*;
-pub use publisher::publisher_impl::{Publisher, Waiter};
+pub(crate) use publisher::publisher_impl::{Publisher, Waiter};
 
 use crate::{
     backend::{

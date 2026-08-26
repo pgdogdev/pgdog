@@ -11,7 +11,7 @@ use crate::{
 use super::split::Pipeline;
 
 /// Context passed to the query engine to execute a query.
-pub struct QueryEngineContext<'a> {
+pub(crate) struct QueryEngineContext<'a> {
     /// Client ID running the query.
     pub(super) id: FrontendPid,
     /// Prepared statements cache.
@@ -47,7 +47,7 @@ pub struct QueryEngineContext<'a> {
 }
 
 impl<'a> QueryEngineContext<'a> {
-    pub fn new(client: &'a mut Client) -> Self {
+    pub(crate) fn new(client: &'a mut Client) -> Self {
         let memory_stats = client.memory_stats();
 
         Self {
@@ -79,7 +79,7 @@ impl<'a> QueryEngineContext<'a> {
     }
 
     /// Create context from mirror.
-    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
+    pub(crate) fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
@@ -100,15 +100,15 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<TransactionType> {
         self.transaction
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
-    pub fn in_error(&self) -> bool {
+    pub(crate) fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
     }
 }

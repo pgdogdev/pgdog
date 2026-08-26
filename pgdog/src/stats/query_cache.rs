@@ -8,14 +8,14 @@ use crate::{
 
 use super::*;
 
-pub struct QueryCacheMetric {
+pub(crate) struct QueryCacheMetric {
     name: String,
     help: String,
     value: usize,
     gauge: bool,
 }
 
-pub struct QueryCache {
+pub(crate) struct QueryCache {
     stats: Stats,
     len: usize,
     prepared_statements: usize,

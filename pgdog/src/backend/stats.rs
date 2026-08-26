@@ -6,7 +6,7 @@ use std::sync::Arc;
 use fnv::FnvHashMap as HashMap;
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
-pub use pgdog_stats::server::Counts;
+pub(crate) use pgdog_stats::server::Counts;
 use tokio::time::Instant;
 
 use crate::{
@@ -25,12 +25,12 @@ static STATS: Lazy<RwLock<HashMap<BackendPid, Arc<Mutex<ConnectedServer>>>>> =
     Lazy::new(|| RwLock::new(HashMap::default()));
 
 /// Get a snapshot of all connected-server stats.
-pub fn stats() -> Vec<ConnectedServer> {
+pub(crate) fn stats() -> Vec<ConnectedServer> {
     STATS.read().values().map(|v| v.lock().clone()).collect()
 }
 
 /// Get idle-in-transaction server connections for connection pool.
-pub fn idle_in_transaction(pool: &Pool) -> usize {
+pub(crate) fn idle_in_transaction(pool: &Pool) -> usize {
     STATS
         .read()
         .values()
@@ -43,13 +43,13 @@ pub fn idle_in_transaction(pool: &Pool) -> usize {
 
 /// Core server statistics (shared between local and global).
 #[derive(Clone, Debug, Copy)]
-pub struct ServerStats {
-    pub inner: pgdog_stats::server::Stats,
-    pub id: BackendPid,
-    pub last_used: Instant,
-    pub last_healthcheck: Option<Instant>,
-    pub created_at: Instant,
-    pub client_id: Option<FrontendPid>,
+pub(crate) struct ServerStats {
+    pub(crate) inner: pgdog_stats::server::Stats,
+    pub(crate) id: BackendPid,
+    pub(crate) last_used: Instant,
+    pub(crate) last_healthcheck: Option<Instant>,
+    pub(crate) created_at: Instant,
+    pub(crate) client_id: Option<FrontendPid>,
     query_timer: Option<Instant>,
     transaction_timer: Option<Instant>,
     idle_in_transaction_timer: Option<Instant>,
@@ -94,10 +94,10 @@ impl DerefMut for ServerStats {
 
 /// Connected server (shared globally).
 #[derive(Clone, Debug)]
-pub struct ConnectedServer {
-    pub stats: ServerStats,
-    pub addr: Address,
-    pub application_name: String,
+pub(crate) struct ConnectedServer {
+    pub(crate) stats: ServerStats,
+    pub(crate) addr: Address,
+    pub(crate) application_name: String,
 }
 
 /// Server statistics handle.
@@ -106,14 +106,14 @@ pub struct ConnectedServer {
 /// and a reference to shared stats for global visibility.
 /// Syncs local to shared on I/O operations.
 #[derive(Clone, Debug)]
-pub struct Stats {
+pub(crate) struct Stats {
     local: ServerStats,
     shared: Arc<Mutex<ConnectedServer>>,
 }
 
 impl Stats {
     /// Register new server with statistics.
-    pub fn connect(
+    pub(crate) fn connect(
         id: BackendPid,
         addr: &Address,
         params: &Parameters,
@@ -153,7 +153,7 @@ impl Stats {
         self.sync_to_shared();
     }
 
-    pub fn link_client(&mut self, client_name: &str, server_name: &str, id: FrontendPid) {
+    pub(crate) fn link_client(&mut self, client_name: &str, server_name: &str, id: FrontendPid) {
         self.local.client_id = Some(id);
         if client_name != server_name {
             let mut guard = self.shared.lock();
@@ -163,7 +163,7 @@ impl Stats {
         }
     }
 
-    pub fn parse_complete(&mut self) {
+    pub(crate) fn parse_complete(&mut self) {
         self.local.total.parse += 1;
         self.local.last_checkout.parse += 1;
         self.local.total.prepared_statements += 1;
@@ -171,31 +171,31 @@ impl Stats {
     }
 
     /// Overwrite how many prepared statements we have in the cache for stats.
-    pub fn set_prepared_statements(&mut self, size: usize) {
+    pub(crate) fn set_prepared_statements(&mut self, size: usize) {
         self.local.total.prepared_statements = size;
         self.local.total.prepared_sync += 1;
         self.local.last_checkout.prepared_sync += 1;
         self.sync_to_shared();
     }
 
-    pub fn close_many(&mut self, closed: usize, size: usize) {
+    pub(crate) fn close_many(&mut self, closed: usize, size: usize) {
         self.local.total.prepared_statements = size;
         self.local.total.close += closed;
         self.local.last_checkout.close += closed;
         self.sync_to_shared();
     }
 
-    pub fn copy_mode(&mut self) {
+    pub(crate) fn copy_mode(&mut self) {
         self.state(State::CopyMode);
     }
 
-    pub fn bind_complete(&mut self) {
+    pub(crate) fn bind_complete(&mut self) {
         self.local.total.bind += 1;
         self.local.last_checkout.bind += 1;
     }
 
     /// Record rows affected from a Postgres CommandComplete message.
-    pub fn rows_affected(&mut self, cmd: &CommandComplete) {
+    pub(crate) fn rows_affected(&mut self, cmd: &CommandComplete) {
         let Ok(Some(rows)) = cmd.rows() else {
             return;
         };
@@ -217,29 +217,29 @@ impl Stats {
     }
 
     /// A transaction has been completed.
-    pub fn transaction(&mut self, now: Instant) {
+    pub(crate) fn transaction(&mut self, now: Instant) {
         self.transaction_state(now, State::Idle);
     }
 
     /// Increment two-phase commit transaction count.
-    pub fn transaction_2pc(&mut self) {
+    pub(crate) fn transaction_2pc(&mut self) {
         self.local.last_checkout.transactions_2pc += 1;
         self.local.total.transactions_2pc += 1;
     }
 
     /// Error occurred in a transaction.
-    pub fn transaction_error(&mut self, now: Instant) {
+    pub(crate) fn transaction_error(&mut self, now: Instant) {
         self.transaction_state(now, State::TransactionError);
     }
 
     /// An error occurred in general.
-    pub fn error(&mut self) {
+    pub(crate) fn error(&mut self) {
         self.local.total.errors += 1;
         self.local.last_checkout.errors += 1;
     }
 
     /// A query has been completed.
-    pub fn query(&mut self, now: Instant, idle_in_transaction: bool) {
+    pub(crate) fn query(&mut self, now: Instant, idle_in_transaction: bool) {
         self.local.total.queries += 1;
         self.local.last_checkout.queries += 1;
 
@@ -260,7 +260,7 @@ impl Stats {
     }
 
     /// Manual state change.
-    pub fn state(&mut self, state: State) {
+    pub(crate) fn state(&mut self, state: State) {
         if self.local.state != state {
             self.local.state = state;
             if state == State::Active {
@@ -283,7 +283,7 @@ impl Stats {
     }
 
     /// Send bytes to server - syncs to shared for real-time visibility.
-    pub fn send(&mut self, bytes: usize, code: u8) {
+    pub(crate) fn send(&mut self, bytes: usize, code: u8) {
         self.local.total.bytes_sent += bytes;
         self.local.last_checkout.bytes_sent += bytes;
         self.local.last_sent = code;
@@ -291,7 +291,7 @@ impl Stats {
     }
 
     /// Receive bytes from server - syncs to shared for real-time visibility.
-    pub fn receive(&mut self, bytes: usize, code: u8) {
+    pub(crate) fn receive(&mut self, bytes: usize, code: u8) {
         self.local.total.bytes_received += bytes;
         self.local.last_checkout.bytes_received += bytes;
         self.local.last_received = code;
@@ -299,7 +299,7 @@ impl Stats {
     }
 
     /// Track healthchecks.
-    pub fn healthcheck(&mut self) {
+    pub(crate) fn healthcheck(&mut self) {
         self.local.total.healthchecks += 1;
         self.local.last_checkout.healthchecks += 1;
         self.local.last_healthcheck = Some(Instant::now());
@@ -307,18 +307,18 @@ impl Stats {
     }
 
     #[inline]
-    pub fn memory_used(&mut self, stats: MemoryStats) {
+    pub(crate) fn memory_used(&mut self, stats: MemoryStats) {
         self.local.memory = *stats;
     }
 
     #[inline]
-    pub fn cleaned(&mut self) {
+    pub(crate) fn cleaned(&mut self) {
         self.local.last_checkout.cleaned += 1;
         self.local.total.cleaned += 1;
     }
 
     /// Track rollbacks.
-    pub fn rollback(&mut self) {
+    pub(crate) fn rollback(&mut self) {
         self.local.total.rollbacks += 1;
         self.local.last_checkout.rollbacks += 1;
         self.sync_to_shared();
@@ -330,7 +330,7 @@ impl Stats {
     }
 
     /// Reset last_checkout counts.
-    pub fn reset_last_checkout(&mut self) -> Counts {
+    pub(crate) fn reset_last_checkout(&mut self) -> Counts {
         let counts = self.local.last_checkout;
         self.local.last_checkout = Counts::default();
         counts
@@ -340,38 +340,38 @@ impl Stats {
 
     /// Get current state (local, no lock).
     #[inline]
-    pub fn get_state(&self) -> State {
+    pub(crate) fn get_state(&self) -> State {
         self.local.state
     }
 
     /// Get created_at timestamp (local, no lock).
     #[inline]
-    pub fn created_at(&self) -> Instant {
+    pub(crate) fn created_at(&self) -> Instant {
         self.local.created_at
     }
 
     /// Get last_used timestamp (local, no lock).
     #[inline]
-    pub fn last_used(&self) -> Instant {
+    pub(crate) fn last_used(&self) -> Instant {
         self.local.last_used
     }
 
     /// Get last_healthcheck timestamp (local, no lock).
     #[inline]
-    pub fn last_healthcheck(&self) -> Option<Instant> {
+    pub(crate) fn last_healthcheck(&self) -> Option<Instant> {
         self.local.last_healthcheck
     }
 
     /// Get pool_id (local, no lock).
     #[inline]
     #[cfg(test)]
-    pub fn pool_id(&self) -> u64 {
+    pub(crate) fn pool_id(&self) -> u64 {
         self.local.pool_id
     }
 
     /// Set pool_id.
     #[inline]
-    pub fn set_pool_id(&mut self, pool_id: u64) {
+    pub(crate) fn set_pool_id(&mut self, pool_id: u64) {
         self.local.pool_id = pool_id;
         self.shared.lock().stats.pool_id = pool_id;
     }
@@ -379,26 +379,26 @@ impl Stats {
     /// Get total counts (local, no lock).
     #[inline]
     #[cfg(test)]
-    pub fn total(&self) -> Counts {
+    pub(crate) fn total(&self) -> Counts {
         self.local.total
     }
 
     /// Get last_checkout counts (local, no lock).
     #[inline]
     #[cfg(test)]
-    pub fn last_checkout(&self) -> Counts {
+    pub(crate) fn last_checkout(&self) -> Counts {
         self.local.last_checkout
     }
 
     /// Clear client_id.
     #[inline]
-    pub fn clear_client_id(&mut self) {
+    pub(crate) fn clear_client_id(&mut self) {
         self.local.client_id = None;
     }
 
     /// Legacy update method - syncs local to shared.
     #[inline]
-    pub fn update(&self) {
+    pub(crate) fn update(&self) {
         self.sync_to_shared();
     }
 }

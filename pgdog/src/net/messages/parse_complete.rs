@@ -3,7 +3,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct ParseComplete;
+pub(crate) struct ParseComplete;
 
 impl FromBytes for ParseComplete {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

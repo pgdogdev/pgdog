@@ -8,7 +8,7 @@ use crate::tasks;
 use crate::util::safe_sleep;
 
 #[derive(Debug, Clone)]
-pub struct Logger {
+pub(crate) struct Logger {
     interval: Duration,
 }
 
@@ -19,13 +19,13 @@ impl Default for Logger {
 }
 
 impl Logger {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             interval: Duration::from_secs(10),
         }
     }
 
-    pub fn spawn(&self) {
+    pub(crate) fn spawn(&self) {
         let me = self.clone();
 
         tasks::spawn("stats logger", async move {

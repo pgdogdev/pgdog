@@ -10,7 +10,7 @@ use crate::backend::schema::sync::pg_dump::SyncState;
 use pgdog_stats::{SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr)]
-pub enum SchemaSyncPhase {
+pub(crate) enum SchemaSyncPhase {
     #[display("pre")]
     Pre,
     #[display("post")]
@@ -32,12 +32,12 @@ impl From<SchemaSyncPhase> for SyncState {
 /// Sync the schema (pre-data, post-data, or cutover) from a source database to a target.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct SchemaSyncTask {
-    pub orchestrator: Orchestrator,
-    pub phase: SchemaSyncPhase,
+    pub(crate) orchestrator: Orchestrator,
+    pub(crate) phase: SchemaSyncPhase,
     #[builder(default)]
-    pub ignore_errors: bool,
+    pub(crate) ignore_errors: bool,
     #[builder(default)]
-    pub dry_run: bool,
+    pub(crate) dry_run: bool,
 }
 
 impl Task for SchemaSyncTask {

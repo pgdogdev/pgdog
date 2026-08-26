@@ -45,19 +45,19 @@ static DATABASES: Lazy<ArcSwap<Databases>> =
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Sync databases during modification.
-pub fn lock() -> MutexGuard<'static, RawMutex, ()> {
+pub(crate) fn lock() -> MutexGuard<'static, RawMutex, ()> {
     LOCK.lock()
 }
 
 /// Get databases handle.
 ///
 /// This allows to access any database proxied by pgDog.
-pub fn databases() -> Arc<Databases> {
+pub(crate) fn databases() -> Arc<Databases> {
     DATABASES.load().clone()
 }
 
 /// Replace databases pooler-wide.
-pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
+pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
     //
@@ -82,7 +82,7 @@ pub fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), E
 }
 
 /// Re-create all connections.
-pub fn reconnect() -> Result<(), Error> {
+pub(crate) fn reconnect() -> Result<(), Error> {
     let config = config();
     let databases = from_config(&config);
     replace_databases(databases, false)?;
@@ -91,7 +91,7 @@ pub fn reconnect() -> Result<(), Error> {
 
 /// Re-create databases from existing config,
 /// preserving connections.
-pub fn reload_from_existing() -> Result<(), Error> {
+pub(crate) fn reload_from_existing() -> Result<(), Error> {
     let _lock = lock();
     let config = config();
     let databases = from_config(&config);
@@ -100,7 +100,7 @@ pub fn reload_from_existing() -> Result<(), Error> {
 }
 
 /// Initialize the databases for the first time.
-pub fn init() -> Result<(), Error> {
+pub(crate) fn init() -> Result<(), Error> {
     let config = config();
     replace_databases(from_config(&config), false)?;
 
@@ -114,12 +114,12 @@ pub fn init() -> Result<(), Error> {
 }
 
 /// Shutdown all databases.
-pub fn shutdown() {
+pub(crate) fn shutdown() {
     databases().shutdown();
 }
 
 /// Cancel all queries running on a database.
-pub async fn cancel_all(database: &str) -> Result<(), Error> {
+pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     let clusters: Vec<_> = databases()
         .all()
         .iter()
@@ -133,7 +133,7 @@ pub async fn cancel_all(database: &str) -> Result<(), Error> {
 }
 
 /// Re-create pools from config.
-pub fn reload() -> Result<(), Error> {
+pub(crate) fn reload() -> Result<(), Error> {
     info!("reloading configuration");
 
     // Load config from disk.
@@ -218,7 +218,7 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.
 /// Persists changes to disk (best effort).
-pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
+pub(crate) async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
     use tokio::fs::{copy, write};
 
     let config = {
@@ -280,10 +280,10 @@ pub async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
     Ok(())
 }
 
-pub use pgdog_stats::User;
+pub(crate) use pgdog_stats::User;
 
 /// Convert to a database/user pair.
-pub trait ToUser {
+pub(crate) trait ToUser {
     /// Perform the conversion.
     fn to_user(&self) -> User;
 }
@@ -308,7 +308,7 @@ impl ToUser for (&str, Option<&str>) {
 
 /// Databases.
 #[derive(Default, Clone)]
-pub struct Databases {
+pub(crate) struct Databases {
     databases: HashMap<User, Cluster>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
@@ -316,7 +316,7 @@ pub struct Databases {
 
 impl Databases {
     /// Get the database user password, if one is configured.
-    pub fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
+    pub(crate) fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
             if cluster.passwords().is_empty() {
                 None
@@ -329,7 +329,7 @@ impl Databases {
     }
 
     /// Get a cluster for the user/database pair if it's configured.
-    pub fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
+    pub(crate) fn cluster(&self, user: impl ToUser) -> Result<Cluster, Error> {
         let user = user.to_user();
         if let Some(cluster) = self.databases.get(&user) {
             Ok(cluster.clone())
@@ -339,7 +339,7 @@ impl Databases {
     }
 
     /// Get the schema owner for this database.
-    pub fn schema_owner(&self, database: &str) -> Result<Cluster, Error> {
+    pub(crate) fn schema_owner(&self, database: &str) -> Result<Cluster, Error> {
         for (user, cluster) in &self.databases {
             if cluster.schema_admin() && user.database == database {
                 return Ok(cluster.clone());
@@ -354,7 +354,7 @@ impl Databases {
     ///
     /// N.B.: Subsequent entry will override previous entry.
     ///
-    pub fn schema_owners(&self) -> Vec<Cluster> {
+    pub(crate) fn schema_owners(&self) -> Vec<Cluster> {
         let mut schema_owners = HashMap::new();
 
         for cluster in self.databases.values() {
@@ -366,7 +366,7 @@ impl Databases {
         schema_owners.into_values().collect()
     }
 
-    pub fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
+    pub(crate) fn mirrors(&self, user: impl ToUser) -> Result<Option<&[Cluster]>, Error> {
         let user = user.to_user();
         if self.databases.contains_key(&user) {
             Ok(self.mirrors.get(&user).map(|m| m.as_slice()))
@@ -376,7 +376,7 @@ impl Databases {
     }
 
     /// Get precomputed mirror configuration.
-    pub fn mirror_config(
+    pub(crate) fn mirror_config(
         &self,
         source_db: &str,
         destination_db: &str,
@@ -386,12 +386,12 @@ impl Databases {
     }
 
     /// Get all clusters and databases.
-    pub fn all(&self) -> &HashMap<User, Cluster> {
+    pub(crate) fn all(&self) -> &HashMap<User, Cluster> {
         &self.databases
     }
 
     /// Cancel a query running on one of the databases proxied by the pooler.
-    pub async fn cancel(&self, id: FrontendPid) -> Result<(), Error> {
+    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), Error> {
         for cluster in self.databases.values() {
             cluster.cancel(id).await?;
         }
@@ -632,7 +632,7 @@ fn new_pool(
 }
 
 /// Load databases from config.
-pub fn from_config(config: &ConfigAndUsers) -> Databases {
+pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
     let mut databases = HashMap::new();
     // The schema cache is shared between all databases.
     let schema_cache = SchemaCache::default();

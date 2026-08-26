@@ -7,7 +7,7 @@ use super::super::prelude::*;
 
 /// Password message.
 #[derive(Debug)]
-pub enum Password {
+pub(crate) enum Password {
     /// SASLInitialResponse (F)
     SASLInitialResponse { name: String, response: String },
     /// PasswordMessage (F) or SASLResponse (F)
@@ -17,20 +17,20 @@ pub enum Password {
 
 impl Password {
     /// Create new SASL initial response.
-    pub fn sasl_initial(response: &str) -> Self {
+    pub(crate) fn sasl_initial(response: &str) -> Self {
         Self::SASLInitialResponse {
             name: "SCRAM-SHA-256".to_string(),
             response: response.to_owned(),
         }
     }
 
-    pub fn new_password(response: impl AsRef<str>) -> Self {
+    pub(crate) fn new_password(response: impl AsRef<str>) -> Self {
         Self::PasswordMessage {
             response: [response.as_ref(), "\0"].concat(),
         }
     }
 
-    pub fn password(&self) -> Option<&str> {
+    pub(crate) fn password(&self) -> Option<&str> {
         match self {
             Password::SASLInitialResponse { .. } => None,
             Password::PasswordMessage { response } => Some(response),

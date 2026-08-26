@@ -3,7 +3,7 @@ use crate::frontend::router::sharding::mapping::MappingResolver;
 use super::Centroids;
 
 #[derive(Debug)]
-pub enum Operator<'a> {
+pub(crate) enum Operator<'a> {
     Shards(usize),
     Centroids {
         shards: usize,

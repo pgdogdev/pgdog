@@ -3,7 +3,7 @@
 use crate::net::messages::{code, prelude::*};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum TransactionState {
+pub(crate) enum TransactionState {
     Idle,
     Error,
     InTrasaction,
@@ -11,18 +11,18 @@ pub enum TransactionState {
 
 // ReadyForQuery (F).
 #[derive(Debug, Clone, Copy)]
-pub struct ReadyForQuery {
-    pub status: char,
+pub(crate) struct ReadyForQuery {
+    pub(crate) status: char,
 }
 
 impl ReadyForQuery {
     /// New idle message.
-    pub fn idle() -> Self {
+    pub(crate) fn idle() -> Self {
         ReadyForQuery { status: 'I' }
     }
 
     /// In transaction message.
-    pub fn in_transaction(in_transaction: bool) -> Self {
+    pub(crate) fn in_transaction(in_transaction: bool) -> Self {
         if in_transaction {
             ReadyForQuery { status: 'T' }
         } else {
@@ -30,12 +30,12 @@ impl ReadyForQuery {
         }
     }
 
-    pub fn error() -> Self {
+    pub(crate) fn error() -> Self {
         ReadyForQuery { status: 'E' }
     }
 
     /// Get transaction state.
-    pub fn state(&self) -> Result<TransactionState, Error> {
+    pub(crate) fn state(&self) -> Result<TransactionState, Error> {
         match self.status {
             'E' => Ok(TransactionState::Error),
             'T' => Ok(TransactionState::InTrasaction),
@@ -76,7 +76,7 @@ mod test {
     use super::ReadyForQuery;
 
     impl ReadyForQuery {
-        pub fn is_transaction_aborted(&self) -> bool {
+        pub(crate) fn is_transaction_aborted(&self) -> bool {
             self.status == 'E'
         }
     }

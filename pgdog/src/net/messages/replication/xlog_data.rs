@@ -12,11 +12,11 @@ use super::logical::update::Update;
 
 /// XLogData (B) message.
 #[derive(Clone)]
-pub struct XLogData {
-    pub starting_point: i64,
-    pub current_end: i64,
-    pub system_clock: i64,
-    pub bytes: Bytes,
+pub(crate) struct XLogData {
+    pub(crate) starting_point: i64,
+    pub(crate) current_end: i64,
+    pub(crate) system_clock: i64,
+    pub(crate) bytes: Bytes,
 }
 
 impl std::fmt::Debug for XLogData {
@@ -42,7 +42,7 @@ impl std::fmt::Debug for XLogData {
 
 impl XLogData {
     /// Extract payload.
-    pub fn payload(&self) -> Option<XLogPayload> {
+    pub(crate) fn payload(&self) -> Option<XLogPayload> {
         if self.bytes.is_empty() {
             return None;
         }
@@ -76,7 +76,7 @@ impl XLogData {
     }
 
     /// Length.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.bytes.len()
     }
 }
@@ -116,7 +116,7 @@ impl Protocol for XLogData {
 }
 
 #[derive(Debug, Clone)]
-pub enum XLogPayload {
+pub(crate) enum XLogPayload {
     Begin(Begin),
     Commit(Commit),
     Insert(Insert),

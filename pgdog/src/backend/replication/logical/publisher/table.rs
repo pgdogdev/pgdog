@@ -26,17 +26,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Table {
+pub(crate) struct Table {
     /// Name of the table publication.
-    pub publication: String,
+    pub(crate) publication: String,
     /// Table data.
-    pub table: PublicationTable,
+    pub(crate) table: PublicationTable,
     /// Table replica identity.
-    pub identity: ReplicaIdentity,
+    pub(crate) identity: ReplicaIdentity,
     /// Table columns.
-    pub columns: Vec<PublicationTableColumn>,
+    pub(crate) columns: Vec<PublicationTableColumn>,
     /// Table data as of this LSN.
-    pub lsn: Lsn,
+    pub(crate) lsn: Lsn,
 }
 
 /// An enumerated view over a subset of a table's columns.
@@ -138,7 +138,7 @@ where
 }
 
 impl Table {
-    pub async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub(crate) async fn load(publication: &str, server: &mut Server) -> Result<Vec<Self>, Error> {
         let tables = PublicationTable::load(publication, server).await?;
         let mut results = vec![];
 
@@ -168,7 +168,7 @@ impl Table {
     /// - FULL (`"f"`): valid — identity comes from `update.old`/`delete.old`, not column metadata.
     /// - NOTHING (`"n"`): permanently invalid — UPDATE/DELETE carry no row identity.
     /// - DEFAULT/INDEX: valid only when at least one column carries `identity = true`.
-    pub fn valid(&self) -> Result<(), TableValidationError> {
+    pub(crate) fn valid(&self) -> Result<(), TableValidationError> {
         match self.identity.identity.as_str() {
             "f" => Ok(()),
             "n" => Err(TableValidationError {
@@ -234,7 +234,7 @@ impl Table {
     /// Generate the query for the insertion. Use all the columns in the query.
     /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
     /// the values in the default column order
-    pub fn insert(&self) -> String {
+    pub(crate) fn insert(&self) -> String {
         format!(
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({})",
             escape_identifier(self.table.destination_schema()),
@@ -248,7 +248,7 @@ impl Table {
     /// Uses all columns in VALUES; DO UPDATE SET reuses the same `$N` positions — no reindex.
     /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
     /// the values in the default column order
-    pub fn upsert(&self) -> String {
+    pub(crate) fn upsert(&self) -> String {
         format!(
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
             escape_identifier(self.table.destination_schema()),
@@ -264,7 +264,7 @@ impl Table {
     /// Identity columns are in the WHERE part and non-identity in the SET part.
     /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
     /// the values in the default column order
-    pub fn update(&self) -> String {
+    pub(crate) fn update(&self) -> String {
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
             escape_identifier(self.table.destination_schema()),
@@ -281,7 +281,7 @@ impl Table {
     ///
     /// Paired with [`Update::partial_new`](crate::net::messages::replication::logical::update::Update::partial_new) to
     /// generate proper [bind](crate::net::messages::replication::TupleData::to_bind) with proper order.
-    pub fn update_partial(&self, present: &NonIdentityColumnsPresence) -> String {
+    pub(crate) fn update_partial(&self, present: &NonIdentityColumnsPresence) -> String {
         debug_assert!(
             !present.no_non_identity_present(),
             "update_partial called with no non-identity columns present — would emit empty SET clause"
@@ -304,7 +304,7 @@ impl Table {
     /// Identity columns are in the WHERE part.
     /// Paired with [`Delete::key_non_null`](crate::net::messages::replication::Delete::key_non_null)
     /// to generate proper [bind](crate::net::messages::replication::TupleData::to_bind) with proper order.
-    pub fn delete(&self) -> String {
+    pub(crate) fn delete(&self) -> String {
         format!(
             "DELETE FROM \"{}\".\"{}\" WHERE {}",
             escape_identifier(self.table.destination_schema()),
@@ -314,7 +314,7 @@ impl Table {
     }
 
     /// `INSERT … ON CONFLICT DO NOTHING`. For FULL omni tables; deduplicates overlap-window rows.
-    pub fn upsert_full_identity(&self) -> String {
+    pub(crate) fn upsert_full_identity(&self) -> String {
         format!(
             "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT DO NOTHING",
             escape_identifier(self.table.destination_schema()),
@@ -326,7 +326,7 @@ impl Table {
 
     /// DELETE for REPLICA IDENTITY FULL tables.
     /// Targets exactly one row via a ctid subquery to handle tables with duplicate rows correctly.
-    pub fn delete_full_identity(&self) -> String {
+    pub(crate) fn delete_full_identity(&self) -> String {
         format!(
             "DELETE FROM \"{}\".\"{}\" WHERE (tableoid, ctid) = {}",
             escape_identifier(self.table.destination_schema()),
@@ -343,7 +343,7 @@ impl Table {
     ///
     /// Targets exactly one row via ctid to handle tables with duplicate rows correctly.
     /// Bind with `full_identity_bind_tuple(&old_full, &update.new)` → 2n params.
-    pub fn update_full_identity(&self) -> String {
+    pub(crate) fn update_full_identity(&self) -> String {
         let n = self.columns.len();
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE (tableoid, ctid) = {}",
@@ -362,7 +362,10 @@ impl Table {
     ///
     /// Targets exactly one row via ctid to handle tables with duplicate rows correctly.
     /// Bind with `full_identity_bind_tuple(&old_full, &partial_new)` → n+k params.
-    pub fn update_full_identity_partial_set(&self, present: &NonIdentityColumnsPresence) -> String {
+    pub(crate) fn update_full_identity_partial_set(
+        &self,
+        present: &NonIdentityColumnsPresence,
+    ) -> String {
         debug_assert!(
             !present.no_non_identity_present(),
             "update_full_identity_partial_set called with no present columns — would emit empty SET clause"
@@ -395,7 +398,7 @@ impl Table {
     }
 
     /// Reload table data inside the transaction.
-    pub async fn reload(&mut self, server: &mut Server) -> Result<(), Error> {
+    pub(crate) async fn reload(&mut self, server: &mut Server) -> Result<(), Error> {
         if !server.in_transaction() {
             return Err(Error::TransactionNotStarted);
         }
@@ -407,12 +410,12 @@ impl Table {
     }
 
     /// `true` when the table uses `REPLICA IDENTITY FULL`.
-    pub fn is_identity_full(&self) -> bool {
+    pub(crate) fn is_identity_full(&self) -> bool {
         self.identity.identity == "f"
     }
 
     /// Check if this table is sharded.
-    pub fn is_sharded(&self, tables: &ShardedTables) -> bool {
+    pub(crate) fn is_sharded(&self, tables: &ShardedTables) -> bool {
         for column in &self.columns {
             let c = Column {
                 name: &column.name,
@@ -428,7 +431,7 @@ impl Table {
         false
     }
 
-    pub async fn data_sync(
+    pub(crate) async fn data_sync(
         &mut self,
         source: &Address,
         source_cluster: &Cluster,

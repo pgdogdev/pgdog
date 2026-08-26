@@ -5,34 +5,34 @@
 
 use std::str::from_utf8_unchecked;
 
-pub static PREPARE_TEMPLATE_NAME: &str = "__pgdog_template_name";
+pub(crate) static PREPARE_TEMPLATE_NAME: &str = "__pgdog_template_name";
 
 use super::prelude::*;
 use super::{Message, Query};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prepare {
+pub(crate) struct Prepare {
     pub(crate) name: Bytes,
     pub(crate) query: Bytes,
 }
 
 impl Prepare {
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         // SAFETY: We only support UTF-8.
         unsafe { from_utf8_unchecked(&self.query) }
     }
 
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         // SAFETY: We only support UTF-8.
         unsafe { from_utf8_unchecked(&self.name) }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.name.len() + self.query.len()
     }
 
     #[cfg(test)]
-    pub fn new(name: &str, query: &str) -> Self {
+    pub(crate) fn new(name: &str, query: &str) -> Self {
         Self {
             name: Bytes::from(name.to_owned()),
             query: Bytes::from(query.to_owned()),

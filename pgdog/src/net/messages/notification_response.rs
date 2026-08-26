@@ -8,7 +8,7 @@ use super::prelude::*;
 
 /// NotificationResponse (B).
 #[derive(Debug, Clone)]
-pub struct NotificationResponse {
+pub(crate) struct NotificationResponse {
     payload: Bytes,
     channel_len: usize,
     // Parsed off the wire for correctness; no getter needed yet.
@@ -18,7 +18,7 @@ pub struct NotificationResponse {
 
 impl NotificationResponse {
     /// Get the name of the notification channel.
-    pub fn channel(&self) -> &str {
+    pub(crate) fn channel(&self) -> &str {
         let start = 1 + 4 + 4;
         let end = start + self.channel_len - 1;
 
@@ -68,7 +68,7 @@ mod test {
 
     impl NotificationResponse {
         /// Get message payload.
-        pub fn payload(&self) -> &str {
+        pub(crate) fn payload(&self) -> &str {
             let start = 1 + 4 + 4 + self.channel_len;
             unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
         }

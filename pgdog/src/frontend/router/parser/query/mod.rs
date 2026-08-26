@@ -54,7 +54,7 @@ use tracing::{debug, trace};
 /// of the parsing.
 ///
 #[derive(Debug, Default)]
-pub struct QueryParser {
+pub(crate) struct QueryParser {
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
     // Plugin read override.
@@ -89,7 +89,7 @@ impl QueryParser {
     }
 
     /// Parse a query and return a command.
-    pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+    pub(crate) fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {

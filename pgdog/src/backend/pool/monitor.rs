@@ -65,7 +65,7 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 ///
 /// See [`crate::backend::pool::monitor`] module documentation
 /// for more details.
-pub struct Monitor {
+pub(crate) struct Monitor {
     pool: Pool,
 }
 
@@ -347,7 +347,7 @@ impl Monitor {
         }
     }
 
-    pub async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
+    pub(crate) async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         match Self::healthcheck_internal(pool).await {
             Ok(result) => {
                 pool.inner().health.toggle(result);

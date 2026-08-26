@@ -1,42 +1,42 @@
 //! Configuration.
 
 // Submodules
-pub mod convert;
-pub mod core;
-pub mod database;
-pub mod error;
-pub mod general;
-pub mod memory;
-pub mod networking;
-pub mod overrides;
-pub mod pooling;
-pub mod replication;
-pub mod rewrite;
-pub mod sharding;
-pub mod users;
+pub(crate) mod convert;
+pub(crate) mod core;
+pub(crate) mod database;
+pub(crate) mod error;
+pub(crate) mod general;
+pub(crate) mod memory;
+pub(crate) mod networking;
+pub(crate) mod overrides;
+pub(crate) mod pooling;
+pub(crate) mod replication;
+pub(crate) mod rewrite;
+pub(crate) mod sharding;
+pub(crate) mod users;
 
-pub use core::{Config, ConfigAndUsers};
-pub use database::{Database, Role};
-pub use error::Error;
-pub use general::General;
-pub use memory::*;
-pub use networking::{MultiTenant, TlsVerifyMode};
-pub use overrides::Overrides;
+pub(crate) use core::{Config, ConfigAndUsers};
+pub(crate) use database::{Database, Role};
+pub(crate) use error::Error;
+pub(crate) use general::General;
+pub(crate) use memory::*;
+pub(crate) use networking::{MultiTenant, TlsVerifyMode};
+pub(crate) use overrides::Overrides;
 use pgdog_config::LookupResult;
-pub use pgdog_config::auth::AuthType;
-pub use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
-pub use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
-pub use rewrite::RewriteMode;
+pub(crate) use pgdog_config::auth::AuthType;
+pub(crate) use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
+pub(crate) use pooling::{ConnectionRecovery, PoolerMode, PreparedStatements};
+pub(crate) use rewrite::RewriteMode;
 use std::path::Path;
 #[cfg(test)]
-pub use users::Users;
-pub use users::{ServerAuth, User};
+pub(crate) use users::Users;
+pub(crate) use users::{ServerAuth, User};
 
 // Re-export from sharding module
-pub use sharding::{DataType, Hasher, ShardedMappingDeprecated};
+pub(crate) use sharding::{DataType, Hasher, ShardedMappingDeprecated};
 
 // Re-export from replication module
-pub use replication::MirrorConfig;
+pub(crate) use replication::MirrorConfig;
 
 use parking_lot::Mutex;
 use std::env;
@@ -51,17 +51,17 @@ static CONFIG: Lazy<ArcSwap<ConfigAndUsers>> =
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Load configuration.
-pub fn config() -> Arc<ConfigAndUsers> {
+pub(crate) fn config() -> Arc<ConfigAndUsers> {
     CONFIG.load().clone()
 }
 
 /// Load the configuration file from disk.
-pub fn load(config: &Path, users: &Path) -> Result<ConfigAndUsers, Error> {
+pub(crate) fn load(config: &Path, users: &Path) -> Result<ConfigAndUsers, Error> {
     let config = ConfigAndUsers::load(config, users)?;
     set(config)
 }
 
-pub fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
+pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.check()?;
     validate_lookup_queries(&config)?;
     for table in config.config.sharded_tables.iter_mut() {
@@ -159,7 +159,7 @@ fn validate_lookup_query(query: &str) -> Result<(), String> {
 }
 
 /// Load configuration from a list of database URLs.
-pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
+pub(crate) fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
     let _lock = LOCK.lock();
     let config = (*config()).clone();
     let config = config.databases_from_urls(urls)?;
@@ -169,7 +169,7 @@ pub fn from_urls(urls: &[String]) -> Result<ConfigAndUsers, Error> {
 
 /// Extract all database URLs from the environment and
 /// create the config.
-pub fn from_env() -> Result<ConfigAndUsers, Error> {
+pub(crate) fn from_env() -> Result<ConfigAndUsers, Error> {
     let _lock = LOCK.lock();
 
     let mut urls = vec![];
@@ -203,7 +203,7 @@ pub fn from_env() -> Result<ConfigAndUsers, Error> {
 }
 
 /// Override some settings.
-pub fn overrides(overrides: Overrides) {
+pub(crate) fn overrides(overrides: Overrides) {
     let mut config = (*config()).clone();
     let Overrides {
         default_pool_size,
@@ -232,12 +232,12 @@ pub fn overrides(overrides: Overrides) {
 
 // Test helper functions
 #[cfg(test)]
-pub fn load_test() {
+pub(crate) fn load_test() {
     load_test_with_pooler_mode(PoolerMode::Transaction)
 }
 
 #[cfg(test)]
-pub fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
+pub(crate) fn load_test_with_pooler_mode(pooler_mode: PoolerMode) {
     load_test_with_user_and_pooler_mode("pgdog", pooler_mode, Role::default())
 }
 
@@ -267,7 +267,7 @@ fn load_test_with_user_and_pooler_mode(user: &str, pooler_mode: PoolerMode, role
 }
 
 #[cfg(test)]
-pub fn load_test_replicas() {
+pub(crate) fn load_test_replicas() {
     use crate::backend::databases::init;
 
     let mut config = ConfigAndUsers::default();
@@ -301,13 +301,13 @@ pub fn load_test_replicas() {
 }
 
 #[cfg(test)]
-pub fn load_test_sharded() {
+pub(crate) fn load_test_sharded() {
     load_test_sharded_n(2);
 }
 
 /// Load 3-shard test configuration.
 #[cfg(test)]
-pub fn load_test_sharded_3() {
+pub(crate) fn load_test_sharded_3() {
     load_test_sharded_n(3);
 }
 

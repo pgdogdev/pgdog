@@ -17,24 +17,24 @@ static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
 /// Cache statistics.
 #[derive(Default, Debug, Clone, Copy)]
-pub struct Stats {
+pub(crate) struct Stats {
     /// Cache hits.
-    pub hits: usize,
+    pub(crate) hits: usize,
     /// Cache misses (new queries).
-    pub misses: usize,
+    pub(crate) misses: usize,
     /// Direct shard queries.
-    pub direct: usize,
+    pub(crate) direct: usize,
     /// Multi-shard queries.
-    pub multi: usize,
+    pub(crate) multi: usize,
     /// Parse time.
-    pub parse_time: Duration,
+    pub(crate) parse_time: Duration,
     /// Fingerprints calculated.
-    pub fingerprints: usize,
+    pub(crate) fingerprints: usize,
 }
 
 impl Stats {
     /// Create new statistics record for an AST entry.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             hits: 1,
             ..Default::default()
@@ -53,7 +53,7 @@ pub(super) struct Inner {
 
 /// AST cache.
 #[derive(Clone, Debug)]
-pub struct Cache {
+pub(crate) struct Cache {
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -71,7 +71,7 @@ impl Cache {
     /// Resize cache to capacity, evicting any statements exceeding the capacity.
     ///
     /// Minimum capacity is 1.
-    pub fn resize(capacity: usize) {
+    pub(crate) fn resize(capacity: usize) {
         let capacity = if capacity == 0 { 1 } else { capacity };
 
         CACHE
@@ -84,7 +84,7 @@ impl Cache {
     }
 
     /// Handle parsing a query.
-    pub fn query(
+    pub(crate) fn query(
         &self,
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
@@ -213,7 +213,11 @@ impl Cache {
     /// Used by dry run mode to keep stats on what queries are routed correctly,
     /// and which are not.
     ///
-    pub fn record_normalized(&self, query: &nodes::RawStmt, route: &Route) -> Result<(), Error> {
+    pub(crate) fn record_normalized(
+        &self,
+        query: &nodes::RawStmt,
+        route: &Route,
+    ) -> Result<(), Error> {
         let normalized = normalize(query);
         let normalized = deparse(normalized.stmt())?;
         let normalized = normalized.as_str();
@@ -238,12 +242,12 @@ impl Cache {
     }
 
     /// Get global cache instance.
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         CACHE.clone()
     }
 
     /// Get cache stats.
-    pub fn stats() -> (Stats, usize) {
+    pub(crate) fn stats() -> (Stats, usize) {
         let cache = Self::get();
         let (len, query_stats, mut stats) = {
             let guard = cache.inner.lock();
@@ -265,7 +269,7 @@ impl Cache {
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub fn queries() -> HashMap<Arc<str>, Ast> {
+    pub(crate) fn queries() -> HashMap<Arc<str>, Ast> {
         Self::get()
             .inner
             .lock()
@@ -277,7 +281,7 @@ impl Cache {
 
     /// Reset cache, removing all statements
     /// and setting stats to 0.
-    pub fn reset() {
+    pub(crate) fn reset() {
         let cache = Self::get();
         let mut guard = cache.inner.lock();
         guard.queries.clear();

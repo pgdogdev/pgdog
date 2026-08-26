@@ -3,7 +3,7 @@
 use super::prelude::*;
 use crate::backend::databases::reload;
 
-pub struct Reload;
+pub(crate) struct Reload;
 
 #[async_trait]
 impl Command for Reload {

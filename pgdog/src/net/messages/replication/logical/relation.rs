@@ -6,21 +6,21 @@ use super::super::super::code;
 use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Relation {
-    pub oid: Oid,
-    pub namespace: String,
-    pub name: String,
-    pub replica_identity: i8,
-    pub columns: Vec<Column>,
+pub(crate) struct Relation {
+    pub(crate) oid: Oid,
+    pub(crate) namespace: String,
+    pub(crate) name: String,
+    pub(crate) replica_identity: i8,
+    pub(crate) columns: Vec<Column>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub flag: i8,
-    pub name: String,
+pub(crate) struct Column {
+    pub(crate) flag: i8,
+    pub(crate) name: String,
     /// Type OID (`pg_attribute.atttypid`).
-    pub oid: Oid,
-    pub type_modifier: i32,
+    pub(crate) oid: Oid,
+    pub(crate) type_modifier: i32,
 }
 
 impl ToBytes for Relation {

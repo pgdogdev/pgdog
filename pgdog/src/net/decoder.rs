@@ -8,7 +8,7 @@ use super::{Bind, Format, RowDescription};
 /// decoding logic in those messages are doing all the work.
 ///
 #[derive(Debug, Clone, Default)]
-pub struct Decoder {
+pub(crate) struct Decoder {
     /// Expected result column formats, as requested by [`Bind`] sent by client.
     /// For queries using the simple protocol, the format will be text.
     formats: Vec<Format>,
@@ -18,7 +18,7 @@ pub struct Decoder {
 
 impl Decoder {
     /// Set the format the client specified for the request.
-    pub fn set_formats(&mut self, bind: &Bind) {
+    pub(crate) fn set_formats(&mut self, bind: &Bind) {
         self.formats.clear();
         self.formats.extend(bind.result_formats());
 
@@ -36,7 +36,7 @@ impl Decoder {
 
     /// Set the [`RowDescription`] returned by the server.
     /// This will be used to identify column names and types.
-    pub fn set_row_description(&mut self, rd: RowDescription) {
+    pub(crate) fn set_row_description(&mut self, rd: RowDescription) {
         self.row_description = Some(rd);
     }
 
@@ -44,7 +44,7 @@ impl Decoder {
     ///
     /// BUG(lev): Always returns a format, defaulting to text if the column format is not known.
     ///
-    pub fn get_format(&self, position: usize) -> Format {
+    pub(crate) fn get_format(&self, position: usize) -> Format {
         match self.formats.len() {
             0 => self
                 .row_description()
@@ -58,7 +58,7 @@ impl Decoder {
 
     /// Get a reference to the [`RowDescription`] the server sent
     /// for the request.
-    pub fn row_description(&self) -> &RowDescription {
+    pub(crate) fn row_description(&self) -> &RowDescription {
         self.row_description
             .as_ref()
             .expect("decoder has no row description set")

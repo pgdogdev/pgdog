@@ -5,7 +5,7 @@ use crate::net::messages::ErrorResponse;
 use super::databases::User;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
@@ -129,7 +129,7 @@ impl From<crate::frontend::Error> for Error {
 
 impl Error {
     /// Checkout timeout.
-    pub fn no_server(&self) -> bool {
+    pub(crate) fn no_server(&self) -> bool {
         use crate::backend::pool::Error as PoolError;
         match self {
             // These are recoverable errors.
@@ -140,7 +140,7 @@ impl Error {
     }
 
     /// Transient network/pool fault worth retrying.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         match self {
             Self::Io(_) => true,
             Self::Net(inner) => inner.is_retryable(),
@@ -160,7 +160,7 @@ impl Error {
         }
     }
 
-    pub fn is_auth(&self) -> bool {
+    pub(crate) fn is_auth(&self) -> bool {
         match self {
             Self::Auth(_) => true,
             Self::ConnectionError(err) => err.code == "28000" || err.is_bad_password(),

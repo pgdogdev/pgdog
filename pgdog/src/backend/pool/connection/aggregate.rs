@@ -55,7 +55,7 @@ struct Accumulator<'a> {
 }
 
 impl<'a> Accumulator<'a> {
-    pub fn from_aggregate(
+    pub(crate) fn from_aggregate(
         aggregate: &'a Aggregate,
         helpers: &HashMap<usize, HelperColumns>,
     ) -> Result<Vec<Self>, Error> {

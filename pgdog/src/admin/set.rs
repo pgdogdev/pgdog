@@ -11,7 +11,7 @@ use pg_raw_parse::{
 };
 use serde::de::DeserializeOwned;
 
-pub struct Set {
+pub(crate) struct Set {
     name: String,
     value: String,
 }

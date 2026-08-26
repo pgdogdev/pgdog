@@ -3,7 +3,7 @@ use crate::api::tasks_storage;
 
 use super::prelude::*;
 
-pub struct StopTask {
+pub(crate) struct StopTask {
     task_id: TaskId,
 }
 

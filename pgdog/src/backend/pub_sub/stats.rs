@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default)]
-pub struct Stats {
+pub(crate) struct Stats {
     recv: AtomicU64,
     dropped: AtomicU64,
     listeners: AtomicU64,
 }
 
 #[derive(Debug, Default, Copy, Clone)]
-pub struct StatsSnapshot {
+pub(crate) struct StatsSnapshot {
     pub(crate) recv: u64,
     pub(crate) dropped: u64,
     pub(crate) listeners: u64,

@@ -79,7 +79,7 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
 
 impl LoadBalancer {
     /// Replica pools handle.
-    pub fn pools(&self) -> Vec<&Pool> {
+    pub(crate) fn pools(&self) -> Vec<&Pool> {
         self.targets.iter().map(|target| &target.pool).collect()
     }
 }

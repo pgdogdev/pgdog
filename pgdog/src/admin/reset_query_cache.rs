@@ -3,7 +3,7 @@ use crate::frontend::router::parser::Cache;
 
 use super::prelude::*;
 
-pub struct ResetQueryCache;
+pub(crate) struct ResetQueryCache;
 
 #[async_trait]
 impl Command for ResetQueryCache {

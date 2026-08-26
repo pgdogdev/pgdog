@@ -31,7 +31,7 @@ struct CounterKey {
 static PREV_COUNTERS: Lazy<Mutex<HashMap<CounterKey, f64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub fn now_nanos() -> String {
+pub(crate) fn now_nanos() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -42,82 +42,82 @@ pub fn now_nanos() -> String {
 /// Top-level OTLP metrics export request.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportMetricsServiceRequest {
-    pub resource_metrics: Vec<ResourceMetrics>,
+pub(crate) struct ExportMetricsServiceRequest {
+    pub(crate) resource_metrics: Vec<ResourceMetrics>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourceMetrics {
-    pub resource: Resource,
-    pub scope_metrics: Vec<ScopeMetrics>,
+pub(crate) struct ResourceMetrics {
+    pub(crate) resource: Resource,
+    pub(crate) scope_metrics: Vec<ScopeMetrics>,
 }
 
 #[derive(Serialize)]
-pub struct Resource {
-    pub attributes: Vec<KeyValue>,
+pub(crate) struct Resource {
+    pub(crate) attributes: Vec<KeyValue>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScopeMetrics {
-    pub scope: Scope,
-    pub metrics: Vec<OtelMetric>,
+pub(crate) struct ScopeMetrics {
+    pub(crate) scope: Scope,
+    pub(crate) metrics: Vec<OtelMetric>,
 }
 
 #[derive(Serialize)]
-pub struct Scope {
-    pub name: String,
-    pub version: String,
+pub(crate) struct Scope {
+    pub(crate) name: String,
+    pub(crate) version: String,
 }
 
 #[derive(Serialize)]
-pub struct OtelMetric {
-    pub name: String,
+pub(crate) struct OtelMetric {
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub unit: String,
+    pub(crate) description: Option<String>,
+    pub(crate) unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub gauge: Option<Gauge>,
+    pub(crate) gauge: Option<Gauge>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sum: Option<Sum>,
+    pub(crate) sum: Option<Sum>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Gauge {
-    pub data_points: Vec<NumberDataPoint>,
+pub(crate) struct Gauge {
+    pub(crate) data_points: Vec<NumberDataPoint>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Sum {
+pub(crate) struct Sum {
     /// 1 = DELTA, 2 = CUMULATIVE
-    pub aggregation_temporality: u32,
-    pub is_monotonic: bool,
-    pub data_points: Vec<NumberDataPoint>,
+    pub(crate) aggregation_temporality: u32,
+    pub(crate) is_monotonic: bool,
+    pub(crate) data_points: Vec<NumberDataPoint>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NumberDataPoint {
+pub(crate) struct NumberDataPoint {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_time_unix_nano: Option<String>,
-    pub time_unix_nano: String,
-    pub as_double: f64,
-    pub attributes: Vec<KeyValue>,
+    pub(crate) start_time_unix_nano: Option<String>,
+    pub(crate) time_unix_nano: String,
+    pub(crate) as_double: f64,
+    pub(crate) attributes: Vec<KeyValue>,
 }
 
 #[derive(Serialize, Clone)]
-pub struct KeyValue {
-    pub key: String,
-    pub value: AttributeValue,
+pub(crate) struct KeyValue {
+    pub(crate) key: String,
+    pub(crate) value: AttributeValue,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct AttributeValue {
-    pub string_value: String,
+pub(crate) struct AttributeValue {
+    pub(crate) string_value: String,
 }
 
 /// Build resource attributes from defaults, `OTEL_RESOURCE_ATTRIBUTES`, and `OTEL_SERVICE_NAME`.
@@ -203,7 +203,7 @@ fn measurement_to_f64(m: &MeasurementType) -> f64 {
 }
 
 /// Build an `ExportMetricsServiceRequest` from a collection of `Metric` objects.
-pub fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequest {
+pub(crate) fn build_request(metrics: &[&Metric], now: &str) -> ExportMetricsServiceRequest {
     let config = crate::config::config();
     let namespace = config
         .config

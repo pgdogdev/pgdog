@@ -5,12 +5,12 @@ use super::prelude::*;
 
 /// Fastpath function call message (frontend only, code `F`).
 #[derive(Clone, PartialEq, Debug)]
-pub struct Fastpath {
+pub(crate) struct Fastpath {
     body: Bytes,
 }
 
 impl Fastpath {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.body.len()
     }
 }

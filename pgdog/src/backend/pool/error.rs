@@ -4,7 +4,7 @@ use thiserror::Error;
 use crate::net::BackendPid;
 
 #[derive(Debug, Error, PartialEq, Clone, Copy)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("checkout timeout")]
     CheckoutTimeout,
 
@@ -62,7 +62,7 @@ impl Error {
     ///
     /// Non-retryable: config errors, admin decisions, programming errors.
     /// Everything else (timeouts, server faults, lag, health misses) is transient.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         !matches!(
             self,
             // Config / wiring errors — retrying changes nothing.

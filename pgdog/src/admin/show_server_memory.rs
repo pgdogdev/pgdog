@@ -5,7 +5,7 @@ use crate::{
 
 use super::prelude::*;
 
-pub struct ShowServerMemory;
+pub(crate) struct ShowServerMemory;
 
 #[async_trait]
 impl Command for ShowServerMemory {

@@ -72,14 +72,14 @@ pub(crate) fn range_shard(
 
 /// Runtime mapping of explicit column values or ranges to shard numbers.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Mapping {
+pub(crate) struct Mapping {
     list: ListShards,
     range: RangeShards,
-    pub default: Option<usize>,
+    pub(crate) default: Option<usize>,
 }
 
 impl Mapping {
-    pub fn new(mappings: Vec<ShardedMappingConfig>) -> Option<Self> {
+    pub(crate) fn new(mappings: Vec<ShardedMappingConfig>) -> Option<Self> {
         let mut list = IndexMap::new();
         let mut range = Vec::new();
         let mut default = None;
@@ -109,7 +109,7 @@ impl Mapping {
         }
     }
 
-    pub fn shard(&self, value: &FlexibleTypeRef<'_>) -> Option<usize> {
+    pub(crate) fn shard(&self, value: &FlexibleTypeRef<'_>) -> Option<usize> {
         self.list
             .shard(value)
             .or_else(|| self.range.shard(value))
@@ -118,16 +118,16 @@ impl Mapping {
 }
 
 #[derive(Debug)]
-pub struct MappingResolver<'a> {
+pub(crate) struct MappingResolver<'a> {
     mapping: &'a Mapping,
 }
 
 impl<'a> MappingResolver<'a> {
-    pub fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
+    pub(crate) fn new(mapping: &'a Option<Mapping>) -> Option<Self> {
         mapping.as_ref().map(|mapping| Self { mapping })
     }
 
-    pub fn shard(&self, value: &Value) -> Result<Shard, Error> {
+    pub(crate) fn shard(&self, value: &Value) -> Result<Shard, Error> {
         if let Some(value) = value.integer()? {
             Ok(self.mapping.shard(&FlexibleTypeRef::Integer(value)).into())
         } else if let Some(value) = value.uuid()? {

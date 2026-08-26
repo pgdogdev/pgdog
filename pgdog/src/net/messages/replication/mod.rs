@@ -1,24 +1,24 @@
-pub mod hot_standby_feedback;
-pub mod keep_alive;
-pub mod logical;
-pub mod status_update;
-pub mod xlog_data;
+pub(crate) mod hot_standby_feedback;
+pub(crate) mod keep_alive;
+pub(crate) mod logical;
+pub(crate) mod status_update;
+pub(crate) mod xlog_data;
 
-pub use hot_standby_feedback::HotStandbyFeedback;
-pub use keep_alive::KeepAlive;
-pub use logical::commit::Commit;
-pub use logical::delete::Delete;
-pub use logical::insert::Insert;
-pub use logical::relation::Relation;
-pub use logical::tuple_data::TupleData;
-pub use logical::update::UpdateIdentity;
-pub use status_update::StatusUpdate;
-pub use xlog_data::XLogData;
+pub(crate) use hot_standby_feedback::HotStandbyFeedback;
+pub(crate) use keep_alive::KeepAlive;
+pub(crate) use logical::commit::Commit;
+pub(crate) use logical::delete::Delete;
+pub(crate) use logical::insert::Insert;
+pub(crate) use logical::relation::Relation;
+pub(crate) use logical::tuple_data::TupleData;
+pub(crate) use logical::update::UpdateIdentity;
+pub(crate) use status_update::StatusUpdate;
+pub(crate) use xlog_data::XLogData;
 
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub enum ReplicationMeta {
+pub(crate) enum ReplicationMeta {
     HotStandbyFeedback(HotStandbyFeedback),
     KeepAlive(KeepAlive),
     StatusUpdate(StatusUpdate),

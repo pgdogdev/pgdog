@@ -3,7 +3,7 @@ use super::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
-pub struct ParameterDescription {
+pub(crate) struct ParameterDescription {
     params: Vec<i32>,
 }
 
@@ -40,7 +40,7 @@ impl Protocol for ParameterDescription {
 
 impl ParameterDescription {
     /// Create an empty parameter description.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self { params: Vec::new() }
     }
 
@@ -59,7 +59,7 @@ mod test {
 
     impl ParameterDescription {
         /// Type OIDs of the parameters, in order.
-        pub fn params(&self) -> &[i32] {
+        pub(crate) fn params(&self) -> &[i32] {
             &self.params
         }
     }

@@ -12,14 +12,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct RouterCli {
+pub(crate) struct RouterCli {
     database: String,
     user: String,
     queries: Vec<String>,
 }
 
 impl RouterCli {
-    pub async fn new(
+    pub(crate) async fn new(
         database: impl ToString,
         user: impl ToString,
         file: impl AsRef<Path>,
@@ -38,7 +38,7 @@ impl RouterCli {
         })
     }
 
-    pub fn run(&self) -> Result<Vec<Command>, Error> {
+    pub(crate) fn run(&self) -> Result<Vec<Command>, Error> {
         let mut result = vec![];
         let cluster = databases().cluster((self.user.as_str(), self.database.as_str()))?;
 

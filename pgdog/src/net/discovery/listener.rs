@@ -20,17 +20,17 @@ use crate::util::safe_interval;
 
 /// Service discovery listener.
 #[derive(Clone, Debug)]
-pub struct Listener {
+pub(crate) struct Listener {
     id: u64,
     inner: Arc<Mutex<Inner>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct State {
+pub(crate) struct State {
     /// Number of connected clients.
-    pub clients: u64,
+    pub(crate) clients: u64,
     /// When we received the last state update.
-    pub last_message: SystemTime,
+    pub(crate) last_message: SystemTime,
 }
 
 #[derive(Debug)]
@@ -52,17 +52,17 @@ impl Listener {
     }
 
     /// Get listener.
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         LISTENER.clone()
     }
 
     /// Get peers.
-    pub fn peers(&self) -> HashMap<SocketAddr, State> {
+    pub(crate) fn peers(&self) -> HashMap<SocketAddr, State> {
         self.inner.lock().peers.clone()
     }
 
     /// Run the listener.
-    pub fn run(&self, address: Ipv4Addr, port: u16) {
+    pub(crate) fn run(&self, address: Ipv4Addr, port: u16) {
         let listener = self.clone();
         info!("launching service discovery ({}:{})", address, port);
         tasks::spawn("service discovery", async move {
@@ -73,7 +73,7 @@ impl Listener {
     }
 
     /// Run listener.
-    pub async fn spawn(&self, address: Ipv4Addr, port: u16) -> Result<Self, Error> {
+    pub(crate) async fn spawn(&self, address: Ipv4Addr, port: u16) -> Result<Self, Error> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", port)).await?;
         socket.join_multicast_v4(address, "0.0.0.0".parse::<Ipv4Addr>().unwrap())?;
         socket.multicast_loop_v4()?; // Won't work on IPv6, but nice for debugging.

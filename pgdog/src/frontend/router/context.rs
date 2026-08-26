@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct RouterContext<'a> {
+pub(crate) struct RouterContext<'a> {
     /// Bound parameters to the query.
     pub(super) bind: Option<StatementParameters<'a>>,
     /// Query we're looking it.
@@ -42,7 +42,7 @@ pub struct RouterContext<'a> {
 }
 
 impl<'a> RouterContext<'a> {
-    pub fn new(
+    pub(crate) fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
         params: &'a Parameters,
@@ -74,16 +74,16 @@ impl<'a> RouterContext<'a> {
     }
 
     /// Attach sharding key translations resolved for this statement.
-    pub fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
+    pub(crate) fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
         self.resolved_lookups = resolved;
         self
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
-    pub fn transaction(&self) -> &Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> &Option<TransactionType> {
         &self.transaction
     }
 }

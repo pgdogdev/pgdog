@@ -24,7 +24,7 @@ mod multi_binding;
 mod multi_statement;
 mod omni;
 mod pipeline_execution;
-pub mod prelude;
+pub(crate) mod prelude;
 mod prepared_syntax_error;
 mod replicas;
 mod rewrite_extended;

@@ -31,13 +31,13 @@ use std::{
     time::Duration,
 };
 
-pub mod aggregate;
-pub mod binding;
+pub(crate) mod aggregate;
+pub(crate) mod binding;
 #[cfg(test)]
-pub mod binding_test;
-pub mod buffer;
-pub mod mirror;
-pub mod multi_shard;
+pub(crate) mod binding_test;
+pub(crate) mod buffer;
+pub(crate) mod mirror;
+pub(crate) mod multi_shard;
 
 use aggregate::Aggregates;
 use binding::Binding;
@@ -46,7 +46,7 @@ use multi_shard::MultiShard;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
-pub struct Connection {
+pub(crate) struct Connection {
     user: String,
     database: String,
     binding: Binding,
@@ -110,21 +110,21 @@ impl Connection {
     }
 
     /// Send client request to mirrors.
-    pub fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
+    pub(crate) fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
         for mirror in &mut self.mirrors {
             mirror.send(buffer);
         }
     }
 
     /// Tell mirrors to flush buffered transaction.
-    pub fn mirror_flush(&mut self) {
+    pub(crate) fn mirror_flush(&mut self) {
         for mirror in &mut self.mirrors {
             mirror.flush();
         }
     }
 
     /// Remove transaction from mirrors buffers.
-    pub fn mirror_clear(&mut self) {
+    pub(crate) fn mirror_clear(&mut self) {
         for mirror in &mut self.mirrors {
             mirror.clear();
         }
@@ -237,7 +237,7 @@ impl Connection {
     }
 
     /// Subscribe to a channel.
-    pub async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
+    pub(crate) async fn listen(&mut self, channel: &str, shard: Shard) -> Result<(), Error> {
         let num = match shard {
             Shard::Direct(shard) => shard,
             _ => return Err(Error::ProtocolOutOfSync),
@@ -252,12 +252,12 @@ impl Connection {
     }
 
     /// Stop listening on a channel.
-    pub fn unlisten(&mut self, channel: &str) {
+    pub(crate) fn unlisten(&mut self, channel: &str) {
         self.pub_sub.unlisten(channel);
     }
 
     /// Notify a channel.
-    pub async fn notify(
+    pub(crate) async fn notify(
         &mut self,
         channel: &str,
         payload: &str,
@@ -338,7 +338,7 @@ impl Connection {
     }
 
     /// Reload synchronized with partial config changes.
-    pub async fn safe_reload(&mut self) -> Result<(), Error> {
+    pub(crate) async fn safe_reload(&mut self) -> Result<(), Error> {
         if let Some(wait) = reload_notify::ready() {
             wait.await;
         }

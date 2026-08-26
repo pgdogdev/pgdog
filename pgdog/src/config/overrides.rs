@@ -1,1 +1,1 @@
-pub use pgdog_config::Overrides;
+pub(crate) use pgdog_config::Overrides;

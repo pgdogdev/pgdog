@@ -4,7 +4,7 @@ use crate::frontend::router::parser::Cache;
 
 use super::prelude::*;
 
-pub struct ShowQueryCache {
+pub(crate) struct ShowQueryCache {
     filter: String,
 }
 

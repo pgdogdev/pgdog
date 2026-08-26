@@ -10,7 +10,7 @@ use super::prelude::*;
 use crate::util::safe_timeout;
 
 #[derive(Debug, Clone)]
-pub struct Probe {
+pub(crate) struct Probe {
     url: Url,
 }
 

@@ -4,10 +4,10 @@ use super::super::super::code;
 use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Begin {
-    pub final_transaction_lsn: i64,
-    pub commit_timestamp: i64,
-    pub xid: i32,
+pub(crate) struct Begin {
+    pub(crate) final_transaction_lsn: i64,
+    pub(crate) commit_timestamp: i64,
+    pub(crate) xid: i32,
 }
 
 impl FromBytes for Begin {

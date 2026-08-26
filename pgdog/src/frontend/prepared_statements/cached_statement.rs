@@ -7,9 +7,9 @@ pub(crate) fn global_name(counter: Counter) -> String {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct CachedStmt {
-    pub counter: Counter,
-    pub used: usize,
+pub(crate) struct CachedStmt {
+    pub(crate) counter: Counter,
+    pub(crate) used: usize,
 }
 
 impl MemoryUsage for CachedStmt {
@@ -20,7 +20,7 @@ impl MemoryUsage for CachedStmt {
 }
 
 impl CachedStmt {
-    pub fn name(&self) -> String {
+    pub(crate) fn name(&self) -> String {
         global_name(self.counter)
     }
 }

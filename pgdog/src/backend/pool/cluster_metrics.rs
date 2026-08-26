@@ -7,12 +7,12 @@ use std::{
 };
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Counts {
-    pub total_count: usize,
-    pub mirrored_count: usize,
-    pub dropped_count: usize,
-    pub error_count: usize,
-    pub queue_length: usize,
+pub(crate) struct Counts {
+    pub(crate) total_count: usize,
+    pub(crate) mirrored_count: usize,
+    pub(crate) dropped_count: usize,
+    pub(crate) error_count: usize,
+    pub(crate) queue_length: usize,
 }
 
 impl Sub for Counts {
@@ -72,12 +72,12 @@ use crate::frontend::router::sharding::LookupStats;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
-pub struct ClusterMetrics {
+pub(crate) struct ClusterMetrics {
     /// Mirrored request counts.
-    pub mirror: Counts,
+    pub(crate) mirror: Counts,
     /// Sharding key lookup counters, shared with the cluster's
     /// lookup cache, which records them.
-    pub lookup: Arc<LookupStats>,
+    pub(crate) lookup: Arc<LookupStats>,
 }
 
 #[cfg(test)]

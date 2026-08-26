@@ -14,10 +14,10 @@ use pgdog_stats::{CopyDataDefinition, CopyDataStatus, TaskDefinition};
 /// orchestrator so the composing task can thread it into the next phase.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
-    pub orchestrator: Orchestrator,
+    pub(crate) orchestrator: Orchestrator,
     /// Require a usable replica identity per table. Only streaming needs it,
     /// so a sync-only migration passes `false`. See `Publisher::data_sync`.
-    pub require_replica_identity: bool,
+    pub(crate) require_replica_identity: bool,
 }
 
 impl Task for CopyDataTask {

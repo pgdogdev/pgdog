@@ -1,2 +1,2 @@
-pub mod statement;
-pub use statement::{StatementRewrite, StatementRewriteContext};
+pub(crate) mod statement;
+pub(crate) use statement::{StatementRewrite, StatementRewriteContext};

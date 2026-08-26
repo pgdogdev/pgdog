@@ -17,7 +17,7 @@ use tracing::error;
 const HEADER_SIZE: usize = 5;
 
 #[derive(Default, Debug, Clone)]
-pub struct MessageBuffer {
+pub(crate) struct MessageBuffer {
     buffer: BytesMut,
     capacity: usize,
     stats: MessageBufferStats,
@@ -29,7 +29,7 @@ pub struct MessageBuffer {
 impl MessageBuffer {
     /// Create new cancel-safe
     /// message buffer.
-    pub fn new(capacity: usize, size_limit_block: Option<usize>) -> Self {
+    pub(crate) fn new(capacity: usize, size_limit_block: Option<usize>) -> Self {
         Self {
             buffer: BytesMut::with_capacity(capacity),
             capacity,
@@ -42,12 +42,12 @@ impl MessageBuffer {
     }
 
     /// Update the size limit used to block oversized query messages.
-    pub fn set_size_limit_block(&mut self, size_limit_block: Option<usize>) {
+    pub(crate) fn set_size_limit_block(&mut self, size_limit_block: Option<usize>) {
         self.size_limit_block = size_limit_block;
     }
 
     /// Buffer capacity.
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.buffer.capacity()
     }
 
@@ -157,7 +157,7 @@ impl MessageBuffer {
     }
 
     /// Re-allcoate buffer if it exceeds capacity.
-    pub fn shrink_to_fit(&mut self) -> bool {
+    pub(crate) fn shrink_to_fit(&mut self) -> bool {
         // Re-allocate the buffer to save on memory.
         if self.stats.bytes_alloc > self.capacity * 2 {
             // Create new buffer and copy contents.
@@ -176,7 +176,7 @@ impl MessageBuffer {
     }
 
     /// Get buffer stats.
-    pub fn stats(&self) -> &MessageBufferStats {
+    pub(crate) fn stats(&self) -> &MessageBufferStats {
         &self.stats
     }
 
@@ -186,7 +186,7 @@ impl MessageBuffer {
     ///
     /// This method is cancel-safe.
     ///
-    pub async fn read(
+    pub(crate) async fn read(
         &mut self,
         stream: &mut (impl Unpin + AsyncReadExt),
     ) -> Result<Message, Error> {

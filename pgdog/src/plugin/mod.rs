@@ -11,7 +11,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 
 static LIBS: OnceCell<Vec<Library>> = OnceCell::new();
-pub static PLUGINS: OnceCell<HashMap<String, &'static PluginVtable>> = OnceCell::new();
+pub(crate) static PLUGINS: OnceCell<HashMap<String, &'static PluginVtable>> = OnceCell::new();
 
 // Compare semantic versions by major and minor only (ignore patch/bugfix).
 fn same_major_minor(a: &str, b: &str) -> bool {
@@ -30,7 +30,7 @@ fn same_major_minor(a: &str, b: &str) -> bool {
 ///
 /// This should be run before Tokio is loaded since this is not thread-safe.
 ///
-pub fn load(config: &Config) -> Result<(), libloading::Error> {
+pub(crate) fn load(config: &Config) -> Result<(), libloading::Error> {
     if LIBS.get().is_some() {
         return Ok(());
     };
@@ -130,7 +130,7 @@ pub fn load(config: &Config) -> Result<(), libloading::Error> {
 }
 
 /// Shutdown plugins.
-pub fn shutdown() {
+pub(crate) fn shutdown() {
     if let Some(plugins) = plugins() {
         for plugin in plugins.values() {
             plugin.fini();
@@ -139,12 +139,12 @@ pub fn shutdown() {
 }
 
 /// Get all loaded plugins.
-pub fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {
+pub(crate) fn plugins() -> Option<&'static HashMap<String, &'static PluginVtable>> {
     PLUGINS.get()
 }
 
 /// Load plugins from config.
-pub fn load_from_config() -> Result<(), libloading::Error> {
+pub(crate) fn load_from_config() -> Result<(), libloading::Error> {
     let config = crate::config::config();
 
     load(&config.config)

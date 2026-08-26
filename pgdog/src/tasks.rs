@@ -20,7 +20,7 @@ struct BackgroundTasks {
 }
 
 /// Spawn a process background task that must finish before runtime teardown.
-pub fn spawn<F>(name: &'static str, future: F) -> JoinHandle<F::Output>
+pub(crate) fn spawn<F>(name: &'static str, future: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -46,12 +46,12 @@ where
 }
 
 /// Shared shutdown signal for background tasks that are not tied to a pool/client signal.
-pub fn shutdown_signal() -> CancellationToken {
+pub(crate) fn shutdown_signal() -> CancellationToken {
     TASKS.shutdown.clone()
 }
 
 /// Ask all tracked background tasks to stop and wait for them.
-pub async fn shutdown() {
+pub(crate) async fn shutdown() {
     TASKS.shutdown.cancel();
     TASKS.tracker.close();
 

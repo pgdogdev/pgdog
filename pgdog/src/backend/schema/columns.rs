@@ -1,7 +1,7 @@
 //! Get all table definitions.
-pub use pgdog_stats::Column as StatsColumn;
-pub use pgdog_stats::ForeignKey;
-pub use pgdog_stats::ForeignKeyAction;
+pub(crate) use pgdog_stats::Column as StatsColumn;
+pub(crate) use pgdog_stats::ForeignKey;
+pub(crate) use pgdog_stats::ForeignKeyAction;
 use serde::{Deserialize, Serialize};
 
 use super::Error;
@@ -42,7 +42,7 @@ impl From<DataRow> for ForeignKeyRow {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Column {
+pub(crate) struct Column {
     inner: StatsColumn,
 }
 
@@ -74,7 +74,7 @@ impl DerefMut for Column {
 
 impl Column {
     /// Load all columns from server, including foreign key information.
-    pub async fn load(
+    pub(crate) async fn load(
         server: &mut Server,
     ) -> Result<HashMap<(String, String), Vec<Column>>, Error> {
         let mut result = HashMap::new();

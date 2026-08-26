@@ -9,7 +9,7 @@ use super::Pool;
 
 /// Pool state.
 #[derive(Debug)]
-pub struct State {
+pub(crate) struct State {
     inner: pgdog_stats::State,
 }
 

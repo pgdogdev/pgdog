@@ -1,40 +1,40 @@
 use uuid::Uuid;
 
-pub mod context;
-pub mod context_builder;
-pub mod error;
-pub mod ffi;
-pub mod hasher;
-pub mod lookup;
-pub mod mapping;
-pub mod operator;
-pub mod schema;
-pub mod tables;
+pub(crate) mod context;
+pub(crate) mod context_builder;
+pub(crate) mod error;
+pub(crate) mod ffi;
+pub(crate) mod hasher;
+pub(crate) mod lookup;
+pub(crate) mod mapping;
+pub(crate) mod operator;
+pub(crate) mod schema;
+pub(crate) mod tables;
 #[cfg(test)]
-pub mod test;
-pub mod value;
+pub(crate) mod test;
+pub(crate) mod value;
 
-pub use context::*;
-pub use context_builder::*;
-pub use error::Error;
-pub use hasher::Hasher;
-pub use lookup::{
+pub(crate) use context::*;
+pub(crate) use context_builder::*;
+pub(crate) use error::Error;
+pub(crate) use hasher::Hasher;
+pub(crate) use lookup::{
     LookupCache, LookupStats, LookupTable, PendingLookup, ResolvedLookups, ShardOrLookup,
 };
-pub use mapping::Mapping;
-pub use operator::*;
-pub use pgdog_vector::Centroids;
-pub use schema::SchemaSharder;
-pub use tables::*;
-pub use value::*;
+pub(crate) use mapping::Mapping;
+pub(crate) use operator::*;
+pub(crate) use pgdog_vector::Centroids;
+pub(crate) use schema::SchemaSharder;
+pub(crate) use tables::*;
+pub(crate) use value::*;
 
 /// Hash `BIGINT`.
-pub fn bigint(id: i64) -> u64 {
+pub(crate) fn bigint(id: i64) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hashint8extended(id)) }
 }
 
 /// Hash UUID.
-pub fn uuid(uuid: Uuid) -> u64 {
+pub(crate) fn uuid(uuid: Uuid) -> u64 {
     unsafe {
         ffi::hash_combine64(
             0,
@@ -44,7 +44,7 @@ pub fn uuid(uuid: Uuid) -> u64 {
 }
 
 /// Hash VARCHAR.
-pub fn varchar(s: &[u8]) -> u64 {
+pub(crate) fn varchar(s: &[u8]) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
 }
 

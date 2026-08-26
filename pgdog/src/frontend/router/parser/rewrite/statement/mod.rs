@@ -8,44 +8,44 @@ use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::AstContext;
 use crate::net::parameter::ParameterValue;
 
-pub mod aggregate;
-pub mod auto_id;
-pub mod error;
-pub mod insert;
-pub mod offset;
-pub mod plan;
-pub mod simple_prepared;
-pub mod unique_id;
-pub mod update;
+pub(crate) mod aggregate;
+pub(crate) mod auto_id;
+pub(crate) mod error;
+pub(crate) mod insert;
+pub(crate) mod offset;
+pub(crate) mod plan;
+pub(crate) mod simple_prepared;
+pub(crate) mod unique_id;
+pub(crate) mod update;
 
-pub use error::Error;
-pub use insert::InsertSplit;
-pub use plan::RewritePlan;
+pub(crate) use error::Error;
+pub(crate) use insert::InsertSplit;
+pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
 
 /// Statement rewrite engine context.
 #[derive(Debug)]
-pub struct StatementRewriteContext<'a> {
+pub(crate) struct StatementRewriteContext<'a> {
     /// The statement is using the extended protocol with placeholders.
-    pub extended: bool,
+    pub(crate) extended: bool,
     /// The statement is named, so we need to save any derivatives into the global
     /// statement cache.
-    pub prepared: bool,
+    pub(crate) prepared: bool,
     /// Reference to global prepared stmt cache.
-    pub prepared_statements: &'a mut PreparedStatements,
+    pub(crate) prepared_statements: &'a mut PreparedStatements,
     /// Sharding schema.
-    pub schema: &'a ShardingSchema,
+    pub(crate) schema: &'a ShardingSchema,
     /// Database schema with table/column info.
-    pub db_schema: &'a Schema,
+    pub(crate) db_schema: &'a Schema,
     /// User name for search_path resolution.
-    pub user: &'a str,
+    pub(crate) user: &'a str,
     /// Search path for table lookups.
-    pub search_path: Option<&'a ParameterValue>,
+    pub(crate) search_path: Option<&'a ParameterValue>,
 }
 
 #[derive(Debug)]
-pub struct StatementRewrite<'a> {
+pub(crate) struct StatementRewrite<'a> {
     /// The statement was rewritten.
     rewritten: bool,
     /// Statement is using the extended protocol, so
@@ -72,7 +72,7 @@ impl<'a> StatementRewrite<'a> {
     ///
     /// More often than not, it won't do anything.
     ///
-    pub fn new(ctx: StatementRewriteContext<'a>) -> Self {
+    pub(crate) fn new(ctx: StatementRewriteContext<'a>) -> Self {
         Self {
             rewritten: false,
             extended: ctx.extended,
@@ -97,7 +97,7 @@ impl<'a> StatementRewrite<'a> {
 
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
-    pub fn maybe_rewrite<'mem>(
+    pub(crate) fn maybe_rewrite<'mem>(
         &mut self,
         mut stmt: nodes::RawStmtMut<'mem, '_>,
         mem: make::MemoryToken<'mem>,

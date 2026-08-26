@@ -27,7 +27,7 @@ fn benchmark_implementation(name: &str, p: &[Float], q: &[Float], iterations: us
     start.elapsed()
 }
 
-pub fn run_benchmark() {
+pub(crate) fn run_benchmark() {
     println!("\n=== SIMD Distance Performance Benchmark ===");
     println!("Platform: {}", std::env::consts::ARCH);
 

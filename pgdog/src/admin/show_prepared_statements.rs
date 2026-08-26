@@ -7,7 +7,7 @@ use crate::{
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct ShowPreparedStatements;
+pub(crate) struct ShowPreparedStatements;
 
 #[async_trait]
 impl Command for ShowPreparedStatements {

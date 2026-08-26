@@ -1,7 +1,7 @@
 use super::{code, prelude::*};
 
 #[derive(Debug, Clone, Default)]
-pub struct NoData;
+pub(crate) struct NoData;
 
 impl FromBytes for NoData {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

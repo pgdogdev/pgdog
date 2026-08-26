@@ -95,7 +95,7 @@ pub(super) enum HandleResult {
 /// while the local cache has the names of the prepared statements
 /// currently prepared on the server connection.
 #[derive(Debug)]
-pub struct PreparedStatements {
+pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
     local_cache: LruCache<String, LocalStatement>,
     state: ProtocolState,
@@ -134,7 +134,7 @@ impl PreparedStatements {
 
     /// Apply the pool's prepared statement settings.
     #[inline]
-    pub fn configure(&mut self, config: PreparedStatementsConfig) {
+    pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
     }
 
@@ -144,7 +144,7 @@ impl PreparedStatements {
 
     /// Current prepared statement settings.
     #[cfg(test)]
-    pub fn config(&self) -> PreparedStatementsConfig {
+    pub(crate) fn config(&self) -> PreparedStatementsConfig {
         self.config
     }
 
@@ -501,7 +501,7 @@ impl PreparedStatements {
     }
 
     /// The server has prepared this statement already.
-    pub fn contains(&mut self, name: &str) -> bool {
+    pub(crate) fn contains(&mut self, name: &str) -> bool {
         self.local_cache.promote(name)
     }
 
@@ -510,7 +510,7 @@ impl PreparedStatements {
         self.local_cache.peek(name)
     }
 
-    pub fn prepared(&mut self, name: &str) {
+    pub(crate) fn prepared(&mut self, name: &str) {
         let statement = LocalStatement::new(self.config.ttl, self.config.ttl_jitter);
 
         // Cache is unbounded, so anything handed back is the old entry
@@ -521,7 +521,7 @@ impl PreparedStatements {
     }
 
     /// How much memory is used by this structure, approx.
-    pub fn memory_used(&self) -> usize {
+    pub(crate) fn memory_used(&self) -> usize {
         self.memory_used
     }
 
@@ -560,29 +560,24 @@ impl PreparedStatements {
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.local_cache.clear();
         self.memory_used = 0;
     }
 
     /// Get current extended protocol state.
-    pub fn state(&self) -> &ProtocolState {
+    pub(crate) fn state(&self) -> &ProtocolState {
         &self.state
     }
 
     /// Get mutable reference to protocol state.
-    pub fn state_mut(&mut self) -> &mut ProtocolState {
+    pub(crate) fn state_mut(&mut self) -> &mut ProtocolState {
         &mut self.state
     }
 
     /// Number of prepared statements in local (connection) cache.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.local_cache.len()
-    }
-
-    /// True if the local (connection) prepared statement cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// Ensure capacity of prepared statements is respected.
@@ -592,7 +587,7 @@ impl PreparedStatements {
     /// from this method, or the statements will be out of sync with
     /// what's actually inside Postgres.
     #[must_use]
-    pub fn ensure_capacity(&mut self) -> Vec<Close> {
+    pub(crate) fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.config.limit {
             let candidate = self.local_cache.pop_lru();
