@@ -109,6 +109,7 @@ impl QueryParser {
                 Node::VacuumRelation(_) | Node::VacuumStmt(_) => (),
                 Node::PrepareStmt(_) => (), // We intercept prepared statements and handle them ourselves.
                 Node::SelectStmt(_)
+                | Node::ExecuteStmt(_)
                 | Node::InsertStmt(_)
                 | Node::UpdateStmt(_)
                 | Node::DeleteStmt(_) => {
