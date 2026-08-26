@@ -24,3 +24,4 @@ Contributions are welcome. If you see a bug, feel free to submit a PR with a fix
 1. Please format your code with `cargo fmt`.
 2. If you're feeling generous, `cargo clippy` as well.
 3. Please write and include tests. This is production software used in one of the most important areas of the stack.
+4. If changes have been made to configuration schemas, run `cargo run -p pgdog-jsonschema`

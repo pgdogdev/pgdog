@@ -4,7 +4,6 @@
 //! to the configured endpoint (e.g. Datadog's `/api/v2/otlp/v1/metrics`).
 
 use std::time::Duration;
-
 use tracing::{info, warn};
 
 use super::otel;
@@ -103,7 +102,6 @@ pub async fn run() {
 
 #[cfg(test)]
 mod test {
-    use crate::config::{self, ConfigAndUsers};
     use crate::stats::Metric;
     use crate::stats::open_metric::{Measurement, MeasurementType};
     use crate::stats::otel;
@@ -112,8 +110,6 @@ mod test {
     #[test]
     fn serialized_payload_is_valid_json() {
         let _test_lock = crate::stats::otel::TEST_LOCK.lock();
-
-        config::set(ConfigAndUsers::default()).unwrap();
 
         let metric = Metric::new(PoolMetric {
             name: "sv_idle".into(),

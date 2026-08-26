@@ -8,6 +8,7 @@ pub mod general;
 pub mod memory;
 pub mod networking;
 pub mod otel;
+pub mod otel_temporality;
 pub mod overrides;
 pub mod pooling;
 pub mod replication;

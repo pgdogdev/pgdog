@@ -1,6 +1,6 @@
 use crate::backend::databases::databases;
 
-use super::{Measurement, Metric, OpenMetric};
+use super::{Measurement, Metric, OpenMetric, OpenMetricType};
 
 pub struct MirrorStatsMetrics;
 
@@ -96,35 +96,35 @@ impl MirrorStatsMetrics {
             name: "mirror_total_count".into(),
             measurements: total_count_measurements,
             help: "Total number of requests considered for mirroring.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         }));
 
         metrics.push(Metric::new(MirrorStatsMetric {
             name: "mirror_mirrored_count".into(),
             measurements: mirrored_count_measurements,
             help: "Total number of requests successfully mirrored.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         }));
 
         metrics.push(Metric::new(MirrorStatsMetric {
             name: "mirror_dropped_count".into(),
             measurements: dropped_count_measurements,
             help: "Total number of requests dropped due to exposure settings.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         }));
 
         metrics.push(Metric::new(MirrorStatsMetric {
             name: "mirror_error_count".into(),
             measurements: error_count_measurements,
             help: "Total number of mirror requests that encountered errors.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         }));
 
         metrics.push(Metric::new(MirrorStatsMetric {
             name: "mirror_queue_length".into(),
             measurements: queue_length_measurements,
             help: "Current number of transactions in the mirror queue.".into(),
-            metric_type: "gauge".into(),
+            metric_type: OpenMetricType::Gauge,
         }));
 
         metrics
@@ -135,7 +135,7 @@ struct MirrorStatsMetric {
     name: String,
     measurements: Vec<Measurement>,
     help: String,
-    metric_type: String,
+    metric_type: OpenMetricType,
 }
 
 impl OpenMetric for MirrorStatsMetric {
@@ -151,8 +151,8 @@ impl OpenMetric for MirrorStatsMetric {
         Some(self.help.clone())
     }
 
-    fn metric_type(&self) -> String {
-        self.metric_type.clone()
+    fn metric_type(&self) -> OpenMetricType {
+        self.metric_type
     }
 }
 
@@ -188,7 +188,7 @@ mod tests {
                 },
             ],
             help: "Total number of requests considered for mirroring.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let metric = Metric::new(metric);
@@ -233,7 +233,7 @@ mod tests {
             name: "mirror_mirrored_count".into(),
             measurements,
             help: "Total number of requests successfully mirrored.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let metric = Metric::new(metric);
@@ -254,7 +254,7 @@ mod tests {
                 measurement: 10usize.into(),
             }],
             help: "Total number of requests considered for mirroring.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let mirrored = MirrorStatsMetric {
@@ -264,7 +264,7 @@ mod tests {
                 measurement: 5usize.into(),
             }],
             help: "Total number of requests successfully mirrored.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let dropped = MirrorStatsMetric {
@@ -274,7 +274,7 @@ mod tests {
                 measurement: 3usize.into(),
             }],
             help: "Total number of requests dropped due to exposure settings.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let error = MirrorStatsMetric {
@@ -284,7 +284,7 @@ mod tests {
                 measurement: 2usize.into(),
             }],
             help: "Total number of mirror requests that encountered errors.".into(),
-            metric_type: "counter".into(),
+            metric_type: OpenMetricType::Counter,
         };
 
         let metrics = vec![
@@ -324,7 +324,7 @@ mod tests {
                     measurement: value.into(),
                 }],
                 help: format!("Test metric for {}", name),
-                metric_type: "counter".into(),
+                metric_type: OpenMetricType::Counter,
             };
 
             let metric = Metric::new(metric);
@@ -356,7 +356,7 @@ mod tests {
                 measurement: 5usize.into(),
             }],
             help: "Current number of transactions in the mirror queue.".into(),
-            metric_type: "gauge".into(),
+            metric_type: OpenMetricType::Gauge,
         };
 
         let metric = Metric::new(metric);

@@ -6,18 +6,37 @@ use crate::config::config;
 
 pub trait OpenMetric: Send + Sync {
     fn name(&self) -> String;
+
     /// Metric measurement.
     fn measurements(&self) -> Vec<Measurement>;
+
     /// Metric unit.
     fn unit(&self) -> Option<String> {
         None
     }
 
-    fn metric_type(&self) -> String {
-        "gauge".into()
+    fn metric_type(&self) -> OpenMetricType {
+        OpenMetricType::Gauge
     }
+
     fn help(&self) -> Option<String> {
         None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenMetricType {
+    Gauge,
+    Counter,
+}
+
+impl std::fmt::Display for OpenMetricType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            OpenMetricType::Gauge => "gauge",
+            OpenMetricType::Counter => "counter",
+        };
+        f.write_str(s)
     }
 }
 
