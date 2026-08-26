@@ -324,11 +324,24 @@ impl LoadBalancer {
         result
     }
 
+    /// Wait until automatic role detection elects a primary.
+    ///
+    /// Fails with [`Error::CheckoutTimeout`] if no election happens in time.
+    async fn wait_primary(&self) -> Result<Pool, Error> {
+        let mut receiver = self.elected_primary.subscribe();
+
+        safe_timeout(self.checkout_timeout, receiver.wait_for(|p| p.is_some()))
+            .await
+            .map_err(|_| Error::CheckoutTimeout)?
+            .ok()
+            .and_then(|elected| elected.as_ref().cloned())
+            .ok_or(Error::NoPrimary)
+    }
+
     /// Check out a connection from the primary.
     ///
-    /// In automatic mode, the caller waits until role detection elects a
-    /// primary, or until the checkout times out. Static replica-only
-    /// configurations fail immediately with [`Error::NoPrimary`].
+    /// In automatic mode, the caller waits for an election. Static
+    /// replica-only configurations fail immediately with [`Error::NoPrimary`].
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
         if let Some(pool) = self.primary() {
             return pool.get(request).await;
@@ -338,16 +351,7 @@ impl LoadBalancer {
             return Err(Error::NoPrimary);
         }
 
-        let mut receiver = self.elected_primary.subscribe();
-
-        let primary = safe_timeout(self.checkout_timeout, receiver.wait_for(|p| p.is_some()))
-            .await
-            .map_err(|_| Error::CheckoutTimeout)?
-            .ok()
-            .and_then(|elected| elected.as_ref().cloned())
-            .ok_or(Error::NoPrimary)?;
-
-        primary.get(request).await
+        self.wait_primary().await?.get(request).await
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {

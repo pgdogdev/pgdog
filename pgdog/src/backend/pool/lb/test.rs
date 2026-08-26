@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::task::yield_now;
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, timeout};
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
@@ -46,7 +46,7 @@ fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
     let mut config = create_test_pool_config(host, port);
     config.address.configured_role = Role::Auto;
     config.config.inner.role_detection = true;
-    config.config.inner.checkout_timeout = Duration::from_millis(200);
+    config.config.inner.checkout_timeout = Duration::from_millis(50);
     config
 }
 
@@ -1596,6 +1596,33 @@ async fn test_auto_mode_waits_for_each_new_primary() {
     let primary = spawned.await.unwrap().unwrap();
     assert_eq!(primary.pool.addr().host, "localhost");
     drop(primary);
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_election_channel_no_race_condition() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[create_auto_test_pool_config("127.0.0.1", 5432)],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    lb.targets[0].pool.launch();
+
+    // make sure there is no primary
+    assert!(lb.primary().is_none());
+
+    // initialize the primary before the wait_primary is called
+    set_lsn_stats(&lb.targets[0], false, 100);
+    assert!(lb.redetect_roles());
+
+    let elected = timeout(Duration::ZERO, lb.wait_primary())
+        .await
+        .expect("wait_primary should resolve")
+        .expect("primary should be elected");
+    assert_eq!(elected.addr().host, "127.0.0.1");
 
     lb.shutdown();
 }
