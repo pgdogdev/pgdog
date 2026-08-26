@@ -22,12 +22,12 @@ use crate::{
 use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
 use crate::util::safe_timeout;
 
-pub mod ban;
-pub mod monitor;
-pub mod target_health;
+pub(crate) mod ban;
+pub(crate) mod monitor;
+pub(crate) mod target_health;
 
 use ban::Ban;
-pub use ban::UnbanReason;
+pub(crate) use ban::UnbanReason;
 use monitor::*;
 pub(crate) use target_health::*;
 
@@ -36,9 +36,9 @@ mod test;
 
 /// Read query load balancer target.
 #[derive(Clone, Debug)]
-pub struct Target {
-    pub pool: Pool,
-    pub ban: Ban,
+pub(crate) struct Target {
+    pub(crate) pool: Pool,
+    pub(crate) ban: Ban,
     role: PoolRole,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
@@ -84,7 +84,7 @@ impl Target {
 
 /// Load balancer.
 #[derive(Clone, Default, Debug)]
-pub struct LoadBalancer {
+pub(crate) struct LoadBalancer {
     /// Read/write targets.
     pub(super) targets: Vec<Target>,
     /// Connection checkout timeout.
@@ -153,7 +153,7 @@ impl LoadBalancer {
     }
 
     /// Get the primary pool, if configured.
-    pub fn primary(&self) -> Option<&Pool> {
+    pub(crate) fn primary(&self) -> Option<&Pool> {
         self.primary_target().map(|target| &target.pool)
     }
 
@@ -161,7 +161,7 @@ impl LoadBalancer {
     ///
     /// Unlike [`primary()`], this returns the full target struct which allows
     /// access to ban and health state for monitoring and testing purposes.
-    pub fn primary_target(&self) -> Option<&Target> {
+    pub(crate) fn primary_target(&self) -> Option<&Target> {
         self.targets
             .iter()
             .rev() // If there is a primary, it's likely to be last.
@@ -170,7 +170,7 @@ impl LoadBalancer {
 
     /// Detect database roles from pg_is_in_recovery() and
     /// return new primary (if any), and replicas.
-    pub fn redetect_roles(&self) -> bool {
+    pub(crate) fn redetect_roles(&self) -> bool {
         let mut promoted = false;
 
         let mut targets = self
@@ -224,23 +224,23 @@ impl LoadBalancer {
     }
 
     /// Launch replica pools and start the monitor.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         self.targets.iter().for_each(|target| target.pool.launch());
         Monitor::spawn(self);
     }
 
     /// Check that the load balancer targets are all launched.
-    pub fn online(&self) -> bool {
+    pub(crate) fn online(&self) -> bool {
         self.targets.iter().all(|target| target.pool.lock().online)
     }
 
     /// Get a live connection from the pool.
-    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &Request) -> Result<Guard, Error> {
         self.get_internal(request).await
     }
 
     /// Get parameters from first non-banned connection pool.
-    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         if let Some(target) = self.targets.iter().find(|target| !target.ban.banned()) {
             return target.pool.params(request).await;
         }
@@ -254,7 +254,7 @@ impl LoadBalancer {
     /// removals: each old target is paired with the new target that shares its
     /// address. New targets with no matching old target start empty; old targets
     /// with no match in the new config have their connections dropped.
-    pub fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
+    pub(crate) fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
         for from in &self.targets {
             if let Some(to) = destination
                 .targets
@@ -279,7 +279,7 @@ impl LoadBalancer {
     /// Returns `true` when every target in `self` has a matching address in
     /// `destination`. This allows replica additions (new targets start empty)
     /// while still preserving connections to unchanged replicas.
-    pub fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
+    pub(crate) fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
         self.targets.iter().all(|from| {
             destination
                 .targets
@@ -289,14 +289,14 @@ impl LoadBalancer {
     }
 
     /// True if the LB has any target that can serve replica reads.
-    pub fn has_replicas(&self) -> bool {
+    pub(crate) fn has_replicas(&self) -> bool {
         self.targets
             .iter()
             .any(|target| target.role() == Role::Replica)
     }
 
     /// True if target roles are detected automatically.
-    pub fn role_detection_enabled(&self) -> bool {
+    pub(crate) fn role_detection_enabled(&self) -> bool {
         !self.targets.is_empty()
             && self
                 .targets
@@ -305,7 +305,7 @@ impl LoadBalancer {
     }
 
     /// Cancel a query if one is running.
-    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         for target in &self.targets {
             target.pool.cancel(id).await?;
         }
@@ -314,7 +314,7 @@ impl LoadBalancer {
     }
 
     /// Collect all connection pools used for read queries.
-    pub fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
+    pub(crate) fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
         let result: Vec<_> = self
             .targets
             .iter()
@@ -464,7 +464,7 @@ impl LoadBalancer {
     /// Shutdown replica pools.
     ///
     /// N.B. The primary pool is managed by `super::Shard`.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         for target in &self.targets {
             target.pool.shutdown();
         }

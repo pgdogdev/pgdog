@@ -1,1 +1,1 @@
-pub use pgdog_config::database::*;
+pub(crate) use pgdog_config::database::*;

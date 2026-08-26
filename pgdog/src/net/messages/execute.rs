@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Clone, PartialEq)]
-pub struct Execute {
+pub(crate) struct Execute {
     payload: Bytes,
     portal_len: usize,
 }
@@ -27,7 +27,7 @@ impl Debug for Execute {
 }
 
 impl Execute {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut payload = Payload::named('E');
         payload.put_string("");
         payload.put_i32(0);
@@ -38,7 +38,7 @@ impl Execute {
     }
 
     #[cfg(test)]
-    pub fn new_portal(name: &str) -> Self {
+    pub(crate) fn new_portal(name: &str) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
         payload.put_i32(0);
@@ -51,7 +51,7 @@ impl Execute {
     /// Create an Execute message for a named portal with a row limit.
     /// A limit of 0 means fetch all rows.
     #[cfg(test)]
-    pub fn new_portal_limit(name: &str, max_rows: i32) -> Self {
+    pub(crate) fn new_portal_limit(name: &str, max_rows: i32) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
         payload.put_i32(max_rows);
@@ -61,7 +61,7 @@ impl Execute {
         }
     }
 
-    pub fn portal(&self) -> &str {
+    pub(crate) fn portal(&self) -> &str {
         let start = 5;
         let end = start
             + if self.portal_len > 0 {
@@ -73,7 +73,7 @@ impl Execute {
         from_utf8(buf).unwrap_or("")
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 }

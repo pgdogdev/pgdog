@@ -1,7 +1,7 @@
 use std::mem::take;
 
 /// Convert escape characters into SQL-safe entities.
-pub fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let mut result = Vec::new();
     let mut buffer = String::with_capacity(s.len());
 

@@ -170,7 +170,7 @@ use super::{
 /// COMMIT/ROLLBACK (`Session`) or be dropped along with the transaction
 /// (`Transaction` — the `pg_advisory_xact_lock*` family).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub enum LockScope {
+pub(crate) enum LockScope {
     Session,
     Transaction,
 }
@@ -180,24 +180,24 @@ pub enum LockScope {
 /// `id` is `None` when the key isn't a literal we can resolve (parameter placeholder,
 /// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct AdvisoryLock {
-    pub id: Option<i64>,
-    pub unlock: bool,
-    pub scope: LockScope,
+pub(crate) struct AdvisoryLock {
+    pub(crate) id: Option<i64>,
+    pub(crate) unlock: bool,
+    pub(crate) scope: LockScope,
 }
 
 /// Set of advisory locks discovered while walking a statement.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdvisoryLocks {
+pub(crate) struct AdvisoryLocks {
     locks: HashSet<AdvisoryLock>,
 }
 
 impl AdvisoryLocks {
-    pub fn iter(&self) -> impl Iterator<Item = &AdvisoryLock> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &AdvisoryLock> {
         self.locks.iter()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.locks.is_empty()
     }
 
@@ -337,16 +337,16 @@ impl<'a> SearchResult<'a> {
 
 /// Context for looking up table columns from the database schema.
 /// Used for INSERT statements without explicit column lists.
-pub struct SchemaLookupContext<'a> {
+pub(crate) struct SchemaLookupContext<'a> {
     /// The loaded database schema.
-    pub db_schema: &'a Schema,
+    pub(crate) db_schema: &'a Schema,
     /// The database user (for resolving $user in search_path).
-    pub user: &'a str,
+    pub(crate) user: &'a str,
     /// The search_path parameter (for table resolution).
-    pub search_path: Option<&'a ParameterValue>,
+    pub(crate) search_path: Option<&'a ParameterValue>,
 }
 
-pub struct StatementParser<'a, 'b, 'c> {
+pub(crate) struct StatementParser<'a, 'b, 'c> {
     stmt: pg_raw_parse::Node<'a>,
     bind: Option<StatementParameters<'b>>,
     schema: &'b ShardingSchema,
@@ -424,7 +424,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Set the schema lookup context for INSERT without column list.
-    pub fn with_schema_lookup(mut self, ctx: SchemaLookupContext<'b>) -> Self {
+    pub(crate) fn with_schema_lookup(mut self, ctx: SchemaLookupContext<'b>) -> Self {
         self.schema_lookup = Some(ctx);
         self
     }
@@ -450,7 +450,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
-    pub fn shard(&mut self) -> Result<Option<Shard>, Error> {
+    pub(crate) fn shard(&mut self) -> Result<Option<Shard>, Error> {
         // Omnisharded config overrides sharded: if all tables are omnisharded,
         // don't try to find a sharding key - let omnisharded routing handle it
         if self.is_all_omnisharded() {
@@ -491,7 +491,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     /// Check that the query references a table that contains a sharded
     /// column. This check is needed in case sharded tables config
     /// doesn't specify a table name and should short-circuit if it does.
-    pub fn is_sharded(
+    pub(crate) fn is_sharded(
         &mut self,
         db_schema: &Schema,
         user: &str,
@@ -546,7 +546,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
-    pub fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
+    pub(crate) fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
         AdvisoryLocks {
             locks: self.walk().advisory_locks.clone(),
         }

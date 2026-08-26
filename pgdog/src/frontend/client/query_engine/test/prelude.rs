@@ -1,4 +1,4 @@
-pub use crate::{
+pub(crate) use crate::{
     frontend::{
         ClientRequest,
         client::{

@@ -2,7 +2,7 @@ use super::{code, prelude::*};
 
 #[derive(Debug, Copy, Clone, Default)]
 #[allow(dead_code)]
-pub struct EmptyQueryResponse;
+pub(crate) struct EmptyQueryResponse;
 
 impl FromBytes for EmptyQueryResponse {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

@@ -35,7 +35,7 @@ enum ParallelReply {
 
 // Parallel Postgres server connection.
 #[derive(Debug)]
-pub struct ParallelConnection {
+pub(crate) struct ParallelConnection {
     tx: Sender<ParallelMessage>,
     rx: Receiver<ParallelReply>,
     stop: CancellationToken,
@@ -44,7 +44,7 @@ pub struct ParallelConnection {
 
 impl ParallelConnection {
     // Queue up message to server.
-    pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+    pub(crate) async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.tx
             .send(ParallelMessage::ProtocolMessage(message.clone()))
             .await
@@ -54,7 +54,7 @@ impl ParallelConnection {
     }
 
     // Wait for a message from the server.
-    pub async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         let reply = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
         match reply {
             ParallelReply::Message(message) => Ok(message),
@@ -63,7 +63,7 @@ impl ParallelConnection {
     }
 
     // Request server connection performs socket flush.
-    pub async fn flush(&mut self) -> Result<(), Error> {
+    pub(crate) async fn flush(&mut self) -> Result<(), Error> {
         self.tx
             .send(ParallelMessage::Flush)
             .await
@@ -73,12 +73,12 @@ impl ParallelConnection {
     }
 
     /// Server address.
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.address
     }
 
     // Move server connection into its own Tokio task.
-    pub fn new(server: Server) -> Result<Self, Error> {
+    pub(crate) fn new(server: Server) -> Result<Self, Error> {
         // Ideally we don't hardcode these. PgDog
         // can use a lot of memory if this is high.
         let (tx1, rx1) = channel(4096);
@@ -109,7 +109,7 @@ impl ParallelConnection {
 
     // Get the connection back from the async task. This will
     // only work if the connection is idle (ReadyForQuery received, no more traffic expected).
-    pub async fn reattach(mut self) -> Result<Server, Error> {
+    pub(crate) async fn reattach(mut self) -> Result<Server, Error> {
         self.stop.cancel();
         let server = self.rx.recv().await.ok_or(Error::ParallelConnection)?;
         match server {

@@ -47,7 +47,7 @@ use crate::{net::tweak, state::State};
 /// A request executed on a server connection: simple-protocol queries,
 /// or an extended-protocol message batch ending in a Sync.
 #[derive(Debug, Clone)]
-pub struct ServerRequest {
+pub(crate) struct ServerRequest {
     /// Protocol messages to send.
     messages: Vec<ProtocolMessage>,
     /// Number of ReadyForQuery (B) messages that complete the request.
@@ -58,7 +58,7 @@ impl ServerRequest {
     /// Anonymous extended-protocol query with text-format parameters.
     /// Parameters are bound by the server, so values don't need to be
     /// escaped.
-    pub fn parameterized(query: &str, params: &[BindParameter]) -> Self {
+    pub(crate) fn parameterized(query: &str, params: &[BindParameter]) -> Self {
         Self {
             messages: vec![
                 Parse::new_anonymous(query).into(),
@@ -127,7 +127,7 @@ impl From<&Vec<Query>> for ServerRequest {
 
 /// PostgreSQL server connection.
 #[derive(Debug)]
-pub struct Server {
+pub(crate) struct Server {
     addr: Address,
     stream: Option<Stream>,
     key: BackendKeyData,
@@ -450,7 +450,7 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
-    pub async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
+    pub(crate) async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
@@ -459,7 +459,7 @@ impl Server {
     }
 
     /// Send messages to the server and flush the buffer.
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         // Request is being sent to the server, so the
         // server connection is in a partial state.
         self.sending_request = true;
@@ -488,7 +488,7 @@ impl Server {
 
     /// Send one message to the server but don't flush the buffer,
     /// accelerating bulk transfers.
-    pub async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+    pub(crate) async fn send_one(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.stats.state(State::Active);
 
         let result = self.prepared_statements.handle(message)?;
@@ -524,7 +524,7 @@ impl Server {
     /// This is useful for injecting messages into the extended protocol flow
     /// without waiting on I/O.
     ///
-    pub async fn send_ignore(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
+    pub(crate) async fn send_ignore(&mut self, message: &ProtocolMessage) -> Result<(), Error> {
         self.prepared_statements.handle_ignore(message)?;
         self.send_stream(message).await?;
 
@@ -548,7 +548,7 @@ impl Server {
     }
 
     /// Flush all pending messages making sure they are sent to the server immediately.
-    pub async fn flush(&mut self) -> Result<(), Error> {
+    pub(crate) async fn flush(&mut self) -> Result<(), Error> {
         if let Err(err) = self.stream().flush().await {
             trace!("😳");
             self.stats.state(State::Error);
@@ -564,7 +564,7 @@ impl Server {
     ///
     /// This method is cancel-safe.
     ///
-    pub async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         let message = loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
@@ -689,7 +689,7 @@ impl Server {
     }
 
     /// Synchronize parameters between client and server.
-    pub async fn link_client(
+    pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
         params: &Parameters,
@@ -763,7 +763,7 @@ impl Server {
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
-    pub fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
         if rollback {
             self.client_params.rollback();
         } else {
@@ -771,11 +771,11 @@ impl Server {
         }
     }
 
-    pub fn changed_params(&self) -> &Parameters {
+    pub(crate) fn changed_params(&self) -> &Parameters {
         &self.changed_params
     }
 
-    pub fn reset_changed_params(&mut self) {
+    pub(crate) fn reset_changed_params(&mut self) {
         self.changed_params.clear();
     }
 
@@ -783,19 +783,19 @@ impl Server {
     ///
     /// There are no more expected messages from the server connection
     /// and we haven't started an explicit transaction.
-    pub fn done(&self) -> bool {
+    pub(crate) fn done(&self) -> bool {
         self.prepared_statements.done() && !self.in_transaction() && !self.statement_executed
     }
 
     /// Server hasn't finished sending or receiving a complete message.
-    pub fn io_in_progress(&self) -> bool {
+    pub(crate) fn io_in_progress(&self) -> bool {
         self.stream
             .as_ref()
             .map(|stream| stream.io_in_progress())
             .unwrap_or(false)
     }
 
-    pub fn liveness(&mut self) -> Liveness {
+    pub(crate) fn liveness(&mut self) -> Liveness {
         self.stream
             .as_mut()
             .map(|stream| stream.liveness())
@@ -803,7 +803,7 @@ impl Server {
     }
 
     /// Server can execute a query.
-    pub fn in_sync(&self) -> bool {
+    pub(crate) fn in_sync(&self) -> bool {
         matches!(
             self.stats().get_state(),
             State::Idle | State::IdleInTransaction | State::TransactionError
@@ -812,70 +812,70 @@ impl Server {
 
     /// Server is done executing all queries and is
     /// not inside a transaction.
-    pub fn can_check_in(&self) -> bool {
+    pub(crate) fn can_check_in(&self) -> bool {
         self.stats().get_state() == State::Idle
     }
 
     /// Server hasn't sent all messages yet.
-    pub fn has_more_messages(&self) -> bool {
+    pub(crate) fn has_more_messages(&self) -> bool {
         self.prepared_statements.has_more_messages() || self.streaming
     }
 
-    pub fn in_copy_mode(&self) -> bool {
+    pub(crate) fn in_copy_mode(&self) -> bool {
         self.prepared_statements.in_copy_mode()
     }
 
     /// Protocol is out of sync due to an error in extended protocol.
-    pub fn out_of_sync(&self) -> bool {
+    pub(crate) fn out_of_sync(&self) -> bool {
         self.prepared_statements.out_of_sync()
     }
 
     /// Server is still inside a transaction.
     #[inline]
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
     }
 
     /// The server connection permanently failed.
     #[inline]
-    pub fn error(&self) -> bool {
+    pub(crate) fn error(&self) -> bool {
         self.stats().get_state() == State::Error
     }
 
     /// Did the schema change and prepared statements are broken.
-    pub fn schema_changed(&self) -> bool {
+    pub(crate) fn schema_changed(&self) -> bool {
         self.schema_changed
     }
 
     /// Prepared statements changed outside of our pipeline,
     /// need to resync from `pg_prepared_statements` view.
-    pub fn sync_prepared(&self) -> bool {
+    pub(crate) fn sync_prepared(&self) -> bool {
         self.sync_prepared
     }
 
     /// Connection was left with an unfinished query.
-    pub fn needs_drain(&self) -> bool {
+    pub(crate) fn needs_drain(&self) -> bool {
         !self.in_sync()
     }
 
     /// A request is being sent by a client.
-    pub fn sending_request(&self) -> bool {
+    pub(crate) fn sending_request(&self) -> bool {
         self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
-    pub fn force_close(&self) -> bool {
+    pub(crate) fn force_close(&self) -> bool {
         self.stats().get_state() == State::ForceClose || self.io_in_progress()
     }
 
     /// Server parameters.
     #[inline]
-    pub fn params(&self) -> &Parameters {
+    pub(crate) fn params(&self) -> &Parameters {
         &self.params
     }
 
     /// Execute a batch of queries and return all results.
-    pub async fn execute_batch(
+    pub(crate) async fn execute_batch(
         &mut self,
         request: impl Into<ServerRequest>,
     ) -> Result<Vec<Message>, Error> {
@@ -923,7 +923,7 @@ impl Server {
     }
 
     /// Execute a query on the server and return the result.
-    pub async fn execute(
+    pub(crate) async fn execute(
         &mut self,
         request: impl Into<ServerRequest>,
     ) -> Result<Vec<Message>, Error> {
@@ -931,7 +931,7 @@ impl Server {
     }
 
     /// Execute query and raise an error if one is returned by PostgreSQL.
-    pub async fn execute_checked(
+    pub(crate) async fn execute_checked(
         &mut self,
         request: impl Into<ServerRequest>,
     ) -> Result<Vec<Message>, Error> {
@@ -953,7 +953,7 @@ impl Server {
     }
 
     /// Execute a query and return all rows.
-    pub async fn fetch_all<T: From<DataRow>>(
+    pub(crate) async fn fetch_all<T: From<DataRow>>(
         &mut self,
         request: impl Into<ServerRequest>,
     ) -> Result<Vec<T>, Error> {
@@ -968,7 +968,7 @@ impl Server {
     }
 
     /// Perform a healthcheck on this connection using the provided query.
-    pub async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
+    pub(crate) async fn healthcheck(&mut self, query: &str) -> Result<(), Error> {
         debug!("running healthcheck \"{}\" [{}]", query, self.addr);
 
         self.execute(query).await?;
@@ -1087,28 +1087,28 @@ impl Server {
 
     /// Reset error state caused by schema change.
     #[inline]
-    pub fn reset_schema_changed(&mut self) {
+    pub(crate) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
     #[inline]
-    pub fn reset_params(&mut self) {
+    pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
     }
 
     #[inline]
-    pub fn reset_re_synced(&mut self) {
+    pub(crate) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
     #[inline]
-    pub fn re_synced(&self) -> bool {
+    pub(crate) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
     #[inline]
-    pub fn disconnect_reason(&mut self, reason: DisconnectReason) {
+    pub(crate) fn disconnect_reason(&mut self, reason: DisconnectReason) {
         if self.disconnect_reason.is_none() {
             self.disconnect_reason = Some(reason);
         }
@@ -1116,25 +1116,25 @@ impl Server {
 
     /// Server connection unique identifier.
     #[inline]
-    pub fn id(&self) -> BackendPid {
+    pub(crate) fn id(&self) -> BackendPid {
         self.id
     }
 
     /// Backend key data for query cancellation.
     #[inline]
-    pub fn key(&self) -> &BackendKeyData {
+    pub(crate) fn key(&self) -> &BackendKeyData {
         &self.key
     }
 
     /// Number of password attempts it took to authenticate this connection.
     #[inline]
-    pub fn password_attempts(&self) -> usize {
+    pub(crate) fn password_attempts(&self) -> usize {
         self.password_attempts
     }
 
     /// How old this connection is.
     #[inline]
-    pub fn age(&self, instant: Instant) -> Duration {
+    pub(crate) fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats().created_at())
     }
 
@@ -1144,7 +1144,7 @@ impl Server {
     /// negative overflow. No-op when `jitter` is zero. Called once
     /// by the pool after a successful connect.
     #[inline]
-    pub fn apply_lifetime_jitter(&mut self, base: Duration, jitter: Duration) {
+    pub(crate) fn apply_lifetime_jitter(&mut self, base: Duration, jitter: Duration) {
         if jitter.is_zero() {
             return;
         }
@@ -1164,29 +1164,29 @@ impl Server {
     /// Effective max_age for this connection: the per-connection
     /// jittered value if one was sampled, otherwise `base`.
     #[inline]
-    pub fn effective_max_age(&self, base: Duration) -> Duration {
+    pub(crate) fn effective_max_age(&self, base: Duration) -> Duration {
         self.max_age.unwrap_or(base)
     }
 
     #[inline]
-    pub fn credentials_generation(&self) -> u64 {
+    pub(crate) fn credentials_generation(&self) -> u64 {
         self.credentials_generation
     }
 
     #[inline]
-    pub fn set_credentials_generation(&mut self, generation: u64) {
+    pub(crate) fn set_credentials_generation(&mut self, generation: u64) {
         self.credentials_generation = generation;
     }
 
     /// How long this connection has been idle.
     #[inline]
-    pub fn idle_for(&self, instant: Instant) -> Duration {
+    pub(crate) fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats().last_used())
     }
 
     /// How long has it been since the last connection healthcheck.
     #[inline]
-    pub fn healthcheck_age(&self, instant: Instant) -> Duration {
+    pub(crate) fn healthcheck_age(&self, instant: Instant) -> Duration {
         if let Some(last_healthcheck) = self.stats().last_healthcheck() {
             instant.duration_since(last_healthcheck)
         } else {
@@ -1196,7 +1196,7 @@ impl Server {
 
     /// Get server address.
     #[inline]
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.addr
     }
 
@@ -1208,12 +1208,12 @@ impl Server {
     /// Server needs a cleanup because client changed a session variable,
     /// parameter, or advisory lock state
     #[inline]
-    pub fn dirty(&self) -> bool {
+    pub(crate) fn dirty(&self) -> bool {
         self.dirty
     }
 
     #[inline]
-    pub fn mark_dirty(&mut self, dirty: bool) {
+    pub(crate) fn mark_dirty(&mut self, dirty: bool) {
         self.dirty = dirty;
     }
 
@@ -1225,43 +1225,43 @@ impl Server {
     }
 
     #[inline]
-    pub fn stats(&self) -> &Stats {
+    pub(crate) fn stats(&self) -> &Stats {
         &self.stats
     }
 
     #[inline]
-    pub fn stats_mut(&mut self) -> &mut Stats {
+    pub(crate) fn stats_mut(&mut self) -> &mut Stats {
         &mut self.stats
     }
 
     #[inline]
-    pub fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
+    pub(crate) fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
         self.pooler_mode = pooler_mode;
     }
 
     #[inline]
-    pub fn pooler_mode(&self) -> &PoolerMode {
+    pub(crate) fn pooler_mode(&self) -> &PoolerMode {
         &self.pooler_mode
     }
 
     #[inline]
-    pub fn replication_mode(&self) -> bool {
+    pub(crate) fn replication_mode(&self) -> bool {
         self.replication_mode
     }
 
     #[inline]
-    pub fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
+    pub(crate) fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
         &mut self.prepared_statements
     }
 
     #[inline]
     #[cfg(test)]
-    pub fn prepared_statements(&self) -> &PreparedStatements {
+    pub(crate) fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
     }
 
     #[inline]
-    pub fn memory_stats(&self) -> MemoryStats {
+    pub(crate) fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
             inner: pgdog_stats::MemoryStats {
                 buffer: *self.stream_buffer.stats(),
@@ -1302,7 +1302,7 @@ impl Drop for Server {
 
 // Used for testing.
 #[cfg(test)]
-pub mod test {
+pub(crate) mod test {
     use std::time::SystemTime;
 
     use bytes::{BufMut, Bytes, BytesMut};
@@ -1376,7 +1376,7 @@ pub mod test {
     }
 
     impl Server {
-        pub fn new_error() -> Server {
+        pub(crate) fn new_error() -> Server {
             let mut server = Server::default();
             server.stats.state(State::Error);
 
@@ -1398,7 +1398,7 @@ pub mod test {
     /// Connect to the `pgdog1` database on the test server.
     /// Used by tests that need a second, distinct database so that
     /// row locks on the two databases do not share a lock namespace.
-    pub async fn test_server_pgdog1_db() -> Server {
+    pub(crate) async fn test_server_pgdog1_db() -> Server {
         Server::connect(
             &Address {
                 database_name: "pgdog1".into(),
@@ -1412,7 +1412,7 @@ pub mod test {
         .unwrap()
     }
 
-    pub async fn test_replication_server() -> Server {
+    pub(crate) async fn test_replication_server() -> Server {
         Server::connect(
             &Address::new_test(),
             ServerOptions::new_replication(),

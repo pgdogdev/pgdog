@@ -76,7 +76,7 @@ enum Command {
 /// Pipelined destination connection: a handle over a background task that
 /// owns the `Server` and reconciles responses.
 #[derive(Debug)]
-pub struct PipelinedConnection {
+pub(crate) struct PipelinedConnection {
     tx: Sender<Command>,
     shared: Arc<Mutex<Shared>>,
     address: Address,
@@ -84,7 +84,7 @@ pub struct PipelinedConnection {
 
 impl PipelinedConnection {
     /// This moves `server` into a background task and returns a handle to it.
-    pub fn new(server: Server) -> Result<Self, Error> {
+    pub(crate) fn new(server: Server) -> Result<Self, Error> {
         let (tx, rx) = channel(4096);
         let shared = Arc::new(Mutex::new(Shared::default()));
         let address = server.addr().clone();
@@ -107,14 +107,14 @@ impl PipelinedConnection {
     }
 
     /// Server address.
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.address
     }
 
     /// Enqueue a DML statement (`Bind/Execute/Flush`) without waiting for its
     /// response. `is_direct` marks a single-shard write whose 0-row result
     /// counts as a missed row.
-    pub async fn execute(&self, bind: Bind, is_direct: bool) -> Result<(), Error> {
+    pub(crate) async fn execute(&self, bind: Bind, is_direct: bool) -> Result<(), Error> {
         self.tx
             .send(Command::Execute { bind, is_direct })
             .await
@@ -124,7 +124,7 @@ impl PipelinedConnection {
     /// Prepare `parses` and wait for the acknowledgments. Inside a transaction
     /// uses `Flush` (must not commit the open implicit transaction); otherwise
     /// uses `Sync`.
-    pub async fn prepare(&self, parses: &[Parse], in_transaction: bool) -> Result<(), Error> {
+    pub(crate) async fn prepare(&self, parses: &[Parse], in_transaction: bool) -> Result<(), Error> {
         if parses.is_empty() {
             return Ok(());
         }
@@ -146,14 +146,14 @@ impl PipelinedConnection {
 
     /// Send `Sync` and wait for `ReadyForQuery` (commits the open implicit
     /// transaction on this shard).
-    pub async fn sync_and_drain(&self) -> Result<(), Error> {
+    pub(crate) async fn sync_and_drain(&self) -> Result<(), Error> {
         self.send_command_and_wait_for_sync_point(vec![Sync.into()], SyncPointKind::ReadyForQuery)
             .await
     }
 
     /// Wait until every outstanding DML acknowledgment has been read. Used at
     /// commit to confirm the shard is error-free before any shard is `Sync`ed.
-    pub async fn drain_acks(&self) -> Result<(), Error> {
+    pub(crate) async fn drain_acks(&self) -> Result<(), Error> {
         let (done, rx) = oneshot::channel();
         self.tx
             .send(Command::DrainAcks { done })
@@ -164,7 +164,7 @@ impl PipelinedConnection {
 
     /// Non-blocking peek + take of the latched error. `Some` means the shard
     /// has errored and the transaction must be rolled back.
-    pub fn take_error(&self) -> Option<Error> {
+    pub(crate) fn take_error(&self) -> Option<Error> {
         self.shared.lock().error.take()
     }
 

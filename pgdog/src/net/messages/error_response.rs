@@ -10,14 +10,14 @@ use crate::frontend::Error as FrontendError;
 
 /// ErrorResponse (B) message.
 #[derive(Debug, Clone)]
-pub struct ErrorResponse {
-    pub severity: String,
-    pub code: String,
-    pub message: String,
-    pub detail: Option<String>,
-    pub context: Option<String>,
-    pub file: Option<String>,
-    pub routine: Option<String>,
+pub(crate) struct ErrorResponse {
+    pub(crate) severity: String,
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) context: Option<String>,
+    pub(crate) file: Option<String>,
+    pub(crate) routine: Option<String>,
 }
 
 impl Default for ErrorResponse {
@@ -36,12 +36,12 @@ impl Default for ErrorResponse {
 
 impl ErrorResponse {
     /// True if this error response signals an invalid password (SQLSTATE 28P01).
-    pub fn is_bad_password(&self) -> bool {
+    pub(crate) fn is_bad_password(&self) -> bool {
         self.code == "28P01"
     }
 
     /// Authentication error.
-    pub fn auth(user: &str, database: &str) -> ErrorResponse {
+    pub(crate) fn auth(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "28000".into(),
@@ -56,7 +56,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn cross_shard_disabled(query: Option<&str>) -> ErrorResponse {
+    pub(crate) fn cross_shard_disabled(query: Option<&str>) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -78,7 +78,7 @@ impl ErrorResponse {
     // Cross-shard queries are disabled.
     // User specified an unmapped sharding key in list-based/range-based sharding,
     // and, if not stopped, the query would be cross-shard.
-    pub fn unmapped_sharding_key_in_cross_shard_disabled(sharding_key: &str) -> ErrorResponse {
+    pub(crate) fn unmapped_sharding_key_in_cross_shard_disabled(sharding_key: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -90,7 +90,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn set_shard_after_connect(name: &str) -> ErrorResponse {
+    pub(crate) fn set_shard_after_connect(name: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -104,7 +104,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn omni_write_with_directive() -> ErrorResponse {
+    pub(crate) fn omni_write_with_directive() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -119,7 +119,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn direct_shard_mismatch() -> ErrorResponse {
+    pub(crate) fn direct_shard_mismatch() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -129,7 +129,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn sharding_key_lookup(reason: &str) -> ErrorResponse {
+    pub(crate) fn sharding_key_lookup(reason: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -139,7 +139,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn transaction_statement_mode() -> ErrorResponse {
+    pub(crate) fn transaction_statement_mode() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -149,7 +149,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn client_idle_timeout(duration: Duration, state: &State) -> ErrorResponse {
+    pub(crate) fn client_idle_timeout(duration: Duration, state: &State) -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P05".into(),
@@ -177,7 +177,7 @@ impl ErrorResponse {
     }
 
     /// Connection error.
-    pub fn connection(user: &str, database: &str) -> ErrorResponse {
+    pub(crate) fn connection(user: &str, database: &str) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -193,7 +193,7 @@ impl ErrorResponse {
     }
 
     /// Pooler is shutting down.
-    pub fn shutting_down() -> ErrorResponse {
+    pub(crate) fn shutting_down() -> ErrorResponse {
         ErrorResponse {
             severity: "FATAL".into(),
             code: "57P01".into(),
@@ -205,7 +205,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn syntax<T: Into<String>>(err: T) -> ErrorResponse {
+    pub(crate) fn syntax<T: Into<String>>(err: T) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),
             code: "42601".into(),
@@ -217,7 +217,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn protocol_violation(err: &str) -> ErrorResponse {
+    pub(crate) fn protocol_violation(err: &str) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),
             code: "08P01".into(),
@@ -229,7 +229,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn tls_required() -> ErrorResponse {
+    pub(crate) fn tls_required() -> ErrorResponse {
         Self {
             severity: "FATAL".into(),
             code: "08004".into(),
@@ -241,7 +241,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_err(err: &impl std::error::Error) -> Self {
+    pub(crate) fn from_err(err: &impl std::error::Error) -> Self {
         let message = err.to_string();
         Self {
             severity: "ERROR".into(),
@@ -254,7 +254,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn from_client_err(err: &FrontendError) -> Self {
+    pub(crate) fn from_client_err(err: &FrontendError) -> Self {
         use crate::backend::Error as BackendError;
         if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
             *(err.clone())
@@ -269,7 +269,7 @@ impl ErrorResponse {
     }
 
     /// Whether this Postgres error is transient and the operation can be retried.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         matches!(
             self.code.as_str(),
             // Connection exceptions — server unreachable or dropped the connection.
@@ -287,7 +287,7 @@ impl ErrorResponse {
         )
     }
 
-    pub fn no_transaction() -> Self {
+    pub(crate) fn no_transaction() -> Self {
         Self {
             severity: "WARNING".into(),
             code: "25P01".into(),
@@ -298,7 +298,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn in_failed_transaction() -> Self {
+    pub(crate) fn in_failed_transaction() -> Self {
         Self {
             severity: "ERROR".into(),
             code: "25P02".into(),
@@ -309,7 +309,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn query_too_large(size: usize, limit: usize) -> Self {
+    pub(crate) fn query_too_large(size: usize, limit: usize) -> Self {
         Self {
             severity: "FATAL".into(),
             code: "54000".into(),

@@ -11,7 +11,7 @@ use pgdog_stats::client::Stats as StatsStats;
 
 /// Client statistics.
 #[derive(Copy, Clone, Debug)]
-pub struct Stats {
+pub(crate) struct Stats {
     inner: StatsStats,
     transaction_timer: Instant,
     query_timer: Instant,
@@ -77,7 +77,7 @@ impl Stats {
     }
 
     /// Get wait time if waiting.
-    pub fn wait_time(&self) -> Duration {
+    pub(crate) fn wait_time(&self) -> Duration {
         if self.state == State::Waiting {
             self.wait_timer.elapsed()
         } else {

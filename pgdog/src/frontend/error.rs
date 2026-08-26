@@ -8,7 +8,7 @@ use crate::unique_id;
 
 /// Frontend error.
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 

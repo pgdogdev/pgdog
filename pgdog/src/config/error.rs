@@ -1,3 +1,3 @@
 //! Configuration errors.
 
-pub use pgdog_config::Error;
+pub(crate) use pgdog_config::Error;

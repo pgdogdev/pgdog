@@ -12,10 +12,10 @@
 //! most networks are assigned with DHCP so having a static config
 //! for all nodes isn't ideal.
 
-pub mod error;
-pub mod listener;
-pub mod message;
+pub(crate) mod error;
+pub(crate) mod listener;
+pub(crate) mod message;
 
-pub use error::Error;
-pub use listener::Listener;
-pub use message::{Message, Payload};
+pub(crate) use error::Error;
+pub(crate) use listener::Listener;
+pub(crate) use message::{Message, Payload};

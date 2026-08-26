@@ -8,9 +8,9 @@ use super::tuple_data::TupleData;
 /// WAL INSERT record. Use with [`Table::insert`](crate::backend::replication::logical::publisher::Table::insert)
 /// or [`Table::upsert`](crate::backend::replication::logical::publisher::Table::upsert).
 #[derive(Debug, Clone)]
-pub struct Insert {
-    pub oid: Oid,
-    pub tuple_data: TupleData,
+pub(crate) struct Insert {
+    pub(crate) oid: Oid,
+    pub(crate) tuple_data: TupleData,
 }
 
 impl ToBytes for Insert {

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
-pub enum AuthResult {
+pub(crate) enum AuthResult {
     /// No problems.
     #[default]
     Ok,
@@ -24,7 +24,7 @@ pub enum AuthResult {
 }
 
 impl AuthResult {
-    pub fn is_ok(&self) -> bool {
+    pub(crate) fn is_ok(&self) -> bool {
         matches!(self, Self::Ok)
     }
 }

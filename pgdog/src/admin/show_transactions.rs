@@ -3,7 +3,7 @@ use crate::frontend::client::query_engine::two_pc::Manager;
 
 use super::prelude::*;
 
-pub struct ShowTransactions;
+pub(crate) struct ShowTransactions;
 
 #[async_trait]
 impl Command for ShowTransactions {

@@ -14,10 +14,10 @@ use crate::{
 };
 
 /// Get all relations in the database.
-pub static TABLES: &str = include_str!("relations.sql");
+pub(crate) static TABLES: &str = include_str!("relations.sql");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Relation {
+pub(crate) struct Relation {
     inner: StatsRelation,
 }
 
@@ -73,7 +73,7 @@ impl From<DataRow> for Relation {
 
 impl Relation {
     /// Load relations and their columns.
-    pub async fn load(server: &mut Server) -> Result<Vec<Relation>, Error> {
+    pub(crate) async fn load(server: &mut Server) -> Result<Vec<Relation>, Error> {
         let mut relations: HashMap<_, _> = server
             .fetch_all::<Relation>(TABLES)
             .await?

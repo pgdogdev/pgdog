@@ -1,30 +1,30 @@
-pub mod non_identity_columns_presence;
-pub use non_identity_columns_presence::*;
+pub(crate) mod non_identity_columns_presence;
+pub(crate) use non_identity_columns_presence::*;
 
-pub mod slot;
-pub use slot::*;
-pub mod copy;
-pub mod parallel_sync;
-pub mod progress;
-pub mod publisher_impl;
-pub mod queries;
-pub mod table;
-pub use copy::*;
-pub use parallel_sync::ParallelSyncManager;
-pub use queries::*;
-pub use table::*;
+pub(crate) mod slot;
+pub(crate) use slot::*;
+pub(crate) mod copy;
+pub(crate) mod parallel_sync;
+pub(crate) mod progress;
+pub(crate) mod publisher_impl;
+pub(crate) mod queries;
+pub(crate) mod table;
+pub(crate) use copy::*;
+pub(crate) use parallel_sync::ParallelSyncManager;
+pub(crate) use queries::*;
+pub(crate) use table::*;
 
 #[cfg(test)]
-pub mod test {
+pub(crate) mod test {
 
     use crate::backend::{Server, server::test::test_replication_server};
 
-    pub struct PublicationTest {
-        pub server: Server,
+    pub(crate) struct PublicationTest {
+        pub(crate) server: Server,
     }
 
     impl PublicationTest {
-        pub async fn cleanup(&mut self) {
+        pub(crate) async fn cleanup(&mut self) {
             self.server
                 .execute("DROP PUBLICATION IF EXISTS publication_test")
                 .await
@@ -40,7 +40,7 @@ pub mod test {
         }
     }
 
-    pub async fn setup_publication() -> PublicationTest {
+    pub(crate) async fn setup_publication() -> PublicationTest {
         let mut server = test_replication_server().await;
 
         server.execute("CREATE TABLE IF NOT EXISTS publication_test_one (id BIGSERIAL PRIMARY KEY, email VARCHAR NOT NULL)").await.unwrap();

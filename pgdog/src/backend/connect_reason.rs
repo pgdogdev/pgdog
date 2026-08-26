@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub enum ConnectReason {
+pub(crate) enum ConnectReason {
     LsnCheck,
     BelowMin,
     ClientWaiting,

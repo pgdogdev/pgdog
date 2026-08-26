@@ -113,11 +113,11 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub async fn read_server_message(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read_server_message(&mut self) -> Result<Message, Error> {
         Ok(self.backend.read().await?)
     }
 
-    pub async fn process_server_message(
+    pub(crate) async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
@@ -496,7 +496,7 @@ pub(super) struct ExplainResponseState {
 }
 
 impl ExplainResponseState {
-    pub fn new(trace: ExplainTrace) -> Self {
+    pub(crate) fn new(trace: ExplainTrace) -> Self {
         Self {
             lines: trace.render_lines(),
             row_description: None,
@@ -505,7 +505,7 @@ impl ExplainResponseState {
         }
     }
 
-    pub fn capture_row_description(&mut self, row_description: RowDescription) {
+    pub(crate) fn capture_row_description(&mut self, row_description: RowDescription) {
         self.supported = row_description.fields.len() == 1
             && matches!(row_description.field(0).map(|f| f.type_oid), Some(25));
         if self.supported {
@@ -515,7 +515,7 @@ impl ExplainResponseState {
         }
     }
 
-    pub fn should_emit(&self) -> bool {
+    pub(crate) fn should_emit(&self) -> bool {
         self.supported && !self.annotated
     }
 }

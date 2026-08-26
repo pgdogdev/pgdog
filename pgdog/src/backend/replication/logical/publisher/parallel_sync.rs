@@ -33,7 +33,7 @@ struct ParallelSync {
 
 impl ParallelSync {
     // Run parallel sync.
-    pub fn run(self) -> JoinHandle<Result<Table, Error>> {
+    pub(crate) fn run(self) -> JoinHandle<Result<Table, Error>> {
         tasks::spawn("parallel sync", async move {
             // Record copy in queue before waiting for permit.
             let tracker = TableCopy::new(&self.table.table.schema, &self.table.table.name);
@@ -165,7 +165,7 @@ impl ParallelSync {
 }
 
 /// Sync tables in parallel up to maximum concurrency.
-pub struct ParallelSyncManager {
+pub(crate) struct ParallelSyncManager {
     permit: Arc<Semaphore>,
     tables: Vec<Table>,
     replicas: Vec<Pool>,
@@ -175,7 +175,7 @@ pub struct ParallelSyncManager {
 
 impl ParallelSyncManager {
     /// Create parallel sync manager.
-    pub fn new(
+    pub(crate) fn new(
         tables: Vec<Table>,
         replicas: Vec<Pool>,
         source: Cluster,
@@ -202,7 +202,7 @@ impl ParallelSyncManager {
     }
 
     /// Run parallel table sync and return table LSNs when everything is done.
-    pub async fn run(self, cancel: CancellationToken) -> Result<Vec<Table>, Error> {
+    pub(crate) async fn run(self, cancel: CancellationToken) -> Result<Vec<Table>, Error> {
         info!(
             "starting parallel table copy using {} replicas and {} parallel copies",
             self.replicas.len(),

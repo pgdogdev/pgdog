@@ -11,7 +11,7 @@ use super::Error;
 use crate::net::messages::{Authentication, Password};
 
 #[derive(Debug, Clone)]
-pub struct Client<'a> {
+pub(crate) struct Client<'a> {
     passwords: Vec<String>,
     user: &'a str,
     salt: [u8; 4],
@@ -21,7 +21,7 @@ impl<'a> Client<'a> {
     /// Create new MD5 client. When multiple passwords are provided, all of
     /// them are accepted by [`Client::check`]; [`Client::encrypted`] and
     /// [`Client::response`] use the first password.
-    pub fn new(user: &'a str, passwords: &[String]) -> Self {
+    pub(crate) fn new(user: &'a str, passwords: &[String]) -> Self {
         Self {
             passwords: passwords.to_vec(),
             user,
@@ -29,7 +29,7 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub fn new_salt(user: &'a str, passwords: &[String], salt: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn new_salt(user: &'a str, passwords: &[String], salt: &[u8]) -> Result<Self, Error> {
         Ok(Self {
             user,
             passwords: passwords.to_vec(),
@@ -38,7 +38,7 @@ impl<'a> Client<'a> {
     }
 
     /// Challenge
-    pub fn challenge(&self) -> Authentication {
+    pub(crate) fn challenge(&self) -> Authentication {
         Authentication::Md5(Bytes::from(self.salt.to_vec()))
     }
 
@@ -61,12 +61,12 @@ impl<'a> Client<'a> {
         Ok(self.encrypt(self.passwords.first().ok_or(Error::ServerSideOnePassword)?))
     }
 
-    pub fn response(&self) -> Result<Password, Error> {
+    pub(crate) fn response(&self) -> Result<Password, Error> {
         Ok(Password::new_password(self.encrypted()?))
     }
 
     /// Check encrypted password against any of the configured passwords.
-    pub fn check(&self, encrypted: &str) -> bool {
+    pub(crate) fn check(&self, encrypted: &str) -> bool {
         self.passwords.iter().any(|p| {
             crate::util::constant_time_eq(self.encrypt(p).as_bytes(), encrypted.as_bytes())
         })

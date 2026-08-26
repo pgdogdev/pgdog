@@ -1,83 +1,83 @@
 //! PostgreSQL wire protocol messages.
-pub mod auth;
-pub mod backend_key;
-pub mod backend_pid;
-pub mod bind;
-pub mod bind_complete;
-pub mod buffer;
-pub mod close;
-pub mod close_complete;
-pub mod command_complete;
-pub mod copy_data;
-pub mod copy_done;
-pub mod copy_fail;
-pub mod data_row;
-pub mod data_types;
-pub mod describe;
-pub mod empty_query_response;
-pub mod error_response;
-pub mod execute;
-pub mod fastpath;
-pub mod flush;
-pub mod frontend_pid;
-pub mod hello;
-pub mod negotiate_protocol_version;
-pub mod no_data;
-pub mod notice_response;
-pub mod notification_response;
-pub mod parameter_description;
-pub mod parameter_status;
-pub mod parse;
-pub mod parse_complete;
-pub mod payload;
-pub mod prelude;
-pub mod prepare;
-pub mod protocol_version;
-pub mod query;
-pub mod replication;
-pub mod rfq;
-pub mod row_description;
-pub mod sync;
-pub mod terminate;
+pub(crate) mod auth;
+pub(crate) mod backend_key;
+pub(crate) mod backend_pid;
+pub(crate) mod bind;
+pub(crate) mod bind_complete;
+pub(crate) mod buffer;
+pub(crate) mod close;
+pub(crate) mod close_complete;
+pub(crate) mod command_complete;
+pub(crate) mod copy_data;
+pub(crate) mod copy_done;
+pub(crate) mod copy_fail;
+pub(crate) mod data_row;
+pub(crate) mod data_types;
+pub(crate) mod describe;
+pub(crate) mod empty_query_response;
+pub(crate) mod error_response;
+pub(crate) mod execute;
+pub(crate) mod fastpath;
+pub(crate) mod flush;
+pub(crate) mod frontend_pid;
+pub(crate) mod hello;
+pub(crate) mod negotiate_protocol_version;
+pub(crate) mod no_data;
+pub(crate) mod notice_response;
+pub(crate) mod notification_response;
+pub(crate) mod parameter_description;
+pub(crate) mod parameter_status;
+pub(crate) mod parse;
+pub(crate) mod parse_complete;
+pub(crate) mod payload;
+pub(crate) mod prelude;
+pub(crate) mod prepare;
+pub(crate) mod protocol_version;
+pub(crate) mod query;
+pub(crate) mod replication;
+pub(crate) mod rfq;
+pub(crate) mod row_description;
+pub(crate) mod sync;
+pub(crate) mod terminate;
 
-pub use auth::{Authentication, Password};
-pub use backend_key::BackendKeyData;
-pub use backend_pid::BackendPid;
-pub use bind::{Bind, Format, ParameterWithFormat};
-pub use bind_complete::BindComplete;
-pub use buffer::MessageBuffer;
-pub use close::Close;
-pub use close_complete::CloseComplete;
-pub use command_complete::CommandComplete;
-pub use copy_data::CopyData;
-pub use copy_done::CopyDone;
-pub use copy_fail::CopyFail;
-pub use data_row::{DataRow, ToDataRowColumn};
-pub use data_types::*;
-pub use describe::Describe;
-pub use empty_query_response::EmptyQueryResponse;
-pub use error_response::ErrorResponse;
-pub use execute::Execute;
-pub use fastpath::Fastpath;
-pub use flush::Flush;
-pub use frontend_pid::FrontendPid;
-pub use hello::Startup;
-pub use negotiate_protocol_version::NegotiateProtocolVersion;
-pub use no_data::NoData;
-pub use notice_response::NoticeResponse;
-pub use notification_response::NotificationResponse;
-pub use parameter_description::ParameterDescription;
-pub use parameter_status::ParameterStatus;
-pub use parse::Parse;
-pub use parse_complete::ParseComplete;
-pub use payload::Payload;
-pub use prepare::{PREPARE_TEMPLATE_NAME, Prepare};
-pub use protocol_version::ProtocolVersion;
-pub use query::Query;
-pub use rfq::{ReadyForQuery, TransactionState};
-pub use row_description::{Field, RowDescription};
-pub use sync::Sync;
-pub use terminate::Terminate;
+pub(crate) use auth::{Authentication, Password};
+pub(crate) use backend_key::BackendKeyData;
+pub(crate) use backend_pid::BackendPid;
+pub(crate) use bind::{Bind, Format, ParameterWithFormat};
+pub(crate) use bind_complete::BindComplete;
+pub(crate) use buffer::MessageBuffer;
+pub(crate) use close::Close;
+pub(crate) use close_complete::CloseComplete;
+pub(crate) use command_complete::CommandComplete;
+pub(crate) use copy_data::CopyData;
+pub(crate) use copy_done::CopyDone;
+pub(crate) use copy_fail::CopyFail;
+pub(crate) use data_row::{DataRow, ToDataRowColumn};
+pub(crate) use data_types::*;
+pub(crate) use describe::Describe;
+pub(crate) use empty_query_response::EmptyQueryResponse;
+pub(crate) use error_response::ErrorResponse;
+pub(crate) use execute::Execute;
+pub(crate) use fastpath::Fastpath;
+pub(crate) use flush::Flush;
+pub(crate) use frontend_pid::FrontendPid;
+pub(crate) use hello::Startup;
+pub(crate) use negotiate_protocol_version::NegotiateProtocolVersion;
+pub(crate) use no_data::NoData;
+pub(crate) use notice_response::NoticeResponse;
+pub(crate) use notification_response::NotificationResponse;
+pub(crate) use parameter_description::ParameterDescription;
+pub(crate) use parameter_status::ParameterStatus;
+pub(crate) use parse::Parse;
+pub(crate) use parse_complete::ParseComplete;
+pub(crate) use payload::Payload;
+pub(crate) use prepare::{PREPARE_TEMPLATE_NAME, Prepare};
+pub(crate) use protocol_version::ProtocolVersion;
+pub(crate) use query::Query;
+pub(crate) use rfq::{ReadyForQuery, TransactionState};
+pub(crate) use row_description::{Field, RowDescription};
+pub(crate) use sync::Sync;
+pub(crate) use terminate::Terminate;
 
 use crate::{net::Error, stats::memory::MemoryUsage};
 
@@ -89,7 +89,7 @@ pub(crate) fn c_string_bytes(value: &str) -> Bytes {
 }
 
 /// Convert a Rust struct to a PostgreSQL wire protocol message.
-pub trait ToBytes {
+pub(crate) trait ToBytes {
     /// Create the protocol message as an array of bytes.
     /// The message must conform to the spec. No additional manipulation
     /// of the data will take place.
@@ -97,13 +97,13 @@ pub trait ToBytes {
 }
 
 /// Convert a PostgreSQL wire protocol message to a Rust struct.
-pub trait FromBytes: Sized {
+pub(crate) trait FromBytes: Sized {
     /// Perform the conversion.
     fn from_bytes(bytes: Bytes) -> Result<Self, Error>;
 }
 
 /// PostgreSQL wire protocol message.
-pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
+pub(crate) trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
     /// 99% of messages have a letter code.
     fn code(&self) -> char;
 
@@ -119,7 +119,7 @@ pub trait Protocol: ToBytes + FromBytes + std::fmt::Debug {
 }
 
 #[derive(Clone, PartialEq, Default, Copy, Debug)]
-pub enum Source {
+pub(crate) enum Source {
     /// Message synthesised by pgdog itself (not from any real connection).
     /// This is the default: any message constructed without an explicit source is internal.
     #[default]
@@ -131,7 +131,7 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn backend_id(&self) -> Option<BackendPid> {
+    pub(crate) fn backend_id(&self) -> Option<BackendPid> {
         if let Self::Backend(id) = self {
             Some(*id)
         } else {
@@ -142,7 +142,7 @@ impl Source {
 
 /// PostgreSQL protocol message.
 #[derive(Clone, Default, PartialEq)]
-pub struct Message {
+pub(crate) struct Message {
     payload: Bytes,
     stream: bool,
     source: Source,
@@ -236,7 +236,7 @@ impl FromBytes for Message {
 
 impl Message {
     /// Create new message from network payload.
-    pub fn new(payload: Bytes) -> Self {
+    pub(crate) fn new(payload: Bytes) -> Self {
         Self {
             payload,
             stream: false,
@@ -245,49 +245,49 @@ impl Message {
     }
 
     /// This message is part of a stream and should be flushed asap.
-    pub fn stream(mut self, stream: bool) -> Self {
+    pub(crate) fn stream(mut self, stream: bool) -> Self {
         self.stream = stream;
         self
     }
 
     /// Take the message payload.
-    pub fn payload(&self) -> Bytes {
+    pub(crate) fn payload(&self) -> Bytes {
         self.payload.clone()
     }
 
     /// Number of bytes in the message.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 
     /// This message is coming from the backend.
-    pub fn backend(mut self, id: BackendPid) -> Self {
+    pub(crate) fn backend(mut self, id: BackendPid) -> Self {
         self.source = Source::Backend(id);
         self
     }
 
     /// This message is coming from the frontend.
-    pub fn frontend(mut self) -> Self {
+    pub(crate) fn frontend(mut self) -> Self {
         self.source = Source::Frontend;
         self
     }
 
     /// Where is this message coming from?
-    pub fn source(&self) -> Source {
+    pub(crate) fn source(&self) -> Source {
         self.source
     }
 
     #[cfg(test)]
     // FIXME(sage): This and transaction_error should use ReadyForQuery's code
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.code() == 'Z' && matches!(self.payload[5] as char, 'T' | 'E')
     }
 
-    pub fn transaction_error(&self) -> bool {
+    pub(crate) fn transaction_error(&self) -> bool {
         self.code() == 'Z' && self.payload[5] as char == 'E'
     }
 
-    pub fn replace_payload(&mut self, bytes: Bytes) {
+    pub(crate) fn replace_payload(&mut self, bytes: Bytes) {
         self.payload = bytes;
     }
 }

@@ -9,11 +9,11 @@ use std::sync::LazyLock;
 use crate::backend::replication::logical::Error;
 use task::{TaskError, TaskStorage, TaskWaiter};
 
-pub mod copy_data;
-pub mod replication;
-pub mod resharding;
-pub mod schema_sync;
-pub mod task;
+pub(crate) mod copy_data;
+pub(crate) mod replication;
+pub(crate) mod resharding;
+pub(crate) mod schema_sync;
+pub(crate) mod task;
 
 /// Process-global task registry shared by all `crate::api` task modules.
 static TASKS: LazyLock<TaskStorage> = LazyLock::new(TaskStorage::default);

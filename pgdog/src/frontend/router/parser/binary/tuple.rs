@@ -7,7 +7,7 @@ use crate::net::messages::ToBytes;
 use super::header::Header;
 
 #[derive(Debug, Clone)]
-pub enum Data {
+pub(crate) enum Data {
     Null,
     Column(Bytes),
 }
@@ -29,7 +29,7 @@ impl Data {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tuple {
+pub(crate) struct Tuple {
     row: Vec<Data>,
     oid: Option<i32>,
     end: bool,
@@ -144,7 +144,7 @@ impl Tuple {
             }
     }
 
-    pub fn end(&self) -> bool {
+    pub(crate) fn end(&self) -> bool {
         self.end
     }
 }
@@ -202,7 +202,7 @@ mod test {
     use super::{Data, Tuple};
 
     impl Tuple {
-        pub fn new(row: &[Data]) -> Self {
+        pub(crate) fn new(row: &[Data]) -> Self {
             Self {
                 row: row.to_vec(),
                 oid: None,
@@ -210,7 +210,7 @@ mod test {
             }
         }
 
-        pub fn new_end() -> Self {
+        pub(crate) fn new_end() -> Self {
             Self {
                 row: vec![],
                 oid: None,

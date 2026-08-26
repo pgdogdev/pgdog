@@ -11,7 +11,7 @@ use crate::frontend::router::sharding::mapping::compare_flexible_type;
 
 /// A single validation problem detected in a sharded table mapping configuration.
 #[derive(Debug, Display)]
-pub enum ValidationError {
+pub(crate) enum ValidationError {
     /// A shard number in a mapping entry exceeds the available shard count.
     #[display("shard={shard} exceeds the configured shard count ({num_shards})")]
     ShardOutOfRange { shard: usize, num_shards: usize },
@@ -50,7 +50,7 @@ pub enum ValidationError {
 /// Errors are ordered by entry position: all problems with entry N are reported
 /// before any problem with entry N+1. Range overlap is checked last as it
 /// requires the full slice.
-pub fn validate(
+pub(crate) fn validate(
     configs: &[ShardedMappingConfig],
     data_type: DataType,
     num_shards: usize,
@@ -66,7 +66,7 @@ pub fn validate(
 }
 
 /// Check that the shard number in `config` is within `[0, num_shards)`.
-pub fn check_shard_range(
+pub(crate) fn check_shard_range(
     config: &ShardedMappingConfig,
     num_shards: usize,
 ) -> Option<ValidationError> {
@@ -80,7 +80,7 @@ pub fn check_shard_range(
 
 /// Check that `config`, if it is a range entry, has well-formed bounds: at least
 /// one of `start`/`end` is defined, and `start <= end` when both are present.
-pub fn check_range_bounds(config: &ShardedMappingConfig) -> Option<ValidationError> {
+pub(crate) fn check_range_bounds(config: &ShardedMappingConfig) -> Option<ValidationError> {
     let ShardedMappingConfig::Range(r) = config else {
         return None;
     };
@@ -101,7 +101,7 @@ pub fn check_range_bounds(config: &ShardedMappingConfig) -> Option<ValidationErr
 }
 
 /// Check that all values in `config` (list values or range bounds) match `data_type`.
-pub fn check_type_compatibility(
+pub(crate) fn check_type_compatibility(
     config: &ShardedMappingConfig,
     data_type: DataType,
 ) -> Vec<ValidationError> {
@@ -128,7 +128,7 @@ pub fn check_type_compatibility(
 /// Compares every pair of ranges as half-open intervals `[start, end)`, with an
 /// absent bound treated as -inf (`start`) or +inf (`end`). Returns
 /// [`ValidationError::RangesOverlap`] naming the first conflicting pair.
-pub fn check_range_overlap(configs: &[ShardedMappingConfig]) -> Vec<ValidationError> {
+pub(crate) fn check_range_overlap(configs: &[ShardedMappingConfig]) -> Vec<ValidationError> {
     let ranges: Vec<_> = configs
         .iter()
         .filter_map(|c| match c {

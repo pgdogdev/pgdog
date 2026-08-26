@@ -7,7 +7,7 @@ use super::prelude::*;
 
 /// Pause pool(s).
 #[derive(Default)]
-pub struct Pause {
+pub(crate) struct Pause {
     user: Option<String>,
     database: Option<String>,
     resume: bool,

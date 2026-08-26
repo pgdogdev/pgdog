@@ -24,20 +24,20 @@ use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 /// then replication. With `auto_cutover` it also performs the cutover.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReshardTask {
-    pub orchestrator: Orchestrator,
+    pub(crate) orchestrator: Orchestrator,
     /// Skip the pre- and post-data schema sync.
     #[builder(default)]
-    pub skip_schema_sync: bool,
+    pub(crate) skip_schema_sync: bool,
     /// Only replicate; skip the initial data copy.
     #[builder(default)]
-    pub replicate_only: bool,
+    pub(crate) replicate_only: bool,
     /// Only copy data; skip replication.
     #[builder(default)]
-    pub sync_only: bool,
+    pub(crate) sync_only: bool,
     /// Cut over automatically once replication has caught up, instead of
     /// waiting for an operator `CUTOVER`. Set by the reshard flow.
     #[builder(default)]
-    pub auto_cutover: bool,
+    pub(crate) auto_cutover: bool,
 }
 
 impl Task for ReshardTask {

@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
@@ -98,7 +98,7 @@ impl Error {
     /// If this error corresponds to a fatal client-facing condition, return the
     /// `ErrorResponse` to send before disconnecting. Returns `None` for errors
     /// that are not surfaced to the client.
-    pub fn as_fatal_error_response(&self) -> Option<super::messages::ErrorResponse> {
+    pub(crate) fn as_fatal_error_response(&self) -> Option<super::messages::ErrorResponse> {
         match self {
             Self::MessageTooLarge { size, limit } => Some(
                 super::messages::ErrorResponse::query_too_large(*size, *limit),
@@ -114,7 +114,7 @@ impl Error {
     }
 
     /// Transient network fault worth retrying.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         matches!(self, Self::Io(_) | Self::UnexpectedEof)
     }
 }

@@ -13,13 +13,13 @@ use crate::frontend::router::parser::comment::directive::Directive;
 use strip::{leading_block_comment, trailing_block_comment};
 
 #[derive(Default, Debug, Clone)]
-pub struct QueryAndComment<'a> {
-    pub query: &'a str,
+pub(crate) struct QueryAndComment<'a> {
+    pub(crate) query: &'a str,
     #[cfg(test)]
-    pub comment: String,
-    pub role: Option<Role>,
-    pub shard: Option<ShardOrLookup>,
-    pub sharding_key: Option<String>,
+    pub(crate) comment: String,
+    pub(crate) role: Option<Role>,
+    pub(crate) shard: Option<ShardOrLookup>,
+    pub(crate) sharding_key: Option<String>,
 }
 
 /// Extract SQL C-style block comments from both the beginning and the end
@@ -30,7 +30,7 @@ pub struct QueryAndComment<'a> {
 /// This algorithm uses a heuristic, and not the real Postgres parser, because the heuristic
 /// is 2x faster and will work most of the time.
 ///
-pub fn parse_edge_comment<'a>(
+pub(crate) fn parse_edge_comment<'a>(
     query: &'a str,
     schema: &ShardingSchema,
 ) -> Result<QueryAndComment<'a>, Error> {

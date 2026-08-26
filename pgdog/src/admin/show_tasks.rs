@@ -12,7 +12,7 @@ use super::prelude::*;
 /// to not overwhelm the cli output
 const MAX_LEVEL: usize = 1;
 
-pub struct ShowTasks;
+pub(crate) struct ShowTasks;
 
 #[async_trait]
 impl Command for ShowTasks {

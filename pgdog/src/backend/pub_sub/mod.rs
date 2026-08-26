@@ -1,11 +1,11 @@
-pub mod client;
-pub mod listener;
-pub mod notification;
-pub mod stats;
+pub(crate) mod client;
+pub(crate) mod listener;
+pub(crate) mod notification;
+pub(crate) mod stats;
 
-pub use client::PubSubClient;
-pub use listener::PubSubListener;
-pub use stats::{Stats, StatsSnapshot};
+pub(crate) use client::PubSubClient;
+pub(crate) use listener::PubSubListener;
+pub(crate) use stats::{Stats, StatsSnapshot};
 
 use crate::config::config;
 

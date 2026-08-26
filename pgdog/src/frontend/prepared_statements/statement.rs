@@ -3,7 +3,7 @@ use crate::{net::Prepare, stats::memory::MemoryUsage};
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Statement {
+pub(crate) struct Statement {
     pub(super) stmt: StatementType,
     pub(super) row_description: Option<RowDescription>,
     pub(super) cache_key: CacheKey,

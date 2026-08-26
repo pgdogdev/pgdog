@@ -2,10 +2,10 @@ use crate::backend::pub_sub::listener;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct Listeners;
+pub(crate) struct Listeners;
 
 impl Listeners {
-    pub fn load() -> Vec<Metric> {
+    pub(crate) fn load() -> Vec<Metric> {
         let mut stats: Vec<_> = listener::stats().into_iter().collect();
         stats.sort_by(|a, b| a.0.cmp(&b.0));
 

@@ -5,7 +5,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::ops::{Deref, DerefMut};
 
 /// Payload wrapper.
-pub struct Payload {
+pub(crate) struct Payload {
     bytes: BytesMut,
     /// Bytes of header already written into `bytes` (name byte, if any,
     /// plus the length placeholder, if any).
@@ -21,7 +21,7 @@ impl Default for Payload {
 
 impl Payload {
     /// Create new payload.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut bytes = BytesMut::with_capacity(4);
         bytes.put_i32(0); // Length placeholder, patched in on freeze().
 
@@ -37,7 +37,7 @@ impl Payload {
     }
 
     /// Create new named payload.
-    pub fn named(name: char) -> Self {
+    pub(crate) fn named(name: char) -> Self {
         let mut bytes = BytesMut::with_capacity(5);
         bytes.put_u8(name as u8);
         bytes.put_i32(0); // Length placeholder, patched in on freeze().
@@ -49,7 +49,7 @@ impl Payload {
         }
     }
 
-    pub fn wrapped(name: char) -> Self {
+    pub(crate) fn wrapped(name: char) -> Self {
         let mut bytes = BytesMut::with_capacity(1);
         bytes.put_u8(name as u8);
 
@@ -60,7 +60,7 @@ impl Payload {
         }
     }
 
-    pub fn raw() -> Self {
+    pub(crate) fn raw() -> Self {
         Self {
             bytes: BytesMut::new(),
             header_len: 0,
@@ -73,7 +73,7 @@ impl Payload {
     /// The header (name byte and/or length) was already written in place
     /// when the payload was created, so this just patches the length
     /// field, if any, and freezes the buffer. No extra allocation or copy.
-    pub fn freeze(mut self) -> Bytes {
+    pub(crate) fn freeze(mut self) -> Bytes {
         if self.with_len {
             let name_len = self.header_len - 4;
             let len = (self.bytes.len() - name_len) as i32;
@@ -85,7 +85,7 @@ impl Payload {
 
     /// Add a C-style string to the payload. It will be NULL-terminated
     /// automatically.
-    pub fn put_string(&mut self, string: &str) {
+    pub(crate) fn put_string(&mut self, string: &str) {
         self.bytes.reserve(string.len() + 1);
         self.bytes.put_slice(string.as_bytes());
         self.bytes.put_u8(0);

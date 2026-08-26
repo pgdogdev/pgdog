@@ -4,7 +4,7 @@ use crate::backend::pub_sub::listener;
 
 use super::prelude::*;
 
-pub struct ShowListeners;
+pub(crate) struct ShowListeners;
 
 #[async_trait]
 impl Command for ShowListeners {

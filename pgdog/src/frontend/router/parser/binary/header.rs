@@ -20,7 +20,7 @@ const HEADER_SIZE: usize = 11 + 4 + 4; // signature + flags + extension
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(Default))]
-pub struct Header {
+pub(crate) struct Header {
     pub(super) flags: i32,
     pub(super) has_oid: bool,
     pub(super) header_extension: i32,

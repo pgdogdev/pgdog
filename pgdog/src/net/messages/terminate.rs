@@ -4,7 +4,7 @@ use super::prelude::*;
 
 /// Terminate the connection.
 #[derive(Debug)]
-pub struct Terminate;
+pub(crate) struct Terminate;
 
 impl FromBytes for Terminate {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

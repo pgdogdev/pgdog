@@ -33,21 +33,21 @@ use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
-pub mod query_engine;
-pub mod sticky;
-pub mod timeouts;
-pub mod transaction_type;
+pub(crate) mod query_engine;
+pub(crate) mod sticky;
+pub(crate) mod timeouts;
+pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub use transaction_type::TransactionType;
+pub(crate) use transaction_type::TransactionType;
 
 /// PostgreSQL client.
 ///
 /// It thinks it's talking to a real Postgres server, but actually it's talking to PgDog :-).
 ///
 #[derive(Debug)]
-pub struct Client {
+pub(crate) struct Client {
     // Client IP.
     addr: SocketAddr,
     // Client socket.
@@ -132,7 +132,7 @@ impl Client {
     /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
     ///   for more modern clients.
     ///
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         stream: Stream,
         params: Parameters,
         addr: SocketAddr,
@@ -705,12 +705,12 @@ impl Client {
         Ok(BufferEvent::HaveRequest)
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
     /// Get client memory stats.
-    pub fn memory_stats(&self) -> MemoryStats {
+    pub(crate) fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
             inner: pgdog_stats::MemoryStats {
                 buffer: *self.stream_buffer.stats(),
@@ -730,7 +730,7 @@ impl Drop for Client {
 
 #[cfg(test)]
 impl Client {
-    pub async fn spawn_test(mut self) {
+    pub(crate) async fn spawn_test(mut self) {
         self.spawn_internal().await;
     }
 }
@@ -752,7 +752,7 @@ impl MemoryUsage for Client {
 }
 
 #[cfg(test)]
-pub mod test;
+pub(crate) mod test;
 
 #[cfg(test)]
 mod client_certificate_tests {

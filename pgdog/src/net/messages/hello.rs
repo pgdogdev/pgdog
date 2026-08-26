@@ -18,7 +18,7 @@ use super::{super::Parameter, FromBytes, Payload, Protocol, ToBytes};
 ///
 /// See: <https://www.postgresql.org/docs/current/protocol-message-formats.html>
 #[derive(Debug, PartialEq)]
-pub enum Startup {
+pub(crate) enum Startup {
     /// SSLRequest (F)
     Ssl,
     /// GSSENCRequest (F)
@@ -35,7 +35,7 @@ pub enum Startup {
 
 impl Startup {
     /// Read Startup message from a stream.
-    pub async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
+    pub(crate) async fn from_stream(stream: &mut (impl AsyncRead + Unpin)) -> Result<Self, Error> {
         let len = stream.read_i32().await?;
         let code = stream.read_i32().await?;
 
@@ -129,12 +129,12 @@ impl Startup {
     }
 
     /// Create new startup message from config.
-    pub fn new(user: &str, database: &str, params: Vec<Parameter>) -> Self {
+    pub(crate) fn new(user: &str, database: &str, params: Vec<Parameter>) -> Self {
         Self::new_with_protocol_version(ProtocolVersion::V3_0, user, database, params)
     }
 
     /// Create new startup message with a specific protocol version.
-    pub fn new_with_protocol_version(
+    pub(crate) fn new_with_protocol_version(
         version: ProtocolVersion,
         user: &str,
         database: &str,
@@ -158,7 +158,7 @@ impl Startup {
     }
 
     /// Create new startup TLS request.
-    pub fn tls() -> Self {
+    pub(crate) fn tls() -> Self {
         Self::Ssl
     }
 }
@@ -225,7 +225,7 @@ impl super::ToBytes for Startup {
 
 /// Reply to a SSLRequest (F) message.
 #[derive(Debug, PartialEq)]
-pub enum SslReply {
+pub(crate) enum SslReply {
     Yes,
     No,
 }

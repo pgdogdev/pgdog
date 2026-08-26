@@ -19,7 +19,7 @@ use super::Error;
 /// and its inputs.
 ///
 #[derive(Clone)]
-pub struct QueryParserContext<'a> {
+pub(crate) struct QueryParserContext<'a> {
     /// Cluster is read-only, i.e. has no primary.
     pub(super) read_only: bool,
     /// Cluster has no replicas, only a primary.
@@ -61,7 +61,7 @@ pub struct QueryParserContext<'a> {
 
 impl<'a> QueryParserContext<'a> {
     /// Create query parser context from router context.
-    pub fn new(router_context: RouterContext<'a>) -> Result<Self, Error> {
+    pub(crate) fn new(router_context: RouterContext<'a>) -> Result<Self, Error> {
         let mut shards_calculator = ShardsWithPriority::default();
         let mut bare_key_lookups = Vec::new();
 

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Copy, Default)]
-pub enum DisconnectReason {
+pub(crate) enum DisconnectReason {
     Idle,
     Old,
     Error,

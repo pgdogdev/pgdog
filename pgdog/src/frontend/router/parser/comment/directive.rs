@@ -23,10 +23,10 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
         .map(|m| m.as_str())
 }
 
-pub struct Directive {
-    pub shard_or_lookup: Option<ShardOrLookup>,
-    pub role: Option<Role>,
-    pub sharding_key: Option<String>,
+pub(crate) struct Directive {
+    pub(crate) shard_or_lookup: Option<ShardOrLookup>,
+    pub(crate) role: Option<Role>,
+    pub(crate) sharding_key: Option<String>,
 }
 
 pub(super) fn shard_role_from_comment(

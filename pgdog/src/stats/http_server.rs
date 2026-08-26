@@ -67,7 +67,7 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
     Ok(response)
 }
 
-pub async fn server(host: &str, port: u16) -> std::io::Result<()> {
+pub(crate) async fn server(host: &str, port: u16) -> std::io::Result<()> {
     let addr = format!("{}:{}", host, port);
     info!("OpenMetrics endpoint http://{}", addr);
     let listener = TcpListener::bind(&addr).await?;

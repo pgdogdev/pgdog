@@ -27,7 +27,7 @@ use super::*;
 ///    results returned by executing those statements in a multi-shard context.
 ///
 #[derive(Default, Debug, Clone)]
-pub struct GlobalCache {
+pub(crate) struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
     unused: HashSet<Counter>,
@@ -126,7 +126,7 @@ impl GlobalCache {
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
-    pub fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
+    pub(crate) fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
         if let Some(entry) = self.names.get_mut(name)
             && entry.row_description.is_none()
         {
@@ -139,7 +139,7 @@ impl GlobalCache {
     ///
     /// It can be used to prepare this statement on a server connection
     /// or to inspect the original query.
-    pub fn parse(&self, name: &str) -> Option<Parse> {
+    pub(crate) fn parse(&self, name: &str) -> Option<Parse> {
         self.names.get(name).and_then(|p| p.parse().clone())
     }
 
@@ -159,7 +159,7 @@ impl GlobalCache {
     ///
     /// Used for preparing this statement on a server connection.
     ///
-    pub fn rewritten_parse(&self, name: &str) -> Option<Parse> {
+    pub(crate) fn rewritten_parse(&self, name: &str) -> Option<Parse> {
         self.names
             .get(name)
             .and_then(|p| p.rewritten_parse().clone().or(p.parse()))

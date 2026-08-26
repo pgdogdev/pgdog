@@ -14,7 +14,7 @@ use tracing::info;
 use crate::backend::databases::{Databases, databases};
 use crate::tasks;
 
-pub async fn server(port: u16) -> std::io::Result<()> {
+pub(crate) async fn server(port: u16) -> std::io::Result<()> {
     info!("healthcheck endpoint http://0.0.0.0:{}", port);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;

@@ -26,7 +26,7 @@ enum StreamInner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Liveness {
+pub(crate) enum Liveness {
     Clean,
     DataPending,
     Closed,
@@ -35,7 +35,7 @@ pub enum Liveness {
 /// A network socket.
 #[pin_project]
 #[derive(Debug)]
-pub struct Stream {
+pub(crate) struct Stream {
     #[pin]
     inner: StreamInner,
     io_in_progress: bool,
@@ -100,12 +100,12 @@ impl AsyncWrite for Stream {
 
 impl Stream {
     /// Memory used by the stream buffers.
-    pub fn memory_usage(&self) -> usize {
+    pub(crate) fn memory_usage(&self) -> usize {
         self.capacity * 2
     }
 
     /// Wrap an unencrypted TCP stream.
-    pub fn plain(stream: TcpStream, capacity: usize) -> Self {
+    pub(crate) fn plain(stream: TcpStream, capacity: usize) -> Self {
         Self {
             inner: StreamInner::Plain(BufStream::with_capacity(capacity, capacity, stream)),
             io_in_progress: false,
@@ -116,7 +116,7 @@ impl Stream {
     }
 
     /// Wrap an encrypted TCP stream.
-    pub fn tls(
+    pub(crate) fn tls(
         stream: tokio_rustls::TlsStream<TcpStream>,
         capacity: usize,
         tls_identity: Option<String>,
@@ -132,7 +132,7 @@ impl Stream {
     }
 
     /// Create a dev null stream that discards all data.
-    pub fn dev_null() -> Self {
+    pub(crate) fn dev_null() -> Self {
         Self {
             inner: StreamInner::DevNull,
             io_in_progress: false,
@@ -144,23 +144,23 @@ impl Stream {
 
     /// Get the hostname identity (SAN dNSName, falling back to Subject CN)
     /// from the client's TLS certificate, if any.
-    pub fn tls_identity(&self) -> Option<&str> {
+    pub(crate) fn tls_identity(&self) -> Option<&str> {
         self.tls_identity.as_deref()
     }
 
     /// The client presented a TLS certificate, even one we can't name.
-    pub fn tls_client_certificate(&self) -> bool {
+    pub(crate) fn tls_client_certificate(&self) -> bool {
         self.tls_client_certificate
     }
 
     /// This is a TLS stream.
-    pub fn is_tls(&self) -> bool {
+    pub(crate) fn is_tls(&self) -> bool {
         matches!(self.inner, StreamInner::Tls(_))
     }
 
     /// Get peer address if any. We're not using UNIX sockets (yet)
     /// so the peer address should always be available.
-    pub fn peer_addr(&self) -> PeerAddr {
+    pub(crate) fn peer_addr(&self) -> PeerAddr {
         match &self.inner {
             StreamInner::Plain(stream) => stream.get_ref().peer_addr().ok().into(),
             StreamInner::Tls(stream) => stream.get_ref().get_ref().0.peer_addr().ok().into(),
@@ -168,7 +168,7 @@ impl Stream {
         }
     }
 
-    pub fn liveness(&mut self) -> Liveness {
+    pub(crate) fn liveness(&mut self) -> Liveness {
         let mut buf = [0u8; 1];
         let peeked = match &mut self.inner {
             StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
@@ -185,7 +185,7 @@ impl Stream {
     }
 
     /// Get the current io_in_progress state.
-    pub fn io_in_progress(&self) -> bool {
+    pub(crate) fn io_in_progress(&self) -> bool {
         self.io_in_progress
     }
 
@@ -195,7 +195,7 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
+    pub(crate) async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
         self.io_in_progress = true;
         let result = async {
             let bytes = message.to_bytes();
@@ -233,7 +233,7 @@ impl Stream {
     ///
     /// This will flush all buffers and ensure the data is actually sent via the socket.
     /// Use this only for the last message in the exchange to avoid bottlenecks.
-    pub async fn send_flush(
+    pub(crate) async fn send_flush(
         &mut self,
         message: &impl Protocol,
     ) -> Result<usize, crate::net::Error> {
@@ -245,7 +245,7 @@ impl Stream {
     }
 
     /// Send multiple messages and flush the buffer.
-    pub async fn send_many(
+    pub(crate) async fn send_many(
         &mut self,
         messages: &[impl Protocol],
     ) -> Result<usize, crate::net::Error> {
@@ -265,13 +265,13 @@ impl Stream {
     /// The stream is buffered, so this is quite fast. The pooler will perform exactly
     /// one memory allocation per protocol message. It can be optimized to re-use an existing
     /// buffer but it's not worth the complexity.
-    pub async fn read(&mut self) -> Result<Message, crate::net::Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, crate::net::Error> {
         let mut buf = BytesMut::with_capacity(5);
         self.read_buf(&mut buf).await
     }
 
     /// Read data into a buffer, avoiding unnecessary allocations.
-    pub async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
+    pub(crate) async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
         let result = async {
             let code = eof(self.read_u8().await)?;
             self.io_in_progress = true;
@@ -304,7 +304,7 @@ impl Stream {
     }
 
     /// Send an error to the client and disconnect gracefully.
-    pub async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
+    pub(crate) async fn fatal(&mut self, error: ErrorResponse) -> Result<(), crate::net::Error> {
         self.send_flush(&error).await?;
 
         Ok(())
@@ -312,7 +312,7 @@ impl Stream {
 
     /// Send an error to the client and let them know we are ready
     /// for more queries.
-    pub async fn error(
+    pub(crate) async fn error(
         &mut self,
         error: ErrorResponse,
         in_transaction: bool,
@@ -338,7 +338,7 @@ impl Stream {
     }
 }
 
-pub fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
+pub(crate) fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
     match result {
         Ok(val) => Ok(val),
         Err(err) => {
@@ -353,7 +353,7 @@ pub fn eof<T>(result: std::io::Result<T>) -> Result<T, crate::net::Error> {
 
 /// Wrapper around SocketAddr
 /// to make it easier to debug.
-pub struct PeerAddr {
+pub(crate) struct PeerAddr {
     addr: Option<SocketAddr>,
 }
 

@@ -6,13 +6,13 @@ use tracing::{error, warn};
 
 /// Load balancer target ban.
 #[derive(Clone, Debug)]
-pub struct Ban {
+pub(crate) struct Ban {
     inner: Arc<RwLock<BanInner>>,
     pool: Pool,
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum UnbanReason {
+pub(crate) enum UnbanReason {
     AllTargetsBanned,
     Expired,
     Manual,
@@ -38,12 +38,12 @@ impl Ban {
     }
 
     /// Check if the database is banned.
-    pub fn banned(&self) -> bool {
+    pub(crate) fn banned(&self) -> bool {
         self.inner.read().ban.is_some()
     }
 
     /// Get ban error, if any.
-    pub fn error(&self) -> Option<Error> {
+    pub(crate) fn error(&self) -> Option<Error> {
         self.inner.read().ban.as_ref().map(|b| b.error)
     }
 
@@ -51,7 +51,7 @@ impl Ban {
     ///
     /// Returns `None` when the pool isn't banned or the ban is manual, since
     /// manual bans never expire on their own.
-    pub fn time_remaining(&self, now: Instant) -> Option<Duration> {
+    pub(crate) fn time_remaining(&self, now: Instant) -> Option<Duration> {
         self.inner.read().ban.as_ref().and_then(|ban| {
             if ban.error == Error::ManualBan {
                 None
@@ -70,7 +70,7 @@ impl Ban {
     /// used as an operand but it's only used for logging.
     /// We should unify methods and provide one public interface to this.
     ///
-    pub fn unban(&self, manual_check: bool, reason: UnbanReason) {
+    pub(crate) fn unban(&self, manual_check: bool, reason: UnbanReason) {
         let mut guard = self.inner.upgradable_read();
         if let Some(ref ban) = guard.ban {
             let mut unbanned = false;
@@ -88,7 +88,7 @@ impl Ban {
     }
 
     /// Ban the database for the ban_timeout duration.
-    pub fn ban(&self, error: Error, ban_timeout: Duration) -> bool {
+    pub(crate) fn ban(&self, error: Error, ban_timeout: Duration) -> bool {
         let created_at = Instant::now();
         let mut guard = self.inner.upgradable_read();
 

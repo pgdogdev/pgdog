@@ -22,7 +22,7 @@ use crate::tasks;
 use crate::util::safe_timeout;
 
 /// A composable async task.
-pub trait Task: std::fmt::Debug + Send + Sync + Sized {
+pub(crate) trait Task: std::fmt::Debug + Send + Sync + Sized {
     /// Status payload this task reports through
     /// [`set_status`](TaskContext::set_status).
     type Status: Into<TaskStatus> + Display;
@@ -58,7 +58,7 @@ pub trait Task: std::fmt::Debug + Send + Sync + Sized {
 /// independent of the domain-specific status the task reports for itself
 /// (which is tracked separately as [`TaskStatus`]).
 #[derive(Display, Debug, Clone, PartialEq, Eq)]
-pub enum TaskProgress {
+pub(crate) enum TaskProgress {
     #[display("started")]
     Started,
     #[display("running")]
@@ -79,33 +79,33 @@ pub enum TaskProgress {
 
 /// Snapshot of a task's current state, readable through the registry.
 #[derive(Debug, Clone)]
-pub struct TaskState {
+pub(crate) struct TaskState {
     /// What the task is, from [`Task::definition`]: its name and, where it has
     /// any, the structured detail. Immutable for the life of the task, so every
     /// snapshot shares it.
-    pub definition: Arc<TaskDefinition>,
+    pub(crate) definition: Arc<TaskDefinition>,
     /// Where the task is in its lifecycle (carries the error/panic message
     /// for its terminal failure variants).
-    pub progress: TaskProgress,
+    pub(crate) progress: TaskProgress,
     /// Last status reported by the task itself. Preserved across terminal
     /// transitions, so a failed or cancelled task still shows what it last
     /// reported.
-    pub status: TaskStatus,
-    pub started_at: SystemTime,
-    pub updated_at: SystemTime,
+    pub(crate) status: TaskStatus,
+    pub(crate) started_at: SystemTime,
+    pub(crate) updated_at: SystemTime,
 }
 
 impl TaskState {
     /// Whether the task reached a terminal state (finished, cancelled,
     /// errored, or panicked).
-    pub fn is_terminal(&self) -> bool {
+    pub(crate) fn is_terminal(&self) -> bool {
         self.progress.is_terminal()
     }
 }
 
 /// Why a task did not complete.
 #[derive(Debug, Display, Error)]
-pub enum TaskError<E> {
+pub(crate) enum TaskError<E> {
     /// The task itself returned an error.
     #[display("task failed: {_0}")]
     Failed(E),
@@ -181,16 +181,16 @@ impl TaskEntryState {
 /// Registry entry of a queued task. Holds no `T`: the reported status is a
 /// concrete [`TaskStatus`], so every task type shares one entry type.
 pub(crate) struct TaskEntry {
-    pub started_at: SystemTime,
+    pub(crate) started_at: SystemTime,
     /// Id of the task itself
-    pub id: TaskId,
+    pub(crate) id: TaskId,
     /// Id of the task that spawned this one; `None` for a root task.
-    pub parent_id: Option<TaskId>,
+    pub(crate) parent_id: Option<TaskId>,
     /// Id of the root task (the most parent of current) or the
     /// task id itself if it has no parent.
-    pub root_id: TaskId,
+    pub(crate) root_id: TaskId,
     /// Nesting depth.
-    pub level: usize,
+    pub(crate) level: usize,
     /// What the task is, from [`Task::definition`]. Immutable, so it lives
     /// outside the state lock and every snapshot shares it.
     definition: Arc<TaskDefinition>,
@@ -228,7 +228,7 @@ impl TaskEntry {
         state.updated_at = SystemTime::now();
     }
 
-    pub fn state(&self) -> TaskState {
+    pub(crate) fn state(&self) -> TaskState {
         let state = self.state.read();
 
         TaskState {
@@ -240,7 +240,7 @@ impl TaskEntry {
         }
     }
 
-    pub fn expired(&self, now: SystemTime, ttl: Duration) -> bool {
+    pub(crate) fn expired(&self, now: SystemTime, ttl: Duration) -> bool {
         let state = self.state.read();
         state.progress.is_terminal()
             && now
@@ -268,7 +268,7 @@ impl Drop for TerminalOnDrop {
 /// Generic over the task so [`set_status`](Self::set_status) only accepts that
 /// task's own [`Task::Status`]; the entry it points at is type-erased, so `T`
 /// is carried as a phantom.
-pub struct TaskContext<T: Task> {
+pub(crate) struct TaskContext<T: Task> {
     task: Arc<TaskEntry>,
     _task: PhantomData<fn() -> T>,
 }
@@ -285,14 +285,14 @@ impl<T: Task> Clone for TaskContext<T> {
 /// Handle to a spawned task. Resolves, as a future, to the
 /// task's result; also exposes the registry id of the task.
 #[derive(Debug)]
-pub struct TaskWaiter<R, E> {
+pub(crate) struct TaskWaiter<R, E> {
     id: TaskId,
     #[debug(ignore)]
     waiter: Receiver<Result<R, TaskError<E>>>,
 }
 
 impl<R, E> TaskWaiter<R, E> {
-    pub fn id(&self) -> TaskId {
+    pub(crate) fn id(&self) -> TaskId {
         self.id
     }
 }
@@ -315,7 +315,7 @@ impl<R, E> Future for TaskWaiter<R, E> {
 const TASK_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The main storage for async tasks
-pub struct TaskStorage {
+pub(crate) struct TaskStorage {
     tasks: Arc<TasksMap>,
     retention: Duration,
 }
@@ -333,7 +333,7 @@ impl<T: Task> TaskContext<T> {
     }
 
     /// Update the status the task reports for itself.
-    pub fn set_status(&self, status: T::Status) {
+    pub(crate) fn set_status(&self, status: T::Status) {
         let _enter = self.task.tracing_span.enter();
 
         let mut state = self.task.state.write();
@@ -356,14 +356,14 @@ impl<T: Task> TaskContext<T> {
     /// Get the task's cancellation token.
     /// If it's called the cancellation will wait for the task finishes
     /// before aborting it (only for root tasks)
-    pub fn cancellation_token(&self) -> CancellationToken {
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.task.cooperative.store(true, Ordering::Relaxed);
 
         self.task.cancellation_token.clone()
     }
 
     /// Run `task` as a subtask, inside the caller's own task.
-    pub fn run<'a, T1: Task + 'a>(
+    pub(crate) fn run<'a, T1: Task + 'a>(
         &self,
         task: T1,
     ) -> impl Future<Output = Result<T1::Output, T1::Error>> + Send + use<'a, T, T1> {
@@ -426,13 +426,13 @@ impl<T: Task> TaskContext<T> {
         }
     }
 
-    pub fn root_id(&self) -> TaskId {
+    pub(crate) fn root_id(&self) -> TaskId {
         self.task.root_id
     }
 }
 
 impl TaskStorage {
-    pub fn new(retention: Duration) -> Self {
+    pub(crate) fn new(retention: Duration) -> Self {
         Self {
             tasks: Arc::default(),
             retention,
@@ -441,7 +441,7 @@ impl TaskStorage {
 
     /// Schedule the new task as a root task for execution. A root outlives the
     /// caller's frame, so it is spawned and owns everything it touches.
-    pub fn run<T: Task + 'static>(&self, task: T) -> TaskWaiter<T::Output, T::Error> {
+    pub(crate) fn run<T: Task + 'static>(&self, task: T) -> TaskWaiter<T::Output, T::Error> {
         self.prune();
 
         let tasks = &self.tasks;
@@ -545,7 +545,7 @@ impl TaskStorage {
     /// Some(state) if the task cancel in progress
     /// None if the task is not found, it's a not root task, or
     /// the task is already in terminal state.
-    pub fn cancel_task(&self, id: TaskId) -> Option<TaskState> {
+    pub(crate) fn cancel_task(&self, id: TaskId) -> Option<TaskState> {
         let entry = self.tasks.map.get(&id)?;
         let state = entry.state();
 
@@ -579,7 +579,7 @@ impl TaskStorage {
     ///
     /// The handler runs while the registry's shard locks are held, so it must
     /// not call back into the registry.
-    pub fn try_for_each<F>(&self, mut f: F)
+    pub(crate) fn try_for_each<F>(&self, mut f: F)
     where
         F: FnMut(&TaskEntry) -> ControlFlow<()>,
     {
@@ -600,7 +600,7 @@ impl TaskStorage {
 
     /// Visit every task in the registry, at every depth.
     #[allow(dead_code)]
-    pub fn for_each<F>(&self, mut f: F)
+    pub(crate) fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&TaskEntry),
     {

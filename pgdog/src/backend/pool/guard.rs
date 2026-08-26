@@ -13,7 +13,7 @@ use super::{Pool, cleanup::Cleanup};
 use crate::util::safe_timeout;
 
 /// Connection guard.
-pub struct Guard {
+pub(crate) struct Guard {
     server: Option<Box<Server>>,
     pub(super) pool: Pool,
     pub(super) reset: bool,
@@ -40,7 +40,7 @@ impl std::fmt::Debug for Guard {
 
 impl Guard {
     /// Create new connection guard.
-    pub fn new(pool: Pool, mut server: Box<Server>, granted_at: Instant) -> Self {
+    pub(crate) fn new(pool: Pool, mut server: Box<Server>, granted_at: Instant) -> Self {
         server.stats_mut().set_timers(granted_at);
 
         Self {

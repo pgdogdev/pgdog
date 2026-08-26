@@ -5,20 +5,20 @@ use crate::backend::databases::User;
 
 use super::Error;
 
-pub mod guard;
-pub mod manager;
-pub mod phase;
+pub(crate) mod guard;
+pub(crate) mod manager;
+pub(crate) mod phase;
 pub(crate) mod server_transactions;
-pub mod statement;
-pub mod stats;
-pub mod transaction;
-pub mod wal;
+pub(crate) mod statement;
+pub(crate) mod stats;
+pub(crate) mod transaction;
+pub(crate) mod wal;
 
-pub use guard::TwoPcGuard;
-pub use manager::Manager;
-pub use phase::TwoPcPhase;
-pub use stats::TwoPcStats;
-pub use transaction::TwoPcTransaction;
+pub(crate) use guard::TwoPcGuard;
+pub(crate) use manager::Manager;
+pub(crate) use phase::TwoPcPhase;
+pub(crate) use stats::TwoPcStats;
+pub(crate) use transaction::TwoPcTransaction;
 
 #[cfg(test)]
 mod test;
@@ -82,11 +82,11 @@ impl TwoPc {
         Ok(())
     }
 
-    pub fn set_auto(&mut self) {
+    pub(crate) fn set_auto(&mut self) {
         self.auto = true;
     }
 
-    pub fn auto(&self) -> bool {
+    pub(crate) fn auto(&self) -> bool {
         self.auto
     }
 }

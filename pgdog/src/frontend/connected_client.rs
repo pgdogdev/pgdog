@@ -7,22 +7,22 @@ use super::Stats;
 
 /// Connected client.
 #[derive(Clone, Debug)]
-pub struct ConnectedClient {
+pub(crate) struct ConnectedClient {
     /// Client statistics.
-    pub stats: Stats,
+    pub(crate) stats: Stats,
     /// Client IP address.
-    pub addr: SocketAddr,
+    pub(crate) addr: SocketAddr,
     /// System time when the client connected.
-    pub connected_at: DateTime<Local>,
+    pub(crate) connected_at: DateTime<Local>,
     /// Client connection parameters.
-    pub paramters: Parameters,
+    pub(crate) paramters: Parameters,
     /// Cancel key identifying this client and its secret.
-    pub key: BackendKeyData,
+    pub(crate) key: BackendKeyData,
 }
 
 impl ConnectedClient {
     /// New connected client.
-    pub fn new(key: BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
+    pub(crate) fn new(key: BackendKeyData, addr: SocketAddr, params: &Parameters) -> Self {
         Self {
             key,
             stats: Stats::new(),

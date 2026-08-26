@@ -19,7 +19,7 @@ use crate::state::State;
 
 use super::*;
 
-pub fn pool() -> Pool {
+pub(crate) fn pool() -> Pool {
     let config = Config {
         inner: pgdog_stats::Config {
             max: 1,
@@ -43,7 +43,7 @@ pub fn pool() -> Pool {
     pool
 }
 
-pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
+pub(crate) fn pool_with_prepared_capacity(capacity: usize) -> Pool {
     let config = Config {
         inner: pgdog_stats::Config {
             max: 1,

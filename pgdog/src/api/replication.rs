@@ -37,15 +37,15 @@ pub(crate) enum Direction {
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationTask {
     /// The running replication waiter this task drives to completion.
-    pub waiter: ReplicationWaiter,
+    pub(crate) waiter: ReplicationWaiter,
     /// Cut over automatically once the destination has caught up, instead
     /// of waiting for an operator `CUTOVER`.
     #[builder(default)]
-    pub auto_cutover: bool,
+    pub(crate) auto_cutover: bool,
     /// Replication direction. `Reverse` marks the post-cutover stream that
     /// backs a rollback; it only affects reported status, not control flow.
     #[builder(default)]
-    pub direction: Direction,
+    pub(crate) direction: Direction,
 }
 
 /// Cutover tokens of the replication tasks currently awaiting an operator

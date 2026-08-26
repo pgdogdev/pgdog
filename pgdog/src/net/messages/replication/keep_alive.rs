@@ -4,15 +4,15 @@ use super::super::code;
 use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct KeepAlive {
-    pub wal_end: i64,
-    pub system_clock: i64,
-    pub reply: u8,
+pub(crate) struct KeepAlive {
+    pub(crate) wal_end: i64,
+    pub(crate) system_clock: i64,
+    pub(crate) reply: u8,
 }
 
 impl KeepAlive {
     /// Origin expects reply.
-    pub fn reply(&self) -> bool {
+    pub(crate) fn reply(&self) -> bool {
         self.reply == 1
     }
 }

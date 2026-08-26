@@ -252,7 +252,7 @@ impl Display for Orchestrator {
 
 #[derive(Debug, Display)]
 #[display("{orchestrator}")]
-pub struct ReplicationWaiter {
+pub(crate) struct ReplicationWaiter {
     orchestrator: Orchestrator,
     waiter: Waiter,
     config: Arc<ConfigAndUsers>,

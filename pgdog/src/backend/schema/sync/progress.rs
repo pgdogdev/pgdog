@@ -9,7 +9,7 @@ use crate::tasks;
 use super::Statement;
 
 #[derive(Clone)]
-pub enum Item {
+pub(crate) enum Item {
     Table { schema: String, name: String },
     Other { sql: String },
 }
@@ -94,13 +94,13 @@ enum Message {
 }
 
 #[derive(Clone)]
-pub struct Progress {
+pub(crate) struct Progress {
     tx: mpsc::UnboundedSender<Message>,
     timer: Instant,
 }
 
 impl Progress {
-    pub fn new(total: usize) -> Self {
+    pub(crate) fn new(total: usize) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let timer = Instant::now();
 
@@ -111,13 +111,13 @@ impl Progress {
         Self { tx, timer }
     }
 
-    pub fn done(&mut self) {
+    pub(crate) fn done(&mut self) {
         let elapsed = self.timer.elapsed();
         info!("finished in {:.3}s", elapsed.as_secs_f64());
         self.timer = Instant::now();
     }
 
-    pub fn next(&self, item: impl Into<Item>) {
+    pub(crate) fn next(&self, item: impl Into<Item>) {
         let _ = self.tx.send(Message::Next(item.into()));
     }
 

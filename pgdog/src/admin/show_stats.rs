@@ -4,7 +4,7 @@ use crate::util::millis;
 
 use super::prelude::*;
 
-pub struct ShowStats;
+pub(crate) struct ShowStats;
 
 #[async_trait]
 impl Command for ShowStats {

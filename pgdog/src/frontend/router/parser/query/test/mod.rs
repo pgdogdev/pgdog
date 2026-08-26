@@ -19,29 +19,29 @@ use crate::frontend::{
 };
 use crate::net::messages::Query;
 
-pub mod setup;
+pub(crate) mod setup;
 
-pub mod test_bypass;
-pub mod test_comments;
-pub mod test_ddl;
-pub mod test_delete;
-pub mod test_dml;
-pub mod test_explain;
-pub mod test_functions;
-pub mod test_insert;
-pub mod test_prefer_primary;
-pub mod test_prepared;
-pub mod test_rr;
-pub mod test_schema_sharding;
-pub mod test_search_path;
-pub mod test_select;
-pub mod test_session_control;
-pub mod test_set;
-pub mod test_sharding;
-pub mod test_special;
-pub mod test_split;
-pub mod test_subqueries;
-pub mod test_transaction;
+pub(crate) mod test_bypass;
+pub(crate) mod test_comments;
+pub(crate) mod test_ddl;
+pub(crate) mod test_delete;
+pub(crate) mod test_dml;
+pub(crate) mod test_explain;
+pub(crate) mod test_functions;
+pub(crate) mod test_insert;
+pub(crate) mod test_prefer_primary;
+pub(crate) mod test_prepared;
+pub(crate) mod test_rr;
+pub(crate) mod test_schema_sharding;
+pub(crate) mod test_search_path;
+pub(crate) mod test_select;
+pub(crate) mod test_session_control;
+pub(crate) mod test_set;
+pub(crate) mod test_sharding;
+pub(crate) mod test_special;
+pub(crate) mod test_split;
+pub(crate) mod test_subqueries;
+pub(crate) mod test_transaction;
 
 fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();

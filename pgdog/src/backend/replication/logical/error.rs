@@ -10,7 +10,7 @@ use crate::{
 
 /// The kind of validation failure, decoupled from which table it occurred on.
 #[derive(Debug, Display)]
-pub enum TableValidationErrorKind {
+pub(crate) enum TableValidationErrorKind {
     #[display("has no replica identity columns")]
     NoIdentityColumns,
     #[display(
@@ -26,14 +26,14 @@ pub enum TableValidationErrorKind {
 /// A single table-level validation failure.
 #[derive(Debug, Display, Error)]
 #[display("table {table_name}: {kind}")]
-pub struct TableValidationError {
-    pub table_name: String,
-    pub kind: TableValidationErrorKind,
+pub(crate) struct TableValidationError {
+    pub(crate) table_name: String,
+    pub(crate) kind: TableValidationErrorKind,
 }
 
 /// Newtype that `Display`s a slice of `TableValidationError` as a human-readable list.
 #[derive(Debug, Error)]
-pub struct TableValidationErrors(#[error(ignore)] pub Vec<TableValidationError>);
+pub(crate) struct TableValidationErrors(#[error(ignore)] pub Vec<TableValidationError>);
 
 impl fmt::Display for TableValidationErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -67,7 +67,7 @@ macro_rules! ensure_validation {
 pub(crate) use ensure_validation;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
@@ -220,7 +220,7 @@ impl From<TableValidationError> for Error {
 
 impl Error {
     /// Two-phase commit transaction that still needs manager cleanup, if any.
-    pub fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
+    pub(crate) fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
         match self {
             Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
             _ => None,
@@ -228,7 +228,7 @@ impl Error {
     }
 
     /// Whether the table copy should be retried after this error.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         match self {
             Self::TwoPcCleanupPending { source, .. } => source.is_retryable(),
             Self::Net(inner) => inner.is_retryable(),

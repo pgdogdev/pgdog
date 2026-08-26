@@ -7,7 +7,7 @@ use crate::backend::databases::databases;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct LookupMetrics;
+pub(crate) struct LookupMetrics;
 
 /// One metric series being assembled: per-cluster measurements
 /// followed by an unlabeled global rollup, like mirror stats.
@@ -96,7 +96,7 @@ impl TimeSeries {
 }
 
 impl LookupMetrics {
-    pub fn load() -> Vec<Metric> {
+    pub(crate) fn load() -> Vec<Metric> {
         let mut hits = Series::new(
             "sharding_lookup_cache_hits",
             "Sharding key values translated from the lookup cache.",

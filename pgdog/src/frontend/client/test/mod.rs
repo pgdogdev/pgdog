@@ -30,17 +30,17 @@ use crate::{
 
 use super::Stream;
 
-pub mod auth;
-pub mod target_session_attrs;
-pub mod test_client;
-pub use test_client::{SpawnedClient, TestClient};
+pub(crate) mod auth;
+pub(crate) mod target_session_attrs;
+pub(crate) mod test_client;
+pub(crate) use test_client::{SpawnedClient, TestClient};
 
 //
 // cargo nextest runs these in separate processes.
 // That's important otherwise I'm not sure what would happen.
 //
 
-pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
+pub(crate) async fn test_client(replicas: bool) -> (TcpStream, Client) {
     if replicas {
         load_test_replicas();
     } else {
@@ -51,17 +51,17 @@ pub async fn test_client(replicas: bool) -> (TcpStream, Client) {
 }
 
 /// Load test client with 4 databases (2 shards, 1 replica each).
-pub async fn test_client_sharded() -> (TcpStream, Client) {
+pub(crate) async fn test_client_sharded() -> (TcpStream, Client) {
     load_test_sharded();
 
     parallel_test_client().await
 }
 
-pub async fn parallel_test_client() -> (TcpStream, Client) {
+pub(crate) async fn parallel_test_client() -> (TcpStream, Client) {
     parallel_test_client_with_params(Parameters::default()).await
 }
 
-pub async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream, Client) {
+pub(crate) async fn parallel_test_client_with_params(params: Parameters) -> (TcpStream, Client) {
     let addr = "127.0.0.1:0".to_string();
     let conn_addr = addr.clone();
     let stream = TcpListener::bind(&conn_addr).await.unwrap();
@@ -93,7 +93,7 @@ macro_rules! new_client {
 
 /// Read a series of messages from the stream and make sure
 /// they arrive in the right order.
-pub async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
+pub(crate) async fn read_messages(stream: &mut (impl AsyncRead + Unpin), codes: &[char]) -> Vec<Message> {
     let mut result = vec![];
     let mut error = false;
 

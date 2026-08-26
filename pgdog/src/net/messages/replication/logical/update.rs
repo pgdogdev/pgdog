@@ -9,7 +9,7 @@ use super::tuple_data::TupleData;
 /// - `Old`     — byte `'O'`: `REPLICA IDENTITY FULL`; full old row sent.
 /// - `Nothing` — no K/O block precedes the new-tuple marker; the pre-image is absent.
 #[derive(Debug, Clone)]
-pub enum UpdateIdentity {
+pub(crate) enum UpdateIdentity {
     Key(TupleData),
     Old(TupleData),
     Nothing,
@@ -18,10 +18,10 @@ pub enum UpdateIdentity {
 /// WAL UPDATE record. Use with [`Table::update`](crate::backend::replication::logical::publisher::Table::update)
 /// or [`Table::update_partial`](crate::backend::replication::logical::publisher::Table::update_partial).
 #[derive(Debug, Clone)]
-pub struct Update {
-    pub oid: Oid,
-    pub identity: UpdateIdentity,
-    pub new: TupleData,
+pub(crate) struct Update {
+    pub(crate) oid: Oid,
+    pub(crate) identity: UpdateIdentity,
+    pub(crate) new: TupleData,
 }
 
 impl Update {
@@ -30,13 +30,13 @@ impl Update {
     /// In a WAL UPDATE record, columns whose value did not change are sent as `'u'`
     /// (Toasted/unchanged) in the new tuple — the value is not included in the record.
     /// Stripping them yields only the columns that were actually modified.
-    pub fn partial_new(&self) -> TupleData {
+    pub(crate) fn partial_new(&self) -> TupleData {
         self.new.without_toasted()
     }
 
     /// Concatenate `where_cols` then `set_cols` into one `TupleData` for a FULL-identity UPDATE.
     /// WHERE params (`$1..$k`) come from `where_cols`; SET params (`$k+1..$n`) from `set_cols`.
-    pub fn full_identity_bind_tuple(where_cols: &TupleData, set_cols: &TupleData) -> TupleData {
+    pub(crate) fn full_identity_bind_tuple(where_cols: &TupleData, set_cols: &TupleData) -> TupleData {
         TupleData {
             columns: where_cols
                 .columns

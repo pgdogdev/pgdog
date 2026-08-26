@@ -81,18 +81,18 @@ fn increment_connector_build_count() {
 fn increment_connector_build_count() {}
 
 /// Get the current TLS acceptor snapshot, if TLS is enabled.
-pub fn acceptor() -> Option<Arc<TlsAcceptor>> {
+pub(crate) fn acceptor() -> Option<Arc<TlsAcceptor>> {
     ACCEPTOR.load_full()
 }
 
 /// Extract the hostname identity from the peer's TLS certificate, if present.
-pub fn peer_identity(conn: &ServerConnection) -> Option<String> {
+pub(crate) fn peer_identity(conn: &ServerConnection) -> Option<String> {
     identity_from_certs(conn.peer_certificates()?)
 }
 
 /// The peer presented a client certificate. Unlike [`peer_identity`], this is
 /// true even when the certificate has no name to derive an identity from.
-pub fn peer_certificate_present(conn: &ServerConnection) -> bool {
+pub(crate) fn peer_certificate_present(conn: &ServerConnection) -> bool {
     conn.peer_certificates()
         .is_some_and(|certs| !certs.is_empty())
 }
@@ -127,7 +127,7 @@ pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String
 }
 
 /// Preload TLS at startup.
-pub fn load() -> Result<(), Error> {
+pub(crate) fn load() -> Result<(), Error> {
     reload()
 }
 
@@ -135,7 +135,7 @@ pub fn load() -> Result<(), Error> {
 ///
 /// This validates the new settings and swaps them in atomically. If validation
 /// fails, the existing TLS acceptor remains active.
-pub fn reload() -> Result<(), Error> {
+pub(crate) fn reload() -> Result<(), Error> {
     debug!("reloading TLS configuration");
 
     let config = config();
@@ -448,7 +448,7 @@ impl ServerCertVerifier for AllowAllVerifier {
 }
 
 /// Create a TLS connector with the specified verification mode.
-pub fn connector_with_verify_mode(
+pub(crate) fn connector_with_verify_mode(
     mode: TlsVerifyMode,
     ca_cert_path: Option<&PathBuf>,
     client_cert_path: Option<&PathBuf>,

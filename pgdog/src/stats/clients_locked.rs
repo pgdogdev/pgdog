@@ -4,12 +4,12 @@ use crate::frontend::comms::comms;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct ClientsLocked {
+pub(crate) struct ClientsLocked {
     total_locked: usize,
 }
 
 impl ClientsLocked {
-    pub fn load() -> Metric {
+    pub(crate) fn load() -> Metric {
         let total_locked = comms().clients_locked_count();
         Metric::new(Self { total_locked })
     }

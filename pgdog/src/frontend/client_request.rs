@@ -18,21 +18,21 @@ use crate::{
 
 use super::{PreparedStatements, router::Route};
 
-pub use super::BufferedQuery;
+pub(crate) use super::BufferedQuery;
 
 /// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
-pub struct ClientRequest {
+pub(crate) struct ClientRequest {
     /// Messages, e.g. Query, or Parse, Bind, Execute, etc.
-    pub messages: Vec<ProtocolMessage>,
+    pub(crate) messages: Vec<ProtocolMessage>,
     /// The route this request will take in our query engine.
     /// When the request is created, this is not known yet.
     /// The QueryEngine will set the route once it handles the request.
-    pub route: Option<Route>,
+    pub(crate) route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
-    pub ast: Option<Ast>,
+    pub(crate) ast: Option<Ast>,
     /// Last Parse we received.
-    pub last_parse: Option<Parse>,
+    pub(crate) last_parse: Option<Parse>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -78,7 +78,7 @@ impl ClientRequest {
     }
 
     /// Remove any saved state from the request.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         // We drop `last_parse` once the client has executed it. The gate is
         // `is_executable` (Bind/Execute/Query present), not the presence of
         // Sync: lib/pq sends Parse, Describe, Sync to learn parameter/row
@@ -96,7 +96,7 @@ impl ClientRequest {
 
     /// We received a complete request and we are ready to
     /// send it to the query engine.
-    pub fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         if let Some(message) = self.messages.last() {
             // Flush (H) | Sync (S) | Query (Q) | CopyDone (c) | CopyFail (f) | Fastpath (F)
             if matches!(message.code(), 'H' | 'S' | 'Q' | 'c' | 'f' | 'F') {
@@ -119,12 +119,12 @@ impl ClientRequest {
     }
 
     /// Number of bytes in the buffer.
-    pub fn total_message_len(&self) -> usize {
+    pub(crate) fn total_message_len(&self) -> usize {
         self.messages.iter().map(|b| b.len()).sum()
     }
 
     /// If this buffer contains a query, retrieve it.
-    pub fn query(&self) -> Result<Option<BufferedQuery>, Error> {
+    pub(crate) fn query(&self) -> Result<Option<BufferedQuery>, Error> {
         for message in &self.messages {
             match message {
                 ProtocolMessage::Query(query) => {
@@ -183,7 +183,7 @@ impl ClientRequest {
     }
 
     /// If this buffer contains bound parameters, retrieve them.
-    pub fn parameters(&self) -> Result<Option<&Bind>, Error> {
+    pub(crate) fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
             if let ProtocolMessage::Bind(bind) = message {
                 return Ok(Some(bind));
@@ -194,7 +194,7 @@ impl ClientRequest {
     }
 
     /// Get all CopyData messages.
-    pub fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
+    pub(crate) fn copy_data(&self) -> Result<Vec<CopyData>, Error> {
         let mut rows = vec![];
         for message in &self.messages {
             if let ProtocolMessage::CopyData(copy_data) = message {
@@ -206,7 +206,7 @@ impl ClientRequest {
     }
 
     /// Remove all CopyData messages and return the rest.
-    pub fn without_copy_data(&self) -> Self {
+    pub(crate) fn without_copy_data(&self) -> Self {
         let mut messages = self.messages.clone();
         messages.retain(|m| m.code() != 'd');
 
@@ -219,7 +219,7 @@ impl ClientRequest {
     }
 
     /// The buffer has COPY messages.
-    pub fn is_copy(&self) -> bool {
+    pub(crate) fn is_copy(&self) -> bool {
         self.messages
             .last()
             .map(|m| m.code() == 'd' || m.code() == 'c')
@@ -229,7 +229,7 @@ impl ClientRequest {
     /// The buffer contains only Sync (and possibly Flush) messages.
     /// Used to avoid resetting multi-shard state when Sync is sent
     /// as a separate request (via splice).
-    pub fn is_sync_only(&self) -> bool {
+    pub(crate) fn is_sync_only(&self) -> bool {
         !self.messages.is_empty()
             && self
                 .messages
@@ -294,7 +294,7 @@ impl ClientRequest {
     }
 
     /// Get the route for this client request.
-    pub fn route(&self) -> &Route {
+    pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route = Route::default();
         }

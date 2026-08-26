@@ -4,12 +4,12 @@ use super::super::Error;
 use crate::net::{CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes};
 
 #[derive(Debug, Clone)]
-pub enum CommandType {
+pub(crate) enum CommandType {
     Insert,
 }
 
 #[derive(Debug, Clone)]
-pub struct MultiServerState {
+pub(crate) struct MultiServerState {
     servers: usize,
     rows: usize,
     counters: HashMap<char, usize>,
@@ -17,7 +17,7 @@ pub struct MultiServerState {
 
 impl MultiServerState {
     /// New multi-server execution state.
-    pub fn new(servers: usize) -> Self {
+    pub(crate) fn new(servers: usize) -> Self {
         Self {
             servers,
             rows: 0,
@@ -26,7 +26,7 @@ impl MultiServerState {
     }
 
     /// Should the message be forwarded to the client.
-    pub fn forward(&mut self, message: &Message) -> Result<bool, Error> {
+    pub(crate) fn forward(&mut self, message: &Message) -> Result<bool, Error> {
         let code = message.code();
         let count = self.counters.entry(code).or_default();
         *count += 1;
@@ -46,17 +46,17 @@ impl MultiServerState {
     }
 
     /// Number of rows returned.
-    pub fn rows(&self) -> usize {
+    pub(crate) fn rows(&self) -> usize {
         self.rows
     }
 
     /// Error happened.
-    pub fn error(&self) -> bool {
+    pub(crate) fn error(&self) -> bool {
         self.counters.contains_key(&'E')
     }
 
     /// Create CommandComplete (C) message.
-    pub fn command_complete(&self, command_type: CommandType) -> Option<CommandComplete> {
+    pub(crate) fn command_complete(&self, command_type: CommandType) -> Option<CommandComplete> {
         if !self.counters.contains_key(&'C') || self.error() {
             return None;
         }
@@ -69,7 +69,7 @@ impl MultiServerState {
     }
 
     /// Create ReadyForQuery (C) message.
-    pub fn ready_for_query(&self, in_transaction: bool) -> Option<ReadyForQuery> {
+    pub(crate) fn ready_for_query(&self, in_transaction: bool) -> Option<ReadyForQuery> {
         if !self.counters.contains_key(&'Z') {
             return None;
         }

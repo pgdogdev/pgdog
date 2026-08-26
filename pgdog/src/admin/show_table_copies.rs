@@ -5,7 +5,7 @@ use crate::util::{format_bytes, human_duration_display, number_human};
 
 use super::prelude::*;
 
-pub struct ShowTableCopies;
+pub(crate) struct ShowTableCopies;
 
 #[async_trait]
 impl Command for ShowTableCopies {

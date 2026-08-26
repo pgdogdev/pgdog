@@ -8,12 +8,12 @@ use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
 
-pub struct SchemaSync {
-    pub from_database: String,
-    pub to_database: String,
-    pub publication: String,
-    pub replication_slot: Option<String>,
-    pub phase: SchemaSyncPhase,
+pub(crate) struct SchemaSync {
+    pub(crate) from_database: String,
+    pub(crate) to_database: String,
+    pub(crate) publication: String,
+    pub(crate) replication_slot: Option<String>,
+    pub(crate) phase: SchemaSyncPhase,
 }
 
 #[async_trait]
