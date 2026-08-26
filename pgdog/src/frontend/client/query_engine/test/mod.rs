@@ -21,6 +21,7 @@ mod idle_in_transaction_recovery;
 mod lock_session;
 mod manual_lock;
 mod multi_binding;
+mod multi_statement;
 mod omni;
 mod pipeline_execution;
 pub mod prelude;

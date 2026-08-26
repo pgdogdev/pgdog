@@ -1,5 +1,6 @@
 use crate::frontend::ClientRequest;
 use crate::frontend::SetParam;
+use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::ProtocolMessage;
 use crate::net::messages::ErrorResponse;
@@ -13,11 +14,12 @@ use super::*;
 const SHARD_TARGETING_PARAMS: [&str; 2] = [PGDOG_SHARD, PGDOG_SHARDING_KEY];
 
 impl QueryEngine {
+    /// Handle a `SET` statement or equivalent `SELECT set_config([...])` query.
     pub(crate) async fn set(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         params: &[SetParam],
-        behave_like_select: bool,
+        set_config: bool,
     ) -> Result<(), Error> {
         // Make sure client isn't changing route mid-transaction.
         if self.route_change_check(context, params).await? {
@@ -75,9 +77,10 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context).await?;
         } else {
-            let values_to_return =
-                behave_like_select.then(|| params.iter().map(|p| p.value.as_ref()));
-            self.fake_command_response(context, fake_command, values_to_return)
+            let fake_response = set_config
+                .then(|| params.iter().map(|p| p.value.as_ref()))
+                .map(|values| FakeResponse::new_params(&["set_config"], values));
+            self.fake_command_response(context, fake_command, fake_response)
                 .await?;
         }
 
@@ -118,8 +121,7 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context).await?;
         } else {
-            self.fake_command_response(context, "RESET", None::<Option<_>>)
-                .await?;
+            self.fake_command_response(context, "RESET", None).await?;
         }
 
         Ok(())

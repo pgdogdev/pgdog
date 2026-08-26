@@ -93,7 +93,7 @@
         "query_log_stdout": false,
         "query_parser": "auto",
         "query_parser_enabled": false,
-        "query_parser_engine": "pg_query_protobuf",
+        "query_parser_engine": "pg_query_raw",
         "query_size_limit": null,
         "query_size_limit_action": "warn",
         "query_timeout": 9223372036854775807,
@@ -1100,7 +1100,7 @@
         "query_parser_engine": {
           "description": "Underlying parser implementation used to analyze SQL queries.",
           "$ref": "#/$defs/QueryParserEngine",
-          "default": "pg_query_protobuf"
+          "default": "pg_query_raw"
         },
         "query_size_limit": {
           "description": "Maximum size, in bytes, of a query message (`Query` or `Parse`)\nreceived from a client, including the 5-byte message header.\nProtects the query parser from very large SQL texts; other\nprotocol messages (e.g. `Bind`, `CopyData`) are not affected.\nDepending on the setting `query_size_limit_action` oversized messages are\neither logged or blocked.\n\n_Default:_ `None` (disabled)\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_size_limit>",
@@ -1746,7 +1746,7 @@
         "engine": {
           "description": "Query parser engine used.",
           "$ref": "#/$defs/QueryParserEngine",
-          "default": "pg_query_protobuf"
+          "default": "pg_query_raw"
         },
         "level": {
           "description": "Query parser level.",
@@ -1763,12 +1763,12 @@
       "description": "Underlying parser implementation used to analyze SQL queries.",
       "oneOf": [
         {
-          "description": "Use the protobuf parse tree from `pg_query` (default).",
+          "description": "Use the protobuf parse tree from `pg_query`.",
           "type": "string",
           "const": "pg_query_protobuf"
         },
         {
-          "description": "Use the raw JSON parse tree from `pg_query`.",
+          "description": "Use the raw JSON parse tree from `pg_query` (default).",
           "type": "string",
           "const": "pg_query_raw"
         }

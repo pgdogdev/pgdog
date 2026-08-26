@@ -1,6 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use tokio::{select, sync::Notify};
+use tokio::select;
 use tracing::info;
 
 use crate::frontend::router::parser::Cache;
@@ -10,7 +10,6 @@ use crate::util::safe_sleep;
 #[derive(Debug, Clone)]
 pub struct Logger {
     interval: Duration,
-    shutdown: Arc<Notify>,
 }
 
 impl Default for Logger {
@@ -23,12 +22,7 @@ impl Logger {
     pub fn new() -> Self {
         Self {
             interval: Duration::from_secs(10),
-            shutdown: Arc::new(Notify::new()),
         }
-    }
-
-    pub fn shutdown(&self) {
-        self.shutdown.notify_one();
     }
 
     pub fn spawn(&self) {
@@ -46,7 +40,6 @@ impl Logger {
                             stats.direct, stats.multi, stats.hits, stats.misses, len, (stats.direct as f64 / std::cmp::max(stats.direct + stats.multi, 1) as f64 * 100.0)
                         );
                     }
-                    _ = me.shutdown.notified() => break,
                     _ = shutdown.cancelled() => break,
                 }
             }

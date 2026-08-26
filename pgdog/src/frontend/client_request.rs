@@ -311,8 +311,14 @@ impl ClientRequest {
         self.route.as_ref().unwrap_or(&DEFAULT_ROUTE)
     }
 
+    /// The request contains multiple queries
+    /// sent via the extended protocol.
+    pub(crate) fn is_multi_exec(&self) -> bool {
+        self.messages.iter().filter(|m| m.code() == 'E').count() > 1
+    }
+
     /// Split request into multiple serviceable requests by the query engine.
-    pub fn spliced(&self) -> Result<Vec<Self>, Error> {
+    pub(crate) fn split_extended(&self) -> Result<Vec<Self>, Error> {
         // Splice iff using extended protocol and it executes
         // more than one statement.
         let req_count = self.messages.iter().filter(|m| m.code() == 'E').count();
@@ -430,7 +436,7 @@ mod test {
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = req.split_extended().unwrap();
         assert_eq!(splice.len(), 4);
 
         // First slice should contain: Parse("start"), Bind("start"), Execute, Flush
@@ -488,7 +494,7 @@ mod test {
             Sync.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = req.split_extended().unwrap();
         assert!(splice.is_empty());
 
         let messages = vec![
@@ -501,7 +507,7 @@ mod test {
             Flush.into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = req.split_extended().unwrap();
         assert_eq!(splice.len(), 2);
 
         // First slice: Parse("test"), Bind("test"), Execute, Flush
@@ -563,7 +569,7 @@ mod test {
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
-        let splice = req.spliced().unwrap();
+        let splice = req.split_extended().unwrap();
         assert_eq!(splice.len(), 3);
 
         // First slice should contain: Parse("stmt"), Describe("stmt"), Flush, Bind("stmt"), Execute, Flush

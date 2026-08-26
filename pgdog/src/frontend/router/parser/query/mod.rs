@@ -31,6 +31,7 @@ mod set;
 mod set_config;
 mod shared;
 mod show;
+mod split;
 mod transaction;
 mod update;
 
@@ -262,11 +263,7 @@ impl QueryParser {
             }
         }
 
-        let statement = context
-            .router_context
-            .ast
-            .clone()
-            .ok_or(Error::EmptyQuery)?;
+        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
 
         if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
@@ -339,10 +336,7 @@ impl QueryParser {
             .run()?;
         }
 
-        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        if stmts.len() > 1
-            && let Some(command) = self.try_multi_set(&**stmts, context)?
-        {
+        if let Some(command) = self.check_multi_statement(statement, context)? {
             return Ok(command);
         }
 
@@ -388,7 +382,7 @@ impl QueryParser {
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
                     )));
                 } else {
-                    self.select(&statement, stmt, context)
+                    self.select(statement, stmt, context)
                 }
             }
 
@@ -444,7 +438,7 @@ impl QueryParser {
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
-            Node::ExplainStmt(stmt) => self.explain(&statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
 
             Node::DiscardStmt { .. } => {
                 return Ok(Command::Discard {
@@ -479,7 +473,7 @@ impl QueryParser {
         // Run plugins, if any.
         self.plugins(
             context,
-            &statement,
+            statement,
             match &command {
                 Command::Query(query) => query.is_read(),
                 _ => false,
@@ -532,8 +526,10 @@ impl QueryParser {
         if context.dry_run {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
-                let query = context.query()?.query();
-                Cache::get().record_normalized(query, command.route())?;
+                Cache::get().record_normalized(
+                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    command.route(),
+                )?;
             }
             Ok(command.dry_run())
         } else {

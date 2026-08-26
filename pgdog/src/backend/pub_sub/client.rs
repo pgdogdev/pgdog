@@ -9,7 +9,6 @@ use tokio::{select, spawn};
 
 #[derive(Debug)]
 pub struct PubSubClient {
-    shutdown: Arc<Notify>,
     tx: mpsc::Sender<NotificationResponse>,
     rx: mpsc::Receiver<NotificationResponse>,
     unlisten: HashMap<String, Arc<Notify>>,
@@ -26,7 +25,6 @@ impl PubSubClient {
         let (tx, rx) = mpsc::channel(channel_size());
 
         Self {
-            shutdown: Arc::new(Notify::new()),
             tx,
             rx,
             unlisten: HashMap::new(),
@@ -35,7 +33,6 @@ impl PubSubClient {
 
     /// Listen on a channel.
     pub fn listen(&mut self, channel: &str, mut rx: Listener) {
-        let shutdown = self.shutdown.clone();
         let tx = self.tx.clone();
 
         let unlisten = Arc::new(Notify::new());
@@ -44,10 +41,6 @@ impl PubSubClient {
         spawn(async move {
             loop {
                 select! {
-                    _ = shutdown.notified() => {
-                        return;
-                    }
-
                     _ = unlisten.notified() => {
                         return;
                     }
