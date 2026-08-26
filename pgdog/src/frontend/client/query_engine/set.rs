@@ -46,7 +46,11 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if context.in_transaction() {
+                    context.params.reset_transaction(&param.name);
+                } else {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -58,6 +62,9 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The server is ours, so its session changes with the client's:
+            // record it or we won't know what to undo for the next client.
+            self.backend.record_params(params, context.in_transaction());
             self.execute(context).await?;
         } else {
             let fake_response = set_config
@@ -99,9 +106,14 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        context.params.reset_all();
+        if context.in_transaction() {
+            context.params.reset_all_transaction();
+        } else {
+            context.params.reset_all();
+        }
 
         if self.backend.connected() {
+            self.backend.record_reset_all(context.in_transaction());
             self.execute(context).await?;
         } else {
             self.fake_command_response(context, "RESET", None).await?;
