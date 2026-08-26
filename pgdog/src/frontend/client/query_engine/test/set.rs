@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, DataRow, ErrorResponse, Format, NoData, 
-        ParameterDescription, ParseComplete,ReadyForQuery, RowDescription,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, Format, NoData,
+        ParameterDescription, ParseComplete, ReadyForQuery, RowDescription,
         parameter::ParameterValue,
     },
 };
