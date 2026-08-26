@@ -201,7 +201,11 @@ impl TokenCache {
     ///
     /// Always returns immediately when a token is present (valid or stale).
     /// Blocks only on a true cold miss.
-    pub(crate) async fn get_or_fetch<F, Fut>(&self, addr: &Address, fetcher: F) -> Result<String, Error>
+    pub(crate) async fn get_or_fetch<F, Fut>(
+        &self,
+        addr: &Address,
+        fetcher: F,
+    ) -> Result<String, Error>
     where
         F: Fn(Address) -> Fut + Send + Sync,
         Fut: Future<Output = Result<(String, SystemTime), Error>>,

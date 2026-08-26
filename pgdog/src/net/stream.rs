@@ -195,7 +195,10 @@ impl Stream {
     ///
     /// This is fast because the stream is buffered. Make sure to call [`Stream::send_flush`]
     /// for the last message in the exchange.
-    pub(crate) async fn send(&mut self, message: &impl Protocol) -> Result<usize, crate::net::Error> {
+    pub(crate) async fn send(
+        &mut self,
+        message: &impl Protocol,
+    ) -> Result<usize, crate::net::Error> {
         self.io_in_progress = true;
         let result = async {
             let bytes = message.to_bytes();
@@ -271,7 +274,10 @@ impl Stream {
     }
 
     /// Read data into a buffer, avoiding unnecessary allocations.
-    pub(crate) async fn read_buf(&mut self, bytes: &mut BytesMut) -> Result<Message, crate::net::Error> {
+    pub(crate) async fn read_buf(
+        &mut self,
+        bytes: &mut BytesMut,
+    ) -> Result<Message, crate::net::Error> {
         let result = async {
             let code = eof(self.read_u8().await)?;
             self.io_in_progress = true;

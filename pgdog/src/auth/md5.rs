@@ -29,7 +29,11 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub(crate) fn new_salt(user: &'a str, passwords: &[String], salt: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn new_salt(
+        user: &'a str,
+        passwords: &[String],
+        salt: &[u8],
+    ) -> Result<Self, Error> {
         Ok(Self {
             user,
             passwords: passwords.to_vec(),

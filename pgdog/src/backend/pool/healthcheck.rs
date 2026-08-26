@@ -37,7 +37,11 @@ impl<'a> Healtcheck<'a> {
     }
 
     /// Perform a mandatory healtcheck.
-    pub(crate) fn mandatory(conn: &'a mut Server, pool: &'a Pool, healthcheck_timeout: Duration) -> Self {
+    pub(crate) fn mandatory(
+        conn: &'a mut Server,
+        pool: &'a Pool,
+        healthcheck_timeout: Duration,
+    ) -> Self {
         Self::conditional(
             conn,
             pool,

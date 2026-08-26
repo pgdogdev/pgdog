@@ -213,7 +213,11 @@ impl Cache {
     /// Used by dry run mode to keep stats on what queries are routed correctly,
     /// and which are not.
     ///
-    pub(crate) fn record_normalized(&self, query: &nodes::RawStmt, route: &Route) -> Result<(), Error> {
+    pub(crate) fn record_normalized(
+        &self,
+        query: &nodes::RawStmt,
+        route: &Route,
+    ) -> Result<(), Error> {
         let normalized = normalize(query);
         let normalized = deparse(normalized.stmt())?;
         let normalized = normalized.as_str();

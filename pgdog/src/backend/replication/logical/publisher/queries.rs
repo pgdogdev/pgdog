@@ -165,7 +165,10 @@ pub(crate) struct PublicationTableColumn {
 }
 
 impl PublicationTableColumn {
-    pub(crate) async fn load(identity: &ReplicaIdentity, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub(crate) async fn load(
+        identity: &ReplicaIdentity,
+        server: &mut Server,
+    ) -> Result<Vec<Self>, Error> {
         Ok(server
             .fetch_all(
                 COLUMNS

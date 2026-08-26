@@ -124,7 +124,11 @@ impl PipelinedConnection {
     /// Prepare `parses` and wait for the acknowledgments. Inside a transaction
     /// uses `Flush` (must not commit the open implicit transaction); otherwise
     /// uses `Sync`.
-    pub(crate) async fn prepare(&self, parses: &[Parse], in_transaction: bool) -> Result<(), Error> {
+    pub(crate) async fn prepare(
+        &self,
+        parses: &[Parse],
+        in_transaction: bool,
+    ) -> Result<(), Error> {
         if parses.is_empty() {
             return Ok(());
         }

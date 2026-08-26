@@ -10,7 +10,11 @@ pub(crate) use server::Server;
 
 /// Generate a `SCRAM-SHA-256$iterations:salt$StoredKey:ServerKey` hash string
 /// from a plaintext password, suitable for storage in `users.toml` or `pg_shadow`.
-pub(crate) fn generate_hash(password: &str, iterations: std::num::NonZeroU32, salt: &[u8]) -> String {
+pub(crate) fn generate_hash(
+    password: &str,
+    iterations: std::num::NonZeroU32,
+    salt: &[u8],
+) -> String {
     use aws_lc_rs::digest;
     use aws_lc_rs::hmac::{self, HMAC_SHA256};
     use base64::prelude::*;

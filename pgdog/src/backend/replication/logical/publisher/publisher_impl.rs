@@ -184,7 +184,11 @@ impl Publisher {
     ///
     /// This uses a dedicated replication slot which will survive crashes and reboots.
     /// N.B.: The slot needs to be manually dropped!
-    pub(crate) async fn replicate(&mut self, source: &Cluster, dest: &Cluster) -> Result<Waiter, Error> {
+    pub(crate) async fn replicate(
+        &mut self,
+        source: &Cluster,
+        dest: &Cluster,
+    ) -> Result<Waiter, Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 

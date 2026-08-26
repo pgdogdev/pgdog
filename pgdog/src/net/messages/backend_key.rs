@@ -85,7 +85,10 @@ impl BackendKeyData {
     }
 
     /// Mint a key for a new client connection.
-    pub(crate) fn new_frontend(protocol_version: ProtocolVersion, frontend_key: FrontendPid) -> Self {
+    pub(crate) fn new_frontend(
+        protocol_version: ProtocolVersion,
+        frontend_key: FrontendPid,
+    ) -> Self {
         let secret_len = if protocol_version.supports_extended_cancel_key() {
             EXTENDED_SECRET_LEN
         } else {

@@ -71,7 +71,10 @@ pub(crate) async fn send_message(conn: &mut TcpStream, message: impl Protocol) {
 }
 
 /// Read messages until the given code appears.
-pub(crate) async fn read_until(conn: &mut TcpStream, code: char) -> Result<Vec<Message>, ErrorResponse> {
+pub(crate) async fn read_until(
+    conn: &mut TcpStream,
+    code: char,
+) -> Result<Vec<Message>, ErrorResponse> {
     let mut result = vec![];
     loop {
         let message = read_message(conn).await;

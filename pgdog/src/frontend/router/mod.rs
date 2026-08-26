@@ -68,7 +68,10 @@ impl Router {
     }
 
     /// Parse CopyData messages and shard them.
-    pub(crate) async fn copy_data(&mut self, buffer: &ClientRequest) -> Result<Vec<CopyRow>, Error> {
+    pub(crate) async fn copy_data(
+        &mut self,
+        buffer: &ClientRequest,
+    ) -> Result<Vec<CopyRow>, Error> {
         match self.latest_command {
             Command::Copy(ref mut copy) => Ok(copy.shard(&buffer.copy_data()?).await?),
             _ => Ok(buffer

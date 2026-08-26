@@ -362,7 +362,10 @@ impl Table {
     ///
     /// Targets exactly one row via ctid to handle tables with duplicate rows correctly.
     /// Bind with `full_identity_bind_tuple(&old_full, &partial_new)` → n+k params.
-    pub(crate) fn update_full_identity_partial_set(&self, present: &NonIdentityColumnsPresence) -> String {
+    pub(crate) fn update_full_identity_partial_set(
+        &self,
+        present: &NonIdentityColumnsPresence,
+    ) -> String {
         debug_assert!(
             !present.no_non_identity_present(),
             "update_full_identity_partial_set called with no present columns — would emit empty SET clause"

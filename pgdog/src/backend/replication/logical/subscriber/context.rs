@@ -27,7 +27,11 @@ impl StreamContext {
     ///
     /// Runs the router to resolve the destination shard. Returns an error if
     /// routing fails (e.g. unparseable query, wrong command type).
-    pub(crate) async fn new(cluster: &Cluster, tuple: &TupleData, stmt: &Parse) -> Result<Self, Error> {
+    pub(crate) async fn new(
+        cluster: &Cluster,
+        tuple: &TupleData,
+        stmt: &Parse,
+    ) -> Result<Self, Error> {
         let bind = tuple.to_bind(stmt.name());
         let shard = Self::resolve_shard(cluster, &bind, stmt).await?;
         Ok(Self { bind, shard })

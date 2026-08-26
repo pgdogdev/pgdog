@@ -209,7 +209,9 @@ where
 }
 
 /// FOR TESTING PURPOSES ONLY.
-pub(crate) async fn replicate_and_cutover(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn replicate_and_cutover(
+    commands: Commands,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::ReplicateAndCutover {
         from_database,
         to_database,

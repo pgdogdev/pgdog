@@ -36,7 +36,10 @@ impl Update {
 
     /// Concatenate `where_cols` then `set_cols` into one `TupleData` for a FULL-identity UPDATE.
     /// WHERE params (`$1..$k`) come from `where_cols`; SET params (`$k+1..$n`) from `set_cols`.
-    pub(crate) fn full_identity_bind_tuple(where_cols: &TupleData, set_cols: &TupleData) -> TupleData {
+    pub(crate) fn full_identity_bind_tuple(
+        where_cols: &TupleData,
+        set_cols: &TupleData,
+    ) -> TupleData {
         TupleData {
             columns: where_cols
                 .columns

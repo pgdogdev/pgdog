@@ -78,7 +78,9 @@ impl ErrorResponse {
     // Cross-shard queries are disabled.
     // User specified an unmapped sharding key in list-based/range-based sharding,
     // and, if not stopped, the query would be cross-shard.
-    pub(crate) fn unmapped_sharding_key_in_cross_shard_disabled(sharding_key: &str) -> ErrorResponse {
+    pub(crate) fn unmapped_sharding_key_in_cross_shard_disabled(
+        sharding_key: &str,
+    ) -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),
             code: "58000".into(),

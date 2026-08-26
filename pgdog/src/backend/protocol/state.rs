@@ -136,7 +136,10 @@ impl ProtocolState {
 
     /// Should we ignore the message we just received
     /// and not forward it to the client.
-    pub(crate) fn action(&mut self, code: impl Into<ExecutionCode> + Debug) -> Result<Action, Error> {
+    pub(crate) fn action(
+        &mut self,
+        code: impl Into<ExecutionCode> + Debug,
+    ) -> Result<Action, Error> {
         let code = code.into();
         match code {
             ExecutionCode::Untracked => return Ok(Action::Forward),

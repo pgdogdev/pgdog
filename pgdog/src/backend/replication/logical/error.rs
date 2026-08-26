@@ -33,7 +33,7 @@ pub(crate) struct TableValidationError {
 
 /// Newtype that `Display`s a slice of `TableValidationError` as a human-readable list.
 #[derive(Debug, Error)]
-pub(crate) struct TableValidationErrors(#[error(ignore)] pub Vec<TableValidationError>);
+pub(crate) struct TableValidationErrors(#[error(ignore)] pub(crate) Vec<TableValidationError>);
 
 impl fmt::Display for TableValidationErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

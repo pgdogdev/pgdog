@@ -74,7 +74,11 @@ pub(crate) struct QueryEngine {
 
 impl QueryEngine {
     /// Create new query engine.
-    pub(crate) fn new(params: &Parameters, comms: &ClientComms, admin: bool) -> Result<Self, Error> {
+    pub(crate) fn new(
+        params: &Parameters,
+        comms: &ClientComms,
+        admin: bool,
+    ) -> Result<Self, Error> {
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
 
