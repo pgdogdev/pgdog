@@ -1467,7 +1467,7 @@ ALTER TABLE ONLY events REPLICA IDENTITY FULL;"#,
 
     #[test]
     fn test_create_publication_restored() {
-        let output = parse("CREATE PUBLICATION my_pub(crate) FOR TABLE users, orders;");
+        let output = parse("CREATE PUBLICATION my_pub FOR TABLE users, orders;");
 
         let statements = output.statements(SyncState::PreData).unwrap();
 
@@ -1479,14 +1479,14 @@ ALTER TABLE ONLY events REPLICA IDENTITY FULL;"#,
         );
         assert_eq!(
             statements[1].deref(),
-            "CREATE PUBLICATION my_pub(crate) FOR TABLE users, orders"
+            "CREATE PUBLICATION my_pub FOR TABLE users, orders"
         );
     }
 
     #[test]
     fn test_alter_publication_add_table_restored() {
         // pg_dump outputs publication tables as ALTER PUBLICATION ... ADD TABLE
-        let output = parse("ALTER PUBLICATION my_pub(crate) ADD TABLE ONLY public.users;");
+        let output = parse("ALTER PUBLICATION my_pub ADD TABLE ONLY public.users;");
 
         let statements = output.statements(SyncState::PreData).unwrap();
 
@@ -1494,7 +1494,7 @@ ALTER TABLE ONLY events REPLICA IDENTITY FULL;"#,
         assert!(
             statements[0]
                 .deref()
-                .contains("ALTER PUBLICATION my_pub(crate) ADD TABLE")
+                .contains("ALTER PUBLICATION my_pub ADD TABLE")
         );
     }
 
