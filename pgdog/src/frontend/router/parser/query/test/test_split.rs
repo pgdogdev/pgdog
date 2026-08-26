@@ -154,6 +154,11 @@ fn test_multiple_statements_after_transaction_are_unsafe() {
 }
 
 #[test]
+fn test_one_statement_after_transaction_are_unsafe() {
+    assert_unsafe("BEGIN; SELECT 1; COMMIT; SELECT 2;");
+}
+
+#[test]
 fn test_ddl_in_explicit_transaction_is_split() {
     assert_split(
         "BEGIN; CREATE TABLE split_test (id bigint); DROP TABLE split_test; COMMIT",

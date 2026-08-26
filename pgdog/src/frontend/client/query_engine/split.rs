@@ -67,21 +67,16 @@ impl QueryEngine {
     /// back to normal state.
     ///
     pub(super) fn extended_pipeline_check(&self, context: &QueryEngineContext<'_>) -> bool {
-        let extended_error = self.backend.out_of_sync()
+        self.backend.out_of_sync()
             && !context.client_request.is_sync_only()
-            && !context.pipeline.is_done();
-
-        extended_error
+            && !context.pipeline.is_done()
     }
 
     /// Return true if we should ignore this query because
     /// the simple query pipeline is in an error state, i.e., inside a failed
     /// transaction.
     pub(super) fn simple_pipeline_check(&self, context: &QueryEngineContext<'_>) -> bool {
-        // Simple pipeline ignores all subsequent requests.
-        let simple_error = context.pipeline.is_simple() && context.in_error();
-
-        simple_error
+        context.pipeline.is_simple() && context.in_error()
     }
 
     /// Build a multi-query split.

@@ -47,10 +47,14 @@ impl QueryParser {
                 let safe_not_to_split =
                     no_sharding || extended || direct_to_shard || check.only_ddl();
 
+                let safe_to_split = !check.open_txn
+                    && (check.txn == 1 && check.statements() == 0
+                        || check.statements() == 1 && check.txn == 0);
+
                 if safe_not_to_split {
                     // Safe to use the first statement for routing.
                     Ok(None)
-                } else if check.statements() <= 1 && !check.open_txn {
+                } else if safe_to_split {
                     Ok(Some(Self::split(ast)?))
                 } else {
                     Err(Error::MultiStatementSafety)
