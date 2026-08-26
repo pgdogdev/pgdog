@@ -1952,7 +1952,7 @@ pub(crate) mod test {
             let msg = server.read().await.unwrap();
             assert_eq!(msg.code(), c);
         }
-        assert!(server.prepared_statements.is_empty());
+        assert_eq!(server.prepared_statements.len(), 0);
 
         server
             .send(

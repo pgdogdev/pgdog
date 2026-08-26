@@ -333,7 +333,7 @@ mod test {
         drop(guard);
 
         let guard = pool.get(&Request::default()).await.unwrap();
-        assert!(guard.prepared_statements().is_empty());
+        assert_eq!(guard.prepared_statements().len(), 0);
     }
 
     #[tokio::test]

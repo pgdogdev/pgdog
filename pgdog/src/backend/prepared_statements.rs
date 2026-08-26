@@ -580,11 +580,6 @@ impl PreparedStatements {
         self.local_cache.len()
     }
 
-    /// True if the local (connection) prepared statement cache is empty.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// Ensure capacity of prepared statements is respected.
     ///
     /// WARNING: This removes prepared statements from the cache.
