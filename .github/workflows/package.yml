@@ -25,7 +25,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -83,12 +82,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
+      - name: Sign and attest artifact
+        uses: ./.github/actions/sign-and-attest-image
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
   merge:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -97,7 +94,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -168,12 +164,10 @@ jobs:
             --format '{{json .Manifest}}' | jq -r '.digest')
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Generate merged artifact attestation
-        uses: actions/attest-build-provenance@v2
+      - name: Sign and attest merged artifact
+        uses: ./.github/actions/sign-and-attest-image
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
-          subject-digest: ${{ steps.manifest.outputs.digest }}
-          push-to-registry: true
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }}
 
       - name: Inspect image
         run: |
