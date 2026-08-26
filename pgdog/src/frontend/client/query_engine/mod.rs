@@ -120,7 +120,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
-        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
+        if let Some(result) = Self::check_extended_pipeline_rewrite(context.client_request)? {
             return Ok(result);
         }
 
@@ -128,7 +128,7 @@ impl QueryEngine {
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
-        if self.extended_pipeline_check(context) {
+        if self.in_extended_pipeline_error(context) {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 

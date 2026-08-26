@@ -45,7 +45,7 @@ impl QueryEngine {
     ///
     /// Caller is expected to abort the request and return the result back to the caller
     /// for resubmission.
-    pub(super) fn check_extended_request_split(
+    pub(super) fn check_extended_pipeline_rewrite(
         request: &ClientRequest,
     ) -> Result<Option<QueryEngineResult>, Error> {
         if request.is_multi_exec() {
@@ -66,7 +66,7 @@ impl QueryEngine {
     /// If we see a [`crate::net::Sync`]-only request, we execute it to restore servers
     /// back to normal state.
     ///
-    pub(super) fn extended_pipeline_check(&self, context: &QueryEngineContext<'_>) -> bool {
+    pub(super) fn in_extended_pipeline_error(&self, context: &QueryEngineContext<'_>) -> bool {
         self.backend.out_of_sync()
             && !context.client_request.is_sync_only()
             && !context.pipeline.is_done()
@@ -75,7 +75,7 @@ impl QueryEngine {
     /// Return true if we should ignore this query because
     /// the simple query pipeline is in an error state, i.e., inside a failed
     /// transaction.
-    pub(super) fn simple_pipeline_check(&self, context: &QueryEngineContext<'_>) -> bool {
+    pub(super) fn in_simple_pipeline_error(&self, context: &QueryEngineContext<'_>) -> bool {
         context.pipeline.is_simple() && context.in_error()
     }
 

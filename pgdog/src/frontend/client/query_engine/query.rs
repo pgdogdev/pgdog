@@ -31,7 +31,7 @@ impl QueryEngine {
 
         // Skip statements inside a simple pipeline
         // if we are inside an errored-out transaction.
-        if self.simple_pipeline_check(context) {
+        if self.in_simple_pipeline_error(context) {
             return Ok(());
         }
 
