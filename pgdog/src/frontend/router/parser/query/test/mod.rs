@@ -39,6 +39,7 @@ pub mod test_session_control;
 pub mod test_set;
 pub mod test_sharding;
 pub mod test_special;
+pub mod test_split;
 pub mod test_subqueries;
 pub mod test_transaction;
 

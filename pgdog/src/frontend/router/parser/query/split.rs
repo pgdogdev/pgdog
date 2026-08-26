@@ -50,7 +50,7 @@ impl QueryParser {
                 if safe_not_to_split {
                     // Safe to use the first statement for routing.
                     Ok(None)
-                } else if check.no_txn_dml <= 1 && !check.open_txn {
+                } else if check.statements() <= 1 && !check.open_txn {
                     Ok(Some(Self::split(ast)?))
                 } else {
                     Err(Error::MultiStatementSafety)
