@@ -1,10 +1,10 @@
-use crate::api::async_task::AsyncTaskId;
+use crate::api::task::TaskId;
 use crate::api::tasks_storage;
 
 use super::prelude::*;
 
 pub struct StopTask {
-    task_id: AsyncTaskId,
+    task_id: TaskId,
 }
 
 #[async_trait]

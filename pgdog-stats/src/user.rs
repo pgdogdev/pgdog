@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Database/user pair that identifies a database cluster pool.
-#[derive(Debug, PartialEq, Hash, Eq, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct User {
     /// User name.
     pub user: String,

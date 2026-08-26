@@ -3167,11 +3167,13 @@ name = "pgdog-stats"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "derive_more",
  "indexmap",
  "pgdog-config",
  "pgdog-postgres-types",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

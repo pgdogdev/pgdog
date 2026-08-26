@@ -1,11 +1,11 @@
-use crate::api::async_task::AsyncTaskId;
 use crate::api::replication::ReplicationTask;
+use crate::api::task::TaskId;
 use crate::backend::replication::logical::Error as ReplicationError;
 
 use super::prelude::*;
 
 pub struct Cutover {
-    task_id: Option<AsyncTaskId>,
+    task_id: Option<TaskId>,
 }
 
 #[async_trait]
