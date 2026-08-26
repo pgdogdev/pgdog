@@ -7,7 +7,6 @@ use super::Vector;
 use super::c_string_bytes;
 use super::code;
 use super::prelude::*;
-use bytes::BytesMut;
 
 use std::fmt::Debug;
 use std::str::from_utf8;
@@ -215,11 +214,6 @@ impl Bind {
         })
     }
 
-    /// Format codes, if any.
-    pub fn codes(&self) -> &[Format] {
-        &self.codes
-    }
-
     pub fn new_statement(name: &str) -> Self {
         Self {
             statement: c_string_bytes(name),
@@ -227,6 +221,7 @@ impl Bind {
         }
     }
 
+    #[cfg(test)]
     pub fn new_params(name: &str, params: &[Parameter]) -> Self {
         Self {
             statement: c_string_bytes(name),
@@ -235,6 +230,7 @@ impl Bind {
         }
     }
 
+    #[cfg(test)]
     pub fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
             statement: c_string_bytes(name),
@@ -252,6 +248,7 @@ impl Bind {
         }
     }
 
+    #[cfg(test)]
     pub fn new_params_codes_results(
         name: &str,
         params: &[Parameter],
@@ -259,7 +256,7 @@ impl Bind {
         results: &[i16],
     ) -> Self {
         let mut me = Self::new_params_codes(name, params, codes);
-        let mut buf = BytesMut::with_capacity(results.len() * 2);
+        let mut buf = bytes::BytesMut::with_capacity(results.len() * 2);
         for result in results {
             buf.put_i16(*result);
         }
@@ -484,7 +481,7 @@ mod test {
                 },
             ],
             results: {
-                let mut buf = BytesMut::with_capacity(2);
+                let mut buf = bytes::BytesMut::with_capacity(2);
                 buf.put_i16(0);
                 buf.freeze()
             },
@@ -581,7 +578,7 @@ mod test {
         let decoded = Bind::from_bytes(bytes.clone()).unwrap();
 
         assert_eq!(decoded.params_raw().len(), count);
-        assert_eq!(decoded.codes().len(), 0);
+        assert_eq!(decoded.codes.len(), 0);
         assert_eq!(decoded.statement(), "__pgdog_large");
         assert_eq!(bytes.len(), decoded.len());
     }

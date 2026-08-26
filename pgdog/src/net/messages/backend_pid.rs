@@ -21,13 +21,6 @@ pub struct BackendPid {
     pub(crate) pid: i32,
 }
 
-impl BackendPid {
-    /// Real Postgres backend pid.
-    pub fn pid(&self) -> i32 {
-        self.pid
-    }
-}
-
 impl From<&BackendKeyData> for BackendPid {
     fn from(key: &BackendKeyData) -> Self {
         Self {

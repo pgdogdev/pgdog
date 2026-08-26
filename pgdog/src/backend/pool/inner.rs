@@ -860,7 +860,7 @@ mod test {
         let mut inner = Inner::default();
         let client_id = FrontendPid::new();
         let server_id = BackendPid::for_test(1);
-        let cancel_key = BackendKeyData::legacy(server_id.pid(), 0);
+        let cancel_key = BackendKeyData::legacy(server_id.pid, 0);
 
         assert_eq!(inner.cancel_key(client_id), None);
 
@@ -874,7 +874,7 @@ mod test {
         let mut taken = Taken::default();
         let client_id = FrontendPid::new();
         let server_id = BackendPid::for_test(1);
-        let cancel_key = BackendKeyData::legacy(server_id.pid(), 0);
+        let cancel_key = BackendKeyData::legacy(server_id.pid, 0);
 
         // No mapping yet
         assert_eq!(taken.cancel_key(client_id), None);
@@ -884,7 +884,7 @@ mod test {
 
         // Cancel key should be returned for mapped client, pid matches server_id
         let stored = taken.cancel_key(client_id).unwrap();
-        assert_eq!(stored.pid(), server_id.pid());
+        assert_eq!(stored.pid(), server_id.pid);
         assert_eq!(stored, &cancel_key);
 
         // Different client should return None
@@ -1088,7 +1088,7 @@ mod test {
         assert_eq!(inner.checked_out(), 0);
 
         let mut taken = Taken::default();
-        taken.take(client, server, BackendKeyData::legacy(server.pid(), 0));
+        taken.take(client, server, BackendKeyData::legacy(server.pid, 0));
 
         inner.set_taken(taken);
         assert_eq!(inner.checked_out(), 1);

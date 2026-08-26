@@ -1,4 +1,4 @@
-use super::{c_string_bytes, code, prelude::*};
+use super::{code, prelude::*};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CopyFail {
@@ -6,9 +6,10 @@ pub struct CopyFail {
 }
 
 impl CopyFail {
+    #[cfg(test)]
     pub fn new(error: impl AsRef<str>) -> Self {
         Self {
-            error: c_string_bytes(error.as_ref()),
+            error: super::c_string_bytes(error.as_ref()),
         }
     }
 }

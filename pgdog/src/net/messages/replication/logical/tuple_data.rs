@@ -214,12 +214,6 @@ impl Column {
             },
         }
     }
-
-    /// Get UTF-8 representation of the data,
-    /// if data is encoded with UTF-8.
-    pub fn as_str(&self) -> Option<&str> {
-        from_utf8(&self.data[..]).ok()
-    }
 }
 
 impl FromBytes for TupleData {
@@ -353,11 +347,11 @@ mod test {
         };
         let filled = new.fill_toasted_from(&old).unwrap();
         // col0: from new (unchanged — was present)
-        assert_eq!(filled.columns[0].as_str(), Some("a"));
+        assert_eq!(&*filled.columns[0].data, b"a");
         // col1: from old (was toasted in new)
-        assert_eq!(filled.columns[1].as_str(), Some("b_old"));
+        assert_eq!(&*filled.columns[1].data, b"b_old");
         // col2: from new
-        assert_eq!(filled.columns[2].as_str(), Some("c"));
+        assert_eq!(&*filled.columns[2].data, b"c");
         assert!(
             !filled.has_toasted(),
             "filled tuple must contain no toasted markers"
@@ -374,8 +368,8 @@ mod test {
             columns: vec![text_col("x_old"), text_col("y_old")],
         };
         let filled = new.fill_toasted_from(&old).unwrap();
-        assert_eq!(filled.columns[0].as_str(), Some("x"));
-        assert_eq!(filled.columns[1].as_str(), Some("y"));
+        assert_eq!(&*filled.columns[0].data, b"x");
+        assert_eq!(&*filled.columns[1].data, b"y");
     }
 
     #[test]
@@ -388,8 +382,8 @@ mod test {
             columns: vec![text_col("p"), text_col("q")],
         };
         let filled = new.fill_toasted_from(&old).unwrap();
-        assert_eq!(filled.columns[0].as_str(), Some("p"));
-        assert_eq!(filled.columns[1].as_str(), Some("q"));
+        assert_eq!(&*filled.columns[0].data, b"p");
+        assert_eq!(&*filled.columns[1].data, b"q");
         assert!(!filled.has_toasted());
     }
 

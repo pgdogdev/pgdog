@@ -165,6 +165,7 @@ impl Aggregate {
         &self.group_by
     }
 
+    #[cfg(test)]
     pub fn new_count(column: usize) -> Self {
         Self {
             targets: vec![AggregateTarget {
@@ -176,6 +177,7 @@ impl Aggregate {
         }
     }
 
+    #[cfg(test)]
     pub fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
         Self {
             targets: vec![AggregateTarget {

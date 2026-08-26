@@ -364,6 +364,7 @@ impl Stats {
 
     /// Get pool_id (local, no lock).
     #[inline]
+    #[cfg(test)]
     pub fn pool_id(&self) -> u64 {
         self.local.pool_id
     }
@@ -377,12 +378,14 @@ impl Stats {
 
     /// Get total counts (local, no lock).
     #[inline]
+    #[cfg(test)]
     pub fn total(&self) -> Counts {
         self.local.total
     }
 
     /// Get last_checkout counts (local, no lock).
     #[inline]
+    #[cfg(test)]
     pub fn last_checkout(&self) -> Counts {
         self.local.last_checkout
     }

@@ -783,7 +783,7 @@ mod test {
             }
             .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes())
+        CopyData::new(&xlog.to_bytes())
     }
     fn commit_copy_data(lsn: i64) -> CopyData {
         let xlog = XLogData {
@@ -798,7 +798,7 @@ mod test {
             }
             .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes())
+        CopyData::new(&xlog.to_bytes())
     }
 
     // -- handle ---------------------------------------------------------------
