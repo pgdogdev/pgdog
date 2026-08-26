@@ -23,7 +23,6 @@ use crate::backend::{
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
-use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext, QueryEngineResult};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
@@ -36,22 +35,23 @@ use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
-pub mod query_engine;
+pub(crate) mod query_engine;
 pub(crate) mod request_settings;
-pub mod sticky;
-pub mod timeouts;
-pub mod transaction_type;
+pub(crate) mod sticky;
+pub(crate) mod timeouts;
+pub(crate) mod transaction_type;
 
 pub(crate) use request_settings::ClientRequestSettings;
+use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub use transaction_type::TransactionType;
+pub(crate) use transaction_type::TransactionType;
 
 /// PostgreSQL client.
 ///
 /// It thinks it's talking to a real Postgres server, but actually it's talking to PgDog :-).
 ///
 #[derive(Debug)]
-pub struct Client {
+pub(crate) struct Client {
     // Client IP.
     addr: SocketAddr,
     // Client socket.
@@ -130,7 +130,7 @@ impl Client {
     /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
     ///   for more modern clients.
     ///
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         stream: Stream,
         params: Parameters,
         addr: SocketAddr,
@@ -447,13 +447,15 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, params: Parameters) -> Self {
+    fn new_test(stream: Stream, mut params: Parameters) -> Self {
         use crate::config::config;
 
-        let mut connect_params = Parameters::default();
-        connect_params.insert("user", "pgdog");
-        connect_params.insert("database", "pgdog");
-        connect_params.merge(params);
+        if params.get("user").is_none() {
+            params.insert("user", "pgdog");
+        }
+        if params.get("database").is_none() {
+            params.insert("database", "pgdog");
+        }
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
         Self::maybe_add_application_name_host(
@@ -482,8 +484,8 @@ impl Client {
                 4096,
                 config().config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&connect_params),
-            params: connect_params,
+            sticky: Sticky::from_params(&params),
+            params,
             database: "pgdog".to_string(),
         }
     }
@@ -575,6 +577,8 @@ impl Client {
         query_engine: &mut QueryEngine,
         message: Message,
     ) -> Result<(), Error> {
+        use query_engine::QueryEngineContext;
+
         let mut context = QueryEngineContext::new(self);
         query_engine
             .process_server_message(&mut context, message)
@@ -605,6 +609,7 @@ impl Client {
 
     /// Handle client messages.
     async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        use query_engine::{Pipeline, QueryEngineContext, QueryEngineResult};
         self.check_maintenance_mode(query_engine).await;
 
         match query_engine
@@ -612,15 +617,17 @@ impl Client {
             .await?
         {
             QueryEngineResult::Done(transaction) => self.transaction = transaction,
-            QueryEngineResult::Split(requests) => {
+            QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
-                self.transaction.get_or_insert(TransactionType::Implicit);
+                if extended {
+                    self.transaction.get_or_insert(TransactionType::Implicit);
+                }
 
                 while let Some(mut request) = requests.next() {
                     match query_engine
                         .handle(
                             &mut QueryEngineContext::new(self)
-                                .extended_pipeline(&mut request, requests.len()),
+                                .pipelined(&mut request, Pipeline::new(requests.len(), extended)),
                         )
                         .await?
                     {
@@ -715,12 +722,12 @@ impl Client {
         Ok(BufferEvent::HaveRequest)
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
     /// Get client memory stats.
-    pub fn memory_stats(&self) -> MemoryStats {
+    pub(crate) fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
             inner: pgdog_stats::MemoryStats {
                 buffer: *self.stream_buffer.stats(),
@@ -740,7 +747,7 @@ impl Drop for Client {
 
 #[cfg(test)]
 impl Client {
-    pub async fn spawn_test(mut self) {
+    pub(crate) async fn spawn_test(mut self) {
         self.spawn_internal().await;
     }
 }
@@ -762,7 +769,7 @@ impl MemoryUsage for Client {
 }
 
 #[cfg(test)]
-pub mod test;
+pub(crate) mod test;
 
 #[cfg(test)]
 mod client_certificate_tests {

@@ -7,7 +7,7 @@ use crate::frontend::ClientRequest;
 
 /// Simulate original delay between requests.
 #[derive(Clone, Debug)]
-pub struct BufferWithDelay {
+pub(crate) struct BufferWithDelay {
     pub(super) delay: Duration,
     pub(super) buffer: ClientRequest,
 }

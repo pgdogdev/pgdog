@@ -12,7 +12,7 @@ use crate::config::{Database, General, User};
 
 /// Pool configuration.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
-pub struct Config {
+pub(crate) struct Config {
     pub(crate) inner: pgdog_stats::Config,
 }
 
@@ -32,7 +32,12 @@ impl DerefMut for Config {
 
 impl Config {
     /// Create from database/user configuration.
-    pub fn new(general: &General, database: &Database, user: &User, is_only_replica: bool) -> Self {
+    pub(crate) fn new(
+        general: &General,
+        database: &Database,
+        user: &User,
+        is_only_replica: bool,
+    ) -> Self {
         Self {
             inner: pgdog_stats::Config {
                 min: user

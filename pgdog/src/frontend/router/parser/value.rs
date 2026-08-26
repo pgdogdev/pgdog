@@ -9,7 +9,7 @@ use crate::net::{messages::Vector, vector::str_to_vector};
 
 /// A value extracted from a query.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value<'a> {
+pub(crate) enum Value<'a> {
     String(&'a str),
     Integer(i64),
     // FIXME(sage): This will lose precision on numeric

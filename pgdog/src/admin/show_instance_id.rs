@@ -4,7 +4,7 @@ use super::{
 };
 use crate::util::instance_id;
 
-pub struct ShowInstanceId;
+pub(crate) struct ShowInstanceId;
 
 #[async_trait]
 impl Command for ShowInstanceId {

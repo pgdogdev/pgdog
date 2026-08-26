@@ -84,10 +84,16 @@ impl QueryEngine {
                     } else {
                         0
                     }) + context.stream.send(&CommandComplete::new(command)).await?
-                        + context
-                            .stream
-                            .send(&ReadyForQuery::in_transaction(context.in_transaction()))
-                            .await?
+                        + if context.pipeline.is_simple() && !context.pipeline.is_done() {
+                            // Don't send ReadyForQuery for intermediate queries in a simple query
+                            // pipeline.
+                            0
+                        } else {
+                            context
+                                .stream
+                                .send(&ReadyForQuery::in_transaction(context.in_transaction()))
+                                .await?
+                        }
                 }
                 // TODO(lev): Elixir closes the statement it just asked us to prepare.
                 // That's very memory-conscious of it, and we appreciate it.

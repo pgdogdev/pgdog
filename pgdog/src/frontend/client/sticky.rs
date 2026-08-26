@@ -7,14 +7,14 @@ use rand::{Rng, rng};
 use crate::net::{Parameters, parameter::ParameterValue};
 
 #[derive(Debug, Clone, Copy)]
-pub struct Sticky {
+pub(crate) struct Sticky {
     /// Which shard to use for omnisharded queries, making them
     /// stick to only one database.
-    pub omni_index: usize,
+    pub(crate) omni_index: usize,
 
     /// Desired database role. This comes from `target_session_attrs`
     /// provided by the client.
-    pub role: Option<Role>,
+    pub(crate) role: Option<Role>,
 }
 
 impl Default for Sticky {
@@ -25,12 +25,12 @@ impl Default for Sticky {
 
 impl Sticky {
     /// Create new sticky config.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::from_params(&Parameters::default())
     }
 
     #[cfg(test)]
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         Self {
             omni_index: 1,
             role: None,
@@ -38,7 +38,7 @@ impl Sticky {
     }
 
     /// Create Sticky from params.
-    pub fn from_params(params: &Parameters) -> Self {
+    pub(crate) fn from_params(params: &Parameters) -> Self {
         let role = params.get("pgdog.role").and_then(|value| match value {
             ParameterValue::String(value) => match value.as_str() {
                 "primary" => Some(Role::Primary),

@@ -11,48 +11,49 @@ use crate::{
 
 use tracing::debug;
 
-pub mod advisory_lock;
-pub mod connect;
-pub mod context;
-pub mod deallocate;
-pub mod discard;
-pub mod end_transaction;
-pub mod fake;
-pub mod hooks;
-pub mod incomplete_requests;
-pub mod internal_values;
-pub mod lock;
-pub mod maintenance_mode;
-pub mod multi_step;
-pub mod notify_buffer;
-pub mod pub_sub;
-pub mod query;
+pub(crate) mod advisory_lock;
+pub(crate) mod connect;
+pub(crate) mod context;
+pub(crate) mod deallocate;
+pub(crate) mod discard;
+pub(crate) mod end_transaction;
+pub(crate) mod fake;
+pub(crate) mod hooks;
+pub(crate) mod incomplete_requests;
+pub(crate) mod internal_values;
+pub(crate) mod lock;
+pub(crate) mod maintenance_mode;
+pub(crate) mod multi_step;
+pub(crate) mod notify_buffer;
+pub(crate) mod pub_sub;
+pub(crate) mod query;
 mod query_log_stdout;
-pub mod result;
-pub mod rewrite;
-pub mod route_query;
-pub mod set;
-pub mod split;
-pub mod start_transaction;
+pub(crate) mod result;
+pub(crate) mod rewrite;
+pub(crate) mod route_query;
+pub(crate) mod set;
+pub(crate) mod split;
+pub(crate) mod start_transaction;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
 mod testing;
-pub mod two_pc;
+pub(crate) mod two_pc;
 
 use self::query::ExplainResponseState;
 use self::query_log_stdout::log_query_stdout;
 pub(crate) use advisory_lock::AdvisoryLocks;
-pub use context::QueryEngineContext;
+pub(crate) use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
+pub(crate) use split::Pipeline;
 use two_pc::TwoPc;
-pub use two_pc::phase::TwoPcPhase;
+pub(crate) use two_pc::phase::TwoPcPhase;
 
 /// Implements the entire client/server message exchange.
 /// State here is preserved between requests.
 #[derive(Debug)]
-pub struct QueryEngine {
+pub(crate) struct QueryEngine {
     begin_stmt: Option<BufferedQuery>,
     router: Router,
     comms: ClientComms,
@@ -72,7 +73,11 @@ pub struct QueryEngine {
 
 impl QueryEngine {
     /// Create new query engine.
-    pub fn new(params: &Parameters, comms: &ClientComms, admin: bool) -> Result<Self, Error> {
+    pub(crate) fn new(
+        params: &Parameters,
+        comms: &ClientComms,
+        admin: bool,
+    ) -> Result<Self, Error> {
         let user = params.get_required("user")?;
         let database = params.get_default("database", user);
 
@@ -94,31 +99,31 @@ impl QueryEngine {
         })
     }
 
-    pub fn from_client(client: &Client) -> Result<Self, Error> {
+    pub(crate) fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(&client.params, &client.comms, client.admin)
     }
 
     /// Wait for an async message from the backend.
-    pub async fn read_backend(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read_backend(&mut self) -> Result<Message, Error> {
         Ok(self.backend.read().await?)
     }
 
     /// Client can safely disconnect (no active backend connection or pending transaction).
-    pub fn can_disconnect(&self) -> bool {
+    pub(crate) fn can_disconnect(&self) -> bool {
         self.begin_stmt.is_none() && self.backend.done()
     }
 
     /// Current state.
-    pub fn client_state(&self) -> State {
+    pub(crate) fn client_state(&self) -> State {
         self.stats.state
     }
 
     /// Handle client request.
-    pub async fn handle(
+    pub(crate) async fn handle(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<QueryEngineResult, Error> {
-        if let Some(result) = Self::check_extended_request_split(context.client_request)? {
+        if let Some(result) = Self::check_extended_pipeline_rewrite(context.client_request)? {
             return Ok(result);
         }
 
@@ -126,7 +131,7 @@ impl QueryEngine {
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
-        if self.extended_in_sync_check(context) {
+        if self.in_extended_pipeline_error(context) {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
@@ -266,14 +271,7 @@ impl QueryEngine {
             Command::Copy(_) => self.execute(context).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { extended } => self.discard(context, *extended).await?,
-            Command::Split(_) => {
-                use crate::frontend::router::parser::Error as ParserError;
-                self.error_response(
-                    context,
-                    ErrorResponse::from_err(&Error::Parser(ParserError::MultiStatementMixedSet)),
-                )
-                .await?;
-            }
+            Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 
         self.hooks.after_execution(context)?;

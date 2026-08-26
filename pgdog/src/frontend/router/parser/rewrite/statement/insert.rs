@@ -10,7 +10,7 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use super::{Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
-pub struct InsertSplit {
+pub(crate) struct InsertSplit {
     /// Parameter positions in the original Bind message
     /// that should be used to build the Bind message specific to this
     /// insert statement.
@@ -29,12 +29,12 @@ pub struct InsertSplit {
 
 impl InsertSplit {
     /// Get the global prepared statement name, if this split was registered.
-    pub fn statement_name(&self) -> Option<&str> {
+    pub(crate) fn statement_name(&self) -> Option<&str> {
         self.statement_name.as_deref()
     }
 
     /// Build a ClientRequest from this split and the original request.
-    pub fn build_request(&self, request: &ClientRequest) -> Result<ClientRequest, Error> {
+    pub(crate) fn build_request(&self, request: &ClientRequest) -> Result<ClientRequest, Error> {
         let mut new_request = ClientRequest::default();
         let mut has_parse = false;
 
@@ -100,7 +100,7 @@ impl InsertSplit {
 }
 
 /// Build separate ClientRequests for each insert split.
-pub fn build_split_requests(
+pub(crate) fn build_split_requests(
     splits: &[InsertSplit],
     request: &ClientRequest,
 ) -> Result<Vec<ClientRequest>, Error> {

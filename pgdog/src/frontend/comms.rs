@@ -18,7 +18,7 @@ use super::{ConnectedClient, Stats};
 static COMMS: Lazy<Comms> = Lazy::new(Comms::new);
 
 /// Get global communication channel.
-pub fn comms() -> Comms {
+pub(crate) fn comms() -> Comms {
     COMMS.clone()
 }
 
@@ -35,7 +35,7 @@ struct Global {
 
 /// Bi-directional communications between client and internals.
 #[derive(Clone, Debug)]
-pub struct Comms {
+pub(crate) struct Comms {
     global: Arc<Global>,
 }
 
@@ -58,7 +58,7 @@ impl Comms {
     }
 
     /// Get all connected clients.
-    pub fn clients(&self) -> HashMap<FrontendPid, ConnectedClient> {
+    pub(crate) fn clients(&self) -> HashMap<FrontendPid, ConnectedClient> {
         self.global
             .clients
             .iter()
@@ -67,7 +67,7 @@ impl Comms {
     }
 
     /// Get number of clients who are currently locked.
-    pub fn clients_locked_count(&self) -> usize {
+    pub(crate) fn clients_locked_count(&self) -> usize {
         self.global
             .clients
             .iter()
@@ -76,21 +76,21 @@ impl Comms {
     }
 
     /// Number of connected clients.
-    pub fn clients_len(&self) -> usize {
+    pub(crate) fn clients_len(&self) -> usize {
         self.global.clients.len()
     }
 
-    pub fn tracker(&self) -> &TaskTracker {
+    pub(crate) fn tracker(&self) -> &TaskTracker {
         &self.global.tracker
     }
 
     /// Get number of connected clients.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.global.clients.len()
     }
 
     /// New client connected.
-    pub fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
+    pub(crate) fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
         let pid = FrontendPid::from(&key);
         self.global
             .clients
@@ -98,26 +98,26 @@ impl Comms {
     }
 
     /// Update client parameters.
-    pub fn update_params(&self, id: FrontendPid, params: Parameters) {
+    pub(crate) fn update_params(&self, id: FrontendPid, params: Parameters) {
         if let Some(mut entry) = self.global.clients.get_mut(&id) {
             entry.paramters = params;
         }
     }
 
     /// Client disconnected.
-    pub fn disconnect(&self, id: FrontendPid) {
+    pub(crate) fn disconnect(&self, id: FrontendPid) {
         self.global.clients.remove(&id);
     }
 
     /// Update stats.
-    pub fn update_stats(&self, id: FrontendPid, stats: Stats) {
+    pub(crate) fn update_stats(&self, id: FrontendPid, stats: Stats) {
         if let Some(mut entry) = self.global.clients.get_mut(&id) {
             entry.stats = stats;
         }
     }
 
     /// Verify that a cancel request has a valid secret for the given client.
-    pub fn verify_cancel(&self, key: &BackendKeyData) -> bool {
+    pub(crate) fn verify_cancel(&self, key: &BackendKeyData) -> bool {
         let pid = FrontendPid::from(key);
         self.global
             .clients
@@ -127,24 +127,24 @@ impl Comms {
     }
 
     /// Tell clients pgDog is shutting down.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.global.shutdown.cancel();
         self.global.tracker.close();
     }
 
     /// Get the shutdown signal.
-    pub fn shutting_down(&self) -> CancellationToken {
+    pub(crate) fn shutting_down(&self) -> CancellationToken {
         self.global.shutdown.clone()
     }
 
     /// pgDog is shutting down now.
-    pub fn offline(&self) -> bool {
+    pub(crate) fn offline(&self) -> bool {
         self.global.shutdown.is_cancelled()
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ClientComms {
+pub(crate) struct ClientComms {
     comms: Comms,
     id: FrontendPid,
 }
@@ -158,23 +158,23 @@ impl Deref for ClientComms {
 }
 
 impl ClientComms {
-    pub fn disconnect(&self) {
+    pub(crate) fn disconnect(&self) {
         self.comms.disconnect(self.id);
     }
 
-    pub fn update_stats(&self, stats: Stats) {
+    pub(crate) fn update_stats(&self, stats: Stats) {
         self.comms.update_stats(self.id, stats);
     }
 
-    pub fn new(id: FrontendPid) -> Self {
+    pub(crate) fn new(id: FrontendPid) -> Self {
         Self { id, comms: comms() }
     }
 
-    pub fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
+    pub(crate) fn connect(&self, key: BackendKeyData, addr: SocketAddr, params: &Parameters) {
         self.comms.connect(key, addr, params)
     }
 
-    pub fn update_params(&self, params: &Parameters) {
+    pub(crate) fn update_params(&self, params: &Parameters) {
         self.comms.update_params(self.id, params.clone());
     }
 }

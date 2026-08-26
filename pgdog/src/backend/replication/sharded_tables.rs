@@ -28,34 +28,34 @@ struct Inner {
 }
 
 #[derive(Debug)]
-pub struct CommonMapping {
+pub(crate) struct CommonMapping {
     /// The column data type.
-    pub data_type: DataType,
+    pub(crate) data_type: DataType,
     /// The list/range mapping, if any.
     /// If none, the column is using hash sharding.
-    pub mapping: Option<Mapping>,
+    pub(crate) mapping: Option<Mapping>,
     /// The sharding key lookup shared by every table, if configured.
     /// Bare values routed through the common mapping translate through
     /// it, same as values extracted from statements.
-    pub lookup: Option<CommonLookup>,
+    pub(crate) lookup: Option<CommonLookup>,
 }
 
 /// Lookup translation applied to bare sharding key values
 /// (`pgdog_sharding_key` comments and `SET pgdog.sharding_key`).
 #[derive(Debug, Clone)]
-pub struct CommonLookup {
+pub(crate) struct CommonLookup {
     /// The configured lookup query.
-    pub query: String,
+    pub(crate) query: String,
     /// Cache key for translations.
-    pub table: LookupTable,
+    pub(crate) table: LookupTable,
     /// How the query result is interpreted: hashed, or the shard
     /// number itself.
-    pub result: LookupResult,
+    pub(crate) result: LookupResult,
 }
 
 /// Sharded tables.
 #[derive(Debug, Clone)]
-pub struct ShardedTables {
+pub(crate) struct ShardedTables {
     inner: Arc<Inner>,
 }
 
@@ -79,7 +79,7 @@ impl From<&[ShardedTable]> for ShardedTables {
 }
 
 impl ShardedTables {
-    pub fn new(
+    pub(crate) fn new(
         tables: Vec<ShardedTable>,
         omnisharded_tables: Vec<OmnishardedTable>,
         omnisharded_sticky: bool,
@@ -95,7 +95,7 @@ impl ShardedTables {
     }
 
     /// Like [`Self::new`], with a configured sharding key lookup cache.
-    pub fn with_lookup_cache(
+    pub(crate) fn with_lookup_cache(
         tables: Vec<ShardedTable>,
         omnisharded_tables: Vec<OmnishardedTable>,
         omnisharded_sticky: bool,
@@ -149,34 +149,34 @@ impl ShardedTables {
         }
     }
 
-    pub fn tables(&self) -> &[ShardedTable] {
+    pub(crate) fn tables(&self) -> &[ShardedTable] {
         &self.inner.tables
     }
 
     /// Cached sharding key lookup query results.
-    pub fn lookup_cache(&self) -> &LookupCache {
+    pub(crate) fn lookup_cache(&self) -> &LookupCache {
         &self.inner.lookup_cache
     }
 
-    pub fn omnishards(&self) -> &HashMap<String, bool> {
+    pub(crate) fn omnishards(&self) -> &HashMap<String, bool> {
         &self.inner.omnisharded
     }
 
-    pub fn is_omnisharded_sticky(&self, name: &str) -> Option<bool> {
+    pub(crate) fn is_omnisharded_sticky(&self, name: &str) -> Option<bool> {
         self.omnishards().get(name).cloned()
     }
 
-    pub fn is_omnisharded_sticky_default(&self) -> bool {
+    pub(crate) fn is_omnisharded_sticky_default(&self) -> bool {
         self.inner.omnisharded_sticky
     }
 
     /// System catalogs are to be joined across shards.
-    pub fn is_system_catalog_sharded(&self) -> bool {
+    pub(crate) fn is_system_catalog_sharded(&self) -> bool {
         self.inner.system_catalogs == SystemCatalogsBehavior::Sharded
     }
 
     /// The deployment has only one sharded table.
-    pub fn common_mapping(&self) -> &Option<CommonMapping> {
+    pub(crate) fn common_mapping(&self) -> &Option<CommonMapping> {
         &self.inner.common_mapping
     }
 

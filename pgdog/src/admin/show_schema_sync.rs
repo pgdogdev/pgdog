@@ -9,7 +9,7 @@ use crate::{
 
 use super::prelude::*;
 
-pub struct ShowSchemaSync;
+pub(crate) struct ShowSchemaSync;
 
 #[async_trait]
 impl Command for ShowSchemaSync {

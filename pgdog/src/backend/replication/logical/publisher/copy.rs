@@ -11,12 +11,12 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Copy {
+pub(crate) struct Copy {
     stmt: CopyStatement,
 }
 
 impl Copy {
-    pub fn new(table: &Table, copy_format: CopyFormat) -> Self {
+    pub(crate) fn new(table: &Table, copy_format: CopyFormat) -> Self {
         let stmt = CopyStatement::new(
             &table.table,
             &table
@@ -30,7 +30,7 @@ impl Copy {
         Self { stmt }
     }
 
-    pub async fn start(&self, server: &mut Server) -> Result<(), Error> {
+    pub(crate) async fn start(&self, server: &mut Server) -> Result<(), Error> {
         if !server.in_transaction() {
             return Err(Error::TransactionNotStarted);
         }
@@ -48,7 +48,7 @@ impl Copy {
         Ok(())
     }
 
-    pub async fn data(&self, server: &mut Server) -> Result<Option<CopyData>, Error> {
+    pub(crate) async fn data(&self, server: &mut Server) -> Result<Option<CopyData>, Error> {
         loop {
             let msg = server.read().await?;
 
@@ -67,7 +67,7 @@ impl Copy {
         }
     }
 
-    pub fn statement(&self) -> &CopyStatement {
+    pub(crate) fn statement(&self) -> &CopyStatement {
         &self.stmt
     }
 }

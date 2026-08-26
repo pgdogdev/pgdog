@@ -1,1 +1,1 @@
-pub use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};
+pub(crate) use pgdog_config::{PoolerMode, PreparedStatements, pooling::ConnectionRecovery};

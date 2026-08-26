@@ -16,16 +16,16 @@ use pgdog_config::CopyFormat;
 use std::{fmt::Display, str::FromStr, time::Duration};
 use tracing::{debug, info, trace, warn};
 
-pub use pgdog_stats::Lsn;
+pub(crate) use pgdog_stats::Lsn;
 
 #[derive(Debug, Clone, Copy)]
-pub enum Snapshot {
+pub(crate) enum Snapshot {
     Use,
     Nothing,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub enum SlotKind {
+pub(crate) enum SlotKind {
     DataSync,
     Replication,
 }
@@ -40,7 +40,7 @@ impl Display for Snapshot {
 }
 
 #[derive(Debug)]
-pub struct ReplicationSlot {
+pub(crate) struct ReplicationSlot {
     address: Address,
     publication: String,
     name: String,
@@ -58,7 +58,7 @@ pub struct ReplicationSlot {
 
 impl ReplicationSlot {
     /// Create replication slot used for streaming the WAL.
-    pub fn replication(
+    pub(crate) fn replication(
         publication: &str,
         address: &Address,
         name: Option<String>,
@@ -83,7 +83,7 @@ impl ReplicationSlot {
     }
 
     /// Create replication slot for data sync.
-    pub fn data_sync(publication: &str, address: &Address) -> Self {
+    pub(crate) fn data_sync(publication: &str, address: &Address) -> Self {
         let name = format!("__pgdog_{}", random_string(24).to_lowercase());
 
         Self {
@@ -102,7 +102,7 @@ impl ReplicationSlot {
     }
 
     /// Connect to database using replication mode.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         self.server = Some(
             Box::pin(Server::connect(
                 &self.address,
@@ -117,7 +117,7 @@ impl ReplicationSlot {
     }
 
     /// Get or create a separate server connection for meta commands.
-    pub async fn server_meta(&mut self) -> Result<&mut Server, Error> {
+    pub(crate) async fn server_meta(&mut self) -> Result<&mut Server, Error> {
         if let Some(ref mut server) = self.server_meta {
             Ok(server)
         } else {
@@ -135,7 +135,7 @@ impl ReplicationSlot {
     }
 
     /// Replication lag in bytes for this slot.
-    pub async fn replication_lag(&mut self) -> Result<i64, Error> {
+    pub(crate) async fn replication_lag(&mut self) -> Result<i64, Error> {
         let query = format!(
             "SELECT pg_current_wal_lsn() - confirmed_flush_lsn \
              FROM pg_replication_slots \
@@ -155,12 +155,12 @@ impl ReplicationSlot {
         Ok(lag)
     }
 
-    pub fn server(&mut self) -> Result<&mut Server, Error> {
+    pub(crate) fn server(&mut self) -> Result<&mut Server, Error> {
         self.server.as_mut().ok_or(Error::NotConnected)
     }
 
     /// Create the slot.
-    pub async fn create_slot(&mut self) -> Result<Lsn, Error> {
+    pub(crate) async fn create_slot(&mut self) -> Result<Lsn, Error> {
         if self.server.is_none() {
             self.connect().await?;
         }
@@ -275,7 +275,7 @@ impl ReplicationSlot {
     }
 
     /// Drop the slot.
-    pub async fn drop_slot(&mut self) -> Result<(), Error> {
+    pub(crate) async fn drop_slot(&mut self) -> Result<(), Error> {
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
@@ -300,7 +300,7 @@ impl ReplicationSlot {
     }
 
     /// Start replication.
-    pub async fn start_replication(&mut self) -> Result<(), Error> {
+    pub(crate) async fn start_replication(&mut self) -> Result<(), Error> {
         // Fresh copy stream (including after a reconnect): re-enable status updates.
         self.stopped = false;
         let is_binary = config().config.general.resharding_copy_format == CopyFormat::Binary;
@@ -328,7 +328,7 @@ impl ReplicationSlot {
     }
 
     /// Replicate from slot until finished.
-    pub async fn replicate(
+    pub(crate) async fn replicate(
         &mut self,
         max_wait: Duration,
     ) -> Result<Option<ReplicationData>, Error> {
@@ -365,7 +365,7 @@ impl ReplicationSlot {
     }
 
     /// Update origin on last flushed LSN.
-    pub async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
+    pub(crate) async fn status_update(&mut self, status_update: StatusUpdate) -> Result<(), Error> {
         // Once CopyDone is sent, our copy-in half is closed and any further
         // CopyData would violate the copy protocol. The origin resends
         // unconfirmed WAL on reconnect and our applies are idempotent, so
@@ -396,14 +396,14 @@ impl ReplicationSlot {
 
     /// Drop the source connection and reconnect, restarting replication from the
     /// last confirmed position (`self.lsn`, kept in sync by `status_update`).
-    pub async fn reconnect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
         self.server = None;
         self.connect().await?;
         self.start_replication().await
     }
 
     /// Ask remote to close stream.
-    pub async fn stop_replication(&mut self) -> Result<(), Error> {
+    pub(crate) async fn stop_replication(&mut self) -> Result<(), Error> {
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
         self.stopped = true;
@@ -412,13 +412,13 @@ impl ReplicationSlot {
     }
 
     /// Current slot LSN.
-    pub fn lsn(&self) -> Lsn {
+    pub(crate) fn lsn(&self) -> Lsn {
         self.lsn
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum ReplicationData {
+pub(crate) enum ReplicationData {
     CopyData(CopyData),
     CopyDone,
 }
@@ -546,7 +546,7 @@ mod test {
                         assert_eq!(relation.name, "test_slot_replication")
                     }
                     XLogPayload::Insert(insert) => {
-                        let col = insert.column(0).unwrap();
+                        let col = insert.tuple_data.columns.first().unwrap();
                         let id = i64::from_be_bytes(col.data[..].try_into().unwrap());
                         assert_eq!(id, 1);
                     }

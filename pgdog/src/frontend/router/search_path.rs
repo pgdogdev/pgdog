@@ -1,7 +1,7 @@
 use crate::{backend::Schema, net::parameter::ParameterValue};
 
 #[derive(Debug)]
-pub struct SearchPath<'a> {
+pub(crate) struct SearchPath<'a> {
     search_path: &'a [String],
     user: &'a str,
 }

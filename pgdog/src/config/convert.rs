@@ -3,7 +3,7 @@ use crate::net::{Parameters, Password};
 
 use super::User;
 
-pub fn user_from_params(params: &Parameters, password: &Password) -> Result<User, Error> {
+pub(crate) fn user_from_params(params: &Parameters, password: &Password) -> Result<User, Error> {
     let user = params
         .get("user")
         .ok_or(Error::IncompleteStartup)?

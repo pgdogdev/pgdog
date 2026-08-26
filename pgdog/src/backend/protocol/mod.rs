@@ -1,3 +1,3 @@
-pub mod state;
+pub(crate) mod state;
 
-pub use state::ProtocolState;
+pub(crate) use state::ProtocolState;

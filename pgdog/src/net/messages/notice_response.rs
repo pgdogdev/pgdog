@@ -3,8 +3,8 @@ use bytes::BytesMut;
 use super::{ErrorResponse, prelude::*};
 
 #[derive(Debug)]
-pub struct NoticeResponse {
-    pub message: ErrorResponse,
+pub(crate) struct NoticeResponse {
+    pub(crate) message: ErrorResponse,
 }
 
 impl FromBytes for NoticeResponse {

@@ -5,28 +5,28 @@ use super::Function;
 use crate::backend::schema::Schema;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AggregateTarget {
+pub(crate) struct AggregateTarget {
     column: usize,
     function: AggregateFunction,
     distinct: bool,
 }
 
 impl AggregateTarget {
-    pub fn function(&self) -> &AggregateFunction {
+    pub(crate) fn function(&self) -> &AggregateFunction {
         &self.function
     }
 
-    pub fn column(&self) -> usize {
+    pub(crate) fn column(&self) -> usize {
         self.column
     }
 
-    pub fn is_distinct(&self) -> bool {
+    pub(crate) fn is_distinct(&self) -> bool {
         self.distinct
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AggregateFunction {
+pub(crate) enum AggregateFunction {
     Count,
     Max,
     Min,
@@ -57,7 +57,7 @@ impl fmt::Display for AggregateFunction {
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Aggregate {
+pub(crate) struct Aggregate {
     targets: Vec<AggregateTarget>,
     group_by: Vec<usize>,
 }
@@ -157,15 +157,16 @@ impl Aggregate {
         Self { group_by, targets }
     }
 
-    pub fn targets(&self) -> &[AggregateTarget] {
+    pub(crate) fn targets(&self) -> &[AggregateTarget] {
         &self.targets
     }
 
-    pub fn group_by(&self) -> &[usize] {
+    pub(crate) fn group_by(&self) -> &[usize] {
         &self.group_by
     }
 
-    pub fn new_count(column: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_count(column: usize) -> Self {
         Self {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
@@ -176,7 +177,8 @@ impl Aggregate {
         }
     }
 
-    pub fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_count_group_by(column: usize, group_by: &[usize]) -> Self {
         Self {
             targets: vec![AggregateTarget {
                 function: AggregateFunction::Count,
@@ -187,11 +189,11 @@ impl Aggregate {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.targets.len()
     }
 }

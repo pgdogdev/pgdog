@@ -87,7 +87,7 @@ fn should_convert_to_bigint<'a>(
 use tokio::{process::Command, task::JoinSet};
 
 #[derive(Debug, Clone)]
-pub struct PgDump {
+pub(crate) struct PgDump {
     source: Cluster,
     publication: String,
 }
@@ -118,7 +118,7 @@ fn build_pg_dump_command(
 }
 
 impl PgDump {
-    pub fn new(source: &Cluster, publication: &str) -> Self {
+    pub(crate) fn new(source: &Cluster, publication: &str) -> Self {
         Self {
             source: source.clone(),
             publication: publication.to_string(),
@@ -135,7 +135,7 @@ impl PgDump {
     }
 
     /// Dump schema from source cluster.
-    pub async fn dump(&self) -> Result<PgDumpOutput, Error> {
+    pub(crate) async fn dump(&self) -> Result<PgDumpOutput, Error> {
         let mut comparison: Vec<PublicationTable> = vec![];
         let addr = self
             .source
@@ -215,7 +215,7 @@ impl PgDump {
 }
 
 #[derive(Debug)]
-pub struct PgDumpOutput {
+pub(crate) struct PgDumpOutput {
     stmts: Owned<StmtList>,
     original: String,
 }
@@ -229,7 +229,7 @@ impl Clone for PgDumpOutput {
     }
 }
 
-pub use pgdog_stats::SyncState;
+pub(crate) use pgdog_stats::SyncState;
 
 #[derive(Debug)]
 pub(crate) enum Statement<'a> {
@@ -970,7 +970,7 @@ impl PgDumpOutput {
     }
 
     /// Create objects in destination cluster.
-    pub async fn restore(
+    pub(crate) async fn restore(
         &self,
         dest: &Cluster,
         ignore_errors: bool,

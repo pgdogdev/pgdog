@@ -54,7 +54,7 @@ impl IntoFuture for Waiter {
     }
 }
 
-pub fn start(database: Option<&str>) {
+pub(crate) fn start(database: Option<&str>) {
     match database {
         Some(database) => {
             MAINTENANCE_MODE.add(database);
@@ -67,7 +67,7 @@ pub fn start(database: Option<&str>) {
     }
 }
 
-pub fn stop(database: Option<&str>) {
+pub(crate) fn stop(database: Option<&str>) {
     match database {
         Some(database) => {
             MAINTENANCE_MODE.remove(database);
@@ -81,7 +81,7 @@ pub fn stop(database: Option<&str>) {
 }
 
 #[cfg(test)]
-pub fn is_on(database: &str) -> bool {
+pub(crate) fn is_on(database: &str) -> bool {
     MAINTENANCE_MODE.paused(database)
 }
 

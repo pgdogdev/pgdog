@@ -19,7 +19,7 @@ use crate::net::messages::replication::logical::tuple_data::Identifier;
 /// caching per-shape prepared statements in the subscriber.
 /// [`count_present`] is O(1) (cached at construction).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NonIdentityColumnsPresence {
+pub(crate) struct NonIdentityColumnsPresence {
     mask: BitVec,
     /// Cached count of present (non-Toasted) non-identity columns
     count_present: usize,
@@ -29,7 +29,7 @@ impl NonIdentityColumnsPresence {
     /// Build from an UPDATE tuple.
     ///
     /// Returns [`Error::MissingData`] when tuple and table column counts differ.
-    pub fn from_tuple(
+    pub(crate) fn from_tuple(
         tuple: &crate::net::replication::TupleData,
         table: &Table,
     ) -> Result<Self, Error> {
@@ -58,12 +58,12 @@ impl NonIdentityColumnsPresence {
     }
 
     /// Whether the `idx`-th non-identity column is present.
-    pub fn is_set(&self, idx: usize) -> bool {
+    pub(crate) fn is_set(&self, idx: usize) -> bool {
         self.mask.get(idx).unwrap_or(false)
     }
 
     /// Whether no non-identity column is present (all are `'u'`).
-    pub fn no_non_identity_present(&self) -> bool {
+    pub(crate) fn no_non_identity_present(&self) -> bool {
         self.mask.none()
     }
 }

@@ -6,5 +6,8 @@ pub(crate) enum QueryEngineResult {
     Done(Option<TransactionType>),
     /// Query engine requests the request to be resubmitted
     /// as a series of separate requests.
-    Split(Vec<ClientRequest>),
+    Split {
+        requests: Vec<ClientRequest>,
+        extended: bool,
+    },
 }

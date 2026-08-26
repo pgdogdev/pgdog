@@ -8,6 +8,7 @@ use crate::{
     util::{format_bytes, human_duration, random_string},
 };
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction, RewriteMode};
+use pgdog_stats::Databases;
 use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{select, sync::Mutex, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -228,6 +229,14 @@ impl Orchestrator {
 
         lag.values().copied().max().map(|lag| lag as u64)
     }
+
+    /// The two ends of the migration this orchestrator drives.
+    pub(crate) fn databases(&self) -> Databases {
+        Databases {
+            source: self.source.identifier().database.clone(),
+            destination: self.destination.identifier().database.clone(),
+        }
+    }
 }
 
 impl Display for Orchestrator {
@@ -243,7 +252,7 @@ impl Display for Orchestrator {
 
 #[derive(Debug, Display)]
 #[display("{orchestrator}")]
-pub struct ReplicationWaiter {
+pub(crate) struct ReplicationWaiter {
     orchestrator: Orchestrator,
     waiter: Waiter,
     config: Arc<ConfigAndUsers>,
@@ -282,6 +291,11 @@ impl Display for CutoverReason {
 impl ReplicationWaiter {
     pub(crate) async fn wait(&mut self) -> Result<(), Error> {
         self.waiter.wait().await
+    }
+
+    /// The two ends of the migration this waiter replicates.
+    pub(crate) fn databases(&self) -> Databases {
+        self.orchestrator.databases()
     }
 
     pub(crate) fn stop(&self) {

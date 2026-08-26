@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
-pub enum Shard {
+pub(crate) enum Shard {
     /// Connect to one shard (aka direct-to-shard).
     ///
     /// Shards are numbered 0 to n - 1, inclusively.
@@ -41,23 +41,13 @@ impl Display for Shard {
 
 impl Shard {
     /// Returns true if this is an all-shard query.
-    pub fn is_all(&self) -> bool {
+    pub(crate) fn is_all(&self) -> bool {
         matches!(self, Shard::All)
     }
 
-    /// Create new direct-to-shard mapping.
-    pub fn new_direct(shard: usize) -> Self {
-        Self::Direct(shard)
-    }
-
     /// Returns true if this is a direct-to-shard mapping.
-    pub fn is_direct(&self) -> bool {
+    pub(crate) fn is_direct(&self) -> bool {
         matches!(self, Self::Direct(_))
-    }
-
-    /// Create new all shard mapping.
-    pub fn new_all(&self) -> Self {
-        Self::All
     }
 }
 
@@ -86,7 +76,7 @@ impl From<Vec<usize>> for Shard {
 /// Path a query should take and any transformations
 /// that should be applied to the response.
 #[derive(Debug, Clone, Default, PartialEq, derive_builder::Builder)]
-pub struct Route {
+pub(crate) struct Route {
     /// Computed shard. This is where the query carrying
     /// this route will go no matter what.
     shard: ShardWithPriority,
@@ -164,7 +154,7 @@ impl Route {
     }
 
     /// A query that should go to a replica.
-    pub fn read(shard: ShardWithPriority) -> Self {
+    pub(crate) fn read(shard: ShardWithPriority) -> Self {
         Self {
             shard,
             read: true,
@@ -173,7 +163,7 @@ impl Route {
     }
 
     /// A write query.
-    pub fn write(shard: ShardWithPriority) -> Self {
+    pub(crate) fn write(shard: ShardWithPriority) -> Self {
         Self {
             shard,
             ..Default::default()
@@ -182,18 +172,18 @@ impl Route {
 
     /// Returns true if this is a query that
     /// can be sent to a replica.
-    pub fn is_read(&self) -> bool {
+    pub(crate) fn is_read(&self) -> bool {
         self.read
     }
 
     /// Returns true if this query can only be sent
     /// to a primary.
-    pub fn is_write(&self) -> bool {
+    pub(crate) fn is_write(&self) -> bool {
         !self.is_read()
     }
 
     /// Sharding key lookups that missed the cache while routing.
-    pub fn pending_lookups(&self) -> &[PendingLookup] {
+    pub(crate) fn pending_lookups(&self) -> &[PendingLookup] {
         &self.pending_lookups
     }
 
@@ -202,57 +192,53 @@ impl Route {
     }
 
     /// Get shard if any.
-    pub fn shard(&self) -> &Shard {
+    pub(crate) fn shard(&self) -> &Shard {
         &self.shard
     }
 
-    pub fn shard_with_priority(&self) -> &ShardWithPriority {
+    pub(crate) fn shard_with_priority(&self) -> &ShardWithPriority {
         &self.shard
     }
 
     /// Returns true if this query should go to all shards.
-    pub fn is_all_shards(&self) -> bool {
+    pub(crate) fn is_all_shards(&self) -> bool {
         matches!(*self.shard, Shard::All)
     }
 
     /// Returns true if this query should be sent to multiple
     /// but not all shards.
-    pub fn is_multi_shard(&self) -> bool {
+    pub(crate) fn is_multi_shard(&self) -> bool {
         matches!(*self.shard, Shard::Multi(_))
     }
 
     /// Returns true if this query should be sent to
     /// more than one shard.
-    pub fn is_cross_shard(&self) -> bool {
+    pub(crate) fn is_cross_shard(&self) -> bool {
         self.is_all_shards() || self.is_multi_shard()
     }
 
-    pub fn order_by(&self) -> &[OrderBy] {
+    pub(crate) fn order_by(&self) -> &[OrderBy] {
         &self.order_by
     }
 
-    pub fn aggregate(&self) -> &Aggregate {
+    pub(crate) fn aggregate(&self) -> &Aggregate {
         &self.aggregate
-    }
-
-    pub fn aggregate_mut(&mut self) -> &mut Aggregate {
-        &mut self.aggregate
     }
 
     /// Set shard on this route, along with reasoning
     /// for that shard selection.
-    pub fn set_shard(&mut self, shard: ShardWithPriority) {
+    pub(crate) fn set_shard(&mut self, shard: ShardWithPriority) {
         self.shard = shard;
     }
 
     /// Same as [`Self::set_shard`].
-    pub fn with_shard(mut self, shard: ShardWithPriority) -> Self {
+    pub(crate) fn with_shard(mut self, shard: ShardWithPriority) -> Self {
         self.set_shard(shard);
         self
     }
 
     /// Set the omnisharded flag on this route.
-    pub fn with_omnisharded(mut self, omnisharded: bool) -> Self {
+    pub(crate) fn with_omnisharded(mut self, omnisharded: bool) -> Self {
         self.omnisharded = omnisharded;
         self
     }
@@ -263,24 +249,24 @@ impl Route {
     /// and can be load-balanced across shards or has to be sent to all shards
     /// if it's a write.
     ///
-    pub fn is_omnisharded(&self) -> bool {
+    pub(crate) fn is_omnisharded(&self) -> bool {
         self.omnisharded
     }
 
-    pub fn is_schema_changed(&self) -> bool {
+    pub(crate) fn is_schema_changed(&self) -> bool {
         self.schema_changed
     }
 
-    pub fn with_schema_changed(mut self, changed: bool) -> Self {
+    pub(crate) fn with_schema_changed(mut self, changed: bool) -> Self {
         self.schema_changed = changed;
         self
     }
 
-    pub fn set_search_path_driven(&mut self, schema_driven: bool) {
+    pub(crate) fn set_search_path_driven(&mut self, schema_driven: bool) {
         self.search_path_driven = schema_driven;
     }
 
-    pub fn is_search_path_driven(&self) -> bool {
+    pub(crate) fn is_search_path_driven(&self) -> bool {
         self.search_path_driven
     }
 
@@ -301,7 +287,7 @@ impl Route {
     /// 3. `DISTINCT` clause
     /// 4. `LIMIT` or `OFFSET` clause
     ///
-    pub fn requires_post_processing(&self) -> bool {
+    pub(crate) fn requires_post_processing(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
             || self.distinct().is_some()
@@ -316,77 +302,64 @@ impl Route {
         self.limit = limit;
     }
 
-    pub fn with_read(mut self, read: bool) -> Self {
+    pub(crate) fn with_read(mut self, read: bool) -> Self {
         self.set_read(read);
         self
     }
 
-    pub fn set_read(&mut self, read: bool) {
+    pub(crate) fn set_read(&mut self, read: bool) {
         self.read = read;
     }
 
-    pub fn explain(&self) -> Option<&ExplainTrace> {
+    #[cfg(test)]
+    pub(crate) fn explain(&self) -> Option<&ExplainTrace> {
         self.explain.as_ref()
     }
 
-    pub fn set_explain(&mut self, trace: ExplainTrace) {
+    pub(crate) fn set_explain(&mut self, trace: ExplainTrace) {
         self.explain = Some(trace);
     }
 
-    pub fn take_explain(&mut self) -> Option<ExplainTrace> {
+    pub(crate) fn take_explain(&mut self) -> Option<ExplainTrace> {
         self.explain.take()
     }
 
-    pub fn with_rollback_savepoint(mut self, rollback: bool) -> Self {
+    pub(crate) fn with_rollback_savepoint(mut self, rollback: bool) -> Self {
         self.rollback_savepoint = rollback;
         self
     }
 
-    pub fn rollback_savepoint(&self) -> bool {
+    pub(crate) fn rollback_savepoint(&self) -> bool {
         self.rollback_savepoint
     }
 
-    pub fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
+    pub(crate) fn with_advisory_locks(mut self, locks: AdvisoryLocks) -> Self {
         self.advisory_locks = locks;
         self
     }
 
-    pub fn set_advisory_locks(&mut self, locks: AdvisoryLocks) {
-        self.advisory_locks = locks;
-    }
-
-    pub fn advisory_locks(&self) -> &AdvisoryLocks {
+    pub(crate) fn advisory_locks(&self) -> &AdvisoryLocks {
         &self.advisory_locks
     }
 
     /// True when the statement acquires an advisory lock whose lifetime outlives
     /// a single transaction — the client must stay pinned to the same backend.
-    pub fn is_lock_session(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_lock_session(&self) -> bool {
         self.advisory_locks.has_lock()
     }
 
     /// True when the statement only releases advisory locks — safe to unpin.
-    pub fn is_unlock_session(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_unlock_session(&self) -> bool {
         !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
-    }
-
-    /// Tri-state used by `connect.rs` / tests:
-    /// `Some(true)` — lock, `Some(false)` — unlock, `None` — no advisory lock activity.
-    pub fn lock_session(&self) -> Option<bool> {
-        if self.is_lock_session() {
-            Some(true)
-        } else if self.is_unlock_session() {
-            Some(false)
-        } else {
-            None
-        }
     }
 
     pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
 
-    pub fn should_2pc(&self) -> bool {
+    pub(crate) fn should_2pc(&self) -> bool {
         self.is_cross_shard() && self.is_write()
     }
 
@@ -407,7 +380,7 @@ impl Route {
 /// These are ranked from least priority to highest
 /// priority.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
-pub enum ShardSource {
+pub(crate) enum ShardSource {
     #[default]
     DefaultUnset,
     Table(TableReason),
@@ -420,14 +393,13 @@ pub enum ShardSource {
 }
 
 impl ShardSource {
-    pub fn is_round_robin(&self) -> bool {
+    pub(crate) fn is_round_robin(&self) -> bool {
         matches!(self, Self::RoundRobin(_))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum RoundRobinReason {
-    PrimaryShardedTableInsert,
+pub(crate) enum RoundRobinReason {
     Omni,
     NotExecutable,
     NoTable,
@@ -435,38 +407,37 @@ pub enum RoundRobinReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum OverrideReason {
+pub(crate) enum OverrideReason {
     DryRun,
     ParserDisabled,
     Transaction,
     OnlyOneShard,
-    RewriteUpdate,
     CrossShardFunction,
     CanonicalSchemaInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum TableReason {
+pub(crate) enum TableReason {
     Omni,
     Sharded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
-pub struct ShardWithPriority {
+pub(crate) struct ShardWithPriority {
     source: ShardSource,
     shard: Shard,
 }
 
 impl ShardWithPriority {
     /// Create new shard with comment-level priority.
-    pub fn new_comment(shard: Shard) -> Self {
+    pub(crate) fn new_comment(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Comment,
         }
     }
 
-    pub fn new_plugin(shard: Shard) -> Self {
+    pub(crate) fn new_plugin(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Plugin,
@@ -474,14 +445,14 @@ impl ShardWithPriority {
     }
 
     /// Create new shard with table-level priority.
-    pub fn new_table(shard: Shard) -> Self {
+    pub(crate) fn new_table(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Table(TableReason::Sharded),
         }
     }
 
-    pub fn new_table_omni(shard: Shard) -> Self {
+    pub(crate) fn new_table_omni(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Table(TableReason::Omni),
@@ -489,42 +460,35 @@ impl ShardWithPriority {
     }
 
     /// Create new shard with highest priority.
-    pub fn new_override_parser_disabled(shard: Shard) -> Self {
+    pub(crate) fn new_override_parser_disabled(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::ParserDisabled),
         }
     }
 
-    pub fn new_override_rewrite_update(shard: Shard) -> Self {
-        Self {
-            shard,
-            source: ShardSource::Override(OverrideReason::RewriteUpdate),
-        }
-    }
-
-    pub fn new_override_cross_shard_function() -> Self {
+    pub(crate) fn new_override_cross_shard_function() -> Self {
         Self {
             shard: Shard::All,
             source: ShardSource::Override(OverrideReason::CrossShardFunction),
         }
     }
 
-    pub fn new_override_dry_run(shard: Shard) -> Self {
+    pub(crate) fn new_override_dry_run(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::DryRun),
         }
     }
 
-    pub fn new_override_transaction(shard: Shard) -> Self {
+    pub(crate) fn new_override_transaction(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::Transaction),
         }
     }
 
-    pub fn new_override_only_one_shard(shard: Shard) -> Self {
+    pub(crate) fn new_override_only_one_shard(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::OnlyOneShard),
@@ -538,42 +502,35 @@ impl ShardWithPriority {
         }
     }
 
-    pub fn new_default_unset(shard: Shard) -> Self {
+    pub(crate) fn new_default_unset(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::DefaultUnset,
         }
     }
 
-    pub fn new_rr_omni(shard: Shard) -> Self {
+    pub(crate) fn new_rr_omni(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::Omni),
         }
     }
 
-    pub fn new_rr_not_executable(shard: Shard) -> Self {
+    pub(crate) fn new_rr_not_executable(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::NotExecutable),
         }
     }
 
-    pub fn new_rr_primary_insert(shard: Shard) -> Self {
-        Self {
-            shard,
-            source: ShardSource::RoundRobin(RoundRobinReason::PrimaryShardedTableInsert),
-        }
-    }
-
-    pub fn new_rr_no_table(shard: Shard) -> Self {
+    pub(crate) fn new_rr_no_table(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::NoTable),
         }
     }
 
-    pub fn new_rr_empty_query(shard: Shard) -> Self {
+    pub(crate) fn new_rr_empty_query(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::EmptyQuery),
@@ -581,7 +538,7 @@ impl ShardWithPriority {
     }
 
     /// New SET-based routing.
-    pub fn new_set(shard: Shard) -> Self {
+    pub(crate) fn new_set(shard: Shard) -> Self {
         Self {
             shard,
             source: ShardSource::Set,
@@ -589,7 +546,7 @@ impl ShardWithPriority {
     }
 
     /// New search_path-based shard.
-    pub fn new_search_path(shard: Shard, schema: &str) -> Self {
+    pub(crate) fn new_search_path(shard: Shard, schema: &str) -> Self {
         Self {
             shard,
             source: ShardSource::SearchPath(schema.to_string()),
@@ -611,7 +568,7 @@ impl Deref for ShardWithPriority {
 
 /// Ordered collection of set shards.
 #[derive(Default, Debug, Clone)]
-pub struct ShardsWithPriority {
+pub(crate) struct ShardsWithPriority {
     max: Option<ShardWithPriority>,
 }
 

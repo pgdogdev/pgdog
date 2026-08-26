@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TransactionType {
+pub(crate) enum TransactionType {
     ReadOnly,
     #[default]
     ReadWrite,
@@ -9,15 +9,15 @@ pub enum TransactionType {
 }
 
 impl TransactionType {
-    pub fn read_only(&self) -> bool {
+    pub(crate) fn read_only(&self) -> bool {
         matches!(self, Self::ReadOnly)
     }
 
-    pub fn write(&self) -> bool {
+    pub(crate) fn write(&self) -> bool {
         !self.read_only()
     }
 
-    pub fn error(&self) -> bool {
+    pub(crate) fn error(&self) -> bool {
         matches!(self, Self::ErrorReadWrite | Self::ErrorReadOnly)
     }
 }

@@ -2,7 +2,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct CloseComplete;
+pub(crate) struct CloseComplete;
 
 impl Protocol for CloseComplete {
     fn code(&self) -> char {

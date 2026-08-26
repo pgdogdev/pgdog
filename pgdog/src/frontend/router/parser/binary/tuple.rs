@@ -7,20 +7,20 @@ use crate::net::messages::ToBytes;
 use super::header::Header;
 
 #[derive(Debug, Clone)]
-pub enum Data {
+pub(crate) enum Data {
     Null,
     Column(Bytes),
 }
 
 impl Data {
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         match self {
             Self::Null => 0,
             Self::Column(bytes) => bytes.len(),
         }
     }
 
-    pub fn encoded_len(&self) -> i32 {
+    pub(super) fn encoded_len(&self) -> i32 {
         match self {
             Self::Null => -1,
             Self::Column(bytes) => bytes.len() as i32,
@@ -29,31 +29,13 @@ impl Data {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tuple {
+pub(crate) struct Tuple {
     row: Vec<Data>,
     oid: Option<i32>,
     end: bool,
 }
 
 impl Tuple {
-    #[cfg(test)]
-    pub fn new(row: &[Data]) -> Self {
-        Self {
-            row: row.to_vec(),
-            oid: None,
-            end: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_end() -> Self {
-        Self {
-            row: vec![],
-            oid: None,
-            end: true,
-        }
-    }
-
     /// Calculate the total bytes needed to read a complete tuple.
     /// Returns None if there isn't enough data to determine the size.
     fn calculate_needed_bytes(header: &Header, data: &[u8]) -> Option<usize> {
@@ -162,7 +144,7 @@ impl Tuple {
             }
     }
 
-    pub fn end(&self) -> bool {
+    pub(crate) fn end(&self) -> bool {
         self.end
     }
 }
@@ -212,5 +194,28 @@ impl Deref for Tuple {
 
     fn deref(&self) -> &Self::Target {
         &self.row
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Data, Tuple};
+
+    impl Tuple {
+        pub(crate) fn new(row: &[Data]) -> Self {
+            Self {
+                row: row.to_vec(),
+                oid: None,
+                end: false,
+            }
+        }
+
+        pub(crate) fn new_end() -> Self {
+            Self {
+                row: vec![],
+                oid: None,
+                end: true,
+            }
+        }
     }
 }

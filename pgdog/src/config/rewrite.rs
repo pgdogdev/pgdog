@@ -1,1 +1,1 @@
-pub use pgdog_config::rewrite::*;
+pub(crate) use pgdog_config::rewrite::*;

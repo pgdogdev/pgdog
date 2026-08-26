@@ -19,7 +19,7 @@ use crate::state::State;
 
 use super::*;
 
-pub fn pool() -> Pool {
+pub(crate) fn pool() -> Pool {
     let config = Config {
         inner: pgdog_stats::Config {
             max: 1,
@@ -43,7 +43,7 @@ pub fn pool() -> Pool {
     pool
 }
 
-pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
+pub(crate) fn pool_with_prepared_capacity(capacity: usize) -> Pool {
     let config = Config {
         inner: pgdog_stats::Config {
             max: 1,
@@ -89,7 +89,7 @@ async fn test_checkout_replaces_connection_closed_by_server() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
 
@@ -105,7 +105,7 @@ async fn test_server_closed_does_not_mark_pool_unhealthy() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
     drop(conn);

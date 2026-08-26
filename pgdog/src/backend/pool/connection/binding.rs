@@ -19,7 +19,7 @@ use crate::util::safe_sleep;
 
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
-pub enum Binding {
+pub(crate) enum Binding {
     /// Direct-to-shard transaction.
     Direct(Guard, usize),
     /// Admin database connection.
@@ -33,7 +33,7 @@ pub enum Binding {
 
 impl Binding {
     /// Close all connections to all servers.
-    pub fn disconnect(&mut self) {
+    pub(crate) fn disconnect(&mut self) {
         match self {
             Self::Admin(_) => (),
             _ => {
@@ -44,7 +44,7 @@ impl Binding {
 
     /// Close connections and indicate to servers that
     /// they are probably broken and should not be re-used.
-    pub fn force_close(&mut self) {
+    pub(crate) fn force_close(&mut self) {
         match self {
             Binding::Direct(guard, _) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(guards, _) => {
@@ -59,7 +59,7 @@ impl Binding {
     }
 
     /// Are we connected to a backend?
-    pub fn connected(&self) -> bool {
+    pub(crate) fn connected(&self) -> bool {
         match self {
             Binding::Direct(_, _) => true,
             Binding::MultiShard(servers, _) => !servers.is_empty(),
@@ -76,7 +76,7 @@ impl Binding {
     ///
     /// If we're not connected, e.g. [`Self::connected`] is false, then this returns 0.
     ///
-    pub fn connected_servers(&self) -> usize {
+    pub(crate) fn connected_servers(&self) -> usize {
         match self {
             Binding::Direct(_, _) => 1,
             Binding::MultiShard(servers, _) => servers.len(),
@@ -136,7 +136,7 @@ impl Binding {
     }
 
     /// Send an entire buffer of messages to the servers(s).
-    pub async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
 
@@ -197,7 +197,7 @@ impl Binding {
     /// have only one reply. The route must match the route of the request
     /// that follows — sending to extra shards leaves them with a dangling
     /// Ignore expectation that blocks the multi-shard read loop.
-    pub async fn send_ignore(
+    pub(crate) async fn send_ignore(
         &mut self,
         message: &ProtocolMessage,
         route: &Route,
@@ -235,7 +235,7 @@ impl Binding {
     }
 
     /// Send copy messages to shards they are destined to go.
-    pub async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
+    pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers, state) => {
                 for row in rows {
@@ -292,7 +292,7 @@ impl Binding {
         }
     }
 
-    pub fn has_more_messages(&self) -> bool {
+    pub(crate) fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
             Binding::Direct(server, ..) => server.has_more_messages(),
@@ -304,7 +304,7 @@ impl Binding {
     }
 
     /// Protocol is out of sync due to an error in extended protocol.
-    pub fn out_of_sync(&self) -> bool {
+    pub(crate) fn out_of_sync(&self) -> bool {
         match self {
             Binding::Direct(server, ..) => server.out_of_sync(),
             Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.out_of_sync()),
@@ -335,7 +335,7 @@ impl Binding {
     }
 
     /// Execute a query on all servers.
-    pub async fn execute(
+    pub(crate) async fn execute(
         &mut self,
         query: impl Into<Query> + Clone,
     ) -> Result<Vec<Message>, Error> {
@@ -413,7 +413,7 @@ impl Binding {
     }
 
     /// Link client to server.
-    pub async fn link_client(
+    pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
         params: &Parameters,
@@ -444,7 +444,7 @@ impl Binding {
     }
 
     /// Handle transaction end.
-    pub fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
         match self {
             Binding::Direct(server, ..) => server.transaction_params_hook(rollback),
             Binding::MultiShard(servers, _) => servers
@@ -454,7 +454,7 @@ impl Binding {
         }
     }
 
-    pub fn changed_params(&mut self) -> Parameters {
+    pub(crate) fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Direct(server, ..) => server.changed_params().clone(),
             Binding::MultiShard(servers, _) => {
@@ -511,7 +511,7 @@ impl Binding {
         }
     }
 
-    pub fn is_multishard(&self) -> bool {
+    pub(crate) fn is_multishard(&self) -> bool {
         match self {
             Binding::MultiShard(servers, _) => !servers.is_empty(),
             _ => false,
@@ -519,7 +519,7 @@ impl Binding {
     }
 
     /// If connected to one shard only, get that shard number.
-    pub fn direct_shard_number(&self) -> Option<usize> {
+    pub(crate) fn direct_shard_number(&self) -> Option<usize> {
         if let Self::Direct(_, shard) = self {
             Some(*shard)
         } else {
@@ -527,7 +527,7 @@ impl Binding {
         }
     }
 
-    pub fn in_copy_mode(&self) -> bool {
+    pub(crate) fn in_copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.in_copy_mode()),
@@ -537,7 +537,7 @@ impl Binding {
     }
 
     /// Number of connected shards.
-    pub fn shards(&self) -> Result<usize, Error> {
+    pub(crate) fn shards(&self) -> Result<usize, Error> {
         Ok(match self {
             Binding::Admin(_) => 1,
             Binding::Direct(_, _) => 1,

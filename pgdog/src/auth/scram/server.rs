@@ -25,7 +25,7 @@ enum Provider {
 /// `server-first-message` can be unambiguous. The server will accept a client
 /// proof matching any of the configured passwords.
 #[derive(Clone)]
-pub struct UserPassword {
+pub(crate) struct UserPassword {
     passwords: Vec<String>,
     salt: Vec<u8>,
     iterations: u16,
@@ -39,7 +39,7 @@ pub struct UserPassword {
 /// iteration count baked in, so multi-password support is not possible here —
 /// only the first hash is used.
 #[derive(Clone)]
-pub struct HashedPassword {
+pub(crate) struct HashedPassword {
     pub(crate) hash: String,
 }
 
@@ -99,14 +99,14 @@ impl AuthenticationProvider for HashedPassword {
 
 /// SCRAM-SHA-256 server that handles
 /// authenticating clients.
-pub struct Server {
+pub(crate) struct Server {
     provider: Provider,
 }
 
 impl Server {
     /// Create new SCRAM server. Any of the given plain text passwords will be
     /// accepted.
-    pub fn new(passwords: &[PasswordKind]) -> Self {
+    pub(crate) fn new(passwords: &[PasswordKind]) -> Self {
         let hash = passwords
             .iter()
             .find(|p| matches!(p, PasswordKind::Hashed(_)));
@@ -144,7 +144,7 @@ impl Server {
     }
 
     /// Handle authentication.
-    pub async fn handle(self, stream: &mut Stream) -> Result<bool, Error> {
+    pub(crate) async fn handle(self, stream: &mut Stream) -> Result<bool, Error> {
         let scram = match self.provider {
             Provider::Plain(plain) => Scram::Plain(ScramServer::new(plain)),
             Provider::Hashed(hashed) => Scram::Hashed(ScramServer::new(hashed)),

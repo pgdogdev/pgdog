@@ -17,7 +17,7 @@ pub(super) fn get_show_variable(sql: &str) -> Result<String, Error> {
     }
 }
 
-pub struct ShowGuc {
+pub(crate) struct ShowGuc {
     pub(super) variable: String,
 }
 

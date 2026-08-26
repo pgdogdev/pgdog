@@ -10,7 +10,7 @@ use super::prelude::*;
 
 /// Show all connection pools that are currently banned, with the ban reason
 /// and how much time is left before the ban expires.
-pub struct ShowBans;
+pub(crate) struct ShowBans;
 
 #[async_trait]
 impl Command for ShowBans {

@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio_rustls::rustls;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
@@ -19,17 +19,11 @@ pub enum Error {
     #[error("unexpected TLS request")]
     UnexpectedTlsRequest,
 
-    #[error("connection is not sending messages")]
-    ConnectionDown,
-
     #[error("unexpected message, expected {0} got {1}")]
     UnexpectedMessage(char, char),
 
     #[error("unexpected payload")]
     UnexpectedPayload,
-
-    #[error("data type not supported for encoding")]
-    UnsupportedDataTypeForEncoding,
 
     #[error("CommandComplete contains no row counts")]
     CommandCompleteNoRows,
@@ -52,9 +46,6 @@ pub enum Error {
     #[error("\"{0}\" parameter is missing")]
     MissingParameter(String),
 
-    #[error("incorrect parameter format code: {0}")]
-    IncorrectParameterFormatCode(i16),
-
     #[error("unknown tuple data identifier: {0}")]
     UnknownTupleDataIdentifier(char),
 
@@ -76,29 +67,8 @@ pub enum Error {
     #[error("not a uuid")]
     NotUuid(#[from] uuid::Error),
 
-    #[error("not a timestamptz")]
-    NotTimestampTz,
-
     #[error("wrong size slice")]
     WrongSizeSlice(#[from] TryFromSliceError),
-
-    #[error("wrong size binary ({0}) for type")]
-    WrongSizeBinary(usize),
-
-    #[error("invalid timestamp components")]
-    InvalidTimestamp,
-
-    #[error("only simple protocols supported for rewrites")]
-    OnlySimpleForRewrites,
-
-    #[error("array has {0} dimensions, only 1 is supported")]
-    ArrayDimensions(usize),
-
-    #[error("not a boolean")]
-    NotBoolean,
-
-    #[error("not a pg_lsn")]
-    NotPgLsn,
 
     #[error("{0}")]
     TypeError(#[from] pgdog_postgres_types::Error),
@@ -128,7 +98,7 @@ impl Error {
     /// If this error corresponds to a fatal client-facing condition, return the
     /// `ErrorResponse` to send before disconnecting. Returns `None` for errors
     /// that are not surfaced to the client.
-    pub fn as_fatal_error_response(&self) -> Option<super::messages::ErrorResponse> {
+    pub(crate) fn as_fatal_error_response(&self) -> Option<super::messages::ErrorResponse> {
         match self {
             Self::MessageTooLarge { size, limit } => Some(
                 super::messages::ErrorResponse::query_too_large(*size, *limit),
@@ -144,11 +114,8 @@ impl Error {
     }
 
     /// Transient network fault worth retrying.
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Io(_) | Self::UnexpectedEof | Self::ConnectionDown
-        )
+    pub(crate) fn is_retryable(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::UnexpectedEof)
     }
 }
 
@@ -161,7 +128,6 @@ mod tests {
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
         assert!(Error::Io(io).is_retryable());
         assert!(Error::UnexpectedEof.is_retryable());
-        assert!(Error::ConnectionDown.is_retryable());
     }
 
     #[test]

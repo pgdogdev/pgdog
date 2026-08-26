@@ -13,7 +13,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// The pid is the same pid as in the [BackendKeyData] but without the secret, and it's
 /// a monotonically increasing counter.
 #[derive(Copy, Clone, Debug, Display, Hash, PartialEq, Eq)]
-pub struct FrontendPid(i32);
+pub(crate) struct FrontendPid(i32);
 
 impl Default for FrontendPid {
     fn default() -> Self {
@@ -22,13 +22,13 @@ impl Default for FrontendPid {
 }
 
 impl FrontendPid {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // Mask off the sign bit so the synthetic pid is always non-negative,
         // matching the Postgres convention that backend pids are positive.
         Self((COUNTER.fetch_add(1, Ordering::SeqCst) & i32::MAX as u32) as i32)
     }
 
-    pub fn pid(&self) -> i32 {
+    pub(crate) fn pid(&self) -> i32 {
         self.0
     }
 }

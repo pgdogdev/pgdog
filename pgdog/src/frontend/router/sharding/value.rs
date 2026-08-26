@@ -11,7 +11,7 @@ use crate::{
 use bytes::Bytes;
 
 #[derive(Debug, Clone)]
-pub enum Data<'a> {
+pub(crate) enum Data<'a> {
     Text(&'a str),
     Binary(&'a [u8]),
     Integer(i64),
@@ -42,13 +42,13 @@ impl<'a> From<&'a Bytes> for Data<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Value<'a> {
+pub(crate) struct Value<'a> {
     data_type: DataType,
     data: Data<'a>,
 }
 
 impl<'a> Value<'a> {
-    pub fn new(data: impl Into<Data<'a>>, data_type: DataType) -> Self {
+    pub(crate) fn new(data: impl Into<Data<'a>>, data_type: DataType) -> Self {
         Self {
             data_type,
             data: data.into(),
@@ -57,7 +57,7 @@ impl<'a> Value<'a> {
 
     /// Convert parameter to value, given the data type
     /// and known encoding.
-    pub fn from_param(
+    pub(crate) fn from_param(
         param: &'a ParameterWithFormat<'a>,
         data_type: DataType,
     ) -> Result<Self, Error> {
@@ -70,7 +70,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn vector(&self) -> Result<Option<Vector>, Error> {
+    pub(crate) fn vector(&self) -> Result<Option<Vector>, Error> {
         if self.data_type == DataType::Vector {
             match self.data {
                 Data::Text(text) => Ok(Some(Vector::decode(text.as_bytes(), Format::Text)?)),
@@ -82,7 +82,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => text.parse::<i64>().is_ok(),
@@ -104,7 +104,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn integer(&self) -> Result<Option<i64>, Error> {
+    pub(crate) fn integer(&self) -> Result<Option<i64>, Error> {
         if self.data_type == DataType::Bigint {
             match self.data {
                 Data::Integer(int) => Ok(Some(int)),
@@ -128,7 +128,7 @@ impl<'a> Value<'a> {
     /// values through sharding key lookups. `None` for data types
     /// without one, e.g. vectors. Text that is already in place is
     /// borrowed, not copied.
-    pub fn to_text(&self) -> Result<Option<Cow<'_, str>>, Error> {
+    pub(crate) fn to_text(&self) -> Result<Option<Cow<'_, str>>, Error> {
         match self.data_type {
             DataType::Bigint => Ok(self.integer()?.map(|int| Cow::Owned(int.to_string()))),
             DataType::Varchar => Ok(self.varchar()?.map(Cow::Borrowed)),
@@ -137,7 +137,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn varchar(&self) -> Result<Option<&str>, Error> {
+    pub(crate) fn varchar(&self) -> Result<Option<&str>, Error> {
         if self.data_type == DataType::Varchar {
             match self.data {
                 Data::Integer(_) => Ok(None),
@@ -149,7 +149,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn uuid(&self) -> Result<Option<Uuid>, Error> {
+    pub(crate) fn uuid(&self) -> Result<Option<Uuid>, Error> {
         if self.data_type != DataType::Uuid {
             return Ok(None);
         }
@@ -163,7 +163,7 @@ impl<'a> Value<'a> {
         Ok(Some(uuid))
     }
 
-    pub fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
+    pub(crate) fn hash(&self, hasher: Hasher) -> Result<Option<u64>, Error> {
         match self.data_type {
             DataType::Bigint => match self.data {
                 Data::Text(text) => Ok(Some(

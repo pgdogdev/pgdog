@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::SystemTime};
 
+use derive_more::Display;
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
 
@@ -86,38 +87,23 @@ pub struct SchemaStatementTask {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[display(rename_all = "snake_case")]
 pub enum StatementKind {
     Table,
     Index,
     Statement,
 }
 
-impl std::fmt::Display for StatementKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Table => write!(f, "table"),
-            Self::Index => write!(f, "index"),
-            Self::Statement => write!(f, "statement"),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Display, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[display(rename_all = "snake_case")]
 pub enum SyncState {
     PreData,
     PostData,
     Cutover,
     PostCutover,
-}
-
-impl std::fmt::Display for SyncState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PreData => write!(f, "pre_data"),
-            Self::PostData => write!(f, "post_data"),
-            Self::Cutover => write!(f, "cutover"),
-            Self::PostCutover => write!(f, "post_cutover"),
-        }
-    }
 }

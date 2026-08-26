@@ -40,12 +40,12 @@ ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
 #[derive(Debug, Clone, PartialEq, Default, Eq, Hash)]
-pub struct PublicationTable {
-    pub schema: String,
-    pub name: String,
-    pub attributes: String,
-    pub parent_schema: String,
-    pub parent_name: String,
+pub(crate) struct PublicationTable {
+    pub(crate) schema: String,
+    pub(crate) name: String,
+    pub(crate) attributes: String,
+    pub(crate) parent_schema: String,
+    pub(crate) parent_name: String,
 }
 
 impl Display for PublicationTable {
@@ -55,7 +55,7 @@ impl Display for PublicationTable {
 }
 
 impl PublicationTable {
-    pub async fn load(
+    pub(crate) async fn load(
         publication: &str,
         server: &mut Server,
     ) -> Result<Vec<PublicationTable>, Error> {
@@ -66,7 +66,7 @@ impl PublicationTable {
             .await?)
     }
 
-    pub fn destination_name(&self) -> &str {
+    pub(crate) fn destination_name(&self) -> &str {
         if self.parent_name.is_empty() {
             &self.name
         } else {
@@ -74,7 +74,7 @@ impl PublicationTable {
         }
     }
 
-    pub fn destination_schema(&self) -> &str {
+    pub(crate) fn destination_schema(&self) -> &str {
         if self.parent_schema.is_empty() {
             &self.schema
         } else {
@@ -108,14 +108,14 @@ ON (c.relnamespace = n.oid) WHERE n.nspname = $1 AND c.relname = $2";
 
 /// Identifies the columns part of the replica identity for a table.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct ReplicaIdentity {
-    pub oid: Oid,
-    pub identity: String,
-    pub kind: String,
+pub(crate) struct ReplicaIdentity {
+    pub(crate) oid: Oid,
+    pub(crate) identity: String,
+    pub(crate) kind: String,
 }
 
 impl ReplicaIdentity {
-    pub async fn load(table: &PublicationTable, server: &mut Server) -> Result<Self, Error> {
+    pub(crate) async fn load(table: &PublicationTable, server: &mut Server) -> Result<Self, Error> {
         let identity: ReplicaIdentity = server
             .fetch_all(
                 REPLICA_IDENTIFY
@@ -155,17 +155,20 @@ FROM
     WHERE a.attnum > 0::pg_catalog.int2 AND NOT a.attisdropped AND a.attgenerated = '' AND a.attrelid = $2 ORDER BY a.attnum";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PublicationTableColumn {
+pub(crate) struct PublicationTableColumn {
     /// Column number (`pg_attribute.attnum`). Despite the name, this is not an OID.
-    pub oid: i32,
-    pub name: String,
+    pub(crate) oid: i32,
+    pub(crate) name: String,
     /// Type OID (`pg_attribute.atttypid`).
-    pub type_oid: Oid,
-    pub identity: bool,
+    pub(crate) type_oid: Oid,
+    pub(crate) identity: bool,
 }
 
 impl PublicationTableColumn {
-    pub async fn load(identity: &ReplicaIdentity, server: &mut Server) -> Result<Vec<Self>, Error> {
+    pub(crate) async fn load(
+        identity: &ReplicaIdentity,
+        server: &mut Server,
+    ) -> Result<Vec<Self>, Error> {
         Ok(server
             .fetch_all(
                 COLUMNS
@@ -224,7 +227,7 @@ WHERE (n.nspname, c.relname) IN ($1)
     )
   )";
 
-pub async fn tables_missing_unique_index<'a>(
+pub(crate) async fn tables_missing_unique_index<'a>(
     tables: impl IntoIterator<Item = &'a PublicationTable>,
     server: &mut Server,
 ) -> Result<Vec<String>, Error> {

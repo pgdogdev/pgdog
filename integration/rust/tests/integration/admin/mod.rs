@@ -9,8 +9,8 @@ use sqlx::{Column, Executor, Pool, Postgres, Row, TypeInfo};
 
 /// Wire layout expected from `SHOW TASKS`.
 const SHOW_TASKS_LAYOUT: &[(&str, &str)] = &[
+    ("parent_id", "INT8"),
     ("id", "INT8"),
-    ("scope", "TEXT"),
     ("type", "TEXT"),
     ("status", "TEXT"),
     ("inner_status", "TEXT"),
@@ -23,8 +23,8 @@ const SHOW_TASKS_LAYOUT: &[(&str, &str)] = &[
 /// A parsed, validated `SHOW TASKS` row. Built only via [`Tasks::fetch`].
 #[derive(Debug, Clone)]
 pub struct Task {
+    pub parent_id: Option<i64>,
     pub id: Option<i64>,
-    pub scope: String,
     pub kind: String,
     pub status: String,
     pub inner_status: String,
@@ -53,8 +53,8 @@ impl Tasks {
         let rows = raw
             .iter()
             .map(|row| {
+                let parent_id: Option<i64> = row.get("parent_id");
                 let id: Option<i64> = row.get("id");
-                let scope: String = row.get("scope");
                 let status: String = row.get("status");
                 let started_at: String = row.get("started_at");
                 let updated_at: String = row.get("updated_at");
@@ -67,13 +67,13 @@ impl Tasks {
                 assert!(!status.is_empty(), "task {id:?}: status is empty");
                 assert!(elapsed_ms >= 0, "task {id:?}: elapsed_ms is negative");
                 assert!(
-                    scope == "root" || scope == "subtask",
-                    "task {id:?}: unexpected scope {scope:?}"
+                    id.is_some() != parent_id.is_some(),
+                    "task {id:?}: exactly one of id and parent_id must be set"
                 );
 
                 Task {
+                    parent_id,
                     id,
-                    scope,
                     kind: row.get("type"),
                     status,
                     inner_status: row.get("inner_status"),

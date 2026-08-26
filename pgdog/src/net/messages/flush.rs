@@ -5,7 +5,7 @@ use super::prelude::*;
 
 /// Flush (F) message.
 #[derive(Debug)]
-pub struct Flush;
+pub(crate) struct Flush;
 
 impl FromBytes for Flush {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

@@ -7,7 +7,7 @@ use super::*;
 use tracing::debug;
 
 /// Parser result.
-pub enum ParseResult {
+pub(crate) enum ParseResult {
     Pause(Pause),
     Reconnect(Reconnect),
     ShowClients(ShowClients),
@@ -53,7 +53,7 @@ pub enum ParseResult {
 
 impl ParseResult {
     /// Execute command.
-    pub async fn execute(&self) -> Result<Vec<Message>, Error> {
+    pub(crate) async fn execute(&self) -> Result<Vec<Message>, Error> {
         use ParseResult::*;
 
         match self {
@@ -102,7 +102,7 @@ impl ParseResult {
     }
 
     /// Get command name.
-    pub fn name(&self) -> String {
+    pub(crate) fn name(&self) -> String {
         use ParseResult::*;
 
         match self {
@@ -152,11 +152,11 @@ impl ParseResult {
 }
 
 /// Admin command parser.
-pub struct Parser;
+pub(crate) struct Parser;
 
 impl Parser {
     /// Parse the query and return a command we can execute.
-    pub fn parse(sql: &str) -> Result<ParseResult, Error> {
+    pub(crate) fn parse(sql: &str) -> Result<ParseResult, Error> {
         // Handle SET separately because
         // we're about to clobber valid SQL syntax below.
         if is_set_statement(sql) {

@@ -7,30 +7,30 @@
 use std::sync::LazyLock;
 
 use crate::backend::replication::logical::Error;
-use async_task::{AsyncTaskWaiter, AsyncTasksStorage, TaskError};
+use task::{TaskError, TaskStorage, TaskWaiter};
 
-pub mod async_task;
-pub mod copy_data;
-pub mod replication;
-pub mod resharding;
-pub mod schema_sync;
+pub(crate) mod copy_data;
+pub(crate) mod replication;
+pub(crate) mod resharding;
+pub(crate) mod schema_sync;
+pub(crate) mod task;
 
 /// Process-global task registry shared by all `crate::api` task modules.
-static TASKS: LazyLock<AsyncTasksStorage> = LazyLock::new(AsyncTasksStorage::default);
+static TASKS: LazyLock<TaskStorage> = LazyLock::new(TaskStorage::default);
 
 /// Accessor for the process-global task registry.
-pub(crate) fn tasks_storage() -> &'static AsyncTasksStorage {
+pub(crate) fn tasks_storage() -> &'static TaskStorage {
     &TASKS
 }
 
 /// A composable background task: implement [`Task`] (see
-/// [`async_task`]) to define one, then launch it as a top-level task
+/// [`task`]) to define one, then launch it as a top-level task
 /// with [`start`] or nested under a running task through its
-/// [`AsyncTaskContext`](async_task::AsyncTaskContext).
-pub(crate) use async_task::Task;
+/// [`TaskContext`](task::TaskContext).
+pub(crate) use task::Task;
 
 /// Launch `task` as a top-level task in the global registry.
-pub(crate) fn run_task<T: Task>(task: T) -> AsyncTaskWaiter<T::Output, T::Error> {
+pub(crate) fn run_task<T: Task + 'static>(task: T) -> TaskWaiter<T::Output, T::Error> {
     tasks_storage().run(task)
 }
 

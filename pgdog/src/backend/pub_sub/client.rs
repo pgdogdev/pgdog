@@ -8,7 +8,7 @@ use tokio::sync::{Notify, broadcast::error::RecvError, mpsc};
 use tokio::{select, spawn};
 
 #[derive(Debug)]
-pub struct PubSubClient {
+pub(crate) struct PubSubClient {
     tx: mpsc::Sender<NotificationResponse>,
     rx: mpsc::Receiver<NotificationResponse>,
     unlisten: HashMap<String, Arc<Notify>>,
@@ -21,7 +21,7 @@ impl Default for PubSubClient {
 }
 
 impl PubSubClient {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::channel(channel_size());
 
         Self {
@@ -32,7 +32,7 @@ impl PubSubClient {
     }
 
     /// Listen on a channel.
-    pub fn listen(&mut self, channel: &str, mut rx: Listener) {
+    pub(crate) fn listen(&mut self, channel: &str, mut rx: Listener) {
         let tx = self.tx.clone();
 
         let unlisten = Arc::new(Notify::new());
@@ -63,12 +63,12 @@ impl PubSubClient {
     }
 
     /// Wait for a message from the pub/sub channel.
-    pub async fn recv(&mut self) -> Option<NotificationResponse> {
+    pub(crate) async fn recv(&mut self) -> Option<NotificationResponse> {
         self.rx.recv().await
     }
 
     /// Stop listening on a channel.
-    pub fn unlisten(&mut self, channel: &str) {
+    pub(crate) fn unlisten(&mut self, channel: &str) {
         if let Some(notify) = self.unlisten.remove(channel) {
             notify.notify_one();
         }

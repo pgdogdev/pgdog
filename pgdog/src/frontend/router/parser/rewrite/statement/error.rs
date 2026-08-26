@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("unique_id generation failed: {0}")]
     UniqueId(#[from] crate::unique_id::Error),
 

@@ -22,7 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "std"]
 tracing-throttle = "0.4"
 parking_lot.workspace = true
 thiserror = "2"
-derive_more = { version = "2", features = ["display", "debug", "error", "from", "from_str"] }
+derive_more = { workspace = true, features = ["debug", "error", "from_str"] }
 bytes.workspace = true
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

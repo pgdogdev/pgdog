@@ -93,7 +93,7 @@ impl Statement {
 }
 
 #[derive(Debug)]
-pub struct StreamSubscriber {
+pub(crate) struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
 
@@ -136,7 +136,7 @@ pub struct StreamSubscriber {
 }
 
 impl StreamSubscriber {
-    pub fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
+    pub(crate) fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -173,7 +173,7 @@ impl StreamSubscriber {
     // synchronously on the raw `Server` connections (both are one-shot,
     // request/response query flows). Only once they succeed are the connections
     // moved into their per-shard pipelined tasks for the streaming apply path.
-    pub async fn connect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut conns: Vec<Server> = vec![];
 
         for shard in self.cluster.shards() {
@@ -339,7 +339,6 @@ impl StreamSubscriber {
                     old: None,
                 };
                 let insert = XLogInsert {
-                    xid: None,
                     oid: update.oid,
                     tuple_data: update.new,
                 };
@@ -807,7 +806,7 @@ impl StreamSubscriber {
 
     /// Reset destination connections and state, rolling back any open implicit
     /// transaction on each shard. Caches are repopulated from Relation messages on re-delivery.
-    pub async fn reconnect(&mut self) -> Result<(), Error> {
+    pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
         self.connections.clear();
         self.relations.clear();
         self.statements.clear();
@@ -820,12 +819,12 @@ impl StreamSubscriber {
     /// Clear destination connections so the next `handle` call forces a fresh
     /// `connect()`. Use after a failed reconnect to avoid reusing connections
     /// that may have buffered stale handshake responses.
-    pub fn reset_connections(&mut self) {
+    pub(crate) fn reset_connections(&mut self) {
         self.connections.clear();
     }
 
     /// `docs/REPLICATION.md` → "Error rollback".
-    pub async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
+    pub(crate) async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {
             Ok(status) => Ok(status),
             Err(err) => {
@@ -878,7 +877,7 @@ impl StreamSubscriber {
     }
 
     /// LSN of the last transaction committed to all destination shards.
-    pub fn status_update(&self) -> StatusUpdate {
+    pub(crate) fn status_update(&self) -> StatusUpdate {
         StatusUpdate {
             last_applied: self.committed_lsn,
             last_flushed: self.committed_lsn,
@@ -889,12 +888,12 @@ impl StreamSubscriber {
     }
 
     /// Number of bytes processed.
-    pub fn bytes_sharded(&self) -> usize {
+    pub(crate) fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
     }
 
     /// Advance both LSN fields. Call after commit and on publisher init.
-    pub fn set_current_lsn(&mut self, lsn: i64) -> bool {
+    pub(crate) fn set_current_lsn(&mut self, lsn: i64) -> bool {
         self.lsn_changed = lsn != self.lsn;
         self.lsn = lsn;
         self.committed_lsn = lsn;
@@ -908,7 +907,7 @@ impl StreamSubscriber {
     }
 
     /// Get current LSN.
-    pub fn lsn(&self) -> i64 {
+    pub(crate) fn lsn(&self) -> i64 {
         self.lsn
     }
 

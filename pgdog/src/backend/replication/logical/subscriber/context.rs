@@ -17,7 +17,7 @@ use crate::{
 /// Holds the pre-computed `Bind` message and destination `Shard` for a single replication event.
 /// Build with `new`; pass to the subscriber's send path to apply the event to the correct shard.
 #[derive(Debug)]
-pub struct StreamContext {
+pub(crate) struct StreamContext {
     bind: Bind,
     shard: Shard,
 }
@@ -27,7 +27,11 @@ impl StreamContext {
     ///
     /// Runs the router to resolve the destination shard. Returns an error if
     /// routing fails (e.g. unparseable query, wrong command type).
-    pub async fn new(cluster: &Cluster, tuple: &TupleData, stmt: &Parse) -> Result<Self, Error> {
+    pub(crate) async fn new(
+        cluster: &Cluster,
+        tuple: &TupleData,
+        stmt: &Parse,
+    ) -> Result<Self, Error> {
         let bind = tuple.to_bind(stmt.name());
         let shard = Self::resolve_shard(cluster, &bind, stmt).await?;
         Ok(Self { bind, shard })
@@ -88,12 +92,12 @@ impl StreamContext {
 
     /// Consume the context into the routed shard and the `Bind`, so
     /// the send path owns the message without cloning it.
-    pub fn into_parts(self) -> (Shard, Bind) {
+    pub(crate) fn into_parts(self) -> (Shard, Bind) {
         (self.shard, self.bind)
     }
 
     /// The shard(s) the statement should be routed to.
-    pub fn shard(&self) -> &Shard {
+    pub(crate) fn shard(&self) -> &Shard {
         &self.shard
     }
 }
