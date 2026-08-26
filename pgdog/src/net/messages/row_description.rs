@@ -57,7 +57,8 @@ impl Field {
     }
 
     /// Numeric field (binary format).
-    pub fn numeric_binary(name: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn numeric_binary(name: &str) -> Self {
         Self {
             name: name.into(),
             table_oid: 0,
@@ -108,7 +109,8 @@ impl Field {
     }
 
     /// Timestamp field.
-    pub fn timestamp(name: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn timestamp(name: &str) -> Self {
         Self {
             name: name.into(),
             table_oid: 0,
@@ -120,34 +122,9 @@ impl Field {
         }
     }
 
-    /// Float4/Real field (text format).
-    pub fn float(name: &str) -> Self {
-        Self {
-            name: name.into(),
-            table_oid: 0,
-            column: 0,
-            type_oid: 700, // PostgreSQL OID for float4/real
-            type_size: 4,
-            type_modifier: -1,
-            format: 0, // Text format
-        }
-    }
-
-    /// Float4/Real field (binary format).
-    pub fn float_binary(name: &str) -> Self {
-        Self {
-            name: name.into(),
-            table_oid: 0,
-            column: 0,
-            type_oid: 700, // PostgreSQL OID for float4/real
-            type_size: 4,
-            type_modifier: -1,
-            format: 1, // Binary format
-        }
-    }
-
     /// Float8/Double Precision field (text format).
-    pub fn double(name: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn double(name: &str) -> Self {
         Self {
             name: name.into(),
             table_oid: 0,
@@ -156,19 +133,6 @@ impl Field {
             type_size: 8,
             type_modifier: -1,
             format: 0, // Text format
-        }
-    }
-
-    /// Float8/Double Precision field (binary format).
-    pub fn double_binary(name: &str) -> Self {
-        Self {
-            name: name.into(),
-            table_oid: 0,
-            column: 0,
-            type_oid: 701, // PostgreSQL OID for float8/double precision
-            type_size: 8,
-            type_modifier: -1,
-            format: 1, // Binary format
         }
     }
 
@@ -246,25 +210,6 @@ impl RowDescription {
         Self {
             fields: Arc::new(fields),
         }
-    }
-
-    /// Check if the two row descriptions are materially the same.
-    pub fn equivalent(&self, other: &RowDescription) -> bool {
-        if self.fields.len() != other.fields.len() {
-            return false;
-        }
-
-        for (a, b) in self.fields.iter().zip(other.fields.iter()) {
-            if a.name != b.name {
-                return false;
-            }
-
-            if a.type_oid != b.type_oid {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Replaces the data types of each field using the given mapping.

@@ -3,7 +3,7 @@
 use crate::net::Decoder;
 use std::collections::BTreeSet;
 
-use super::{Datum, Double, Float, Format, FromDataType, Numeric, code, prelude::*};
+use super::{Datum, Format, FromDataType, code, prelude::*};
 pub use pgdog_postgres_types::{Data, ToDataRowColumn};
 use pgdog_stats::Lsn;
 
@@ -80,22 +80,6 @@ impl DataRow {
     }
 
     // Get float at index with text/binary encoding.
-    pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
-        self.get::<Float>(index, if text { Format::Text } else { Format::Binary })
-            .map(|float| float.0 as f64)
-    }
-
-    // Get numeric at index with text/binary encoding.
-    pub fn get_numeric(&self, index: usize, text: bool) -> Option<Numeric> {
-        self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
-    }
-
-    // Get double at index with text/binary encoding.
-    pub fn get_double(&self, index: usize, text: bool) -> Option<f64> {
-        self.get::<Double>(index, if text { Format::Text } else { Format::Binary })
-            .map(|double| double.0)
-    }
-
     /// Get text value at index.
     pub fn get_text(&self, index: usize) -> Option<String> {
         self.get::<String>(index, Format::Text)
@@ -113,16 +97,15 @@ impl DataRow {
     }
 
     /// Get column at index given row description.
-    pub fn get_column<'a>(
+    pub(crate) fn get_column(
         &self,
         index: usize,
-        decoder: &'a Decoder,
-    ) -> Result<Option<Column<'a>>, Error> {
+        decoder: &Decoder,
+    ) -> Result<Option<Column>, Error> {
         if let Some(field) = decoder.row_description().field(index)
             && let Some(data) = self.columns.get(index)
         {
             return Ok(Some(Column {
-                name: field.name.as_str(),
                 value: Datum::new(
                     &data.data,
                     field.data_type(),
@@ -138,11 +121,11 @@ impl DataRow {
     /// Get the column at index given row description. Error if not present.
     /// This should only be used when the absence of a column represents a bug
     /// in pgdog.
-    pub fn get_column_checked<'a>(
+    pub(crate) fn get_column_checked(
         &self,
         idx: usize,
-        decoder: &'a Decoder,
-    ) -> Result<Column<'a>, Error> {
+        decoder: &Decoder,
+    ) -> Result<Column, Error> {
         self.get_column(idx, decoder)?
             .ok_or(Error::RequiredColumnMissing(idx))
     }
@@ -151,18 +134,11 @@ impl DataRow {
     pub fn len(&self) -> usize {
         self.columns.len()
     }
-
-    /// No columns.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// Column with data type mapped to a Rust type.
 #[derive(Debug, Clone)]
-pub struct Column<'a> {
-    /// Column name.
-    pub name: &'a str,
+pub(crate) struct Column {
     /// Column value.
     pub value: Datum,
 }

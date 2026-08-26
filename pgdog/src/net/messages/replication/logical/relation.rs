@@ -1,7 +1,6 @@
 use pgdog_postgres_types::Oid;
 
 use crate::net::c_string_buf;
-use crate::net::messages::replication::logical::string::escape;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
@@ -15,30 +14,6 @@ pub struct Relation {
     pub columns: Vec<Column>,
 }
 
-impl Relation {
-    pub fn to_sql(&self) -> Result<String, Error> {
-        Ok(format!(
-            r#""{}"."{}""#,
-            escape(&self.namespace, '"'),
-            escape(&self.name, '"')
-        ))
-    }
-
-    /// Columns in the order they appear in the table
-    /// (and all subsequent data messages).
-    pub fn columns(&self) -> Vec<&str> {
-        self.columns
-            .iter()
-            .map(|column| column.name.as_str())
-            .collect()
-    }
-
-    /// Table name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Column {
     pub flag: i8,
@@ -46,12 +21,6 @@ pub struct Column {
     /// Type OID (`pg_attribute.atttypid`).
     pub oid: Oid,
     pub type_modifier: i32,
-}
-
-impl Column {
-    pub fn to_sql(&self) -> Result<String, Error> {
-        Ok(format!(r#""{}""#, escape(&self.name, '"')))
-    }
 }
 
 impl ToBytes for Relation {

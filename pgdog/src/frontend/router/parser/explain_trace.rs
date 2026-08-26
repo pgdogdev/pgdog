@@ -13,14 +13,6 @@ impl ExplainTrace {
         Self { summary, steps }
     }
 
-    pub fn summary(&self) -> &ExplainSummary {
-        &self.summary
-    }
-
-    pub fn steps(&self) -> &[ExplainEntry] {
-        &self.steps
-    }
-
     pub fn render_lines(&self) -> Vec<String> {
         let mut lines = vec![String::new(), "PgDog Routing:".to_string()];
         lines.push(format!(
@@ -187,7 +179,7 @@ mod tests {
         });
 
         let descriptions: Vec<&str> = trace
-            .steps()
+            .steps
             .iter()
             .map(|entry| entry.description.as_str())
             .collect();
@@ -207,12 +199,12 @@ mod tests {
             read: false,
         });
 
-        assert_eq!(trace.steps().len(), 1);
+        assert_eq!(trace.steps.len(), 1);
         assert_eq!(
-            trace.steps()[0].description,
+            trace.steps[0].description,
             "no sharding key matched; broadcasting"
         );
-        assert!(trace.steps()[0].shard.is_none());
+        assert!(trace.steps[0].shard.is_none());
     }
 
     #[test]
@@ -223,7 +215,7 @@ mod tests {
         });
 
         assert_eq!(
-            trace.steps()[0].description,
+            trace.steps[0].description,
             "multiple shards matched: [1, 5]"
         );
     }

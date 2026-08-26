@@ -3,7 +3,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use tracing::debug;
 
 use std::{
-    collections::{BTreeMap, btree_map},
+    collections::BTreeMap,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -62,7 +62,6 @@ impl<T: ToString> From<(T, T)> for Parameter {
 pub enum ParameterValue {
     String(String),
     Tuple(Vec<String>),
-    Integer(i32),
 }
 
 impl ToBytes for ParameterValue {
@@ -78,9 +77,6 @@ impl ToBytes for ParameterValue {
                     .join(", ".as_bytes());
                 bytes.put(Bytes::from(values));
             }
-            Self::Integer(integer) => {
-                bytes.put_slice(itoa::Buffer::new().format(*integer).as_bytes())
-            }
         }
         bytes.put_u8(0);
 
@@ -93,7 +89,6 @@ impl ToDataRowColumn for ParameterValue {
         match self {
             Self::String(s) => s.to_data_row_column(),
             Self::Tuple(_) => self.to_bytes().to_data_row_column(),
-            Self::Integer(i) => i.to_data_row_column(),
         }
     }
 }
@@ -110,7 +105,6 @@ impl MemoryUsage for ParameterValue {
         match self {
             Self::String(v) => v.memory_usage(),
             Self::Tuple(vals) => vals.memory_usage(),
-            Self::Integer(int) => int.memory_usage(),
         }
     }
 }
@@ -143,7 +137,6 @@ impl Display for ParameterValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Self::Integer(int) => write!(f, "{}", int),
         }
     }
 }
@@ -239,11 +232,6 @@ impl Parameters {
         } else {
             self.params.get(name)
         }
-    }
-
-    /// Get an iterator over in-transaction params.
-    pub fn in_transaction_iter(&self) -> btree_map::Iter<'_, String, ParameterValue> {
-        self.transaction_params.iter()
     }
 
     /// Insert a parameter, but only for the duration of the transaction.
@@ -458,15 +446,6 @@ impl Parameters {
     pub fn get_default<'a>(&'a self, name: &str, default_value: &'a str) -> &'a str {
         self.get(name)
             .map_or(default_value, |p| p.as_str().unwrap_or(default_value))
-    }
-
-    /// Merge other into self.
-    pub fn merge(&mut self, other: Self) {
-        self.params.extend(other.params);
-        self.transaction_params.extend(other.transaction_params);
-        self.transaction_local_params
-            .extend(other.transaction_local_params);
-        Self::compute_hash(&self.params);
     }
 
     /// Copy params set inside the transaction.
@@ -774,32 +753,6 @@ mod test {
         // If value is already quoted, it should strip quotes and re-quote
         let value = ParameterValue::String(r#""already quoted""#.into());
         assert_eq!(format!("{}", value), r#""already quoted""#);
-    }
-
-    #[test]
-    fn test_merge_includes_local_params() {
-        let mut params1 = Parameters::default();
-        params1.insert("base", "value");
-
-        let mut params2 = Parameters::default();
-        params2.insert_transaction("search_path", "public", false);
-        params2.insert_transaction("timezone", "UTC", true);
-
-        params1.merge(params2);
-
-        // All params should be merged
-        assert_eq!(
-            params1.get("base"),
-            Some(&ParameterValue::String("value".into()))
-        );
-        assert_eq!(
-            params1.get("search_path"),
-            Some(&ParameterValue::String("public".into()))
-        );
-        assert_eq!(
-            params1.get("timezone"),
-            Some(&ParameterValue::String("UTC".into()))
-        );
     }
 
     #[test]

@@ -5,8 +5,7 @@ use derive_more::{Display, Error};
 
 use crate::{
     backend::replication::publisher::PublicationTable,
-    frontend::client::query_engine::two_pc::TwoPcTransaction,
-    net::{CommandComplete, ErrorResponse},
+    frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
 };
 
 /// The kind of validation failure, decoupled from which table it occurred on.
@@ -92,29 +91,14 @@ pub enum Error {
     #[error("out of sync, got {0}")]
     OutOfSync(char),
 
-    #[error("out of sync during commit, got {0}")]
-    CommitOutOfSync(char),
-
-    #[error("out of sync during relation prepare, got {0}")]
-    RelationOutOfSync(char),
-
-    #[error("out of sync during row write, got {0}")]
-    SendOutOfSync(char),
-
     #[error("missing data")]
     MissingData,
-
-    #[error("copy error")]
-    Copy,
 
     #[error("pg_error: {0}")]
     PgError(Box<ErrorResponse>),
 
     #[error("table \"{0}\".\"{1}\" has no replica identity")]
     NoReplicaIdentity(String, String),
-
-    #[error("lsn decode")]
-    LsnDecode,
 
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
@@ -161,9 +145,6 @@ pub enum Error {
     #[error("schema isn't loaded")]
     NoSchema,
 
-    #[error("config wasn't updated with new cluster")]
-    NoNewCluster,
-
     #[error("tokio: {0}")]
     JoinError(#[from] tokio::task::JoinError),
 
@@ -173,17 +154,8 @@ pub enum Error {
     #[error("data sync has been aborted")]
     DataSyncAborted,
 
-    #[error("replication has been aborted")]
-    ReplicationAborted,
-
-    #[error("waiter has no publisher")]
-    NoPublisher,
-
     #[error("cutover abort timeout")]
     AbortTimeout,
-
-    #[error("task not found")]
-    TaskNotFound,
 
     #[error("task is not a replication task")]
     NotReplication,
@@ -193,9 +165,6 @@ pub enum Error {
 
     #[error("frontend: {0}")]
     Frontend(#[from] crate::frontend::Error),
-
-    #[error("command complete has no rows: {0}")]
-    CommandCompleteNoRows(CommandComplete),
 
     #[error("missing key in replication stream, out of sync")]
     MissingKey,

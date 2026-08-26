@@ -1,5 +1,5 @@
-use crate::net::messages::{Vector, data_types::Float};
-use pgdog_vector::Distance;
+use crate::net::messages::Vector;
+use pgdog_vector::{Distance, Float};
 
 #[test]
 fn test_euclidean() {

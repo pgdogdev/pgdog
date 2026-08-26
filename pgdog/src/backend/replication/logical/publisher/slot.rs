@@ -546,7 +546,7 @@ mod test {
                         assert_eq!(relation.name, "test_slot_replication")
                     }
                     XLogPayload::Insert(insert) => {
-                        let col = insert.column(0).unwrap();
+                        let col = insert.tuple_data.columns.first().unwrap();
                         let id = i64::from_be_bytes(col.data[..].try_into().unwrap());
                         assert_eq!(id, 1);
                     }

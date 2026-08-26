@@ -59,14 +59,8 @@ pub enum Error {
     #[error("all replicas down")]
     AllReplicasDown,
 
-    #[error("router error")]
-    Router,
-
     #[error("pub/sub disabled")]
     PubSubDisabled,
-
-    #[error("pool {0} has no health target")]
-    PoolNoHealthTarget(u64),
 
     #[error("pool is not healthy")]
     PoolUnhealthy,
@@ -97,7 +91,6 @@ impl Error {
                 | Self::NoShard(_)
                 | Self::NoDatabases
                 | Self::PubSubDisabled
-                | Self::PoolNoHealthTarget(_)
                 // Admin decisions — respect them.
                 | Self::ManualBan
                 // Programming errors.

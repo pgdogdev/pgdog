@@ -1,7 +1,7 @@
 #![allow(clippy::print_stdout)]
 
-use crate::net::messages::{Vector, data_types::Float};
-use pgdog_vector::distance_simd_rust;
+use crate::net::messages::Vector;
+use pgdog_vector::{Float, distance_simd_rust};
 use std::time::{Duration, Instant};
 
 fn benchmark_implementation(name: &str, p: &[Float], q: &[Float], iterations: usize) -> Duration {

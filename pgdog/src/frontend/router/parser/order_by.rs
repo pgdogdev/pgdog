@@ -36,16 +36,6 @@ impl OrderBy {
         }
     }
 
-    /// Get column name.
-    pub fn name(&self) -> Option<&str> {
-        match self {
-            OrderBy::AscColumn(name) => Some(name.as_str()),
-            OrderBy::DescColumn(name) => Some(name.as_str()),
-            OrderBy::AscVectorL2Column(name, _) => Some(name.as_str()),
-            _ => None,
-        }
-    }
-
     /// ORDER BY clause contains a vector.
     pub fn vector(&self) -> Option<(&Vector, &String)> {
         match self {

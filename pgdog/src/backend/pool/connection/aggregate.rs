@@ -450,9 +450,6 @@ fn checked_add(mut lhs: Datum, rhs: Datum) -> Result<Datum, TypeError> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::aggregate::{
-        HelperKind, HelperMapping,
-    };
     use crate::net::{
         Decoder,
         messages::{Field, Format, RowDescription},
@@ -536,41 +533,6 @@ mod test {
         let row = result.pop_front().unwrap();
         let total_count = row.get::<i32>(0, Format::Text).unwrap();
         assert_eq!(total_count, 5);
-    }
-
-    #[test]
-    #[ignore = "this unit test constructs a synthetic case that isn't realistic, and we currently rely on this behavior for control flow on direct-to-shard and explain"]
-    fn aggregate_errors_when_helper_alias_missing() {
-        let aggregate = parse("SELECT AVG(price) FROM menu");
-
-        let rd = RowDescription::new(&[Field::double("avg")]);
-        let decoder = Decoder::from(rd);
-
-        let mut rows = VecDeque::new();
-        let mut shard0 = DataRow::new();
-        shard0.add(12.0_f64);
-        rows.push_back(shard0);
-
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_helper(HelperMapping {
-            target_column: 0,
-            helper_column: 1,
-            distinct: false,
-            kind: HelperKind::Count,
-            alias: "__pgdog_count_expr0_col0".into(),
-        });
-
-        let result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
-            .unwrap()
-            .aggregate();
-
-        assert_matches!(
-            result,
-            Err(Error::UnsupportedAggregation {
-                function,
-                ..
-            }) if function == "avg"
-        );
     }
 
     #[test]

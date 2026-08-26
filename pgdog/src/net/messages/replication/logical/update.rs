@@ -2,7 +2,7 @@ use pgdog_postgres_types::Oid;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
-use super::tuple_data::{Column, TupleData};
+use super::tuple_data::TupleData;
 
 /// Pre-image in a WAL UPDATE record — exactly one variant per record:
 /// - `Key`     — byte `'K'`: identity index changed; old key columns sent.
@@ -25,11 +25,6 @@ pub struct Update {
 }
 
 impl Update {
-    /// Get column at index.
-    pub fn column(&self, index: usize) -> Option<&Column> {
-        self.new.columns.get(index)
-    }
-
     /// Filters unchanged-TOAST (`'u'`) columns out of `new`.
     ///
     /// In a WAL UPDATE record, columns whose value did not change are sent as `'u'`
@@ -106,11 +101,11 @@ impl ToBytes for Update {
 mod test {
     use super::*;
     use crate::net::messages::replication::logical::tuple_data::{
-        Identifier, TupleData, text_col, toasted_col,
+        Column, Identifier, TupleData, text_col, toasted_col,
     };
     use pgdog_postgres_types::Oid;
 
-    fn make_update(new_cols: Vec<super::Column>) -> Update {
+    fn make_update(new_cols: Vec<Column>) -> Update {
         Update {
             oid: Oid(1),
             identity: UpdateIdentity::Nothing,
@@ -118,7 +113,7 @@ mod test {
         }
     }
 
-    fn make_update_with_old(new_cols: Vec<super::Column>, old_cols: Vec<super::Column>) -> Update {
+    fn make_update_with_old(new_cols: Vec<Column>, old_cols: Vec<Column>) -> Update {
         Update {
             oid: Oid(1),
             identity: UpdateIdentity::Old(TupleData { columns: old_cols }),

@@ -1243,12 +1243,6 @@ impl Server {
         self.stats.cleaned();
     }
 
-    /// Server is streaming data.
-    #[inline]
-    pub fn streaming(&self) -> bool {
-        self.streaming
-    }
-
     #[inline]
     pub fn stats(&self) -> &Stats {
         &self.stats
