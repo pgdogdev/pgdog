@@ -9,26 +9,11 @@ pub enum Error {
     #[error("{0}")]
     Net(#[from] crate::net::Error),
 
-    #[error("out of sync with unknown oid, expected Relation message first")]
-    NoRelationMessage,
-
-    #[error("no message to forward")]
-    NoMessage,
-
-    #[error("lsn decode error")]
-    LsnDecode,
-
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
 
     #[error("{0}")]
     Backend(Box<backend::Error>),
-
-    #[error("protocol error")]
-    Protocol,
-
-    #[error("transaction required for copy")]
-    CopyNoTransaction,
 }
 
 impl From<backend::Error> for Error {

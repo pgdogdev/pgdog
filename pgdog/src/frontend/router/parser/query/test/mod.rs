@@ -214,7 +214,7 @@ fn test_insert() {
         "INSERT INTO sharded (id, email) VALUES ($1, $2)",
         ["11".as_bytes(), "test@test.com".as_bytes()]
     );
-    assert_eq!(route.shard(), &Shard::new_direct(1));
+    assert_eq!(route.shard(), &Shard::Direct(1));
 }
 
 #[test]

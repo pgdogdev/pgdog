@@ -77,11 +77,6 @@ impl MemoryStats {
             },
         }
     }
-
-    /// Calculate total memory usage.
-    pub fn total(&self) -> usize {
-        self.buffer.bytes_alloc + self.prepared_statements + self.stream
-    }
 }
 
 #[cfg(test)]

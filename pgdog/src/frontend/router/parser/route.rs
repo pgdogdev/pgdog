@@ -45,19 +45,9 @@ impl Shard {
         matches!(self, Shard::All)
     }
 
-    /// Create new direct-to-shard mapping.
-    pub fn new_direct(shard: usize) -> Self {
-        Self::Direct(shard)
-    }
-
     /// Returns true if this is a direct-to-shard mapping.
     pub fn is_direct(&self) -> bool {
         matches!(self, Self::Direct(_))
-    }
-
-    /// Create new all shard mapping.
-    pub fn new_all(&self) -> Self {
-        Self::All
     }
 }
 
@@ -235,10 +225,6 @@ impl Route {
         &self.aggregate
     }
 
-    pub fn aggregate_mut(&mut self) -> &mut Aggregate {
-        &mut self.aggregate
-    }
-
     /// Set shard on this route, along with reasoning
     /// for that shard selection.
     pub fn set_shard(&mut self, shard: ShardWithPriority) {
@@ -325,7 +311,8 @@ impl Route {
         self.read = read;
     }
 
-    pub fn explain(&self) -> Option<&ExplainTrace> {
+    #[cfg(test)]
+    pub(crate) fn explain(&self) -> Option<&ExplainTrace> {
         self.explain.as_ref()
     }
 
@@ -351,35 +338,21 @@ impl Route {
         self
     }
 
-    pub fn set_advisory_locks(&mut self, locks: AdvisoryLocks) {
-        self.advisory_locks = locks;
-    }
-
     pub fn advisory_locks(&self) -> &AdvisoryLocks {
         &self.advisory_locks
     }
 
     /// True when the statement acquires an advisory lock whose lifetime outlives
     /// a single transaction — the client must stay pinned to the same backend.
-    pub fn is_lock_session(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_lock_session(&self) -> bool {
         self.advisory_locks.has_lock()
     }
 
     /// True when the statement only releases advisory locks — safe to unpin.
-    pub fn is_unlock_session(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_unlock_session(&self) -> bool {
         !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
-    }
-
-    /// Tri-state used by `connect.rs` / tests:
-    /// `Some(true)` — lock, `Some(false)` — unlock, `None` — no advisory lock activity.
-    pub fn lock_session(&self) -> Option<bool> {
-        if self.is_lock_session() {
-            Some(true)
-        } else if self.is_unlock_session() {
-            Some(false)
-        } else {
-            None
-        }
     }
 
     pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
@@ -427,7 +400,6 @@ impl ShardSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum RoundRobinReason {
-    PrimaryShardedTableInsert,
     Omni,
     NotExecutable,
     NoTable,
@@ -440,7 +412,6 @@ pub enum OverrideReason {
     ParserDisabled,
     Transaction,
     OnlyOneShard,
-    RewriteUpdate,
     CrossShardFunction,
     CanonicalSchemaInfo,
 }
@@ -493,13 +464,6 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::ParserDisabled),
-        }
-    }
-
-    pub fn new_override_rewrite_update(shard: Shard) -> Self {
-        Self {
-            shard,
-            source: ShardSource::Override(OverrideReason::RewriteUpdate),
         }
     }
 
@@ -556,13 +520,6 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::RoundRobin(RoundRobinReason::NotExecutable),
-        }
-    }
-
-    pub fn new_rr_primary_insert(shard: Shard) -> Self {
-        Self {
-            shard,
-            source: ShardSource::RoundRobin(RoundRobinReason::PrimaryShardedTableInsert),
         }
     }
 

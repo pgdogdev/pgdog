@@ -260,11 +260,6 @@ impl Message {
         self.payload.len()
     }
 
-    /// Is the message empty?
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// This message is coming from the backend.
     pub fn backend(mut self, id: BackendPid) -> Self {
         self.source = Source::Backend(id);
@@ -274,12 +269,6 @@ impl Message {
     /// This message is coming from the frontend.
     pub fn frontend(mut self) -> Self {
         self.source = Source::Frontend;
-        self
-    }
-
-    /// This message was synthesised by pgdog (not from any real connection).
-    pub fn internal(mut self) -> Self {
-        self.source = Source::Internal;
         self
     }
 

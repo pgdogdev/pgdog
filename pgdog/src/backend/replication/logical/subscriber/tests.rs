@@ -202,7 +202,6 @@ fn sharded_test_b_relation_copy_data(oid: Oid) -> CopyData {
 fn insert_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(id), text_column(value)],
@@ -943,7 +942,6 @@ fn posts_relation_copy_data(oid: Oid) -> CopyData {
 fn posts_insert_copy_data(oid: Oid, id: &str, title: &str, body: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(id), text_column(title), text_column(body)],
@@ -1494,7 +1492,6 @@ fn full_omni_dedup_relation_copy_data(oid: Oid) -> CopyData {
 fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(a), text_column(b)],

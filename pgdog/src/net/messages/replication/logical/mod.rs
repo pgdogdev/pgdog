@@ -3,8 +3,6 @@ pub mod commit;
 pub mod delete;
 pub mod insert;
 pub mod relation;
-pub mod stream_start;
 pub mod string;
-pub mod truncate;
 pub mod tuple_data;
 pub mod update;

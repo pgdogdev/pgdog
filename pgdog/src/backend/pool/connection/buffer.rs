@@ -407,7 +407,8 @@ mod test {
     // Helper function to create PostgreSQL binary NUMERIC data
     fn create_binary_numeric(value: &str) -> Vec<u8> {
         use crate::net::messages::bind::Format;
-        use crate::net::messages::data_types::{FromDataType, Numeric};
+        use crate::net::messages::data_types::FromDataType;
+        use pgdog_postgres_types::Numeric;
         use rust_decimal::Decimal;
         use std::str::FromStr;
 

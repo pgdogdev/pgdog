@@ -434,13 +434,15 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, params: Parameters) -> Self {
+    fn new_test(stream: Stream, mut params: Parameters) -> Self {
         use crate::config::config;
 
-        let mut connect_params = Parameters::default();
-        connect_params.insert("user", "pgdog");
-        connect_params.insert("database", "pgdog");
-        connect_params.merge(params);
+        if params.get("user").is_none() {
+            params.insert("user", "pgdog");
+        }
+        if params.get("database").is_none() {
+            params.insert("database", "pgdog");
+        }
 
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
@@ -462,8 +464,8 @@ impl Client {
                 4096,
                 config().config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&connect_params),
-            params: connect_params,
+            sticky: Sticky::from_params(&params),
+            params,
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,

@@ -51,9 +51,6 @@ pub enum Error {
     #[error("no such user/database: {0}")]
     NoDatabase(User),
 
-    #[error("no cluster connected")]
-    NoCluster,
-
     #[error("database \"{0}\" has no schema owner")]
     NoSchemaOwner(String),
 
@@ -65,18 +62,6 @@ pub enum Error {
 
     #[error("{0}")]
     PreparedStatementError(Box<ErrorResponse>),
-
-    #[error("prepared statement \"{0}\" is missing")]
-    PreparedStatementMissing(String),
-
-    #[error("expected '1', got '{0}")]
-    ExpectedParseComplete(char),
-
-    #[error("expected '3', got '{0}'")]
-    ExpectedCloseComplete(char),
-
-    #[error("unsupported authentication algorithm")]
-    UnsupportedAuth,
 
     #[error("{0}")]
     Replication(#[from] crate::backend::replication::Error),
@@ -92,9 +77,6 @@ pub enum Error {
 
     #[error("rollback left server in inconsistent state")]
     RollbackFailed,
-
-    #[error("decoder is missing required data to decode row")]
-    DecoderRowError,
 
     #[error("read timeout")]
     ReadTimeout,
@@ -119,12 +101,6 @@ pub enum Error {
 
     #[error("Vault credentials fetch failed: {0}")]
     VaultCredentials(String),
-
-    #[error("pub/sub channel disabled")]
-    PubSubDisabled,
-
-    #[error("mirror buffer empty")]
-    MirrorBufferEmpty,
 
     #[error("{0}")]
     FrontendError(Box<crate::frontend::Error>),

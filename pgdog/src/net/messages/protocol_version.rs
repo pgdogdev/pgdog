@@ -39,16 +39,6 @@ impl ProtocolVersion {
         self.major
     }
 
-    /// Protocol minor version.
-    pub const fn minor(self) -> u16 {
-        self.minor
-    }
-
-    /// Whether PgDog supports this protocol version directly.
-    pub fn is_supported(self) -> bool {
-        matches!(self, Self::V3_0 | Self::V3_2)
-    }
-
     /// Whether this protocol version uses the extended (variable-length)
     /// `BackendKeyData` cancel secret introduced in 3.2.
     pub fn supports_extended_cancel_key(self) -> bool {

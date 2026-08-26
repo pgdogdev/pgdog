@@ -54,11 +54,6 @@ impl ParameterHints<'_> {
     ) -> Result<(), Error> {
         let mut schema_sharder = SchemaSharder::default();
 
-        if let Some(ParameterValue::Integer(val)) = self.pgdog_shard {
-            let shard = Shard::Direct(*val as usize);
-            self.hooks.record_set_shard(&shard);
-            shards.push(ShardWithPriority::new_set(shard));
-        }
         if let Some(ParameterValue::String(val)) = self.pgdog_shard
             && let Ok(shard) = val.parse()
         {
@@ -101,8 +96,6 @@ impl ParameterHints<'_> {
                         schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
                     }
                 }
-
-                _ => (),
             }
 
             if let Some((shard, schema)) = schema_sharder.get() {

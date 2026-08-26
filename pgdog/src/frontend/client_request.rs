@@ -293,16 +293,6 @@ impl ClientRequest {
         references_anonymous
     }
 
-    /// Rewrite query in buffer.
-    pub fn rewrite(&mut self, request: &[ProtocolMessage]) -> Result<(), Error> {
-        if self.messages.iter().any(|c| c.code() != 'Q') {
-            return Err(Error::OnlySimpleForRewrites);
-        }
-        self.messages.clear();
-        self.messages.extend(request.to_vec());
-        Ok(())
-    }
-
     /// Get the route for this client request.
     pub fn route(&self) -> &Route {
         lazy_static! {

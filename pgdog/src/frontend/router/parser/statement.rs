@@ -201,18 +201,10 @@ impl AdvisoryLocks {
         self.locks.is_empty()
     }
 
-    pub fn len(&self) -> usize {
-        self.locks.len()
-    }
-
     /// True if any advisory lock (pg_advisory_lock, etc.) was taken.
-    pub fn has_lock(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn has_lock(&self) -> bool {
         self.locks.iter().any(|l| !l.unlock)
-    }
-
-    /// True if an unlock call appears in the statement.
-    pub fn has_unlock(&self) -> bool {
-        self.locks.iter().any(|l| l.unlock)
     }
 }
 

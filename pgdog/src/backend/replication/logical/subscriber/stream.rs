@@ -339,7 +339,6 @@ impl StreamSubscriber {
                     old: None,
                 };
                 let insert = XLogInsert {
-                    xid: None,
                     oid: update.oid,
                     tuple_data: update.new,
                 };

@@ -10,15 +10,6 @@ pub enum Error {
     InconsistentRowDescription { expected: usize, actual: usize },
 
     #[error(
-        "inconsistent data types between shards: column {column_index} has type OID {expected} on some shards but {actual} on others"
-    )]
-    InconsistentDataTypes {
-        column_index: usize,
-        expected: i32,
-        actual: i32,
-    },
-
-    #[error(
         "inconsistent column names between shards: column {column_index} has name '{expected}' on some shards but '{actual}' on others"
     )]
     InconsistentColumnNames {
@@ -34,9 +25,6 @@ pub enum Error {
 
     #[error("net error: {0}")]
     Net(#[from] crate::net::Error),
-
-    #[error("unsupported aggregation {function}: {reason}")]
-    UnsupportedAggregation { function: String, reason: String },
 }
 
 impl From<crate::backend::Error> for Error {

@@ -8,7 +8,4 @@ pub enum Error {
 
     #[error("invalid server first message")]
     InvalidServerFirst(#[from] scram::Error),
-
-    #[error("auth failed")]
-    AuthenticationFailed,
 }
