@@ -1,7 +1,7 @@
 name: release-binaries
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -14,8 +14,8 @@ jobs:
     permissions:
       contents: write
     env:
-      # release event supplies the tag; manual runs use the typed input
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      # Tag pushes supply ref_name; manual runs use the typed input.
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     strategy:
       fail-fast: false
       matrix:
