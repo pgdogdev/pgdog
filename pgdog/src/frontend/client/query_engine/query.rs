@@ -13,10 +13,11 @@ use crate::{
     util::safe_timeout,
 };
 
-use tracing::{debug, error};
-
 use super::hooks::schema::schema_changed;
 use super::*;
+use crate::frontend::ClientRequest;
+use crate::net::messages;
+use tracing::{debug, error};
 
 impl QueryEngine {
     /// Handle query from client.
@@ -150,6 +151,13 @@ impl QueryEngine {
             self.pending_explain = None;
         }
 
+        if self.backend.schema_changed()
+            && context.transaction().is_none()
+            && self.retry_statement(context).await?
+        {
+            return Ok(());
+        }
+
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
@@ -252,6 +260,148 @@ impl QueryEngine {
         self.hooks.on_server_message(context, &message)?;
 
         Ok(())
+    }
+
+    /// If we encounter a cache invalidated error & we're either:
+    ///
+    /// 1. In a transaction, but we've not encountered a Bind & Execute before this statement,
+    ///    we haven't encountered any simple protocol messages,
+    ///    and we don't have parameters local to the transaction
+    /// 2. Not in a transaction
+    ///
+    /// Then, handle it on our end instead of forwarding the error to the client.
+    pub(crate) async fn retry_statement(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<bool, Error> {
+        // Cover both [Bind, Execute] and [Parse, Describe] cases that can cause the error.
+        let statement_to_invalidate = context
+            .client_request
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                ProtocolMessage::Bind(bind) => Some(bind.statement()),
+                _ => None,
+            })
+            .or_else(|| {
+                context
+                    .client_request
+                    .messages
+                    .iter()
+                    .find_map(|message| match message {
+                        ProtocolMessage::Describe(describe) if describe.is_statement() => {
+                            Some(describe.statement())
+                        }
+                        _ => None,
+                    })
+            });
+
+        let Some(statement_to_invalidate) = statement_to_invalidate else {
+            return Ok(false);
+        };
+
+        let has_bind = context
+            .client_request
+            .messages
+            .iter()
+            .any(|message| matches!(message, ProtocolMessage::Bind(_)));
+
+        let prepared_statements = &mut context.prepared_statements;
+
+        // Find the matching local mapping to the global key that we got
+        // from the re-written Bind/Describe.
+        let Some(local_mapping) = prepared_statements
+            .local
+            .iter()
+            .find_map(|kv| kv.1.eq(statement_to_invalidate).then_some(kv.0))
+        else {
+            return Ok(false);
+        };
+
+        // Fetch the Parse corresponding to the global key that we got
+        // from the re-written Bind/Describe.
+        let Some(mut parse) = prepared_statements
+            .global
+            .read()
+            .parse(statement_to_invalidate)
+        else {
+            return Ok(false);
+        };
+
+        // Refactor the Parse to use the local mapping name, so that we can call .insert()
+        parse.rename(local_mapping);
+
+        // Remove the invalidated statement from global cache.
+        prepared_statements
+            .global
+            .write()
+            .remove(statement_to_invalidate);
+
+        // Inserting here will rewrite our local statement Parse to use a new global cache name
+        // (e.g. __pgdog_2)
+        prepared_statements.insert(&mut parse);
+
+        let new_global_name = parse.name();
+        let parse = parse.clone();
+
+        // Send the Parse, Describe, Sync to cache the new statement
+        // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
+        if has_bind {
+            let mut client_request = ClientRequest::default();
+
+            // Parse, Describe, Sync messages w/ new global statement
+            client_request.push(ProtocolMessage::from(parse));
+            client_request.push(ProtocolMessage::Describe(
+                messages::Describe::new_statement(new_global_name),
+            ));
+            client_request.push(ProtocolMessage::Sync(messages::Sync));
+
+            // Assume the same Route as the original request.
+            client_request.route = context.client_request.route.clone();
+
+            self.backend
+                .handle_client_request(&client_request, &mut self.router, self.streaming)
+                .await?;
+
+            while self.backend.has_more_messages() {
+                // Messages here are not forwarded to the Client; they don't know we're doing this.
+                let _ = self.read_server_message().await?;
+            }
+        }
+
+        {
+            let mut client_request = ClientRequest::default();
+
+            // [Bind, Execute] or [Parse, Describe] to be re-written w/ new statement name.
+            for message in &context.client_request.messages {
+                let mut cloned_message = message.clone();
+                match &mut cloned_message {
+                    ProtocolMessage::Bind(bind) => bind.change_statement(new_global_name),
+                    ProtocolMessage::Parse(parse) => parse.rename(new_global_name),
+                    ProtocolMessage::Describe(describe) if describe.is_statement() => {
+                        describe.rename(new_global_name)
+                    }
+                    _ => (),
+                }
+                client_request.push(cloned_message);
+            }
+
+            // Assume the same Route as the original request.
+            client_request.route = context.client_request.route.clone();
+
+            self.backend
+                .handle_client_request(&client_request, &mut self.router, self.streaming)
+                .await?;
+
+            while self.backend.has_more_messages() {
+                let message = self.read_server_message().await?;
+
+                // Forward these (the original intended messages) to the client.
+                Box::pin(self.process_server_message(context, message)).await?;
+            }
+        }
+
+        Ok(true)
     }
 
     async fn emit_explain_rows(

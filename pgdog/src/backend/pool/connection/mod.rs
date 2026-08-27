@@ -78,6 +78,16 @@ impl Connection {
         Ok(conn)
     }
 
+    // Did the schema change and prepared statements are broken.
+    pub(crate) fn schema_changed(&self) -> bool {
+        match &self.binding {
+            Binding::Direct(shard, _) => shard.schema_changed(),
+            // TODO: Check into this logic before requesting review.
+            Binding::MultiShard(shards, _) => shards.iter().any(|shard| shard.schema_changed()),
+            _ => false,
+        }
+    }
+
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
