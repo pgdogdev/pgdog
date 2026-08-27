@@ -295,7 +295,7 @@ impl QueryEngine {
         }
 
         // Bind takes priority over Describe.
-        let Some(statement_to_invalidate) = bind.or(describe) else {
+        let Some(statement_to_close) = bind.or(describe) else {
             return Ok(false);
         };
 
@@ -306,7 +306,7 @@ impl QueryEngine {
         let Some(local_mapping) = prepared_statements
             .local
             .iter()
-            .find_map(|kv| kv.1.eq(statement_to_invalidate).then_some(kv.0))
+            .find_map(|kv| kv.1.eq(statement_to_close).then_some(kv.0))
         else {
             return Ok(false);
         };
@@ -316,7 +316,7 @@ impl QueryEngine {
         let Some(mut parse) = prepared_statements
             .global
             .read()
-            .parse(statement_to_invalidate)
+            .parse(statement_to_close)
         else {
             return Ok(false);
         };
@@ -328,30 +328,38 @@ impl QueryEngine {
             prepared_statements
                 .global
                 .write()
-                .remove(statement_to_invalidate);
+                .remove(statement_to_close);
 
             prepared_statements.insert(&mut parse);
 
             (parse.name(), parse.clone())
         };
 
-        // Send the Parse, Describe, Sync to cache the new statement
-        // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
-        if bind.is_some() {
+        // Cycle #1
+        {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();
 
-            // Parse, Describe, Sync messages w/ new global statement
-            client_request.push(ProtocolMessage::from(parse));
-            client_request.push(ProtocolMessage::Describe(
-                messages::Describe::new_statement(new_global_name),
-            ));
-            client_request.push(ProtocolMessage::Sync(messages::Sync));
+            // Free the old statement.
+            client_request.push(ProtocolMessage::Close(messages::Close::named(
+                statement_to_close,
+            )));
+
+            if bind.is_some() {
+                // Send the Parse, Describe, Sync to cache the new statement
+                // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
+                client_request.push(ProtocolMessage::from(parse));
+                client_request.push(ProtocolMessage::Describe(
+                    messages::Describe::new_statement(new_global_name),
+                ));
+                client_request.push(ProtocolMessage::Sync(messages::Sync));
+            }
 
             self.handle_request_and_maybe_forward(&mut client_request, context, false)
                 .await?;
         }
 
+        // Cycle #2
         {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();
