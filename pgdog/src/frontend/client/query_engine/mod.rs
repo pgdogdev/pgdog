@@ -61,6 +61,8 @@ pub(crate) struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
+    // Flag used to prevent a recursive loop in retry_statement
+    retrying: bool,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
@@ -89,6 +91,7 @@ impl QueryEngine {
             comms: comms.clone(),
             hooks: QueryEngineHooks::new(),
             stats: Stats::default(),
+            retrying: false,
             streaming: bool::default(),
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),

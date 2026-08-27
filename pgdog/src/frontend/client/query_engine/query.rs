@@ -16,7 +16,7 @@ use crate::{
 use super::hooks::schema::schema_changed;
 use super::*;
 use crate::frontend::ClientRequest;
-use crate::net::messages;
+use crate::net::{Close, messages};
 use tracing::{debug, error};
 
 impl QueryEngine {
@@ -157,8 +157,10 @@ impl QueryEngine {
             self.pending_explain = None;
         }
 
-        if self.backend.schema_changed()
+        if code == 'E'
+            && self.backend.schema_changed()
             && context.transaction().is_none()
+            && !self.retrying
             && self.retry_statement(context).await?
         {
             return Ok(());
@@ -282,6 +284,9 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
+        self.retrying = true;
+        self.backend.reset_schema_changed();
+
         // Cover both [Bind, Execute] and [Parse, Describe] cases that can cause the error.
         // TODO: Write a test case for [Parse, Describe] now that Go test cases are deleted.
         let mut bind: Option<&str> = None;
@@ -296,104 +301,60 @@ impl QueryEngine {
 
         // Bind takes priority over Describe.
         let Some(statement_to_close) = bind.or(describe) else {
-            return Ok(false);
-        };
-
-        let prepared_statements = &mut context.prepared_statements;
-
-        // Find the matching local mapping to the global key that we got
-        // from the re-written Bind/Describe.
-        let Some(local_mapping) = prepared_statements
-            .local
-            .iter()
-            .find_map(|kv| kv.1.eq(statement_to_close).then_some(kv.0))
-        else {
+            self.retrying = false;
             return Ok(false);
         };
 
         // Fetch the Parse corresponding to the global key that we got
         // from the re-written Bind/Describe.
-        let Some(mut parse) = prepared_statements
+        let Some(parse) = context
+            .prepared_statements
             .global
             .read()
             .parse(statement_to_close)
         else {
+            self.retrying = false;
             return Ok(false);
         };
 
-        // Refactor the Parse to a new global name; invalidate the old global; map local => new.
-        let (new_global_name, parse) = {
-            parse.rename(local_mapping);
+        // Free the old statement.
+        self.backend
+            .close_many(Close::named(statement_to_close))
+            .await?;
 
-            prepared_statements
-                .global
-                .write()
-                .remove(statement_to_close);
-
-            prepared_statements.insert(&mut parse);
-
-            (parse.name(), parse.clone())
-        };
-
-        // Cycle #1
-        {
+        if bind.is_some() {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();
 
-            // Free the old statement.
-            client_request.push(ProtocolMessage::Close(messages::Close::named(
-                statement_to_close,
-            )));
+            // Send the Parse, Describe, Sync to cache the new statement
+            // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
+            client_request.push(ProtocolMessage::from(parse.clone()));
+            client_request.push(ProtocolMessage::Describe(
+                messages::Describe::new_statement(statement_to_close),
+            ));
+            client_request.push(ProtocolMessage::Sync(messages::Sync));
 
-            if bind.is_some() {
-                // Send the Parse, Describe, Sync to cache the new statement
-                // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
-                client_request.push(ProtocolMessage::from(parse));
-                client_request.push(ProtocolMessage::Describe(
-                    messages::Describe::new_statement(new_global_name),
-                ));
-                client_request.push(ProtocolMessage::Sync(messages::Sync));
-            }
-
-            self.handle_request_and_maybe_forward(&mut client_request, context, false)
+            self.handle_request_and_maybe_forward(client_request, context, false)
                 .await?;
         }
 
-        // Cycle #2
-        {
-            let mut client_request = ClientRequest::default();
-            client_request.route = context.client_request.route.clone();
+        // Forward the original messages.
+        self.handle_request_and_maybe_forward(context.client_request.clone(), context, true)
+            .await?;
 
-            // [Bind, Execute] or [Parse, Describe] to be re-written w/ new statement name.
-            for message in &context.client_request.messages {
-                let mut message = message.clone();
-                match &mut message {
-                    ProtocolMessage::Bind(bind) => bind.change_statement(new_global_name),
-                    ProtocolMessage::Parse(parse) => parse.rename(new_global_name),
-                    ProtocolMessage::Describe(describe) if describe.is_statement() => {
-                        describe.rename(new_global_name)
-                    }
-                    _ => (),
-                }
-                client_request.push(message);
-            }
-
-            self.handle_request_and_maybe_forward(&mut client_request, context, true)
-                .await?;
-        }
-
+        self.retrying = false;
         Ok(true)
     }
 
     // TODO: docs
     pub(crate) async fn handle_request_and_maybe_forward(
         &mut self,
-        client_request: &mut ClientRequest,
+        client_request: ClientRequest,
         context: &mut QueryEngineContext<'_>,
         forward: bool,
     ) -> Result<(), Error> {
         self.backend
-            .handle_client_request(client_request, &mut self.router, self.streaming)
+            .handle_client_request(&client_request, &mut self.router, self.streaming)
             .await?;
 
         while self.backend.has_more_messages() {

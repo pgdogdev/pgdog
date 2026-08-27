@@ -214,11 +214,6 @@ impl Bind {
         })
     }
 
-    // Change the statement inside the Bind message.
-    pub(crate) fn change_statement(&mut self, new_statement: &str) {
-        self.statement = c_string_bytes(new_statement);
-    }
-
     pub(crate) fn new_statement(name: &str) -> Self {
         Self {
             statement: c_string_bytes(name),

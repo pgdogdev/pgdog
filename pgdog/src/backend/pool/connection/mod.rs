@@ -39,6 +39,7 @@ pub(crate) mod buffer;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
 
+use crate::net::Close;
 use aggregate::Aggregates;
 use binding::Binding;
 use mirror::Mirror;
@@ -86,6 +87,36 @@ impl Connection {
             Binding::MultiShard(shards, _) => shards.iter().any(|shard| shard.schema_changed()),
             _ => false,
         }
+    }
+
+    // Reset the schema changed flag on the server(s) the client is connected to.
+    pub(crate) fn reset_schema_changed(&mut self) {
+        match &mut self.binding {
+            Binding::Direct(shard, _) => shard.reset_schema_changed(),
+            Binding::MultiShard(shards, _) => {
+                for shard in shards {
+                    shard.reset_schema_changed();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Forward the Close message to the server(s) the client is connected to.
+    pub(crate) async fn close_many(&mut self, close_message: Close) -> Result<(), Error> {
+        match &mut self.binding {
+            Binding::Direct(shard, _) => shard.close_many(&[close_message]).await?,
+            Binding::MultiShard(shards, _) => {
+                for shard in shards {
+                    shard
+                        .close_many(std::slice::from_ref(&close_message))
+                        .await?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     /// Create a server connection if one doesn't exist already.
