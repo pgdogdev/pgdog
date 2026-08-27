@@ -1,8 +1,8 @@
 //! Integration tests asserting admin command output over the wire.
 //!
 //! Each submodule connects to the live PgDog admin database (`rust::setup::admin_sqlx`).
-pub mod resharding;
 pub mod reset_stats;
+pub mod resharding;
 pub mod show_config;
 pub mod show_version;
 pub mod tasks;
