@@ -52,6 +52,7 @@ impl Pools {
         let mut maxwait = vec![];
         let mut errors = vec![];
         let mut out_of_sync = vec![];
+        let mut banned = vec![];
         let mut total_xact_count = vec![];
         let mut total_xact_2pc_count = vec![];
         let mut avg_xact_count = vec![];
@@ -98,7 +99,7 @@ impl Pools {
 
         for (user, cluster) in databases().all() {
             for (shard_num, shard) in cluster.shards().iter().enumerate() {
-                for (role, pool) in shard.pools_with_roles() {
+                for (role, ban, pool) in shard.pools_with_roles_and_bans() {
                     let state = pool.state();
                     let labels = vec![
                         ("user".into(), user.user.clone()),
@@ -147,6 +148,11 @@ impl Pools {
                     out_of_sync.push(Measurement {
                         labels: labels.clone(),
                         measurement: state.out_of_sync.into(),
+                    });
+
+                    banned.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: (ban.banned() as i64).into(),
                     });
 
                     let stats = state.stats;
@@ -447,6 +453,14 @@ impl Pools {
             help: "Connections that have been returned to the pool in a broken state.".into(),
             unit: None,
             metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "banned".into(),
+            measurements: banned,
+            help: "Whether the pool is currently banned from serving traffic (1 = banned, 0 = available).".into(),
+            unit: None,
+            metric_type: None,
         }));
 
         metrics.push(Metric::new(PoolMetric {
@@ -840,6 +854,34 @@ mod tests {
         assert_eq!(lines[1], "# UNIT sv_active connections");
         assert_eq!(lines[2], "# HELP sv_active Active servers per pool");
         assert_eq!(lines[3], "sv_active{user=\"alice\",database=\"app\"} 5");
+    }
+
+    #[test]
+    fn banned_metric_renders_as_gauge() {
+        config::set(ConfigAndUsers::default()).unwrap();
+
+        let metric = PoolMetric {
+            name: "banned".into(),
+            measurements: vec![Measurement {
+                labels: vec![
+                    ("database".into(), "app".into()),
+                    ("role".into(), "replica".into()),
+                ],
+                measurement: (true as i64).into(),
+            }],
+            help: "Whether the pool is currently banned from serving traffic (1 = banned, 0 = available).".into(),
+            unit: None,
+            metric_type: None,
+        };
+
+        let rendered = Metric::new(metric).to_string();
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "# TYPE banned gauge");
+        assert_eq!(
+            lines[1],
+            "# HELP banned Whether the pool is currently banned from serving traffic (1 = banned, 0 = available)."
+        );
+        assert_eq!(lines[2], "banned{database=\"app\",role=\"replica\"} 1");
     }
 }
 
