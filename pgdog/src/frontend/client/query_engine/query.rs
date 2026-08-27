@@ -276,44 +276,28 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// If we encounter a cache invalidated error &
-    /// we're not in a transaction,
+    /// If we encounter a cache invalidated error & we're not in a transaction,
     /// then, handle it on our end instead of forwarding the error to the client.
     pub(crate) async fn retry_statement(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
         // Cover both [Bind, Execute] and [Parse, Describe] cases that can cause the error.
-        let statement_to_invalidate = context
-            .client_request
-            .messages
-            .iter()
-            .find_map(|message| match message {
-                ProtocolMessage::Bind(bind) => Some(bind.statement()),
-                _ => None,
-            })
-            .or_else(|| {
-                context
-                    .client_request
-                    .messages
-                    .iter()
-                    .find_map(|message| match message {
-                        ProtocolMessage::Describe(describe) if describe.is_statement() => {
-                            Some(describe.statement())
-                        }
-                        _ => None,
-                    })
-            });
+        // TODO: Write a test case for [Parse, Describe] now that Go test cases are deleted.
+        let mut bind: Option<&str> = None;
+        let mut describe: Option<&str> = None;
+        for message in &context.client_request.messages {
+            match message {
+                ProtocolMessage::Bind(bind_2) => bind = Some(bind_2.statement()),
+                ProtocolMessage::Describe(describe_2) => describe = Some(describe_2.statement()),
+                _ => {}
+            }
+        }
 
-        let Some(statement_to_invalidate) = statement_to_invalidate else {
+        // Bind takes priority over Describe.
+        let Some(statement_to_invalidate) = bind.or(describe) else {
             return Ok(false);
         };
-
-        let has_bind = context
-            .client_request
-            .messages
-            .iter()
-            .any(|message| matches!(message, ProtocolMessage::Bind(_)));
 
         let prepared_statements = &mut context.prepared_statements;
 
@@ -337,26 +321,25 @@ impl QueryEngine {
             return Ok(false);
         };
 
-        // Refactor the Parse to use the local mapping name, so that we can call .insert()
-        parse.rename(local_mapping);
+        // Refactor the Parse to a new global name; invalidate the old global; map local => new.
+        let (new_global_name, parse) = {
+            parse.rename(local_mapping);
 
-        // Remove the invalidated statement from global cache.
-        prepared_statements
-            .global
-            .write()
-            .remove(statement_to_invalidate);
+            prepared_statements
+                .global
+                .write()
+                .remove(statement_to_invalidate);
 
-        // Inserting here will rewrite our local statement Parse to use a new global cache name
-        // (e.g. __pgdog_2)
-        prepared_statements.insert(&mut parse);
+            prepared_statements.insert(&mut parse);
 
-        let new_global_name = parse.name();
-        let parse = parse.clone();
+            (parse.name(), parse.clone())
+        };
 
         // Send the Parse, Describe, Sync to cache the new statement
         // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
-        if has_bind {
+        if bind.is_some() {
             let mut client_request = ClientRequest::default();
+            client_request.route = context.client_request.route.clone();
 
             // Parse, Describe, Sync messages w/ new global statement
             client_request.push(ProtocolMessage::from(parse));
@@ -365,26 +348,18 @@ impl QueryEngine {
             ));
             client_request.push(ProtocolMessage::Sync(messages::Sync));
 
-            // Assume the same Route as the original request.
-            client_request.route = context.client_request.route.clone();
-
-            self.backend
-                .handle_client_request(&client_request, &mut self.router, self.streaming)
+            self.handle_request_and_maybe_forward(&mut client_request, context, false)
                 .await?;
-
-            while self.backend.has_more_messages() {
-                // Messages here are not forwarded to the Client; they don't know we're doing this.
-                let _ = self.read_server_message().await?;
-            }
         }
 
         {
             let mut client_request = ClientRequest::default();
+            client_request.route = context.client_request.route.clone();
 
             // [Bind, Execute] or [Parse, Describe] to be re-written w/ new statement name.
             for message in &context.client_request.messages {
-                let mut cloned_message = message.clone();
-                match &mut cloned_message {
+                let mut message = message.clone();
+                match &mut message {
                     ProtocolMessage::Bind(bind) => bind.change_statement(new_global_name),
                     ProtocolMessage::Parse(parse) => parse.rename(new_global_name),
                     ProtocolMessage::Describe(describe) if describe.is_statement() => {
@@ -392,25 +367,36 @@ impl QueryEngine {
                     }
                     _ => (),
                 }
-                client_request.push(cloned_message);
+                client_request.push(message);
             }
 
-            // Assume the same Route as the original request.
-            client_request.route = context.client_request.route.clone();
-
-            self.backend
-                .handle_client_request(&client_request, &mut self.router, self.streaming)
+            self.handle_request_and_maybe_forward(&mut client_request, context, true)
                 .await?;
+        }
 
-            while self.backend.has_more_messages() {
-                let message = self.read_server_message().await?;
+        Ok(true)
+    }
 
-                // Forward these (the original intended messages) to the client.
+    // TODO: docs
+    pub(crate) async fn handle_request_and_maybe_forward(
+        &mut self,
+        client_request: &mut ClientRequest,
+        context: &mut QueryEngineContext<'_>,
+        forward: bool,
+    ) -> Result<(), Error> {
+        self.backend
+            .handle_client_request(client_request, &mut self.router, self.streaming)
+            .await?;
+
+        while self.backend.has_more_messages() {
+            let message = self.read_server_message().await?;
+
+            if forward {
                 Box::pin(self.process_server_message(context, message)).await?;
             }
         }
 
-        Ok(true)
+        Ok(())
     }
 
     async fn emit_explain_rows(
