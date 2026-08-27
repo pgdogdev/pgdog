@@ -10,8 +10,8 @@ use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
     EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatementsLevel,
-    QueryParser, QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
-    ShardedMappingKey, ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
+    QueryParser, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
+    ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
 
 use super::database::Database;
@@ -629,23 +629,6 @@ impl Config {
         if self.general.query_parser_enabled {
             warn!(r#""query_parser_enabled" is deprecated, use "query_parser" = "on" instead"#);
             self.general.query_parser = QueryParserLevel::On;
-        }
-
-        let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
-            || self
-                .query_parsers
-                .iter()
-                .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
-
-        if raw_query_parser && self.memory.stack_size < 32 * 1024 * 1024 {
-            self.memory.stack_size = 32 * 1024 * 1024;
-            warn!(
-                r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
-            );
-        }
-
-        if !raw_query_parser {
-            warn!(r#""query_parser_engine" is deprecated and uses the "pg_query_raw" option now"#)
         }
 
         if !self.sharded_mappings.is_empty() {
