@@ -16,56 +16,60 @@ pub(crate) struct ExecuteParams {
 
 impl ExecuteParams {
     pub(crate) fn new(stmt: &ExecuteStmt) -> Self {
-        let mut params = vec![];
-
-        for param in stmt.params() {
-            let param = match param {
-                Node::A_Const(a_const) => match a_const.val() {
-                    None => BindParameter::new_null(),
-                    Some(ConstValue::String(text)) => {
-                        let data = Bytes::from(text.to_string());
-                        BindParameter {
-                            len: data.len() as i32,
-                            data,
-                        }
-                    }
-
-                    Some(ConstValue::Integer(int)) => {
-                        let data = Bytes::from(int.to_string());
-                        BindParameter {
-                            len: data.len() as i32,
-                            data,
-                        }
-                    }
-
-                    Some(ConstValue::Float(float)) => {
-                        let data = Bytes::from(float.to_string());
-                        BindParameter {
-                            len: data.len() as i32,
-                            data,
-                        }
-                    }
-
-                    Some(ConstValue::Boolean(bool)) => {
-                        let data = Bytes::from((if bool { "t" } else { "f" }).to_string());
-                        BindParameter {
-                            len: data.len() as i32,
-                            data,
-                        }
-                    }
-
-                    _ => BindParameter::new_null(),
-                },
-
-                _ => BindParameter::new_null(),
-            };
-
-            params.push(param);
-        }
+        let params = stmt.params().iter().map(Self::from_node).collect();
 
         Self {
             params,
             format: vec![Format::Text],
+        }
+    }
+
+    /// Extract a bind parameter from an EXECUTE argument node.
+    ///
+    /// Postgres wraps cast expressions as [`Node::TypeCast`], e.g.
+    /// `EXECUTE stmt(1::bigint)`. Peel those wrappers so the underlying
+    /// constant is used for sharding key extraction.
+    fn from_node(param: Node<'_>) -> BindParameter {
+        match param {
+            Node::TypeCast(cast) => Self::from_node(cast.arg()),
+            Node::A_Const(a_const) => match a_const.val() {
+                None => BindParameter::new_null(),
+                Some(ConstValue::String(text)) => {
+                    let data = Bytes::from(text.to_string());
+                    BindParameter {
+                        len: data.len() as i32,
+                        data,
+                    }
+                }
+
+                Some(ConstValue::Integer(int)) => {
+                    let data = Bytes::from(int.to_string());
+                    BindParameter {
+                        len: data.len() as i32,
+                        data,
+                    }
+                }
+
+                Some(ConstValue::Float(float)) => {
+                    let data = Bytes::from(float.to_string());
+                    BindParameter {
+                        len: data.len() as i32,
+                        data,
+                    }
+                }
+
+                Some(ConstValue::Boolean(bool)) => {
+                    let data = Bytes::from((if bool { "t" } else { "f" }).to_string());
+                    BindParameter {
+                        len: data.len() as i32,
+                        data,
+                    }
+                }
+
+                _ => BindParameter::new_null(),
+            },
+
+            _ => BindParameter::new_null(),
         }
     }
 
@@ -117,16 +121,53 @@ mod test {
 
     #[test]
     fn test_exec_parameter() {
-        let stmt = pg_raw_parse::parse("EXECUTE __pgdog_1 (1, 'test', now())").unwrap();
-        let stmt_1 = stmt.stmts().next().unwrap();
-        match stmt_1 {
-            Node::ExecuteStmt(execute) => {
-                let params = StatementParameters::Execute(&ExecuteParams::new(execute));
-                let first = params.parameter(0).unwrap().unwrap().bigint().unwrap();
-                assert_eq!(first, 1);
-            }
+        let stmt = pg_raw_parse::parse(
+            "EXECUTE __pgdog_1 (
+                1, 'test', 1.5, true, false, NULL, B'101', now(),
+                2::bigint, 'x'::text, 3.5::float8, false::bool,
+                NULL::int, (4::int)::bigint,
+                '3'::int, 1::bool,
+                '123e4567-e89b-12d3-a456-426614174000'::uuid,
+                CAST('5' AS bigint)
+            )",
+        )
+        .unwrap();
+        let Node::ExecuteStmt(execute) = stmt.stmts().next().unwrap() else {
+            panic!("not an execute stmt");
+        };
+        let exec_params = ExecuteParams::new(execute);
+        let params = StatementParameters::Execute(&exec_params);
 
-            _ => panic!("not an execute stmt"),
-        }
+        assert_eq!(params.parameter(0).unwrap().unwrap().bigint().unwrap(), 1);
+        assert_eq!(
+            params.parameter(1).unwrap().unwrap().text().unwrap(),
+            "test"
+        );
+        assert_eq!(params.parameter(2).unwrap().unwrap().text().unwrap(), "1.5");
+        assert_eq!(params.parameter(3).unwrap().unwrap().text().unwrap(), "t");
+        assert_eq!(params.parameter(4).unwrap().unwrap().text().unwrap(), "f");
+        assert!(params.parameter(5).unwrap().unwrap().is_null());
+        // BitString / function calls are not extractable for routing.
+        assert!(params.parameter(6).unwrap().unwrap().is_null());
+        assert!(params.parameter(7).unwrap().unwrap().is_null());
+
+        assert_eq!(params.parameter(8).unwrap().unwrap().bigint().unwrap(), 2);
+        assert_eq!(params.parameter(9).unwrap().unwrap().text().unwrap(), "x");
+        assert_eq!(
+            params.parameter(10).unwrap().unwrap().text().unwrap(),
+            "3.5"
+        );
+        assert_eq!(params.parameter(11).unwrap().unwrap().text().unwrap(), "f");
+        assert!(params.parameter(12).unwrap().unwrap().is_null());
+        assert_eq!(params.parameter(13).unwrap().unwrap().bigint().unwrap(), 4);
+        // EXECUTE parameters remain in text format. PgDog unwraps the cast
+        // node but leaves PostgreSQL to perform the actual type coercion.
+        assert_eq!(params.parameter(14).unwrap().unwrap().text().unwrap(), "3");
+        assert_eq!(params.parameter(15).unwrap().unwrap().text().unwrap(), "1");
+        assert_eq!(
+            params.parameter(16).unwrap().unwrap().text().unwrap(),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(params.parameter(17).unwrap().unwrap().bigint().unwrap(), 5);
     }
 }
