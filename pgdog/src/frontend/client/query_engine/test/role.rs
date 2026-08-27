@@ -157,6 +157,52 @@ async fn test_set_session_authorization_does_not_leak_to_next_client() {
     );
 }
 
+/// `SET ROLE` issued *after* a backend is attached, with no pin anywhere.
+///
+/// A plain (non-`LOCAL`) `SET` survives `COMMIT` in Postgres, so the role stays on
+/// the connection once the transaction ends. But `client_params` is only populated
+/// at check-out (`Server::link_client`), and in-transaction sets are tracked
+/// separately, so nothing records that this connection now carries a role — and the
+/// next check-out has nothing to reset.
+///
+/// This is the scenario cleanup cannot reach: no pin means the connection is never
+/// dirty, so the `DIRTY` queries never run.
+#[tokio::test]
+async fn test_set_role_in_transaction_does_not_leak() {
+    load_single_connection_test_pool();
+
+    let pid = {
+        let mut client = TestClient::new(Parameters::default()).await.leak_pool();
+
+        assert_eq!(run_simple(&mut client, "BEGIN").await.status, 'T');
+
+        // Attaches the backend, so the SET below lands on it directly.
+        let pid = client.backend_pid().await;
+
+        assert_eq!(run_simple(&mut client, "SET ROLE pgdog1").await.status, 'T');
+        assert_eq!(
+            fetch_text(&mut client, "SELECT current_user").await,
+            "pgdog1"
+        );
+
+        assert_eq!(run_simple(&mut client, "COMMIT").await.status, 'I');
+
+        pid
+    };
+
+    let mut next = TestClient::new(Parameters::default()).await;
+    assert_eq!(
+        next.backend_pid().await,
+        pid,
+        "single connection test pool should reuse the same backend"
+    );
+    assert_eq!(
+        fetch_text(&mut next, "SELECT current_user").await,
+        "pgdog",
+        "SET ROLE inside a transaction leaked to the next client"
+    );
+}
+
 /// Without a pin the connection is never dirty, so no cleanup runs, `client_params`
 /// still records `role`, and the check-out path resets it. This passes before the
 /// fix as well as after it — it is here to document that the pin is what breaks the
