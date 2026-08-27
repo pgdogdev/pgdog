@@ -4,14 +4,14 @@ use tracing::trace;
 use super::{Error, Hasher, Operator, Value};
 
 #[derive(Debug)]
-pub struct Context<'a> {
+pub(crate) struct Context<'a> {
     pub(super) value: Value<'a>,
     pub(super) operator: Operator<'a>,
     pub(super) hasher: Hasher,
 }
 
 impl Context<'_> {
-    pub fn apply(&self) -> Result<Shard, Error> {
+    pub(crate) fn apply(&self) -> Result<Shard, Error> {
         match &self.operator {
             Operator::Shards(shards) => {
                 trace!("sharding using hash");

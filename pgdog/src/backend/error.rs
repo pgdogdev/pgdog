@@ -5,7 +5,7 @@ use crate::net::messages::ErrorResponse;
 use super::databases::User;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
@@ -51,9 +51,6 @@ pub enum Error {
     #[error("no such user/database: {0}")]
     NoDatabase(User),
 
-    #[error("no cluster connected")]
-    NoCluster,
-
     #[error("database \"{0}\" has no schema owner")]
     NoSchemaOwner(String),
 
@@ -65,18 +62,6 @@ pub enum Error {
 
     #[error("{0}")]
     PreparedStatementError(Box<ErrorResponse>),
-
-    #[error("prepared statement \"{0}\" is missing")]
-    PreparedStatementMissing(String),
-
-    #[error("expected '1', got '{0}")]
-    ExpectedParseComplete(char),
-
-    #[error("expected '3', got '{0}'")]
-    ExpectedCloseComplete(char),
-
-    #[error("unsupported authentication algorithm")]
-    UnsupportedAuth,
 
     #[error("{0}")]
     Replication(#[from] crate::backend::replication::Error),
@@ -92,12 +77,6 @@ pub enum Error {
 
     #[error("rollback left server in inconsistent state")]
     RollbackFailed,
-
-    #[error("decoder is missing required data to decode row")]
-    DecoderRowError,
-
-    #[error("read timeout")]
-    ReadTimeout,
 
     #[error("router error: {0}")]
     Router(String),
@@ -119,12 +98,6 @@ pub enum Error {
 
     #[error("Vault credentials fetch failed: {0}")]
     VaultCredentials(String),
-
-    #[error("pub/sub channel disabled")]
-    PubSubDisabled,
-
-    #[error("mirror buffer empty")]
-    MirrorBufferEmpty,
 
     #[error("{0}")]
     FrontendError(Box<crate::frontend::Error>),
@@ -156,19 +129,18 @@ impl From<crate::frontend::Error> for Error {
 
 impl Error {
     /// Checkout timeout.
-    pub fn no_server(&self) -> bool {
+    pub(crate) fn no_server(&self) -> bool {
         use crate::backend::pool::Error as PoolError;
         match self {
             // These are recoverable errors.
             Error::Pool(PoolError::CheckoutTimeout) => true,
             Error::Pool(PoolError::AllReplicasDown) => true,
-            Error::Pool(PoolError::Banned) => true,
             _ => false,
         }
     }
 
     /// Transient network/pool fault worth retrying.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         match self {
             Self::Io(_) => true,
             Self::Net(inner) => inner.is_retryable(),
@@ -184,13 +156,11 @@ impl Error {
             | Self::MultiShardNotConnected
             | Self::CopyNotConnected
             | Self::ClusterNotConnected => true,
-            // Server stopped responding mid-stream.
-            Self::ReadTimeout => true,
             _ => false,
         }
     }
 
-    pub fn is_auth(&self) -> bool {
+    pub(crate) fn is_auth(&self) -> bool {
         match self {
             Self::Auth(_) => true,
             Self::ConnectionError(err) => err.code == "28000" || err.is_bad_password(),

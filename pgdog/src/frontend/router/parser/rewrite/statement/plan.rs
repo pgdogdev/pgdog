@@ -14,7 +14,7 @@ use super::{
 /// Executed in order of fields in this struct.
 ///
 #[derive(Default, Clone, Debug)]
-pub struct RewritePlan {
+pub(crate) struct RewritePlan {
     /// Number of parameters ($1, $2, etc.) in
     /// the original statement. This is calculated first,
     /// and $params+n parameters are added to the statement to

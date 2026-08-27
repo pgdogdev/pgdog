@@ -67,6 +67,7 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
                 if is_terminal(task.status.as_str()) {
                     continue;
                 }
+
                 if let Some(id) = task.id {
                     let _ = admin.execute(format!("STOP_TASK {id}").as_str()).await;
                 }

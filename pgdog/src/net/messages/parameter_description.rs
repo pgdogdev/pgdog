@@ -3,7 +3,7 @@ use super::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
-pub struct ParameterDescription {
+pub(crate) struct ParameterDescription {
     params: Vec<i32>,
 }
 
@@ -40,18 +40,8 @@ impl Protocol for ParameterDescription {
 
 impl ParameterDescription {
     /// Create an empty parameter description.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self { params: Vec::new() }
-    }
-
-    /// Create a parameter description from a list of type OIDs.
-    pub fn from_params(params: Vec<i32>) -> Self {
-        Self { params }
-    }
-
-    /// Type OIDs of the parameters, in order.
-    pub fn params(&self) -> &[i32] {
-        &self.params
     }
 
     pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
@@ -66,6 +56,13 @@ impl ParameterDescription {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    impl ParameterDescription {
+        /// Type OIDs of the parameters, in order.
+        pub(crate) fn params(&self) -> &[i32] {
+            &self.params
+        }
+    }
 
     #[test]
     fn parameter_description_round_trip_small() {

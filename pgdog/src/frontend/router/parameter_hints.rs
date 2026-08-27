@@ -14,20 +14,20 @@ use crate::{
 };
 
 /// `SET pgdog.shard` — pin queries to an explicit shard number.
-pub const PGDOG_SHARD: &str = "pgdog.shard";
+pub(crate) const PGDOG_SHARD: &str = "pgdog.shard";
 /// `SET pgdog.sharding_key` — pin queries to the shard a key resolves to.
-pub const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
+pub(crate) const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
 /// `SET pgdog.role` — pin queries to a primary or replica.
-pub const PGDOG_ROLE: &str = "pgdog.role";
+pub(crate) const PGDOG_ROLE: &str = "pgdog.role";
 /// Connection pinning.
-pub const PGDOG_PIN: &str = "pgdog.pin";
+pub(crate) const PGDOG_PIN: &str = "pgdog.pin";
 
 #[derive(Debug, Clone, Default)]
-pub struct ParameterHints<'a> {
-    pub search_path: Option<&'a ParameterValue>,
-    pub pgdog_shard: Option<&'a ParameterValue>,
-    pub pgdog_sharding_key: Option<&'a ParameterValue>,
-    pub pgdog_role: Option<&'a ParameterValue>,
+pub(crate) struct ParameterHints<'a> {
+    pub(crate) search_path: Option<&'a ParameterValue>,
+    pub(crate) pgdog_shard: Option<&'a ParameterValue>,
+    pub(crate) pgdog_sharding_key: Option<&'a ParameterValue>,
+    pub(crate) pgdog_role: Option<&'a ParameterValue>,
     hooks: ParserHooks,
 }
 
@@ -54,11 +54,6 @@ impl ParameterHints<'_> {
     ) -> Result<(), Error> {
         let mut schema_sharder = SchemaSharder::default();
 
-        if let Some(ParameterValue::Integer(val)) = self.pgdog_shard {
-            let shard = Shard::Direct(*val as usize);
-            self.hooks.record_set_shard(&shard);
-            shards.push(ShardWithPriority::new_set(shard));
-        }
         if let Some(ParameterValue::String(val)) = self.pgdog_shard
             && let Ok(shard) = val.parse()
         {
@@ -101,8 +96,6 @@ impl ParameterHints<'_> {
                         schema_sharder.resolve(Some(schema), &sharding_schema.schemas);
                     }
                 }
-
-                _ => (),
             }
 
             if let Some((shard, schema)) = schema_sharder.get() {

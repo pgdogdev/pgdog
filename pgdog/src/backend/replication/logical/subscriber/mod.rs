@@ -1,14 +1,14 @@
-pub mod context;
-pub mod copy;
-pub mod omni_ownership;
-pub mod parallel_connection;
-pub mod pipeline;
-pub mod stream;
+pub(crate) mod context;
+pub(crate) mod copy;
+pub(crate) mod omni_ownership;
+pub(crate) mod parallel_connection;
+pub(crate) mod pipeline;
+pub(crate) mod stream;
 
 #[cfg(test)]
 mod tests;
 
-pub use context::StreamContext;
-pub use copy::CopySubscriber;
-pub use parallel_connection::ParallelConnection;
-pub use pipeline::PipelinedConnection;
+pub(crate) use context::StreamContext;
+pub(crate) use copy::CopySubscriber;
+pub(crate) use parallel_connection::ParallelConnection;
+pub(crate) use pipeline::PipelinedConnection;

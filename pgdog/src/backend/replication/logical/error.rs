@@ -5,13 +5,12 @@ use derive_more::{Display, Error};
 
 use crate::{
     backend::replication::publisher::PublicationTable,
-    frontend::client::query_engine::two_pc::TwoPcTransaction,
-    net::{CommandComplete, ErrorResponse},
+    frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
 };
 
 /// The kind of validation failure, decoupled from which table it occurred on.
 #[derive(Debug, Display)]
-pub enum TableValidationErrorKind {
+pub(crate) enum TableValidationErrorKind {
     #[display("has no replica identity columns")]
     NoIdentityColumns,
     #[display(
@@ -27,14 +26,14 @@ pub enum TableValidationErrorKind {
 /// A single table-level validation failure.
 #[derive(Debug, Display, Error)]
 #[display("table {table_name}: {kind}")]
-pub struct TableValidationError {
-    pub table_name: String,
-    pub kind: TableValidationErrorKind,
+pub(crate) struct TableValidationError {
+    pub(crate) table_name: String,
+    pub(crate) kind: TableValidationErrorKind,
 }
 
 /// Newtype that `Display`s a slice of `TableValidationError` as a human-readable list.
 #[derive(Debug, Error)]
-pub struct TableValidationErrors(#[error(ignore)] pub Vec<TableValidationError>);
+pub(crate) struct TableValidationErrors(#[error(ignore)] pub(crate) Vec<TableValidationError>);
 
 impl fmt::Display for TableValidationErrors {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -68,7 +67,7 @@ macro_rules! ensure_validation {
 pub(crate) use ensure_validation;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
@@ -92,29 +91,14 @@ pub enum Error {
     #[error("out of sync, got {0}")]
     OutOfSync(char),
 
-    #[error("out of sync during commit, got {0}")]
-    CommitOutOfSync(char),
-
-    #[error("out of sync during relation prepare, got {0}")]
-    RelationOutOfSync(char),
-
-    #[error("out of sync during row write, got {0}")]
-    SendOutOfSync(char),
-
     #[error("missing data")]
     MissingData,
-
-    #[error("copy error")]
-    Copy,
 
     #[error("pg_error: {0}")]
     PgError(Box<ErrorResponse>),
 
     #[error("table \"{0}\".\"{1}\" has no replica identity")]
     NoReplicaIdentity(String, String),
-
-    #[error("lsn decode")]
-    LsnDecode,
 
     #[error("replication slot \"{0}\" doesn't exist, but it should")]
     MissingReplicationSlot(String),
@@ -161,9 +145,6 @@ pub enum Error {
     #[error("schema isn't loaded")]
     NoSchema,
 
-    #[error("config wasn't updated with new cluster")]
-    NoNewCluster,
-
     #[error("tokio: {0}")]
     JoinError(#[from] tokio::task::JoinError),
 
@@ -173,17 +154,8 @@ pub enum Error {
     #[error("data sync has been aborted")]
     DataSyncAborted,
 
-    #[error("replication has been aborted")]
-    ReplicationAborted,
-
-    #[error("waiter has no publisher")]
-    NoPublisher,
-
     #[error("cutover abort timeout")]
     AbortTimeout,
-
-    #[error("task not found")]
-    TaskNotFound,
 
     #[error("task is not a replication task")]
     NotReplication,
@@ -193,9 +165,6 @@ pub enum Error {
 
     #[error("frontend: {0}")]
     Frontend(#[from] crate::frontend::Error),
-
-    #[error("command complete has no rows: {0}")]
-    CommandCompleteNoRows(CommandComplete),
 
     #[error("missing key in replication stream, out of sync")]
     MissingKey,
@@ -251,7 +220,7 @@ impl From<TableValidationError> for Error {
 
 impl Error {
     /// Two-phase commit transaction that still needs manager cleanup, if any.
-    pub fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
+    pub(crate) fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
         match self {
             Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
             _ => None,
@@ -259,7 +228,7 @@ impl Error {
     }
 
     /// Whether the table copy should be retried after this error.
-    pub fn is_retryable(&self) -> bool {
+    pub(crate) fn is_retryable(&self) -> bool {
         match self {
             Self::TwoPcCleanupPending { source, .. } => source.is_retryable(),
             Self::Net(inner) => inner.is_retryable(),
@@ -355,9 +324,6 @@ mod tests {
         // IO reset wrapped as Backend — the common path for network drops during COPY.
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
         assert!(Error::Backend(BE::Io(io)).is_retryable());
-
-        // Read timeout mid-stream.
-        assert!(Error::Backend(BE::ReadTimeout).is_retryable());
 
         // Pool couldn't hand out a connection.
         assert!(Error::Backend(BE::Pool(PE::CheckoutTimeout)).is_retryable());

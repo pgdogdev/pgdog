@@ -24,7 +24,6 @@ use crate::backend::{
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
-use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
@@ -34,20 +33,21 @@ use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
-pub mod query_engine;
-pub mod sticky;
-pub mod timeouts;
-pub mod transaction_type;
+pub(crate) mod query_engine;
+pub(crate) mod sticky;
+pub(crate) mod timeouts;
+pub(crate) mod transaction_type;
 
+use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub use transaction_type::TransactionType;
+pub(crate) use transaction_type::TransactionType;
 
 /// PostgreSQL client.
 ///
 /// It thinks it's talking to a real Postgres server, but actually it's talking to PgDog :-).
 ///
 #[derive(Debug)]
-pub struct Client {
+pub(crate) struct Client {
     // Client IP.
     addr: SocketAddr,
     // Client socket.
@@ -132,7 +132,7 @@ impl Client {
     /// - `protocol_version`: The version of the PostgreSQL protocol used by the client. This is typically 3.0, but can be 3.2
     ///   for more modern clients.
     ///
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         stream: Stream,
         params: Parameters,
         addr: SocketAddr,
@@ -434,13 +434,15 @@ impl Client {
     }
 
     #[cfg(test)]
-    pub fn new_test(stream: Stream, params: Parameters) -> Self {
+    fn new_test(stream: Stream, mut params: Parameters) -> Self {
         use crate::config::config;
 
-        let mut connect_params = Parameters::default();
-        connect_params.insert("user", "pgdog");
-        connect_params.insert("database", "pgdog");
-        connect_params.merge(params);
+        if params.get("user").is_none() {
+            params.insert("user", "pgdog");
+        }
+        if params.get("database").is_none() {
+            params.insert("database", "pgdog");
+        }
 
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
@@ -462,8 +464,8 @@ impl Client {
                 4096,
                 config().config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&connect_params),
-            params: connect_params,
+            sticky: Sticky::from_params(&params),
+            params,
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,
@@ -557,6 +559,8 @@ impl Client {
         query_engine: &mut QueryEngine,
         message: Message,
     ) -> Result<(), Error> {
+        use query_engine::QueryEngineContext;
+
         let mut context = QueryEngineContext::new(self);
         query_engine
             .process_server_message(&mut context, message)
@@ -566,49 +570,54 @@ impl Client {
         Ok(())
     }
 
-    /// Handle client messages.
-    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
-        // Check maintenance mode.
+    /// Suspend client execution if the pooler is set in maintenance mode.
+    ///
+    /// This can happen only between transactions. The admin client ignores maintenance
+    /// mode because it can be used to turn it off.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_engine`: Query engine to set the client state into `waiting`.
+    ///
+    async fn check_maintenance_mode(&self, query_engine: &mut QueryEngine) {
         if !self.in_transaction()
             && !self.admin
             && let Some(waiter) = maintenance_mode::waiter(&self.database)
         {
-            let state = query_engine.get_state();
-            query_engine.set_state(State::Waiting);
+            let _guard = query_engine.set_maintenance_mode();
             waiter.await;
-            query_engine.set_state(state);
         }
+    }
 
-        // If client sent multiple requests, split them up and execute individually.
-        let spliced = self.client_request.spliced()?;
-        if spliced.is_empty() {
-            let mut context = QueryEngineContext::new(self);
-            query_engine.handle(&mut context).await?;
-            self.transaction = context.transaction();
-        } else {
-            let total = spliced.len();
-            let mut reqs = spliced.into_iter().enumerate();
-            self.transaction.get_or_insert(TransactionType::Implicit);
-            while let Some((num, mut req)) = reqs.next() {
-                debug!("processing spliced request {}/{}", num + 1, total);
-                let mut context = QueryEngineContext::new(self).spliced(&mut req, reqs.len());
-                query_engine.handle(&mut context).await?;
-                self.transaction = context.transaction();
+    /// Handle client messages.
+    async fn client_messages(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        use query_engine::{Pipeline, QueryEngineContext, QueryEngineResult};
+        self.check_maintenance_mode(query_engine).await;
 
-                // If pipeline is aborted due to error, skip to Sync to complete the pipeline.
-                // Postgres ignores all commands after an error until it receives Sync.
-                if query_engine.out_of_sync() && !req.is_sync_only() {
-                    debug!("pipeline aborted, skipping to Sync");
-                    for (_, mut next_req) in reqs.by_ref() {
-                        if next_req.is_sync_only() {
-                            debug!("processing Sync to complete aborted pipeline");
-                            let mut ctx = QueryEngineContext::new(self).spliced(&mut next_req, 0);
-                            query_engine.handle(&mut ctx).await?;
-                            self.transaction = ctx.transaction();
-                            break;
+        match query_engine
+            .handle(&mut QueryEngineContext::new(self))
+            .await?
+        {
+            QueryEngineResult::Done(transaction) => self.transaction = transaction,
+            QueryEngineResult::Split { requests, extended } => {
+                let mut requests = requests.into_iter();
+                if extended {
+                    self.transaction.get_or_insert(TransactionType::Implicit);
+                }
+
+                while let Some(mut request) = requests.next() {
+                    match query_engine
+                        .handle(
+                            &mut QueryEngineContext::new(self)
+                                .pipelined(&mut request, Pipeline::new(requests.len(), extended)),
+                        )
+                        .await?
+                    {
+                        QueryEngineResult::Done(transaction) => {
+                            self.transaction = transaction;
                         }
+                        _ => panic!("query engine cannot split requests twice"),
                     }
-                    break;
                 }
             }
         }
@@ -696,12 +705,12 @@ impl Client {
         Ok(BufferEvent::HaveRequest)
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
     /// Get client memory stats.
-    pub fn memory_stats(&self) -> MemoryStats {
+    pub(crate) fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
             inner: pgdog_stats::MemoryStats {
                 buffer: *self.stream_buffer.stats(),
@@ -721,7 +730,7 @@ impl Drop for Client {
 
 #[cfg(test)]
 impl Client {
-    pub async fn spawn_test(mut self) {
+    pub(crate) async fn spawn_test(mut self) {
         self.spawn_internal().await;
     }
 }
@@ -743,7 +752,7 @@ impl MemoryUsage for Client {
 }
 
 #[cfg(test)]
-pub mod test;
+pub(crate) mod test;
 
 #[cfg(test)]
 mod client_certificate_tests {

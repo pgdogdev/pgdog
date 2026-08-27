@@ -1,21 +1,7 @@
 use std::mem::take;
 
-pub fn escape(s: &str, quote: char) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c == quote {
-            result.push(quote);
-            result.push(c);
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
 /// Convert escape characters into SQL-safe entities.
-pub fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let mut result = Vec::new();
     let mut buffer = String::with_capacity(s.len());
 
@@ -83,12 +69,5 @@ mod test {
         let s = "hello world";
         let result = unescape(s);
         assert_eq!(result, "'hello world'");
-    }
-
-    #[test]
-    fn test_escape() {
-        let s = r#"hello"drop table x;"#;
-        let result = escape(s, '"');
-        assert_eq!(result, r#"hello""drop table x;"#);
     }
 }

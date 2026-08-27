@@ -56,7 +56,7 @@ mod tests {
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
     use crate::net::{
         Parameters,
-        messages::{Bind, Parameter, Parse, Query},
+        messages::{Bind, Parse, Query, bind::Parameter},
     };
     use bytes::Bytes;
     use std::sync::Once;

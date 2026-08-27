@@ -35,7 +35,7 @@ fn next_pool_id() -> u64 {
 
 /// Connection pool.
 #[derive(Clone)]
-pub struct Pool {
+pub(crate) struct Pool {
     inner: Arc<InnerSync>,
 }
 
@@ -87,7 +87,7 @@ impl Pool {
 
     /// Test pool, no connections.
     #[cfg(test)]
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         let config = PoolConfig {
             address: Address::new_test(),
             config: Config::default(),
@@ -100,12 +100,12 @@ impl Pool {
         &self.inner
     }
 
-    pub fn healthy(&self) -> bool {
+    pub(crate) fn healthy(&self) -> bool {
         self.inner.health.healthy()
     }
 
     /// Launch the maintenance loop, bringing the pool online.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         let mut guard = self.lock();
         if !guard.online {
             guard.online = true;
@@ -114,7 +114,7 @@ impl Pool {
         }
     }
 
-    pub async fn get(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn get(&self, request: &Request) -> Result<Guard, Error> {
         match safe_timeout(self.config().checkout_timeout, self.get_internal(request)).await {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
@@ -197,7 +197,7 @@ impl Pool {
     }
 
     /// Get server parameters, fetch them if necessary.
-    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         if let Some(params) = self.inner.params.get() {
             Ok(params)
         } else {
@@ -284,7 +284,7 @@ impl Pool {
     }
 
     /// Send a cancellation request if the client is connected to a server.
-    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         // Must NOT hold the lock while doing async I/O.
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
@@ -336,7 +336,7 @@ impl Pool {
     }
 
     /// Pause pool, closing all open connections.
-    pub fn pause(&self) {
+    pub(crate) fn pause(&self) {
         let mut guard = self.lock();
 
         guard.paused = true;
@@ -344,7 +344,7 @@ impl Pool {
     }
 
     /// Send a cancellation request for all running queries.
-    pub async fn cancel_all(&self) -> Result<(), Error> {
+    pub(crate) async fn cancel_all(&self) -> Result<(), Error> {
         let addr = self.addr().clone();
         // Collect into a Vec to drop the pool lock before awaiting
         let futures: Vec<_> = self
@@ -359,7 +359,7 @@ impl Pool {
     }
 
     /// Resume the pool.
-    pub fn resume(&self) {
+    pub(crate) fn resume(&self) {
         {
             let mut guard = self.lock();
             guard.paused = false;
@@ -369,7 +369,7 @@ impl Pool {
     }
 
     /// Create a connection to the pool, untracked by the logic here.
-    pub async fn standalone(&self, reason: ConnectReason) -> Result<Server, Error> {
+    pub(crate) async fn standalone(&self, reason: ConnectReason) -> Result<Server, Error> {
         Monitor::create_connection(self, reason).await
     }
 
@@ -379,7 +379,7 @@ impl Pool {
     /// is swapped in immediately after) and process shutdown. The operation is the
     /// same in both cases: set `online = false`, dump idle connections, and notify
     /// any waiters so they return `Error::Offline` rather than blocking forever.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         debug!(
             host = %self.addr().host,
             port = self.addr().port,
@@ -420,13 +420,13 @@ impl Pool {
 
     /// Pool address.
     #[inline]
-    pub fn addr(&self) -> &Address {
+    pub(crate) fn addr(&self) -> &Address {
         &self.inner.addr
     }
 
     /// Get pool configuration.
     #[inline]
-    pub fn config(&self) -> &Config {
+    pub(crate) fn config(&self) -> &Config {
         &self.inner.config
     }
 
@@ -480,17 +480,17 @@ impl Pool {
     }
 
     /// Pool state.
-    pub fn state(&self) -> State {
+    pub(crate) fn state(&self) -> State {
         State::get(self)
     }
 
     /// Get replica lag real quick.
-    pub fn replica_lag(&self) -> ReplicaLag {
+    pub(crate) fn replica_lag(&self) -> ReplicaLag {
         self.lock().replica_lag
     }
 
     /// LSN stats
-    pub fn lsn_stats(&self) -> LsnStats {
+    pub(crate) fn lsn_stats(&self) -> LsnStats {
         *self.inner().lsn_stats.read()
     }
 

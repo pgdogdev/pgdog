@@ -18,9 +18,9 @@ const EXPIRY_BUFFER: Duration = Duration::from_secs(45);
 /// secrets engine generates both, so `username` overrides the configured
 /// one when present.
 #[derive(Clone, Debug)]
-pub struct Credentials {
-    pub username: Option<String>,
-    pub secret: String,
+pub(crate) struct Credentials {
+    pub(crate) username: Option<String>,
+    pub(crate) secret: String,
 }
 
 /// Credentials plus their lifetime, as returned by a fetcher.
@@ -29,10 +29,10 @@ pub struct Credentials {
 /// replacement (e.g. a percentage of a Vault lease). When `None`, the
 /// monitor refreshes [`EXPIRY_BUFFER`] before `expires_at`.
 #[derive(Clone, Debug)]
-pub struct FetchedCredentials {
-    pub credentials: Credentials,
-    pub expires_at: Option<SystemTime>,
-    pub refresh_at: Option<Instant>,
+pub(crate) struct FetchedCredentials {
+    pub(crate) credentials: Credentials,
+    pub(crate) expires_at: Option<SystemTime>,
+    pub(crate) refresh_at: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -101,7 +101,7 @@ impl From<&Address> for CacheKey {
 ///   truly expired, which is the fallback signal to retry.
 /// - Blocks exactly once on a cold miss (first connection before the monitor
 ///   has primed the cache, or after an eviction following a failed refresh).
-pub struct TokenCache {
+pub(crate) struct TokenCache {
     inner: Mutex<HashMap<CacheKey, CachedToken>>,
 }
 
@@ -113,7 +113,7 @@ impl TokenCache {
     }
 
     /// Returns the single global instance.
-    pub fn global() -> &'static TokenCache {
+    pub(crate) fn global() -> &'static TokenCache {
         static INSTANCE: Lazy<TokenCache> = Lazy::new(TokenCache::new);
         &INSTANCE
     }
@@ -125,7 +125,7 @@ impl TokenCache {
     /// cached, the token expires sooner than the buffer, or the refresh
     /// instant is already in the past, returns [`Duration::ZERO`] so the
     /// monitor fires immediately.
-    pub fn refresh_in(&self, addr: &Address) -> Duration {
+    pub(crate) fn refresh_in(&self, addr: &Address) -> Duration {
         let Some((expires_at, refresh_at)) = self
             .inner
             .lock()
@@ -152,7 +152,7 @@ impl TokenCache {
     /// Store a freshly fetched token for `addr`.
     ///
     /// Called by the monitor after a successful proactive refresh.
-    pub fn set(&self, addr: &Address, token: String, expires_at: SystemTime) {
+    pub(crate) fn set(&self, addr: &Address, token: String, expires_at: SystemTime) {
         self.inner
             .lock()
             .insert(CacheKey::from(addr), CachedToken::new(token, expires_at));
@@ -165,7 +165,7 @@ impl TokenCache {
     /// default [`EXPIRY_BUFFER`] — e.g. a Vault static role, which only
     /// issues a new password once its TTL actually expires and echoes back
     /// a shrinking TTL if read early, resulting in a tight refresh loop.
-    pub fn set_with_refresh_at(&self, addr: &Address, token: String, refresh_at: Instant) {
+    pub(crate) fn set_with_refresh_at(&self, addr: &Address, token: String, refresh_at: Instant) {
         self.inner.lock().insert(
             CacheKey::from(addr),
             CachedToken {
@@ -181,7 +181,7 @@ impl TokenCache {
 
     /// Store freshly fetched credentials for `addr`, including a
     /// generated username and an explicit refresh instant when present.
-    pub fn set_credentials(&self, addr: &Address, fetched: FetchedCredentials) {
+    pub(crate) fn set_credentials(&self, addr: &Address, fetched: FetchedCredentials) {
         self.inner
             .lock()
             .insert(CacheKey::from(addr), fetched.into());
@@ -192,7 +192,7 @@ impl TokenCache {
     /// Called by the monitor when a refresh fails, so the next
     /// [`get_or_fetch`] blocks on a fresh fetch rather than handing out
     /// an expired token indefinitely.
-    pub fn evict(&self, addr: &Address) {
+    pub(crate) fn evict(&self, addr: &Address) {
         self.inner.lock().remove(&CacheKey::from(addr));
     }
 
@@ -201,7 +201,11 @@ impl TokenCache {
     ///
     /// Always returns immediately when a token is present (valid or stale).
     /// Blocks only on a true cold miss.
-    pub async fn get_or_fetch<F, Fut>(&self, addr: &Address, fetcher: F) -> Result<String, Error>
+    pub(crate) async fn get_or_fetch<F, Fut>(
+        &self,
+        addr: &Address,
+        fetcher: F,
+    ) -> Result<String, Error>
     where
         F: Fn(Address) -> Fut + Send + Sync,
         Fut: Future<Output = Result<(String, SystemTime), Error>>,
@@ -220,7 +224,7 @@ impl TokenCache {
     /// Like [`get_or_fetch`](Self::get_or_fetch), but for providers that
     /// compute their own refresh instant instead of relying on
     /// [`EXPIRY_BUFFER`] — see [`set_with_refresh_at`](Self::set_with_refresh_at).
-    pub async fn get_or_fetch_with_refresh<F, Fut>(
+    pub(crate) async fn get_or_fetch_with_refresh<F, Fut>(
         &self,
         addr: &Address,
         fetcher: F,
@@ -243,7 +247,7 @@ impl TokenCache {
     /// Like [`get_or_fetch`](Self::get_or_fetch), but for providers that
     /// generate full credentials (username and password), e.g. Vault's
     /// database secrets engine.
-    pub async fn credentials_or_fetch<F, Fut>(
+    pub(crate) async fn credentials_or_fetch<F, Fut>(
         &self,
         addr: &Address,
         fetcher: F,

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::task::yield_now;
+use tokio::time::{Instant, sleep, timeout};
 
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
@@ -30,21 +31,20 @@ fn test_addr(host: &str, port: u16) -> Address {
     }
 }
 
-fn test_config(config: pgdog_stats::Config) -> Config {
+fn test_config(config: Config) -> Config {
     Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            checkout_timeout: Duration::from_millis(1000),
-            ban_timeout: Duration::from_millis(100),
-            ..config
-        },
+        max: 1,
+        checkout_timeout: Duration::from_millis(1000),
+        ban_timeout: Duration::from_millis(100),
+        ..config
     }
 }
 
 fn create_auto_test_pool_config(host: &str, port: u16) -> PoolConfig {
     let mut config = create_test_pool_config(host, port);
     config.address.configured_role = Role::Auto;
-    config.config.inner.role_detection = true;
+    config.config.role_detection = true;
+    config.config.checkout_timeout = Duration::from_millis(50);
     config
 }
 
@@ -77,7 +77,7 @@ fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
 
 impl LoadBalancer {
     /// Replica pools handle.
-    pub fn pools(&self) -> Vec<&Pool> {
+    pub(crate) fn pools(&self) -> Vec<&Pool> {
         self.targets.iter().map(|target| &target.pool).collect()
     }
 }
@@ -989,12 +989,10 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -1008,12 +1006,10 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -1490,7 +1486,7 @@ async fn test_redetect_roles_marks_auto_targets_replicas_when_all_valid_targets_
 #[tokio::test]
 async fn test_auto_mode_waits_for_primary_election() {
     let mut config = create_auto_test_pool_config("127.0.0.1", 5432);
-    config.config.inner.checkout_timeout = Duration::from_millis(10);
+    config.config.checkout_timeout = Duration::from_millis(10);
 
     let lb = LoadBalancer::new(
         &None,
@@ -1500,7 +1496,10 @@ async fn test_auto_mode_waits_for_primary_election() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Err(Error::CheckoutTimeout));
+    assert!(matches!(
+        lb.get_primary(&Request::default()).await,
+        Err(Error::CheckoutTimeout)
+    ));
 }
 
 #[tokio::test]
@@ -1513,16 +1512,113 @@ async fn test_auto_mode_primary_election_releases_writes() {
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
+    lb.targets[0].pool.launch();
     let election = lb.clone();
 
-    tokio::spawn(async move {
+    let election = tokio::spawn(async move {
         sleep(Duration::from_millis(10)).await;
-        election.targets[0].set_role(Role::Primary);
-        election.role_detection.notify_one();
+        set_lsn_stats(&election.targets[0], false, 100);
+        assert!(election.redetect_roles());
     });
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
+    let primary = lb.get_primary(&Request::default()).await.unwrap();
+    assert_eq!(primary.pool.addr().host, "127.0.0.1");
+    drop(primary);
+    election.await.unwrap();
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_auto_mode_waits_for_each_new_primary() {
+    let first = create_auto_test_pool_config("127.0.0.1", 5432);
+    let second = create_auto_test_pool_config("localhost", 5432);
+
+    let lb = LoadBalancer::new(
+        &None,
+        &[first, second],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    lb.targets.iter().for_each(|target| target.pool.launch());
+
+    // primary is not defined initially
+    assert!(lb.primary().is_none());
+    // spawn the task that will wait for primary to resolve
+    let spawned = {
+        let lb = lb.clone();
+
+        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+    };
+
+    // assert that the background wait is in progress
+    yield_now().await;
+    assert!(!spawned.is_finished());
+
+    // set the first target to primary and redetect roles
+    set_lsn_stats(&lb.targets[0], false, 100);
+    set_lsn_stats(&lb.targets[1], true, 90);
+    assert!(lb.redetect_roles());
+
+    // primary should be resolved to first primary
+    let primary = spawned.await.unwrap().unwrap();
+    assert_eq!(primary.pool.addr().host, "127.0.0.1");
+    drop(primary);
+
+    // remove primary from first
+    set_lsn_stats(&lb.targets[0], true, 100);
+    lb.redetect_roles();
+    assert!(lb.primary().is_none());
+
+    // spawn another task that should wait for new primary
+    let spawned = {
+        let lb = lb.clone();
+
+        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+    };
+
+    yield_now().await;
+    assert!(!spawned.is_finished());
+
+    set_lsn_stats(&lb.targets[1], false, 200);
+    assert!(lb.redetect_roles());
+    assert!(!lb.redetect_roles());
     assert!(lb.primary().is_some());
+
+    // primary should be resolved to second target
+    let primary = spawned.await.unwrap().unwrap();
+    assert_eq!(primary.pool.addr().host, "localhost");
+    drop(primary);
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_election_channel_no_race_condition() {
+    let lb = LoadBalancer::new(
+        &None,
+        &[create_auto_test_pool_config("127.0.0.1", 5432)],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    );
+    lb.targets[0].pool.launch();
+
+    // make sure there is no primary
+    assert!(lb.primary().is_none());
+
+    // initialize the primary before the wait_primary is called
+    set_lsn_stats(&lb.targets[0], false, 100);
+    assert!(lb.redetect_roles());
+
+    let elected = timeout(Duration::ZERO, lb.wait_primary())
+        .await
+        .expect("wait_primary should resolve")
+        .expect("primary should be elected");
+    assert_eq!(elected.addr().host, "127.0.0.1");
+
+    lb.shutdown();
 }
 
 #[tokio::test]
@@ -1536,11 +1632,12 @@ async fn test_static_replica_only_does_not_wait_for_primary() {
         Default::default(),
     );
 
-    assert_eq!(lb.wait_primary().await, Ok(()));
+    let started = Instant::now();
     assert!(matches!(
         lb.get_primary(&Request::default()).await,
         Err(Error::NoPrimary)
     ));
+    assert!(started.elapsed() < Duration::from_millis(100));
 }
 
 #[tokio::test]
@@ -1618,13 +1715,11 @@ fn create_test_pool_config_weighted(host: &str, port: u16, lb_weight: u8) -> Poo
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::from_millis(100),
-                lb_weight,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::from_millis(100),
+            lb_weight,
+            ..Config::default()
         },
     }
 }
@@ -2038,12 +2133,10 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -2057,12 +2150,10 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
             ..Default::default()
         },
         config: Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                checkout_timeout: Duration::from_millis(1000),
-                ban_timeout: Duration::ZERO,
-                ..Config::default().inner
-            },
+            max: 1,
+            checkout_timeout: Duration::from_millis(1000),
+            ban_timeout: Duration::ZERO,
+            ..Config::default()
         },
     };
 
@@ -2396,7 +2487,7 @@ async fn ban_new_targets_until_health_check() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
         address: test_addr("localhost", 2345),
-        config: test_config(pgdog_stats::Config {
+        config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()
         }),
@@ -2441,7 +2532,7 @@ async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
         address: test_addr("localhost", 2345),
-        config: test_config(pgdog_stats::Config {
+        config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()
         }),

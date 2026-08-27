@@ -19,19 +19,20 @@ const MAX_SECRET_LEN: usize = 256;
 
 /// Variable-length cancel secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SecretKey {
+pub(crate) struct SecretKey {
     bytes: SmallVec<[u8; EXTENDED_SECRET_LEN]>,
 }
 
 impl SecretKey {
     /// 3.0-compatible secret from a 4-byte integer.
-    pub fn legacy(secret: i32) -> Self {
+    #[cfg(test)]
+    pub(crate) fn legacy(secret: i32) -> Self {
         Self {
             bytes: SmallVec::from_slice(&secret.to_be_bytes()),
         }
     }
 
-    pub fn random(len: usize) -> Self {
+    pub(crate) fn random(len: usize) -> Self {
         assert!(
             (1..=MAX_SECRET_LEN).contains(&len),
             "cancel secret must be between 1 and {MAX_SECRET_LEN} bytes"
@@ -43,7 +44,7 @@ impl SecretKey {
         Self { bytes }
     }
 
-    pub fn from_slice(secret: &[u8]) -> Result<Self, crate::net::Error> {
+    pub(crate) fn from_slice(secret: &[u8]) -> Result<Self, crate::net::Error> {
         if secret.is_empty() || secret.len() > MAX_SECRET_LEN {
             return Err(crate::net::Error::UnexpectedPayload);
         }
@@ -53,7 +54,7 @@ impl SecretKey {
         })
     }
 
-    pub fn as_slice(&self) -> &[u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         self.bytes.as_slice()
     }
 
@@ -64,31 +65,30 @@ impl SecretKey {
     /// leading bytes matched, letting an attacker recover the secret byte by
     /// byte. Length is not secret, so an early length mismatch returning `false`
     /// is fine.
-    pub fn constant_time_eq(&self, other: &SecretKey) -> bool {
+    pub(crate) fn constant_time_eq(&self, other: &SecretKey) -> bool {
         crate::util::constant_time_eq(self.as_slice(), other.as_slice())
-    }
-
-    pub fn len(&self) -> usize {
-        self.bytes.len()
     }
 }
 
 /// BackendKeyData (B) — pid + cancel secret on the wire.
 /// `pid` is a raw `i32`; `from_bytes` must not mint a seq to keep round-trip pure.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BackendKeyData {
-    pub pid: i32,
-    pub secret: SecretKey,
+pub(crate) struct BackendKeyData {
+    pub(crate) pid: i32,
+    pub(crate) secret: SecretKey,
 }
 
 impl BackendKeyData {
     /// Wire pid.
-    pub fn pid(&self) -> i32 {
+    pub(crate) fn pid(&self) -> i32 {
         self.pid
     }
 
     /// Mint a key for a new client connection.
-    pub fn new_frontend(protocol_version: ProtocolVersion, frontend_key: FrontendPid) -> Self {
+    pub(crate) fn new_frontend(
+        protocol_version: ProtocolVersion,
+        frontend_key: FrontendPid,
+    ) -> Self {
         let secret_len = if protocol_version.supports_extended_cancel_key() {
             EXTENDED_SECRET_LEN
         } else {
@@ -103,14 +103,15 @@ impl BackendKeyData {
 
     /// Fallback for servers that don't send a `K` message (RDS-proxy etc.).
     /// `pid = 0` sentinel; cancel is a no-op for these connections.
-    pub fn random_legacy() -> Self {
+    pub(crate) fn random_legacy() -> Self {
         Self {
             pid: 0,
             secret: SecretKey::random(LEGACY_SECRET_LEN),
         }
     }
 
-    pub fn legacy(pid: i32, secret: i32) -> Self {
+    #[cfg(test)]
+    pub(crate) fn legacy(pid: i32, secret: i32) -> Self {
         Self {
             pid,
             secret: SecretKey::legacy(secret),
@@ -168,7 +169,7 @@ mod tests {
         let key = BackendKeyData::legacy(42, 1234);
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 4);
+        assert_eq!(roundtrip.secret.bytes.len(), 4);
     }
 
     #[test]
@@ -179,7 +180,7 @@ mod tests {
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 32);
+        assert_eq!(roundtrip.secret.bytes.len(), 32);
     }
 
     #[test]
@@ -190,7 +191,7 @@ mod tests {
         };
         let roundtrip = BackendKeyData::from_bytes(key.to_bytes()).unwrap();
         assert_eq!(roundtrip, key);
-        assert_eq!(roundtrip.secret.len(), 256);
+        assert_eq!(roundtrip.secret.bytes.len(), 256);
     }
 
     #[test]
@@ -198,12 +199,14 @@ mod tests {
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_0, FrontendPid::new())
                 .secret
+                .bytes
                 .len(),
             4
         );
         assert_eq!(
             BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new())
                 .secret
+                .bytes
                 .len(),
             32
         );

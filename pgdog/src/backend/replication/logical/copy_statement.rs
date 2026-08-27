@@ -8,7 +8,7 @@ use super::publisher::PublicationTable;
 
 /// COPY statement generator.
 #[derive(Debug, Clone)]
-pub struct CopyStatement {
+pub(crate) struct CopyStatement {
     table: PublicationTable,
     columns: Vec<String>,
     copy_format: CopyFormat,
@@ -23,7 +23,7 @@ impl CopyStatement {
     /// * `table`: Name of the table.
     /// * `columns`: Table column names.
     ///
-    pub fn new(
+    pub(crate) fn new(
         table: &PublicationTable,
         columns: &[String],
         copy_format: CopyFormat,
@@ -36,12 +36,12 @@ impl CopyStatement {
     }
 
     /// Generate COPY ... TO STDOUT statement.
-    pub fn copy_out(&self) -> String {
+    pub(crate) fn copy_out(&self) -> String {
         self.copy(true)
     }
 
     /// Generate COPY ... FROM STDIN statement.
-    pub fn copy_in(&self) -> String {
+    pub(crate) fn copy_in(&self) -> String {
         self.copy(false)
     }
 

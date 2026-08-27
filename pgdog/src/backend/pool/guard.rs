@@ -13,7 +13,7 @@ use super::{Pool, cleanup::Cleanup};
 use crate::util::safe_timeout;
 
 /// Connection guard.
-pub struct Guard {
+pub(crate) struct Guard {
     server: Option<Box<Server>>,
     pub(super) pool: Pool,
     pub(super) reset: bool,
@@ -40,7 +40,7 @@ impl std::fmt::Debug for Guard {
 
 impl Guard {
     /// Create new connection guard.
-    pub fn new(pool: Pool, mut server: Box<Server>, granted_at: Instant) -> Self {
+    pub(crate) fn new(pool: Pool, mut server: Box<Server>, granted_at: Instant) -> Self {
         server.stats_mut().set_timers(granted_at);
 
         Self {
@@ -240,7 +240,7 @@ mod test {
     use std::time::Duration;
 
     use pgdog_config::pooling::ConnectionRecovery;
-    use pgdog_stats::PreparedStatementsConfig;
+    use pgdog_config::prepared_statements::PreparedStatementsConfig;
     use tokio::time::Instant;
 
     use crate::util::{safe_sleep, safe_timeout};
@@ -333,7 +333,7 @@ mod test {
         drop(guard);
 
         let guard = pool.get(&Request::default()).await.unwrap();
-        assert!(guard.prepared_statements().is_empty());
+        assert_eq!(guard.prepared_statements().len(), 0);
     }
 
     #[tokio::test]
@@ -341,12 +341,10 @@ mod test {
         crate::logger();
 
         let config = Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                min: 0,
-                rollback_timeout: Duration::from_millis(100),
-                ..Config::default().inner
-            },
+            max: 1,
+            min: 0,
+            rollback_timeout: Duration::from_millis(100),
+            ..Config::default()
         };
 
         let pool = Pool::new(&PoolConfig {

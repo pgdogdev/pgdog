@@ -19,13 +19,11 @@ use crate::state::State;
 
 use super::*;
 
-pub fn pool() -> Pool {
+pub(crate) fn pool() -> Pool {
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 1,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 1,
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -43,17 +41,15 @@ pub fn pool() -> Pool {
     pool
 }
 
-pub fn pool_with_prepared_capacity(capacity: usize) -> Pool {
+pub(crate) fn pool_with_prepared_capacity(capacity: usize) -> Pool {
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 1,
-            prepared_statements: pgdog_stats::PreparedStatementsConfig {
-                limit: capacity,
-                ..Default::default()
-            },
-            ..Config::default().inner
+        max: 1,
+        min: 1,
+        prepared_statements: pgdog_config::prepared_statements::PreparedStatementsConfig {
+            limit: capacity,
+            ..Default::default()
         },
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -89,7 +85,7 @@ async fn test_checkout_replaces_connection_closed_by_server() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
 
@@ -105,7 +101,7 @@ async fn test_server_closed_does_not_mark_pool_unhealthy() {
     let killed = conn.id();
     drop(conn);
 
-    terminate_backend(killed.pid()).await;
+    terminate_backend(killed.pid).await;
 
     let conn = pool.get(&Request::default()).await.unwrap();
     drop(conn);
@@ -176,10 +172,8 @@ async fn test_concurrency_with_gas() {
     let tracker = TaskTracker::new();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 10,
-            ..Config::default().inner
-        },
+        max: 10,
+        ..Config::default()
     };
     pool.update_config(config);
 
@@ -218,11 +212,9 @@ async fn test_pause() {
     let pool = pool();
     let tracker = TaskTracker::new();
     let config = Config {
-        inner: pgdog_stats::Config {
-            checkout_timeout: Duration::from_millis(1_000),
-            max: 1,
-            ..Config::default().inner
-        },
+        checkout_timeout: Duration::from_millis(1_000),
+        max: 1,
+        ..Config::default()
     };
     pool.update_config(config);
 
@@ -364,11 +356,9 @@ async fn test_server_force_close_discards_connection() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -533,13 +523,11 @@ async fn test_idle_healthcheck_loop() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 1,
-            idle_healthcheck_interval: Duration::from_millis(100),
-            idle_healthcheck_delay: Duration::from_millis(10),
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 1,
+        idle_healthcheck_interval: Duration::from_millis(100),
+        idle_healthcheck_delay: Duration::from_millis(10),
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -580,14 +568,12 @@ async fn test_idle_healthcheck_loop_disabled_with_zero_interval() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            idle_healthcheck_interval: Duration::ZERO,
-            idle_healthcheck_delay: Duration::from_millis(10),
-            healthcheck_timeout: Duration::from_millis(10),
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        idle_healthcheck_interval: Duration::ZERO,
+        idle_healthcheck_delay: Duration::from_millis(10),
+        healthcheck_timeout: Duration::from_millis(10),
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -618,12 +604,10 @@ async fn test_checkout_timeout() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 1,
-            checkout_timeout: Duration::from_millis(100),
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 1,
+        checkout_timeout: Duration::from_millis(100),
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -647,11 +631,9 @@ async fn test_move_conns_to() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 3,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 3,
+        min: 0,
+        ..Config::default()
     };
 
     let source = Pool::new(&PoolConfig {
@@ -716,11 +698,9 @@ async fn test_move_conns_all_idle() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 3,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 3,
+        min: 0,
+        ..Config::default()
     };
 
     let source = Pool::new(&PoolConfig {
@@ -763,11 +743,9 @@ async fn test_move_conns_all_checked_out() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 3,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 3,
+        min: 0,
+        ..Config::default()
     };
 
     let source = Pool::new(&PoolConfig {
@@ -818,11 +796,9 @@ async fn test_move_conns_destination_serves_after_launch() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 3,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 3,
+        min: 0,
+        ..Config::default()
     };
 
     let source = Pool::new(&PoolConfig {
@@ -859,12 +835,10 @@ async fn test_move_conns_destination_serves_after_launch() {
 
 fn auth_pool(passwords: Vec<Password>) -> Pool {
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            connect_attempts: 1,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        connect_attempts: 1,
+        ..Config::default()
     };
 
     Pool::new(&PoolConfig {
@@ -996,14 +970,12 @@ async fn test_lsn_monitor() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 1,
-            lsn_check_delay: Duration::from_millis(10),
-            lsn_check_interval: Duration::from_millis(50),
-            lsn_check_timeout: Duration::from_millis(5_000),
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 1,
+        lsn_check_delay: Duration::from_millis(10),
+        lsn_check_interval: Duration::from_millis(50),
+        lsn_check_timeout: Duration::from_millis(5_000),
+        ..Config::default()
     };
 
     let pool = Pool::new(&PoolConfig {
@@ -1045,11 +1017,9 @@ async fn test_token_refresh_loop_primes_cache_on_cold_start() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let addr = Address {
@@ -1083,11 +1053,9 @@ async fn test_token_refresh_loop_refreshes_before_expiry() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let addr = Address {
@@ -1128,11 +1096,9 @@ async fn test_token_refresh_loop_evicts_on_failed_refresh() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let addr = Address {
@@ -1173,11 +1139,9 @@ async fn test_token_refresh_loop_not_spawned_for_password_auth() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let addr = Address {
@@ -1213,11 +1177,9 @@ async fn test_token_refresh_loop_stops_on_shutdown() {
     crate::logger();
 
     let config = Config {
-        inner: pgdog_stats::Config {
-            max: 1,
-            min: 0,
-            ..Config::default().inner
-        },
+        max: 1,
+        min: 0,
+        ..Config::default()
     };
 
     let addr = Address {

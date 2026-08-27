@@ -14,20 +14,20 @@ use crate::net::parameter::ParameterValue;
 /// borrowed references.
 #[derive(Debug)]
 #[cfg_attr(test, derive(Default))]
-pub struct AstContext<'a> {
+pub(crate) struct AstContext<'a> {
     /// Sharding schema configuration.
-    pub sharding_schema: ShardingSchema,
+    pub(crate) sharding_schema: ShardingSchema,
     /// Database schema with table/column info.
-    pub db_schema: Schema,
+    pub(crate) db_schema: Schema,
     /// User name for search_path resolution.
-    pub user: &'a str,
+    pub(crate) user: &'a str,
     /// Search path for table lookups.
-    pub search_path: Option<&'a ParameterValue>,
+    pub(crate) search_path: Option<&'a ParameterValue>,
 }
 
 impl<'a> AstContext<'a> {
     /// Create AstContext from a Cluster and Parameters.
-    pub fn from_cluster(cluster: &'a Cluster, params: &'a Parameters) -> Self {
+    pub(crate) fn from_cluster(cluster: &'a Cluster, params: &'a Parameters) -> Self {
         Self {
             sharding_schema: cluster.sharding_schema(),
             db_schema: cluster.schema(),
@@ -38,16 +38,16 @@ impl<'a> AstContext<'a> {
 }
 
 /// Query passed to the parser.
-pub struct AstQuery<'a> {
+pub(crate) struct AstQuery<'a> {
     /// The original request.
-    pub original_query: &'a BufferedQuery,
+    pub(crate) original_query: &'a BufferedQuery,
     /// Query without comments and other noise.
-    pub query_without_comment: &'a str,
+    pub(crate) query_without_comment: &'a str,
 }
 
 impl<'a> AstQuery<'a> {
     /// Return the first `sample_len` characters of the original query, including any comment.
-    pub fn truncated_query(&self, sample_len: usize) -> &str {
+    pub(crate) fn truncated_query(&self, sample_len: usize) -> &str {
         let query = self.original_query.query();
         let end = query
             .char_indices()

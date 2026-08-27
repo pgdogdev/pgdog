@@ -8,8 +8,10 @@ use crate::{
     net::{FrontendPid, Parameters, Stream},
 };
 
+use super::split::Pipeline;
+
 /// Context passed to the query engine to execute a query.
-pub struct QueryEngineContext<'a> {
+pub(crate) struct QueryEngineContext<'a> {
     /// Client ID running the query.
     pub(super) id: FrontendPid,
     /// Prepared statements cache.
@@ -18,8 +20,8 @@ pub struct QueryEngineContext<'a> {
     pub(super) params: &'a mut Parameters,
     /// Request.
     pub(super) client_request: &'a mut ClientRequest,
-    /// Request position in a splice.
-    pub(super) requests_left: usize,
+    /// How many requests are left to execute in an extended pipeline.
+    pub(super) pipeline: Pipeline,
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
@@ -45,7 +47,7 @@ pub struct QueryEngineContext<'a> {
 }
 
 impl<'a> QueryEngineContext<'a> {
-    pub fn new(client: &'a mut Client) -> Self {
+    pub(crate) fn new(client: &'a mut Client) -> Self {
         let memory_stats = client.memory_stats();
 
         Self {
@@ -59,7 +61,7 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats,
             admin: client.admin,
-            requests_left: 0,
+            pipeline: Pipeline::None,
             rollback: false,
             sticky: client.sticky,
             rewrite_result: None,
@@ -68,14 +70,16 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub fn spliced(mut self, req: &'a mut ClientRequest, request_left: usize) -> Self {
+    /// The request is an extended protocol pipeline
+    /// with a counter of how many requests are left to process.
+    pub(crate) fn pipelined(mut self, req: &'a mut ClientRequest, pipeline: Pipeline) -> Self {
         self.client_request = req;
-        self.requests_left = request_left;
+        self.pipeline = pipeline;
         self
     }
 
     /// Create context from mirror.
-    pub fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
+    pub(crate) fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
         Self {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
@@ -87,7 +91,7 @@ impl<'a> QueryEngineContext<'a> {
             cross_shard_disabled: None,
             memory_stats: MemoryStats::default(),
             admin: false,
-            requests_left: 0,
+            pipeline: Pipeline::None,
             rollback: false,
             sticky: Sticky::new(),
             rewrite_result: None,
@@ -96,15 +100,15 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<TransactionType> {
         self.transaction
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
-    pub fn in_error(&self) -> bool {
+    pub(crate) fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
     }
 }

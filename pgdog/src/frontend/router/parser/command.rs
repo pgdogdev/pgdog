@@ -6,14 +6,15 @@ use crate::{
 use lazy_static::lazy_static;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SetParam {
-    pub name: String,
-    pub value: Option<ParameterValue>,
-    pub local: bool,
+pub(crate) struct SetParam {
+    pub(crate) name: String,
+    pub(crate) value: Option<ParameterValue>,
+    pub(crate) local: bool,
 }
 
+/// Query parser result.
 #[derive(Debug, Clone)]
-pub enum Command {
+pub(crate) enum Command {
     Query(Route),
     Copy(Box<CopyParser>),
     StartTransaction {
@@ -31,8 +32,9 @@ pub enum Command {
     Set {
         params: Vec<SetParam>,
         route: Route,
-        behave_like_select: bool,
+        set_config: bool,
     },
+    Split(#[allow(unused)] Vec<String>),
     ResetAll,
     InternalField {
         name: String,
@@ -56,7 +58,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn route(&self) -> &Route {
+    pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route =
                 Route::write(ShardWithPriority::new_default_unset(Shard::All));

@@ -7,7 +7,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Clone, PartialEq)]
-pub struct Execute {
+pub(crate) struct Execute {
     payload: Bytes,
     portal_len: usize,
 }
@@ -27,7 +27,7 @@ impl Debug for Execute {
 }
 
 impl Execute {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut payload = Payload::named('E');
         payload.put_string("");
         payload.put_i32(0);
@@ -37,7 +37,8 @@ impl Execute {
         }
     }
 
-    pub fn new_portal(name: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_portal(name: &str) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
         payload.put_i32(0);
@@ -49,7 +50,8 @@ impl Execute {
 
     /// Create an Execute message for a named portal with a row limit.
     /// A limit of 0 means fetch all rows.
-    pub fn new_portal_limit(name: &str, max_rows: i32) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_portal_limit(name: &str, max_rows: i32) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
         payload.put_i32(max_rows);
@@ -59,7 +61,7 @@ impl Execute {
         }
     }
 
-    pub fn portal(&self) -> &str {
+    pub(crate) fn portal(&self) -> &str {
         let start = 5;
         let end = start
             + if self.portal_len > 0 {
@@ -71,13 +73,7 @@ impl Execute {
         from_utf8(buf).unwrap_or("")
     }
 
-    /// Number of rows to return.
-    pub fn max_rows(&self) -> i32 {
-        let mut buf = &self.payload[5 + self.portal_len..];
-        buf.get_i32()
-    }
-
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.payload.len()
     }
 }
@@ -118,7 +114,6 @@ mod test {
 
         let execute = Execute::from_bytes(msg).unwrap();
         assert_eq!(execute.portal(), "test");
-        assert_eq!(execute.max_rows(), 25);
 
         let exec = Execute::new_portal("test1");
         assert_eq!(exec.portal(), "test1");

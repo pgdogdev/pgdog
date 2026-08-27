@@ -1,0 +1,67 @@
+name: Sign and attest image
+description: Keylessly sign an image digest and publish SLSA v1 provenance
+
+inputs:
+  image:
+    description: Fully qualified image digest
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      with:
+        cosign-release: v3.0.6
+
+    - name: Sign and attest image
+      env:
+        IMAGE: ${{ inputs.image }}
+        BUILDER_ID: https://github.com/${{ github.workflow_ref }}
+        INVOCATION_ID: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        REPOSITORY_ID: ${{ github.repository_id }}
+        REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+        RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      run: |
+        workflow="${GITHUB_WORKFLOW_REF#${GITHUB_REPOSITORY}/}"
+        workflow_path="${workflow%@*}"
+        workflow_ref="${GITHUB_WORKFLOW_REF##*@}"
+        jq -n \
+          --arg build_type "https://actions.github.io/buildtypes/workflow/v1" \
+          --arg repository "https://github.com/${GITHUB_REPOSITORY}" \
+          --arg workflow_path "${workflow_path}" \
+          --arg workflow_ref "${workflow_ref}" \
+          --arg source_ref "${GITHUB_REF}" \
+          --arg sha "${GITHUB_SHA}" \
+          --arg event_name "${GITHUB_EVENT_NAME}" \
+          --arg repository_id "${REPOSITORY_ID}" \
+          --arg repository_owner_id "${REPOSITORY_OWNER_ID}" \
+          --arg runner_environment "${RUNNER_ENVIRONMENT}" \
+          --arg builder_id "${BUILDER_ID}" \
+          --arg invocation_id "${INVOCATION_ID}" \
+          '{
+            buildDefinition: {
+              buildType: $build_type,
+              externalParameters: {
+                workflow: {path: $workflow_path, ref: $workflow_ref, repository: $repository}
+              },
+              internalParameters: {github: {
+                event_name: $event_name,
+                repository_id: $repository_id,
+                repository_owner_id: $repository_owner_id,
+                runner_environment: $runner_environment
+              }},
+              resolvedDependencies: [{
+                uri: ("git+" + $repository + "@" + $source_ref),
+                digest: {gitCommit: $sha}
+              }]
+            },
+            runDetails: {
+              builder: {id: $builder_id},
+              metadata: {invocationId: $invocation_id}
+            }
+          }' > provenance.json
+        # Keyless signing records the workflow identity in Sigstore's public transparency log.
+        cosign sign --yes "${IMAGE}"
+        cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${IMAGE}"
+      shell: bash

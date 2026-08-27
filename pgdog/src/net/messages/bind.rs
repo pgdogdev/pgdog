@@ -1,6 +1,5 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
-use uuid::Uuid;
 
 use super::Error;
 use super::FromDataType;
@@ -8,21 +7,20 @@ use super::Vector;
 use super::c_string_bytes;
 use super::code;
 use super::prelude::*;
-use bytes::BytesMut;
 
 use std::fmt::Debug;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
 
-pub use pgdog_postgres_types::Format;
+pub(crate) use pgdog_postgres_types::Format;
 
 /// Parameter data.
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq)]
-pub struct Parameter {
+pub(crate) struct Parameter {
     /// Parameter data length.
-    pub len: i32,
+    pub(crate) len: i32,
     /// Parameter data.
-    pub data: Bytes,
+    pub(crate) data: Bytes,
 }
 
 impl Debug for Parameter {
@@ -44,14 +42,14 @@ impl Parameter {
     }
 
     /// Create a null parameter (no data).
-    pub fn new_null() -> Self {
+    pub(crate) fn new_null() -> Self {
         Self {
             len: -1,
             data: Bytes::new(),
         }
     }
 
-    pub fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         Self {
             len: data.len() as i32,
             data: Bytes::copy_from_slice(data),
@@ -61,7 +59,7 @@ impl Parameter {
 
 /// Parameter with encoded format.
 #[derive(Debug, Clone)]
-pub struct ParameterWithFormat<'a> {
+pub(crate) struct ParameterWithFormat<'a> {
     parameter: &'a Parameter,
     format: Format,
 }
@@ -73,12 +71,12 @@ impl<'a> ParameterWithFormat<'a> {
     }
 
     /// Get text representation if it's valid UTF-8.
-    pub fn text(&self) -> Option<&str> {
+    pub(crate) fn text(&self) -> Option<&str> {
         from_utf8(&self.parameter.data).ok()
     }
 
     /// Get the parameter as a textual value for debugging purposes only.
-    pub fn text_debug(&self) -> String {
+    pub(crate) fn text_debug(&self) -> String {
         if let Some(text) = self.text() {
             text.to_string()
         } else {
@@ -87,45 +85,40 @@ impl<'a> ParameterWithFormat<'a> {
     }
 
     /// Get BIGINT if one is encoded in the field.
-    pub fn bigint(&self) -> Option<i64> {
-        Self::decode(self)
-    }
-
-    /// Get UUID, if one is encoded in the field.
-    pub fn uuid(&self) -> Option<Uuid> {
+    pub(crate) fn bigint(&self) -> Option<i64> {
         Self::decode(self)
     }
 
     /// Get vector, if one is encoded in the field.
-    pub fn vector(&self) -> Option<Vector> {
+    pub(crate) fn vector(&self) -> Option<Vector> {
         Self::decode(self)
     }
 
     /// Get decoded value.
-    pub fn decode<T: FromDataType>(&self) -> Option<T> {
+    pub(crate) fn decode<T: FromDataType>(&self) -> Option<T> {
         T::decode(&self.parameter.data, self.format).ok()
     }
 
-    pub fn format(&self) -> Format {
+    pub(crate) fn format(&self) -> Format {
         self.format
     }
 
-    pub fn data(&'a self) -> &'a [u8] {
+    pub(crate) fn data(&'a self) -> &'a [u8] {
         &self.parameter.data
     }
 
-    pub fn is_null(&self) -> bool {
+    pub(crate) fn is_null(&self) -> bool {
         self.parameter.len < 0
     }
 
-    pub fn parameter(&self) -> &Parameter {
+    pub(crate) fn parameter(&self) -> &Parameter {
         self.parameter
     }
 }
 
 /// Bind (F) message.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
-pub struct Bind {
+pub(crate) struct Bind {
     /// Portal name.
     portal: Bytes,
     /// Prepared statement name.
@@ -187,20 +180,20 @@ impl Bind {
     }
 
     /// Rename this Bind message to a different prepared statement.
-    pub fn rename(&mut self, name: impl AsRef<str>) {
+    pub(crate) fn rename(&mut self, name: impl AsRef<str>) {
         self.statement = c_string_bytes(name.as_ref());
         self.original = None;
     }
 
     /// Make this an anonymous Bind message.
-    pub fn anonymize(&mut self) {
+    pub(crate) fn anonymize(&mut self) {
         if !self.anonymous() {
             self.rename("");
         }
     }
 
     /// Is this Bind message anonymous?
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.statement.len() == 1
     }
 
@@ -211,7 +204,7 @@ impl Bind {
     }
 
     /// Format the client asked each result column to be returned in.
-    pub fn result_formats(&self) -> impl ExactSizeIterator<Item = Format> + '_ {
+    pub(crate) fn result_formats(&self) -> impl ExactSizeIterator<Item = Format> + '_ {
         self.results.chunks_exact(2).map(|code| {
             if i16::from_be_bytes([code[0], code[1]]) == 0 {
                 Format::Text
@@ -231,14 +224,15 @@ impl Bind {
         &self.codes
     }
 
-    pub fn new_statement(name: &str) -> Self {
+    pub(crate) fn new_statement(name: &str) -> Self {
         Self {
             statement: c_string_bytes(name),
             ..Default::default()
         }
     }
 
-    pub fn new_params(name: &str, params: &[Parameter]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_params(name: &str, params: &[Parameter]) -> Self {
         Self {
             statement: c_string_bytes(name),
             params: params.to_vec(),
@@ -246,7 +240,8 @@ impl Bind {
         }
     }
 
-    pub fn new_name_portal(name: &str, portal: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
             statement: c_string_bytes(name),
             portal: c_string_bytes(portal),
@@ -254,7 +249,7 @@ impl Bind {
         }
     }
 
-    pub fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
+    pub(crate) fn new_params_codes(name: &str, params: &[Parameter], codes: &[Format]) -> Self {
         Self {
             statement: c_string_bytes(name),
             codes: codes.to_vec(),
@@ -263,14 +258,15 @@ impl Bind {
         }
     }
 
-    pub fn new_params_codes_results(
+    #[cfg(test)]
+    pub(crate) fn new_params_codes_results(
         name: &str,
         params: &[Parameter],
         codes: &[Format],
         results: &[i16],
     ) -> Self {
         let mut me = Self::new_params_codes(name, params, codes);
-        let mut buf = BytesMut::with_capacity(results.len() * 2);
+        let mut buf = bytes::BytesMut::with_capacity(results.len() * 2);
         for result in results {
             buf.put_i16(*result);
         }
@@ -279,11 +275,11 @@ impl Bind {
         me
     }
 
-    pub fn params_raw(&self) -> &[Parameter] {
+    pub(crate) fn params_raw(&self) -> &[Parameter] {
         &self.params
     }
 
-    pub fn format_codes_raw(&self) -> &[Format] {
+    pub(crate) fn format_codes_raw(&self) -> &[Format] {
         &self.codes
     }
 
@@ -293,7 +289,7 @@ impl Bind {
     /// - If codes.len() == 0: all parameters use Text
     /// - If codes.len() == 1: all parameters use that one format (uniform)
     /// - If codes.len() == params.len() (and > 1): one-to-one mapping
-    pub fn push_param(&mut self, param: Parameter, format: Format) {
+    pub(crate) fn push_param(&mut self, param: Parameter, format: Format) {
         if self.codes.len() == 1 {
             // Uniform format: if new format differs, expand to one-to-one
             if self.codes[0] != format {
@@ -318,7 +314,7 @@ impl Bind {
 
     /// Overwrite an existing parameter at the given index.
     /// Returns `false` if the index is out of bounds.
-    pub fn set_param(&mut self, index: usize, param: Parameter) -> bool {
+    pub(crate) fn set_param(&mut self, index: usize, param: Parameter) -> bool {
         if let Some(slot) = self.params.get_mut(index) {
             *slot = param;
             self.original = None;
@@ -329,7 +325,7 @@ impl Bind {
     }
 
     /// Get the effective format for new parameters.
-    pub fn default_param_format(&self) -> Format {
+    pub(crate) fn default_param_format(&self) -> Format {
         if self.codes.len() == 1 {
             self.codes[0]
         } else if self.codes.is_empty() {
@@ -495,7 +491,7 @@ mod test {
                 },
             ],
             results: {
-                let mut buf = BytesMut::with_capacity(2);
+                let mut buf = bytes::BytesMut::with_capacity(2);
                 buf.put_i16(0);
                 buf.freeze()
             },
@@ -592,7 +588,7 @@ mod test {
         let decoded = Bind::from_bytes(bytes.clone()).unwrap();
 
         assert_eq!(decoded.params_raw().len(), count);
-        assert_eq!(decoded.codes().len(), 0);
+        assert_eq!(decoded.codes.len(), 0);
         assert_eq!(decoded.statement(), "__pgdog_large");
         assert_eq!(bytes.len(), decoded.len());
     }

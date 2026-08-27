@@ -14,7 +14,7 @@ use super::prelude::*;
 /// statements are never known to be the same.
 ///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-pub enum CacheKey {
+pub(crate) enum CacheKey {
     Extended { query: Bytes, data_types: Bytes },
     Simple { query: Bytes },
 }

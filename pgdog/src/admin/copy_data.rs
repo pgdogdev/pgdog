@@ -8,11 +8,11 @@ use crate::backend::replication::orchestrator::Orchestrator;
 
 use super::prelude::*;
 
-pub struct CopyData {
-    pub from_database: String,
-    pub to_database: String,
-    pub publication: String,
-    pub replication_slot: Option<String>,
+pub(crate) struct CopyData {
+    pub(crate) from_database: String,
+    pub(crate) to_database: String,
+    pub(crate) publication: String,
+    pub(crate) replication_slot: Option<String>,
 }
 
 #[async_trait]

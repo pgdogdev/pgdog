@@ -81,7 +81,7 @@ impl<'a> UpdateMulti<'a> {
             // This happens, but the UPDATE's WHERE clause
             // doesn't match any rows, so this whole thing is a no-op.
             self.engine
-                .fake_command_response(context, "UPDATE 0", None::<Option<_>>)
+                .fake_command_response(context, "UPDATE 0", None)
                 .await?;
         }
 

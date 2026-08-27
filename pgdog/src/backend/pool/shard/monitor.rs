@@ -176,10 +176,8 @@ mod test {
         PoolConfig {
             address,
             config: Config {
-                inner: pgdog_stats::Config {
-                    role_detection: true,
-                    ..Config::default().inner
-                },
+                role_detection: true,
+                ..Config::default()
             },
         }
     }

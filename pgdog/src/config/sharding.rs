@@ -1,1 +1,1 @@
-pub use pgdog_config::sharding::{DataType, Hasher, ShardedMappingDeprecated};
+pub(crate) use pgdog_config::sharding::{DataType, Hasher, ShardedMappingDeprecated};

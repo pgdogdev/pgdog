@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use pg_raw_parse::{Node, Owned, StmtList, make};
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -20,29 +21,29 @@ use crate::{backend::ShardingSchema, config::Role};
 /// Abstract syntax tree (query) cache entry,
 /// with statistics.
 #[derive(Debug, Clone)]
-pub struct Ast {
+pub(crate) struct Ast {
     /// Was this entry cached?
-    pub cached: bool,
+    pub(crate) cached: bool,
     /// Shard.
-    pub comment_shard: Option<ShardOrLookup>,
+    pub(crate) comment_shard: Option<ShardOrLookup>,
     /// Role.
-    pub comment_role: Option<Role>,
+    pub(crate) comment_role: Option<Role>,
     /// Sharding Key.
-    pub comment_sharding_key: Option<String>,
+    pub(crate) comment_sharding_key: Option<String>,
     /// Inner sync.
     inner: Arc<AstInner>,
 }
 
 #[derive(Debug)]
-pub struct AstInner {
+pub(crate) struct AstInner {
     /// Cached AST.
     pub(crate) ast: Owned<StmtList>,
     /// AST stats.
-    pub stats: Mutex<Stats>,
+    pub(crate) stats: Mutex<Stats>,
     /// Rewrite plan.
-    pub rewrite_plan: RewritePlan,
+    pub(crate) rewrite_plan: RewritePlan,
     /// Original query.
-    pub query_without_comment: Arc<str>,
+    pub(crate) query_without_comment: Arc<str>,
 }
 
 impl AstInner {
@@ -93,7 +94,8 @@ impl Ast {
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut ast = mem.parse(query.query_without_comment)?;
-            if let Some(stmt) = ast.as_mut().into_iter().next() {
+            // Parser should not receive multi-query requests.
+            if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
                 rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
             Ok::<_, Error>(ast)
@@ -157,7 +159,7 @@ impl Ast {
     }
 
     /// Create new AST from a parse result.
-    pub fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
+    pub(crate) fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
         Self {
             cached: true,
             comment_role: None,
@@ -169,7 +171,7 @@ impl Ast {
 
     /// Update stats for this statement, given the route
     /// calculated by the query parser.
-    pub fn update_stats(&self, route: &Route) {
+    pub(crate) fn update_stats(&self, route: &Route) {
         let mut guard = self.stats.lock();
 
         if route.is_cross_shard() {
@@ -206,7 +208,7 @@ impl Ast {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum StatementType {
+pub(crate) enum StatementType {
     Ddl,
     Dml,
     Session,

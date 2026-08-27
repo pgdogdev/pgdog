@@ -1027,7 +1027,7 @@
         },
         "prepared_statements": {
           "description": "Enables support for prepared statements.\n\n_Default:_ `extended`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>",
-          "$ref": "#/$defs/PreparedStatements",
+          "$ref": "#/$defs/PreparedStatementsLevel",
           "default": "extended"
         },
         "prepared_statements_limit": {
@@ -1704,7 +1704,7 @@
         }
       ]
     },
-    "PreparedStatements": {
+    "PreparedStatementsLevel": {
       "description": "prepared statement support mode.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>",
       "oneOf": [
         {

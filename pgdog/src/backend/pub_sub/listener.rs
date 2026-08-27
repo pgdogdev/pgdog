@@ -125,7 +125,7 @@ struct Channel {
 }
 
 #[derive(Debug)]
-pub struct Listener {
+pub(crate) struct Listener {
     rx: broadcast::Receiver<NotificationResponse>,
     stats: Arc<Stats>,
 }
@@ -212,7 +212,7 @@ struct Comms {
 
 /// Notification listener.
 #[derive(Debug, Clone)]
-pub struct PubSubListener {
+pub(crate) struct PubSubListener {
     id: FrontendPid,
     pool: Pool,
     pool_key: PoolKey,
@@ -227,7 +227,7 @@ impl PubSubListener {
     /// `identifier` and `shard` scope the channels this listener owns. They are
     /// the pgdog-side identity of the pool, so they survive a primary being
     /// promoted underneath us, which the server address would not.
-    pub fn new(pool: &Pool, identifier: &User, shard: usize) -> Self {
+    pub(crate) fn new(pool: &Pool, identifier: &User, shard: usize) -> Self {
         let (tx, mut rx) = mpsc::channel(channel_size());
 
         let pool = pool.clone();
@@ -250,7 +250,7 @@ impl PubSubListener {
         let pool_key = listener.pool_key.clone();
         let pool = listener.pool.clone();
         let comms = listener.comms.clone();
-        tasks::spawn("pub sub", async move {
+        tasks::spawn("pub(crate) sub", async move {
             loop {
                 select! {
                     _ = comms.start.notified() => {}
@@ -291,17 +291,17 @@ impl PubSubListener {
     }
 
     /// Launch the listener.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         self.comms.start.notify_one();
     }
 
     /// Shutdown the listener.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.comms.shutdown.cancel();
     }
 
     /// Listen on a channel.
-    pub async fn listen(&self, channel_name: &str) -> Result<Listener, Error> {
+    pub(crate) async fn listen(&self, channel_name: &str) -> Result<Listener, Error> {
         let listener = {
             let mut guard = self.channels.lock();
             let channels = guard.entry(self.pool_key.clone()).or_default();
@@ -333,7 +333,7 @@ impl PubSubListener {
     }
 
     /// Notify a channel with payload.
-    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+    pub(crate) async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
         self.tx
             .send(Request::Notify {
                 channel: channel.to_string(),

@@ -1,25 +1,18 @@
 use bytes::BytesMut;
 
-use crate::net::CopyData;
-use crate::net::replication::ReplicationMeta;
-
 use super::super::code;
 use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct KeepAlive {
-    pub wal_end: i64,
-    pub system_clock: i64,
-    pub reply: u8,
+pub(crate) struct KeepAlive {
+    pub(crate) wal_end: i64,
+    pub(crate) system_clock: i64,
+    pub(crate) reply: u8,
 }
 
 impl KeepAlive {
-    pub fn wrapped(self) -> Result<CopyData, Error> {
-        Ok(CopyData::new(&ReplicationMeta::KeepAlive(self).to_bytes()))
-    }
-
     /// Origin expects reply.
-    pub fn reply(&self) -> bool {
+    pub(crate) fn reply(&self) -> bool {
         self.reply == 1
     }
 }
@@ -50,6 +43,7 @@ impl ToBytes for KeepAlive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::{CopyData, replication::ReplicationMeta};
 
     #[test]
     fn keep_alive_roundtrip_and_reply_flag() {
@@ -69,7 +63,7 @@ mod tests {
         assert_eq!(decoded.reply, 1);
         assert!(decoded.reply());
 
-        let wrapped = decoded.wrapped().expect("wrap keepalive copydata");
+        let wrapped = CopyData::new(&ReplicationMeta::KeepAlive(decoded).to_bytes());
         let meta = wrapped.replication_meta().expect("decode replication meta");
         matches!(meta, ReplicationMeta::KeepAlive(_))
             .then_some(())

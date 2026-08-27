@@ -14,7 +14,7 @@ impl QueryParser {
             Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: true,
+                set_config: true,
             }
         } else {
             Command::Query(

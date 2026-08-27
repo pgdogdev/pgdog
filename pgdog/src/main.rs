@@ -46,18 +46,18 @@ mod backend;
 mod cli;
 mod config;
 mod frontend;
-pub mod healthcheck;
-pub mod net;
-pub mod plugin;
-pub mod sighup;
-pub mod state;
-pub mod stats;
+mod healthcheck;
+mod net;
+mod plugin;
+mod sighup;
+mod state;
+mod stats;
 pub(crate) mod sync;
-pub mod tasks;
+mod tasks;
 #[cfg(test)]
-pub mod test_utils;
-pub mod unique_id;
-pub mod util;
+mod test_utils;
+mod unique_id;
+mod util;
 
 #[cfg(test)]
 mod tests;

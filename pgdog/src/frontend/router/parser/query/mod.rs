@@ -31,6 +31,7 @@ mod set;
 mod set_config;
 mod shared;
 mod show;
+mod split;
 mod transaction;
 mod update;
 
@@ -53,7 +54,7 @@ use tracing::{debug, trace};
 /// of the parsing.
 ///
 #[derive(Debug, Default)]
-pub struct QueryParser {
+pub(crate) struct QueryParser {
     // No matter what query is executed, we'll send it to the primary.
     write_override: bool,
     // Plugin read override.
@@ -88,7 +89,7 @@ impl QueryParser {
     }
 
     /// Parse a query and return a command.
-    pub fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
+    pub(crate) fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {
@@ -335,10 +336,7 @@ impl QueryParser {
             .run()?;
         }
 
-        // Handle multi-statement SET commands (e.g. "SET x TO 1; SET y TO 2").
-        if stmts.len() > 1
-            && let Some(command) = self.try_multi_set(&**stmts, context)?
-        {
+        if let Some(command) = self.check_multi_query_statement(statement, context)? {
             return Ok(command);
         }
 

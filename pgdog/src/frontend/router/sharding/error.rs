@@ -3,7 +3,7 @@ use std::{array::TryFromSliceError, ffi::NulError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     ParseInt(String),
 
@@ -33,12 +33,6 @@ pub enum Error {
 
     #[error("{0}")]
     NullError(#[from] NulError),
-
-    #[error("btree node error")]
-    BtreeNodeError,
-
-    #[error("range is overlapping or incorrect")]
-    IncorrectRange,
 
     #[error("config has more than one sharding function")]
     MultipleShardingFunctions,

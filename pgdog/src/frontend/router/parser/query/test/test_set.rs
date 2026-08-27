@@ -10,6 +10,7 @@ use crate::{
     net::parameter::ParameterValue,
 };
 
+use super::Error;
 use super::setup::*;
 
 #[test]
@@ -29,16 +30,38 @@ fn test_mixed_set_passthrough_in_session_mode() {
 }
 
 #[test]
-fn test_mixed_set_rejected_in_transaction_mode() {
+fn test_mixed_set_split_in_transaction_mode() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET DateStyle='ISO'; show transaction_isolation").into(),
     ]);
-    assert!(
-        result.is_err(),
-        "expected error for mixed SET in transaction mode, got {result:#?}",
-    );
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
+}
+
+#[test]
+fn test_mixed_set_multiple_queries_error() {
+    let mut test = QueryParserTest::new();
+
+    let result = test
+        .try_execute(vec![
+            Query::new("SET application_name TO 'test'; SELECT 1; SELECT 2;").into(),
+        ])
+        .unwrap_err();
+
+    assert!(matches!(result, Error::MultiStatementSafety));
+}
+
+#[test]
+fn test_mixed_set_reset_query_works() {
+    let mut test = QueryParserTest::new();
+
+    let command = test
+        .execute(vec![
+            Query::new("SET application_name TO 'test'; SELECT 1; RESET application_name; SHOW application_name;").into(),
+        ]);
+
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 4));
 }
 
 #[test]
@@ -66,15 +89,13 @@ fn test_set_config_null_value() {
 
     match command {
         Command::Set {
-            params,
-            behave_like_select,
-            ..
+            params, set_config, ..
         } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].name, "lock_timeout");
             assert_eq!(params[0].value, None);
             assert!(!params[0].local);
-            assert!(behave_like_select);
+            assert!(set_config);
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
     }
@@ -121,24 +142,35 @@ fn test_set_multi_statement_mixed_local() {
 }
 
 #[test]
-fn test_set_multi_statement_mixed_returns_error() {
+fn test_set_multi_statement_mixed_returns_split() {
     let mut test = QueryParserTest::new();
 
-    let result = test.try_execute(vec![
+    let command = test.execute(vec![
         Query::new("SET statement_timeout TO 1; SELECT 1").into(),
     ]);
-    assert!(result.is_err());
+
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
 }
 
 #[test]
 fn test_multi_statement_no_set_falls_through() {
-    let mut test = QueryParserTest::new();
+    let mut test = QueryParserTest::new_single_shard(&config());
 
     let command = test.execute(vec![Query::new("SELECT 1; SELECT 2").into()]);
     assert!(
         matches!(command, Command::Query(_)),
         "multi-statement without SET should fall through, got {command:#?}",
     );
+}
+
+#[test]
+fn test_multi_statement_no_set_cross_shard_requires_transaction() {
+    let mut test = QueryParserTest::new();
+
+    let result = test
+        .try_execute(vec![Query::new("SELECT 1; SELECT 2").into()])
+        .unwrap_err();
+    assert!(matches!(result, Error::MultiStatementSafety))
 }
 
 #[test]

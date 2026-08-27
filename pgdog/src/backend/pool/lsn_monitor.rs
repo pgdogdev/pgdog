@@ -17,7 +17,7 @@ use pgdog_postgres_types::Format;
 
 use crate::util::{safe_interval, safe_sleep, safe_timeout};
 use pgdog_stats::LsnStats as StatsLsnStats;
-pub use pgdog_stats::replication::ReplicaLag;
+pub(crate) use pgdog_stats::replication::ReplicaLag;
 
 static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
 
@@ -60,7 +60,7 @@ SELECT
 
 /// LSN information.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LsnStats {
+pub(crate) struct LsnStats {
     inner: StatsLsnStats,
 }
 
@@ -86,12 +86,12 @@ impl From<StatsLsnStats> for LsnStats {
 
 impl LsnStats {
     /// How old the stats are.
-    pub fn lsn_age(&self, now: SystemTime) -> Duration {
+    pub(crate) fn lsn_age(&self, now: SystemTime) -> Duration {
         now.duration_since(self.fetched).unwrap_or_default()
     }
 
     /// Stats contain real data.
-    pub fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.inner.valid()
     }
 }
@@ -427,12 +427,10 @@ mod test {
         // Single connection, short checkout timeout so the saturated checkout
         // fails fast and the fallback path runs quickly.
         let config = Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                min: 1,
-                checkout_timeout: Duration::from_millis(100),
-                ..Config::default().inner
-            },
+            max: 1,
+            min: 1,
+            checkout_timeout: Duration::from_millis(100),
+            ..Config::default()
         };
 
         let pool = Pool::new(&PoolConfig {

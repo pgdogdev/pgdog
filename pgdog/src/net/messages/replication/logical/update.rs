@@ -2,14 +2,14 @@ use pgdog_postgres_types::Oid;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
-use super::tuple_data::{Column, TupleData};
+use super::tuple_data::TupleData;
 
 /// Pre-image in a WAL UPDATE record — exactly one variant per record:
 /// - `Key`     — byte `'K'`: identity index changed; old key columns sent.
 /// - `Old`     — byte `'O'`: `REPLICA IDENTITY FULL`; full old row sent.
 /// - `Nothing` — no K/O block precedes the new-tuple marker; the pre-image is absent.
 #[derive(Debug, Clone)]
-pub enum UpdateIdentity {
+pub(crate) enum UpdateIdentity {
     Key(TupleData),
     Old(TupleData),
     Nothing,
@@ -18,30 +18,28 @@ pub enum UpdateIdentity {
 /// WAL UPDATE record. Use with [`Table::update`](crate::backend::replication::logical::publisher::Table::update)
 /// or [`Table::update_partial`](crate::backend::replication::logical::publisher::Table::update_partial).
 #[derive(Debug, Clone)]
-pub struct Update {
-    pub oid: Oid,
-    pub identity: UpdateIdentity,
-    pub new: TupleData,
+pub(crate) struct Update {
+    pub(crate) oid: Oid,
+    pub(crate) identity: UpdateIdentity,
+    pub(crate) new: TupleData,
 }
 
 impl Update {
-    /// Get column at index.
-    pub fn column(&self, index: usize) -> Option<&Column> {
-        self.new.columns.get(index)
-    }
-
     /// Filters unchanged-TOAST (`'u'`) columns out of `new`.
     ///
     /// In a WAL UPDATE record, columns whose value did not change are sent as `'u'`
     /// (Toasted/unchanged) in the new tuple — the value is not included in the record.
     /// Stripping them yields only the columns that were actually modified.
-    pub fn partial_new(&self) -> TupleData {
+    pub(crate) fn partial_new(&self) -> TupleData {
         self.new.without_toasted()
     }
 
     /// Concatenate `where_cols` then `set_cols` into one `TupleData` for a FULL-identity UPDATE.
     /// WHERE params (`$1..$k`) come from `where_cols`; SET params (`$k+1..$n`) from `set_cols`.
-    pub fn full_identity_bind_tuple(where_cols: &TupleData, set_cols: &TupleData) -> TupleData {
+    pub(crate) fn full_identity_bind_tuple(
+        where_cols: &TupleData,
+        set_cols: &TupleData,
+    ) -> TupleData {
         TupleData {
             columns: where_cols
                 .columns
@@ -106,11 +104,11 @@ impl ToBytes for Update {
 mod test {
     use super::*;
     use crate::net::messages::replication::logical::tuple_data::{
-        Identifier, TupleData, text_col, toasted_col,
+        Column, Identifier, TupleData, text_col, toasted_col,
     };
     use pgdog_postgres_types::Oid;
 
-    fn make_update(new_cols: Vec<super::Column>) -> Update {
+    fn make_update(new_cols: Vec<Column>) -> Update {
         Update {
             oid: Oid(1),
             identity: UpdateIdentity::Nothing,
@@ -118,7 +116,7 @@ mod test {
         }
     }
 
-    fn make_update_with_old(new_cols: Vec<super::Column>, old_cols: Vec<super::Column>) -> Update {
+    fn make_update_with_old(new_cols: Vec<Column>, old_cols: Vec<Column>) -> Update {
         Update {
             oid: Oid(1),
             identity: UpdateIdentity::Old(TupleData { columns: old_cols }),

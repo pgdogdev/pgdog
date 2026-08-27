@@ -1,57 +1,26 @@
 use pgdog_postgres_types::Oid;
 
 use crate::net::c_string_buf;
-use crate::net::messages::replication::logical::string::escape;
 
 use super::super::super::code;
 use super::super::super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Relation {
-    pub oid: Oid,
-    pub namespace: String,
-    pub name: String,
-    pub replica_identity: i8,
-    pub columns: Vec<Column>,
-}
-
-impl Relation {
-    pub fn to_sql(&self) -> Result<String, Error> {
-        Ok(format!(
-            r#""{}"."{}""#,
-            escape(&self.namespace, '"'),
-            escape(&self.name, '"')
-        ))
-    }
-
-    /// Columns in the order they appear in the table
-    /// (and all subsequent data messages).
-    pub fn columns(&self) -> Vec<&str> {
-        self.columns
-            .iter()
-            .map(|column| column.name.as_str())
-            .collect()
-    }
-
-    /// Table name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
+pub(crate) struct Relation {
+    pub(crate) oid: Oid,
+    pub(crate) namespace: String,
+    pub(crate) name: String,
+    pub(crate) replica_identity: i8,
+    pub(crate) columns: Vec<Column>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub flag: i8,
-    pub name: String,
+pub(crate) struct Column {
+    pub(crate) flag: i8,
+    pub(crate) name: String,
     /// Type OID (`pg_attribute.atttypid`).
-    pub oid: Oid,
-    pub type_modifier: i32,
-}
-
-impl Column {
-    pub fn to_sql(&self) -> Result<String, Error> {
-        Ok(format!(r#""{}""#, escape(&self.name, '"')))
-    }
+    pub(crate) oid: Oid,
+    pub(crate) type_modifier: i32,
 }
 
 impl ToBytes for Relation {

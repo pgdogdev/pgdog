@@ -16,16 +16,9 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// equality-comparable identities.
 #[derive(Copy, Clone, Debug, Display, Hash, PartialEq, Eq)]
 #[display("{seq}#{pid}")]
-pub struct BackendPid {
+pub(crate) struct BackendPid {
     pub(crate) seq: u64,
     pub(crate) pid: i32,
-}
-
-impl BackendPid {
-    /// Real Postgres backend pid.
-    pub fn pid(&self) -> i32 {
-        self.pid
-    }
 }
 
 impl From<&BackendKeyData> for BackendPid {
@@ -41,7 +34,7 @@ impl From<&BackendKeyData> for BackendPid {
 impl BackendPid {
     /// Stable identity for tests. Does not touch the global counter.
     /// Never use outside `#[cfg(test)]` — the value is not process-unique.
-    pub fn for_test(n: i32) -> Self {
+    pub(crate) fn for_test(n: i32) -> Self {
         Self {
             seq: n as u64,
             pid: n,

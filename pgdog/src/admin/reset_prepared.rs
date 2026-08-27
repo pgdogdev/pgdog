@@ -3,7 +3,7 @@ use crate::frontend::prepared_statements::PreparedStatements;
 
 use super::prelude::*;
 
-pub struct ResetPrepared;
+pub(crate) struct ResetPrepared;
 
 #[async_trait]
 impl Command for ResetPrepared {

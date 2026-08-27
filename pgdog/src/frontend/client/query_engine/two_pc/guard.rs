@@ -1,7 +1,7 @@
 use crate::frontend::client::query_engine::two_pc::{TwoPcTransaction, manager::Manager};
 
 #[derive(Debug)]
-pub struct TwoPcGuard {
+pub(crate) struct TwoPcGuard {
     pub(super) transaction: TwoPcTransaction,
     pub(super) manager: Manager,
 }

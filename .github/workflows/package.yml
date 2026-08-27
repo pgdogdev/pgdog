@@ -25,7 +25,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -83,12 +82,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
+      - name: Sign and attest artifact
+        uses: ./.github/actions/sign-and-attest-image
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
   merge:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -97,7 +94,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -159,6 +155,19 @@ jobs:
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Get manifest digest
+        id: manifest
+        run: |
+          digest=$(docker buildx imagetools inspect \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} \
+            --format '{{json .Manifest}}' | jq -r '.digest')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and attest merged artifact
+        uses: ./.github/actions/sign-and-attest-image
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }}
 
       - name: Inspect image
         run: |

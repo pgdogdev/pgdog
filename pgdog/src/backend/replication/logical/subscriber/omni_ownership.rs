@@ -3,13 +3,13 @@
 /// Partitions destinations via `dest_shard % n_sources == source_shard` so that each
 /// subscriber owns a disjoint subset, preventing cross-subscriber row-lock deadlocks.
 #[derive(Debug, Clone, Copy)]
-pub struct OmniOwnership {
+pub(crate) struct OmniOwnership {
     source_shard: usize,
     n_sources: usize,
 }
 
 impl OmniOwnership {
-    pub fn new(source_shard: usize, n_sources: usize) -> Self {
+    pub(crate) fn new(source_shard: usize, n_sources: usize) -> Self {
         debug_assert!(
             n_sources == 0 || source_shard < n_sources,
             "source_shard ({source_shard}) must be < n_sources ({n_sources})"
@@ -21,7 +21,7 @@ impl OmniOwnership {
     }
 
     /// Returns true if this subscriber should write omni-table DML to `dest_shard`.
-    pub fn owns(&self, dest_shard: usize) -> bool {
+    pub(crate) fn owns(&self, dest_shard: usize) -> bool {
         if self.n_sources <= 1 {
             return true;
         }
@@ -31,7 +31,7 @@ impl OmniOwnership {
 
 #[cfg(test)]
 impl OmniOwnership {
-    pub fn test() -> Self {
+    pub(crate) fn test() -> Self {
         Self::new(0, 1)
     }
 }

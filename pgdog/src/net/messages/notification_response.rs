@@ -8,30 +8,21 @@ use super::prelude::*;
 
 /// NotificationResponse (B).
 #[derive(Debug, Clone)]
-pub struct NotificationResponse {
+pub(crate) struct NotificationResponse {
     payload: Bytes,
     channel_len: usize,
+    // Parsed off the wire for correctness; no getter needed yet.
+    #[allow(dead_code)]
     pid: i32,
 }
 
 impl NotificationResponse {
     /// Get the name of the notification channel.
-    pub fn channel(&self) -> &str {
+    pub(crate) fn channel(&self) -> &str {
         let start = 1 + 4 + 4;
         let end = start + self.channel_len - 1;
 
         unsafe { from_utf8_unchecked(&self.payload[start..end]) }
-    }
-
-    /// Get message payload.
-    pub fn payload(&self) -> &str {
-        let start = 1 + 4 + 4 + self.channel_len;
-        unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
-    }
-
-    /// Which connection sent the notification.
-    pub fn pid(&self) -> i32 {
-        self.pid
     }
 }
 
@@ -70,11 +61,18 @@ impl Protocol for NotificationResponse {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
     use bytes::BufMut;
 
     use crate::net::{FromBytes, Payload};
+
+    impl NotificationResponse {
+        /// Get message payload.
+        pub(crate) fn payload(&self) -> &str {
+            let start = 1 + 4 + 4 + self.channel_len;
+            unsafe { from_utf8_unchecked(&self.payload[start..self.payload.len() - 1]) }
+        }
+    }
 
     #[test]
     fn test_notification_response() {

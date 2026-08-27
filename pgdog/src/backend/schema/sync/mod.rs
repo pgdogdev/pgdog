@@ -1,8 +1,8 @@
-pub mod config;
-pub mod error;
-pub mod pg_dump;
-pub mod progress;
+pub(crate) mod config;
+pub(crate) mod error;
+pub(crate) mod pg_dump;
+pub(crate) mod progress;
 
-pub use config::ShardConfig;
-pub use error::Error;
+pub(crate) use config::ShardConfig;
+pub(crate) use error::Error;
 pub(crate) use pg_dump::{PgDump, Statement, SyncState};

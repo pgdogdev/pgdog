@@ -15,7 +15,7 @@ use super::c_string_bytes;
 
 /// Parse (F) message.
 #[derive(Clone, Hash, Eq, PartialEq, Default)]
-pub struct Parse {
+pub(crate) struct Parse {
     /// Prepared statement name.
     name: Bytes,
     /// Prepared statement query.
@@ -38,12 +38,12 @@ impl Debug for Parse {
 
 impl Parse {
     /// Length in bytes of the message.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.name.len() + self.query.len() + self.data_types.len() + 5
     }
 
     /// New anonymous prepared statement.
-    pub fn new_anonymous(query: &str) -> Self {
+    pub(crate) fn new_anonymous(query: &str) -> Self {
         Self {
             name: Bytes::from("\0"),
             query: c_string_bytes(query),
@@ -53,7 +53,7 @@ impl Parse {
     }
 
     /// New prepared statement.
-    pub fn named(name: impl AsRef<str>, query: impl AsRef<str>) -> Self {
+    pub(crate) fn named(name: impl AsRef<str>, query: impl AsRef<str>) -> Self {
         Self {
             name: c_string_bytes(name.as_ref()),
             query: c_string_bytes(query.as_ref()),
@@ -63,27 +63,27 @@ impl Parse {
     }
 
     /// Anonymous prepared statement.
-    pub fn anonymous(&self) -> bool {
+    pub(crate) fn anonymous(&self) -> bool {
         self.name.len() == 1 // Just the null byte.
     }
 
-    pub fn query(&self) -> &str {
+    pub(crate) fn query(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
         unsafe { from_utf8_unchecked(&self.query[0..self.query.len() - 1]) }
     }
 
     /// Get query reference.
-    pub fn query_ref(&self) -> Bytes {
+    pub(crate) fn query_ref(&self) -> Bytes {
         self.query.clone()
     }
 
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in Self::from_bytes.
         unsafe { from_utf8_unchecked(&self.name[0..self.name.len() - 1]) }
     }
 
     /// Rename prepared statement, re-allocating it into its own memory space.
-    pub fn renamed(&self, name: &str) -> Parse {
+    pub(crate) fn renamed(&self, name: &str) -> Parse {
         // PERF: the allocation will create new allocation for inner data, that
         // won't pin any original buffers (allowing to modify them without new allocation)
         // and the new allocation memory size will be just limited by the actual data, not buffers
@@ -96,24 +96,24 @@ impl Parse {
     }
 
     /// Rename the prepared statement with minimal allocations.
-    pub fn rename(&mut self, name: impl AsRef<str>) {
+    pub(crate) fn rename(&mut self, name: impl AsRef<str>) {
         self.name = c_string_bytes(name.as_ref());
         self.original = None;
     }
 
     /// Make this an anonymous Parse.
-    pub fn anonymize(&mut self) {
+    pub(crate) fn anonymize(&mut self) {
         if !self.anonymous() {
             self.rename("");
         }
     }
 
-    pub fn data_types_ref(&self) -> Bytes {
+    pub(crate) fn data_types_ref(&self) -> Bytes {
         self.data_types.clone()
     }
 
     /// Update the SQL for this prepared statement.
-    pub fn set_query(&mut self, query: &str) {
+    pub(crate) fn set_query(&mut self, query: &str) {
         self.query = c_string_bytes(query);
         self.original = None;
     }

@@ -3,13 +3,14 @@
 use std::ops::Deref;
 
 use crate::api::Task;
-use crate::api::async_task::AsyncTaskContext;
+use crate::api::task::TaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
 use crate::backend::schema::sync::pg_dump::SyncState;
+use pgdog_stats::{SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr)]
-pub enum SchemaSyncPhase {
+pub(crate) enum SchemaSyncPhase {
     #[display("pre")]
     Pre,
     #[display("post")]
@@ -28,33 +29,15 @@ impl From<SchemaSyncPhase> for SyncState {
     }
 }
 
-/// Stages of a schema sync, reported as the task's status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub(crate) enum SchemaSyncStatus {
-    /// Dumping the schema from the source.
-    #[display("loading schema")]
-    LoadingSchema,
-    /// Restoring tables on the destination (pre-data).
-    #[display("syncing tables")]
-    SyncingTables,
-    /// Creating indexes and constraints on the destination (post-data).
-    #[display("creating indexes")]
-    CreatingIndexes,
-    /// Restoring cutover-time schema on the destination.
-    #[display("syncing cutover schema")]
-    Cutover,
-}
-
 /// Sync the schema (pre-data, post-data, or cutover) from a source database to a target.
-#[derive(Display, Debug, bon::Builder)]
-#[display("schema_sync({phase}) {orchestrator}")]
+#[derive(Debug, bon::Builder)]
 pub(crate) struct SchemaSyncTask {
-    pub orchestrator: Orchestrator,
-    pub phase: SchemaSyncPhase,
+    pub(crate) orchestrator: Orchestrator,
+    pub(crate) phase: SchemaSyncPhase,
     #[builder(default)]
-    pub ignore_errors: bool,
+    pub(crate) ignore_errors: bool,
     #[builder(default)]
-    pub dry_run: bool,
+    pub(crate) dry_run: bool,
 }
 
 impl Task for SchemaSyncTask {
@@ -62,8 +45,17 @@ impl Task for SchemaSyncTask {
     type Output = Orchestrator;
     type Error = Error;
 
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        SchemaSyncDefinition {
+            databases: self.orchestrator.databases(),
+            sync_state: self.phase.into(),
+            ignore_errors: self.ignore_errors,
+            dry_run: self.dry_run,
+        }
+    }
+
     #[allow(clippy::print_stdout)]
-    async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
+    async fn run(self, ctx: TaskContext<Self>) -> Result<Orchestrator, Error> {
         let mut orchestrator = self.orchestrator;
 
         if orchestrator.schema().is_err() {
@@ -101,6 +93,7 @@ impl Task for SchemaSyncTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pgdog_stats::Databases;
 
     #[test]
     fn schema_sync_status_renders_distinct_labels() {
@@ -131,5 +124,33 @@ mod tests {
             SchemaSyncPhase::Cutover
         );
         assert!("bogus".parse::<SchemaSyncPhase>().is_err());
+    }
+
+    /// The CLI phase selects the stage the definition reports, and the row
+    /// spells it the way `SHOW SCHEMA_SYNC` does. A swapped arm in
+    /// `From<SchemaSyncPhase>` shows up here.
+    #[test]
+    fn schema_sync_definition_reports_its_phase() {
+        for (phase, expected) in [
+            (SchemaSyncPhase::Pre, "pre_data"),
+            (SchemaSyncPhase::Post, "post_data"),
+            (SchemaSyncPhase::Cutover, "cutover"),
+        ] {
+            let definition = TaskDefinition::from(SchemaSyncDefinition {
+                databases: Databases {
+                    source: "prod".into(),
+                    destination: "prod_sharded".into(),
+                },
+                sync_state: phase.into(),
+                ignore_errors: false,
+                dry_run: false,
+            });
+
+            assert_eq!(definition.name, "schema_sync");
+            assert_eq!(
+                definition.to_string(),
+                format!("schema_sync({expected}) prod -> prod_sharded")
+            );
+        }
     }
 }

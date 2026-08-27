@@ -10,7 +10,7 @@ use crate::{
 
 use super::prelude::*;
 
-pub struct ShowReplicationSlots;
+pub(crate) struct ShowReplicationSlots;
 
 #[async_trait]
 impl Command for ShowReplicationSlots {

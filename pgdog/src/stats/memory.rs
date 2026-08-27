@@ -3,7 +3,7 @@ use lru::LruCache;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
-pub trait MemoryUsage {
+pub(crate) trait MemoryUsage {
     fn memory_usage(&self) -> usize;
 }
 
