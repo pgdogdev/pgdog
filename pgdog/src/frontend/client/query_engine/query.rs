@@ -276,14 +276,9 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// If we encounter a cache invalidated error & we're either:
-    ///
-    /// 1. In a transaction, but we've not encountered a Bind & Execute before this statement,
-    ///    we haven't encountered any simple protocol messages,
-    ///    and we don't have parameters local to the transaction
-    /// 2. Not in a transaction
-    ///
-    /// Then, handle it on our end instead of forwarding the error to the client.
+    /// If we encounter a cache invalidated error &
+    /// we're not in a transaction,
+    /// then, handle it on our end instead of forwarding the error to the client.
     pub(crate) async fn retry_statement(
         &mut self,
         context: &mut QueryEngineContext<'_>,

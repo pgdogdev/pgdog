@@ -219,11 +219,6 @@ impl Bind {
         self.statement = c_string_bytes(new_statement);
     }
 
-    /// Format codes, if any.
-    pub fn codes(&self) -> &[Format] {
-        &self.codes
-    }
-
     pub(crate) fn new_statement(name: &str) -> Self {
         Self {
             statement: c_string_bytes(name),
