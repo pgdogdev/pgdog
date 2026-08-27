@@ -962,6 +962,79 @@ mod tests {
     }
 
     #[test]
+    fn test_reset_stats_resets_primary_and_mirror_clusters() {
+        // RESET STATS must clear metrics on both the primary clusters and
+        // their mirrors, not just `self.databases`.
+        let config = Config {
+            databases: vec![
+                Database {
+                    name: "db1".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+                Database {
+                    name: "db1_mirror".to_string(),
+                    host: "localhost".to_string(),
+                    port: 5433,
+                    role: Role::Primary,
+                    ..Default::default()
+                },
+            ],
+            mirroring: vec![Mirroring {
+                source_db: "db1".to_string(),
+                destination_db: "db1_mirror".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let users = crate::config::Users {
+            users: vec![
+                crate::config::User {
+                    name: "alice".to_string(),
+                    database: "db1".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+                crate::config::User {
+                    name: "alice".to_string(),
+                    database: "db1_mirror".to_string(),
+                    password: Some("pass".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let databases = from_config(&ConfigAndUsers {
+            config,
+            users,
+            config_path: std::path::PathBuf::new(),
+            users_path: std::path::PathBuf::new(),
+            ..Default::default()
+        });
+
+        let primary = databases.cluster(("alice", "db1")).unwrap();
+        let mirror = databases
+            .mirrors(("alice", "db1"))
+            .unwrap()
+            .unwrap()
+            .first()
+            .cloned()
+            .unwrap();
+
+        primary.stats().lock().mirror.total_count = 11;
+        mirror.stats().lock().mirror.total_count = 7;
+
+        databases.reset_stats();
+
+        assert_eq!(primary.stats().lock().mirror.total_count, 0);
+        assert_eq!(mirror.stats().lock().mirror.total_count, 0);
+    }
+
+    #[test]
     fn test_mirror_user_mismatch_handling() {
         // Test that mirroring is disabled gracefully when users don't match
         let config = Config {
