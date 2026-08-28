@@ -162,6 +162,7 @@ impl QueryEngine {
             && context.transaction().is_none()
             && Box::pin(self.reprepare_statement(context)).await?
         {
+            self.suppress = std::mem::take(&mut self.delivered);
             context.retry = true;
             return Ok(());
         }
@@ -261,7 +262,16 @@ impl QueryEngine {
             && context.pipeline.is_simple()
             && !context.in_error(); // On error, pipeline is done executing.
         // Possible the client may have already received before the error in retry case.
-        let duplicate = matches!(code, '1' | 't' | 'T' | 'n') && self.delivered.contains(&code);
+        let prepare_family = matches!(code, '1' | 't' | 'T' | 'n');
+        let duplicate = prepare_family
+            && self
+                .suppress
+                .iter()
+                .position(|c| *c == code)
+                .map(|position| {
+                    self.suppress.remove(position);
+                })
+                .is_some();
 
         if !drop_message && !duplicate {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
@@ -271,7 +281,7 @@ impl QueryEngine {
             } else {
                 context.stream.send(&message).await?;
             }
-            if matches!(code, '1' | 't' | 'T' | 'n') {
+            if prepare_family {
                 self.delivered.push(code);
             }
         }

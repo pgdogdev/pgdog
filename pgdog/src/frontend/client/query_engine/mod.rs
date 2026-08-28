@@ -64,6 +64,8 @@ pub(crate) struct QueryEngine {
     // Track ParseComplete / ParameterDescription / RowDescription / NoData
     // already received for the present ClientRequest
     delivered: Vec<char>,
+    // Delivered by the previous attempt of a retried request
+    suppress: Vec<char>,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
@@ -94,6 +96,7 @@ impl QueryEngine {
             stats: Stats::default(),
             streaming: bool::default(),
             delivered: Vec::new(),
+            suppress: Vec::new(),
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
@@ -295,6 +298,7 @@ impl QueryEngine {
             Ok(QueryEngineResult::Retry)
         } else {
             self.delivered.clear();
+            self.suppress.clear();
             Ok(QueryEngineResult::Done(context.transaction()))
         }
     }
