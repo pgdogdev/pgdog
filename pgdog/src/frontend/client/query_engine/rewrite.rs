@@ -1,6 +1,6 @@
-use crate::frontend::router::parser::{AstContext, Cache};
-
 use super::*;
+use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
+use crate::frontend::router::parser::{AstContext, Cache};
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
@@ -23,7 +23,7 @@ impl QueryEngine {
     pub(super) fn parse_and_rewrite(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<RewriteResult>, Error> {
         let use_parser = self
             .backend
             .cluster()
@@ -31,7 +31,7 @@ impl QueryEngine {
             .unwrap_or(false);
 
         if !use_parser {
-            return Ok(true);
+            return Ok(None);
         }
 
         let query = context.client_request.query()?;
@@ -40,10 +40,11 @@ impl QueryEngine {
             let ast_ctx = AstContext::from_cluster(cluster, context.params);
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
 
-            context.rewrite_result = Some(ast.rewrite_plan.apply(context.client_request)?);
+            let rewrite_result = ast.rewrite_plan.apply(context.client_request)?;
             context.client_request.ast = Some(ast);
+            Ok(Some(rewrite_result))
+        } else {
+            Ok(None)
         }
-
-        Ok(true)
     }
 }

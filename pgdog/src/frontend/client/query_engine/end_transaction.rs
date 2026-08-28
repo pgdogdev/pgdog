@@ -94,7 +94,7 @@ impl QueryEngine {
                 self.notify_buffer.clear();
             }
             context.rollback = rollback;
-            self.execute(context).await?;
+            self.execute(context, None).await?;
         }
 
         Ok(())
