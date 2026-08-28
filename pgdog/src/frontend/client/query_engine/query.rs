@@ -118,8 +118,6 @@ impl QueryEngine {
         Ok(self.backend.read().await?)
     }
 
-    /// Return boolean represents whether or not
-    /// the `client_request` attached to `context` should be retried.
     pub(crate) async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
