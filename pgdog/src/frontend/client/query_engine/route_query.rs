@@ -3,6 +3,7 @@ use tracing::trace;
 
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
+use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::sharding::lookup;
 use crate::util::safe_timeout;
 
