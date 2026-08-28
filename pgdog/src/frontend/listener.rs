@@ -10,7 +10,7 @@ use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
 use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
 use tokio::signal::ctrl_c;
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
@@ -36,10 +36,35 @@ impl Listener {
         }
     }
 
+    /// Bind the listening socket with the configured `listen_backlog`.
+    ///
+    /// `TcpListener::bind` hardcodes a backlog of 1024, which caps the queue of
+    /// pending connections regardless of `net.core.somaxconn`; large client fleets
+    /// reconnecting at once (e.g. a rolling deploy) overflow it and their SYNs are
+    /// silently dropped onto the retransmission timer.
+    async fn bind(addr: &str) -> Result<TcpListener, Error> {
+        let backlog = config().config.general.listen_backlog;
+        let addr = lookup_host(addr).await?.next().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("no address to bind: {}", addr),
+            )
+        })?;
+        let socket = if addr.is_ipv4() {
+            TcpSocket::new_v4()?
+        } else {
+            TcpSocket::new_v6()?
+        };
+        #[cfg(not(windows))]
+        socket.set_reuseaddr(true)?;
+        socket.bind(addr)?;
+        Ok(socket.listen(backlog)?)
+    }
+
     /// Listen for client connections and handle them.
     pub(crate) async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
-        let listener = TcpListener::bind(&self.addr).await?;
+        let listener = Self::bind(&self.addr).await?;
         let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
         let mut shutting_down = false;
