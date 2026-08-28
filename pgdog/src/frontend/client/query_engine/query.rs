@@ -161,7 +161,7 @@ impl QueryEngine {
             && self.backend.schema_changed()
             && context.transaction().is_none()
             && !self.retrying
-            && self.retry_statement(context).await?
+            && Box::pin(self.retry_statement(context)).await?
         {
             return Ok(());
         }
@@ -332,7 +332,6 @@ impl QueryEngine {
             .await?;
 
         // Send the Parse and a Flush to cache the new statement
-        // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
         {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();
@@ -344,7 +343,7 @@ impl QueryEngine {
                 .await?;
         }
 
-        // Forward the original messages.
+        // Forward the original messages (minus Parse, minus repetition in cross-shard mixed error cases)
         {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();

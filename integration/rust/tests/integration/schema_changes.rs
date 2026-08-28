@@ -1,6 +1,5 @@
 use integration_tests_rust::setup::{admin_sqlx, connections_sqlx};
 use integration_tests_rust::utils::{Message, startup};
-use serial_test::serial;
 use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Row};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
