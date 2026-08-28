@@ -44,6 +44,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
+    // Should it retry?
+    pub retry: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -67,6 +69,7 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: client.query_log_stdout,
             query_size_limit: client.query_size_limit,
+            retry: false,
         }
     }
 
@@ -97,6 +100,7 @@ impl<'a> QueryEngineContext<'a> {
             rewrite_result: None,
             query_log_stdout: false,
             query_size_limit: None,
+            retry: false,
         }
     }
 

@@ -620,6 +620,9 @@ impl Client {
                     }
                 }
             }
+            QueryEngineResult::Retry => {
+                return Box::pin(self.client_messages(query_engine)).await;
+            }
         }
 
         // Check buffer size once per request.

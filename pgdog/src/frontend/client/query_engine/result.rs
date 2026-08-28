@@ -10,4 +10,6 @@ pub(crate) enum QueryEngineResult {
         requests: Vec<ClientRequest>,
         extended: bool,
     },
+    // Query engine should re-try the request again.
+    Retry,
 }

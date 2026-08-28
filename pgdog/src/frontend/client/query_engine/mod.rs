@@ -287,7 +287,11 @@ impl QueryEngine {
 
         self.update_stats(context);
 
-        Ok(QueryEngineResult::Done(context.transaction()))
+        if context.retry {
+            Ok(QueryEngineResult::Retry)
+        } else {
+            Ok(QueryEngineResult::Done(context.transaction()))
+        }
     }
 
     fn update_stats(&mut self, context: &mut QueryEngineContext<'_>) {

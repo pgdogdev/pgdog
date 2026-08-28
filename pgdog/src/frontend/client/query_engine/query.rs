@@ -92,26 +92,16 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::InPlace { .. }) | None => {
-                'retry_if_changed: for _ in 0..2 {
-                    self.backend
-                        .handle_client_request(
-                            context.client_request,
-                            &mut self.router,
-                            self.streaming,
-                        )
-                        .await?;
+                self.backend
+                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
+                    .await?;
 
-                    while self.backend.has_more_messages()
-                        && !self.backend.in_copy_mode()
-                        && !self.streaming
-                    {
-                        let message = self.read_server_message().await?;
-                        if self.process_server_message(context, message).await? {
-                            continue 'retry_if_changed;
-                        }
-                    }
-
-                    break;
+                while self.backend.has_more_messages()
+                    && !self.backend.in_copy_mode()
+                    && !self.streaming
+                {
+                    let message = self.read_server_message().await?;
+                    self.process_server_message(context, message).await?;
                 }
             }
 
@@ -134,7 +124,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         self.streaming = message.streaming();
 
         let code = message.code();
@@ -174,7 +164,8 @@ impl QueryEngine {
             && context.transaction().is_none()
             && Box::pin(self.retry_statement(context)).await?
         {
-            return Ok(true);
+            context.retry = true;
+            return Ok(());
         }
 
         // Messages that we need to send to the client immediately.
@@ -286,7 +277,7 @@ impl QueryEngine {
         }
         self.hooks.on_server_message(context, &message)?;
 
-        Ok(false)
+        Ok(())
     }
 
     /// If we encounter a cache invalidated error & we're not in a transaction,
@@ -376,7 +367,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        if self.backend.done() {
+        if self.backend.done() && !context.retry {
             let changed_params = self.backend.changed_params();
 
             // Release the connection back into the pool before flushing data to client.
