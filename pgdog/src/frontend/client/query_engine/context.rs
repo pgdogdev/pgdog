@@ -45,7 +45,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
     // Should it retry?
-    pub retry: bool,
+    pub(super) retry: bool,
 }
 
 impl<'a> QueryEngineContext<'a> {
