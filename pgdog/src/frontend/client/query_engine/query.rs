@@ -76,7 +76,7 @@ impl QueryEngine {
                 self.backend.force_close();
                 return Err(err.into());
             }
-        }
+        };
 
         Ok(())
     }
@@ -92,16 +92,26 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::InPlace { .. }) | None => {
-                self.backend
-                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
-                    .await?;
+                'retry_if_changed: for _ in 0..2 {
+                    self.backend
+                        .handle_client_request(
+                            context.client_request,
+                            &mut self.router,
+                            self.streaming,
+                        )
+                        .await?;
 
-                while self.backend.has_more_messages()
-                    && !self.backend.in_copy_mode()
-                    && !self.streaming
-                {
-                    let message = self.read_server_message().await?;
-                    self.process_server_message(context, message).await?;
+                    while self.backend.has_more_messages()
+                        && !self.backend.in_copy_mode()
+                        && !self.streaming
+                    {
+                        let message = self.read_server_message().await?;
+                        if self.process_server_message(context, message).await? {
+                            continue 'retry_if_changed;
+                        }
+                    }
+
+                    break;
                 }
             }
 
@@ -118,11 +128,13 @@ impl QueryEngine {
         Ok(self.backend.read().await?)
     }
 
+    /// Return boolean represents whether or not
+    /// the `client_request` attached to `context` should be retried.
     pub(crate) async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         self.streaming = message.streaming();
 
         let code = message.code();
@@ -160,10 +172,9 @@ impl QueryEngine {
         if code == 'E'
             && self.backend.schema_changed()
             && context.transaction().is_none()
-            && !self.retrying
             && Box::pin(self.retry_statement(context)).await?
         {
-            return Ok(());
+            return Ok(true);
         }
 
         // Messages that we need to send to the client immediately.
@@ -268,22 +279,14 @@ impl QueryEngine {
             } else {
                 context.stream.send(&message).await?;
             }
-            // When `retry_statement` method is replaying a *partially-answered* request
-            // (e.g. a cross-shard Describe where one shard succeeded before another errored)
-            // we track these to ensure they won't be sent twice to the Client
-            // ParseComplete / ParameterDescription / RowDescription / NoData
-            if matches!(code, '1' | 't' | 'T' | 'n') {
-                self.forwarded.push(code);
-            }
         }
 
         if code == 'Z' {
-            self.forwarded.clear();
             self.pending_explain = None;
         }
         self.hooks.on_server_message(context, &message)?;
 
-        Ok(())
+        Ok(false)
     }
 
     /// If we encounter a cache invalidated error & we're not in a transaction,
@@ -292,7 +295,6 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
-        self.retrying = true;
         self.backend.reset_schema_changed();
 
         // Cover both [Bind, Execute] and [Parse, Describe] cases that can cause the error.
@@ -308,7 +310,6 @@ impl QueryEngine {
 
         // Bind takes priority over Describe.
         let Some(statement_to_close) = bind.or(describe) else {
-            self.retrying = false;
             return Ok(false);
         };
 
@@ -320,7 +321,6 @@ impl QueryEngine {
             .read()
             .parse(statement_to_close)
         else {
-            self.retrying = false;
             return Ok(false);
         };
 
@@ -332,74 +332,16 @@ impl QueryEngine {
             .await?;
 
         // Send the Parse and a Flush to cache the new statement
-        {
-            let mut client_request = ClientRequest::default();
-            client_request.route = context.client_request.route.clone();
+        let mut client_request = ClientRequest::default();
+        client_request.route = context.client_request.route.clone();
 
-            client_request.push(ProtocolMessage::from(parse.clone()));
-            client_request.push(ProtocolMessage::from(messages::Flush));
+        client_request.push(ProtocolMessage::from(parse.clone()));
+        client_request.push(ProtocolMessage::from(messages::Flush));
 
-            self.handle_request_and_maybe_forward(client_request, context, false)
-                .await?;
-        }
+        self.backend.send(&client_request).await?;
 
-        // Forward the original messages (minus Parse, minus repetition in cross-shard mixed error cases)
-        {
-            let mut client_request = ClientRequest::default();
-            client_request.route = context.client_request.route.clone();
-            for message in &context.client_request.messages {
-                // We already sent a Parse in the last cycle to re-validate.
-                if !matches!(message, ProtocolMessage::Parse(_)) {
-                    client_request.push(message.clone());
-                }
-            }
-
-            self.handle_request_and_maybe_forward(client_request, context, true)
-                .await?;
-        }
-
-        self.retrying = false;
-        Ok(true)
-    }
-
-    /// Helper method for `retry_statement` to handle `client_request` and then drain the backend,
-    /// forwarding the Server's `Message`s to the client only when `forward` is true.
-    /// Prevents `Message`s from being double forwarded in cross-shard mixed situations.
-    async fn handle_request_and_maybe_forward(
-        &mut self,
-        client_request: ClientRequest,
-        context: &mut QueryEngineContext<'_>,
-        forward: bool,
-    ) -> Result<(), Error> {
-        self.backend
-            .handle_client_request(&client_request, &mut self.router, self.streaming)
-            .await?;
-
-        let mut already_forwarded = if forward {
-            std::mem::take(&mut self.forwarded)
-        } else {
-            Vec::new()
-        };
-
-        while self.backend.has_more_messages() {
-            let message = self.read_server_message().await?;
-
-            if !forward {
-                continue;
-            }
-
-            if let Some(position) = already_forwarded
-                .iter()
-                .position(|code| *code == message.code())
-            {
-                already_forwarded.remove(position);
-                continue;
-            }
-
-            Box::pin(self.process_server_message(context, message)).await?;
-        }
-
-        Ok(())
+        let parse_complete = self.backend.read().await?;
+        Ok(parse_complete.code() == '1')
     }
 
     async fn emit_explain_rows(
