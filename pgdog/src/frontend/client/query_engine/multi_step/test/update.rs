@@ -72,8 +72,11 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
     client.client().client_request.extend(request.messages);
 
     let mut context = QueryEngineContext::new(&mut client.client);
-    client.engine.parse_and_rewrite(&mut context)?;
-    client.engine.route_query(&mut context).await?;
+    let rewrite_result = client.engine.parse_and_rewrite(&mut context)?;
+    client
+        .engine
+        .route_query(&mut context, rewrite_result.as_ref())
+        .await?;
 
     assert!(
         context.client_request.route().shard().is_direct(),
@@ -185,7 +188,7 @@ async fn test_row_same_shard_no_transaction() {
 
     let mut context = QueryEngineContext::new(&mut client.client);
 
-    client.engine.parse_and_rewrite(&mut context).unwrap();
+    let rewrite_result = client.engine.parse_and_rewrite(&mut context).unwrap();
 
     assert!(
         context
@@ -199,8 +202,16 @@ async fn test_row_same_shard_no_transaction() {
         "sharding key update should exist on the request"
     );
 
-    client.engine.route_query(&mut context).await.unwrap();
-    client.engine.execute(&mut context).await.unwrap();
+    client
+        .engine
+        .route_query(&mut context, rewrite_result.as_ref())
+        .await
+        .unwrap();
+    client
+        .engine
+        .execute(&mut context, rewrite_result)
+        .await
+        .unwrap();
 
     let cmd = client.read().await;
 

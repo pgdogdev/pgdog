@@ -99,7 +99,6 @@ async fn commit_statement_describe() {
         .end_not_connected(&mut context, false, true)
         .await
         .unwrap();
-    drop(context);
 
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);
@@ -129,7 +128,6 @@ async fn rollback_without_transaction_describe() {
         .end_not_connected(&mut context, true, true)
         .await
         .unwrap();
-    drop(context);
 
     expect_message!(client.read().await, ParseComplete);
     expect_message!(client.read().await, BindComplete);

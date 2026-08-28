@@ -41,7 +41,6 @@ impl QueryEngine {
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
 
             let rewrite_result = ast.rewrite_plan.apply(context.client_request)?;
-            //context.rewrite_result = Some(ast.rewrite_plan.apply(context.client_request)?);
             context.client_request.ast = Some(ast);
             Ok(Some(rewrite_result))
         } else {
