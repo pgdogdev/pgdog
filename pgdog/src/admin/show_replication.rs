@@ -11,7 +11,7 @@ use crate::{
 
 use super::prelude::*;
 
-pub struct ShowReplication;
+pub(crate) struct ShowReplication;
 
 #[async_trait]
 impl Command for ShowReplication {

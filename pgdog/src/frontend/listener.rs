@@ -2,7 +2,6 @@
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use crate::backend::databases::{databases, reload, shutdown};
 use crate::config::config;
@@ -13,8 +12,8 @@ use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::ctrl_c;
-use tokio::sync::Notify;
 use tokio::{select, spawn};
+use tokio_util::sync::CancellationToken;
 
 use tracing::{error, info, warn};
 
@@ -23,26 +22,27 @@ use crate::util::safe_timeout;
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
-pub struct Listener {
+pub(crate) struct Listener {
     addr: String,
-    shutdown: Arc<Notify>,
+    shutdown: CancellationToken,
 }
 
 impl Listener {
     /// Create new client listener.
-    pub fn new(addr: impl ToString) -> Self {
+    pub(crate) fn new(addr: impl ToString) -> Self {
         Self {
             addr: addr.to_string(),
-            shutdown: Arc::new(Notify::new()),
+            shutdown: CancellationToken::new(),
         }
     }
 
     /// Listen for client connections and handle them.
-    pub async fn listen(&mut self) -> Result<(), Error> {
+    pub(crate) async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = TcpListener::bind(&self.addr).await?;
         let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
+        let mut shutting_down = false;
 
         loop {
             select! {
@@ -67,11 +67,13 @@ impl Listener {
                    }
                 }
 
-                _ = shutdown_signal.notified() => {
+                _ = shutdown_signal.cancelled(), if !shutting_down => {
+                    shutting_down = true;
                     self.start_shutdown();
                 }
 
-                _ = ctrl_c() => {
+                _ = ctrl_c(), if !shutting_down => {
+                    shutting_down = true;
                     self.start_shutdown();
                 }
 
@@ -81,7 +83,7 @@ impl Listener {
                     }
                 }
 
-                _ = self.shutdown.notified() => {
+                _ = self.shutdown.cancelled() => {
                     break;
                 }
             }
@@ -144,7 +146,7 @@ impl Listener {
             }
         }
 
-        self.shutdown.notify_waiters();
+        self.shutdown.cancel();
     }
 
     async fn handle_client(stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {

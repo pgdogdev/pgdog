@@ -8,16 +8,16 @@ use super::{FromBytes, Payload, Protocol, ToBytes, code, protocol_version::Proto
 
 /// NegotiateProtocolVersion (B)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NegotiateProtocolVersion {
+pub(crate) struct NegotiateProtocolVersion {
     /// Protocol version chosen by the server.
-    pub version: ProtocolVersion,
+    pub(crate) version: ProtocolVersion,
     /// Unsupported protocol option names from the startup packet.
-    pub unrecognized_options: Vec<String>,
+    pub(crate) unrecognized_options: Vec<String>,
 }
 
 impl NegotiateProtocolVersion {
     /// Create a negotiation response.
-    pub fn new(version: ProtocolVersion, unrecognized_options: Vec<String>) -> Self {
+    pub(crate) fn new(version: ProtocolVersion, unrecognized_options: Vec<String>) -> Self {
         Self {
             version,
             unrecognized_options,

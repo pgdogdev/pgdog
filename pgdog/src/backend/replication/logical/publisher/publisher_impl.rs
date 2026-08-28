@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
-use pgdog_config::QueryParserEngine;
 use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -44,15 +43,13 @@ fn merge_table_lsns(
 }
 
 #[derive(Debug, Default)]
-pub struct Publisher {
+pub(crate) struct Publisher {
     /// Name of the publication.
     publication: String,
     /// Shard -> Tables mapping.
     tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
-    /// Query parser engine.
-    query_parser_engine: QueryParserEngine,
     /// Replication lag.
     replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
     /// Last transaction.
@@ -62,16 +59,11 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    pub fn new(
-        publication: &str,
-        query_parser_engine: QueryParserEngine,
-        slot_name: String,
-    ) -> Self {
+    pub(crate) fn new(publication: &str, slot_name: String) -> Self {
         Self {
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
-            query_parser_engine,
             replication_lag: Arc::new(Mutex::new(HashMap::new())),
             last_transaction: Arc::new(Mutex::new(None)),
             slot_name,
@@ -98,7 +90,7 @@ impl Publisher {
     }
 
     /// Synchronize tables for all shards.
-    pub async fn sync_tables(
+    pub(crate) async fn sync_tables(
         &mut self,
         data_sync: bool,
         source: &Cluster,
@@ -126,8 +118,7 @@ impl Publisher {
         for (number, shard) in source.shards().iter().enumerate() {
             // Load tables from publication.
             let mut primary = shard.primary(&Request::default()).await?;
-            let tables =
-                Table::load(&self.publication, &mut primary, self.query_parser_engine).await?;
+            let tables = Table::load(&self.publication, &mut primary).await?;
 
             // For data sync, split omni tables evenly between shards.
             if data_sync {
@@ -193,7 +184,11 @@ impl Publisher {
     ///
     /// This uses a dedicated replication slot which will survive crashes and reboots.
     /// N.B.: The slot needs to be manually dropped!
-    pub async fn replicate(&mut self, source: &Cluster, dest: &Cluster) -> Result<Waiter, Error> {
+    pub(crate) async fn replicate(
+        &mut self,
+        source: &Cluster,
+        dest: &Cluster,
+    ) -> Result<Waiter, Error> {
         // Replicate shards in parallel.
         let mut streams = vec![];
 
@@ -360,12 +355,12 @@ impl Publisher {
     }
 
     /// Get current replication lag.
-    pub fn replication_lag(&self) -> HashMap<usize, i64> {
+    pub(crate) fn replication_lag(&self) -> HashMap<usize, i64> {
         self.replication_lag.lock().clone()
     }
 
     /// Get how long ago last transaction was committed.
-    pub fn last_transaction(&self) -> Option<Duration> {
+    pub(crate) fn last_transaction(&self) -> Option<Duration> {
         (*self.last_transaction.lock()).map(|last| last.elapsed())
     }
 
@@ -373,7 +368,7 @@ impl Publisher {
     /// re-sharding the cluster in the process.
     ///
     /// TODO: Parallelize shard syncs.
-    pub async fn data_sync(
+    pub(crate) async fn data_sync(
         &mut self,
         source: &Cluster,
         dest: &Cluster,
@@ -478,7 +473,7 @@ impl Publisher {
     /// Idempotent: the slot map is taken out up front, so repeated calls — or a
     /// call after replication already took the slots over — are no-ops. Every
     /// slot is attempted even if one fails; the first error is returned.
-    pub async fn cleanup(&mut self) -> Result<(), Error> {
+    pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
         let mut error = None;
         for (_, mut slot) in std::mem::take(&mut self.slots) {
             if let Err(err) = slot.drop_slot().await {
@@ -492,27 +487,27 @@ impl Publisher {
 
 #[cfg(test)]
 impl Publisher {
-    pub fn set_replication_lag(&self, shard: usize, lag: i64) {
+    pub(crate) fn set_replication_lag(&self, shard: usize, lag: i64) {
         self.replication_lag.lock().insert(shard, lag);
     }
 
-    pub fn set_last_transaction(&self, instant: Option<Instant>) {
+    pub(crate) fn set_last_transaction(&self, instant: Option<Instant>) {
         *self.last_transaction.lock() = instant;
     }
 }
 
 #[derive(Debug)]
-pub struct Waiter {
+pub(crate) struct Waiter {
     streams: Vec<JoinHandle<Result<(), Error>>>,
     stop: CancellationToken,
 }
 
 impl Waiter {
-    pub fn stop(&self) {
+    pub(crate) fn stop(&self) {
         self.stop.cancel();
     }
 
-    pub async fn wait(&mut self) -> Result<(), Error> {
+    pub(crate) async fn wait(&mut self) -> Result<(), Error> {
         for stream in &mut self.streams {
             stream.await??;
         }
@@ -523,7 +518,7 @@ impl Waiter {
 
 #[cfg(test)]
 impl Waiter {
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         Self {
             streams: vec![],
             stop: CancellationToken::new(),
@@ -562,7 +557,6 @@ mod test {
                 identity: true,
             }],
             lsn: Lsn::from_i64(lsn),
-            query_parser_engine: QueryParserEngine::default(),
         }
     }
 
@@ -594,7 +588,7 @@ mod test {
     fn distribute_omnisharded_tables_initializes_missing_shards() {
         let config = config();
         let cluster = Cluster::new_test(&config);
-        let mut publisher = Publisher::new("test", QueryParserEngine::default(), "slot".into());
+        let mut publisher = Publisher::new("test", "slot".into());
         let table = make_table("public", "omni_only", 0);
 
         publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]), &cluster);
@@ -638,11 +632,7 @@ mod test {
         source.launch();
         let dest = Cluster::new_test(&config());
 
-        let mut publisher = Publisher::new(
-            "publication_no_pk_validation",
-            QueryParserEngine::default(),
-            "sync_test_slot".into(),
-        );
+        let mut publisher = Publisher::new("publication_no_pk_validation", "sync_test_slot".into());
 
         // Validation must fire before the copy begins.
         let result = publisher
@@ -700,11 +690,8 @@ mod test {
         source.launch();
         let dest = Cluster::new_test(&config());
 
-        let mut publisher = Publisher::new(
-            "publication_sync_only_no_pk",
-            QueryParserEngine::default(),
-            "sync_only_no_pk_slot".into(),
-        );
+        let mut publisher =
+            Publisher::new("publication_sync_only_no_pk", "sync_only_no_pk_slot".into());
 
         let cancel = CancellationToken::new();
         cancel.cancel();
@@ -752,7 +739,6 @@ mod test {
 
         let mut publisher = Publisher::new(
             "pub_full_identity_nothing_test",
-            QueryParserEngine::default(),
             "pub_full_identity_nothing_slot".into(),
         );
 
@@ -801,7 +787,7 @@ mod test {
             }
             .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes())
+        CopyData::new(&xlog.to_bytes())
     }
     fn commit_copy_data(lsn: i64) -> CopyData {
         let xlog = XLogData {
@@ -816,7 +802,7 @@ mod test {
             }
             .to_bytes(),
         };
-        CopyData::bytes(xlog.to_bytes())
+        CopyData::new(&xlog.to_bytes())
     }
 
     // -- handle ---------------------------------------------------------------

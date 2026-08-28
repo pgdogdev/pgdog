@@ -49,7 +49,7 @@ macro_rules! expect_message {
 }
 
 /// Read one protocol message from a TCP stream.
-pub async fn read_message(conn: &mut TcpStream) -> Message {
+pub(crate) async fn read_message(conn: &mut TcpStream) -> Message {
     let code = conn.read_u8().await.expect("code");
     let len = conn.read_i32().await.expect("len");
     let mut rest = vec![0u8; len as usize - 4];
@@ -64,14 +64,17 @@ pub async fn read_message(conn: &mut TcpStream) -> Message {
 }
 
 /// Send a protocol message to a TCP stream.
-pub async fn send_message(conn: &mut TcpStream, message: impl Protocol) {
+pub(crate) async fn send_message(conn: &mut TcpStream, message: impl Protocol) {
     let message = message.to_bytes();
     conn.write_all(&message).await.expect("write_all");
     conn.flush().await.expect("flush");
 }
 
 /// Read messages until the given code appears.
-pub async fn read_until(conn: &mut TcpStream, code: char) -> Result<Vec<Message>, ErrorResponse> {
+pub(crate) async fn read_until(
+    conn: &mut TcpStream,
+    code: char,
+) -> Result<Vec<Message>, ErrorResponse> {
     let mut result = vec![];
     loop {
         let message = read_message(conn).await;
@@ -110,7 +113,7 @@ async fn new_client_pair(params: Parameters) -> (TcpStream, Client) {
 
 /// Test client.
 #[derive(Debug)]
-pub struct TestClient {
+pub(crate) struct TestClient {
     pub(crate) client: Client,
     pub(crate) engine: QueryEngine,
     pub(crate) conn: TcpStream,
@@ -197,7 +200,7 @@ impl TestClient {
 
     pub(crate) fn with_full_prepared_statements(self) -> Self {
         let mut config = config().deref().clone();
-        config.config.general.prepared_statements = pgdog_config::PreparedStatements::Full;
+        config.config.general.prepared_statements = pgdog_config::PreparedStatementsLevel::Full;
         set(config).unwrap();
         reload_from_existing().unwrap();
         self
@@ -304,8 +307,8 @@ impl Drop for TestClient {
 /// Test client that spawns the client into an async task,
 /// running the full `spawn_internal` code path (including error handling).
 /// Interaction happens purely over the wire.
-pub struct SpawnedClient {
-    pub conn: TcpStream,
+pub(crate) struct SpawnedClient {
+    pub(crate) conn: TcpStream,
     handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -323,7 +326,7 @@ impl SpawnedClient {
         }
     }
 
-    pub async fn new_default(params: Parameters) -> Self {
+    pub(crate) async fn new_default(params: Parameters) -> Self {
         crate::config::load_test();
         Self::new(params).await
     }
@@ -331,7 +334,7 @@ impl SpawnedClient {
     /// Spawn a client through the full login path, including authentication.
     ///
     /// Config needs to be loaded.
-    pub async fn new_with_login(params: Parameters) -> Self {
+    pub(crate) async fn new_with_login(params: Parameters) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -353,25 +356,25 @@ impl SpawnedClient {
         }
     }
 
-    pub async fn new_sharded(params: Parameters) -> Self {
+    pub(crate) async fn new_sharded(params: Parameters) -> Self {
         load_test_sharded();
         Self::new(params).await
     }
 
-    pub async fn send(&mut self, message: impl Protocol) {
+    pub(crate) async fn send(&mut self, message: impl Protocol) {
         send_message(&mut self.conn, message).await;
     }
 
-    pub async fn read(&mut self) -> Message {
+    pub(crate) async fn read(&mut self) -> Message {
         read_message(&mut self.conn).await
     }
 
-    pub async fn read_until(&mut self, code: char) -> Vec<Message> {
+    pub(crate) async fn read_until(&mut self, code: char) -> Vec<Message> {
         read_until(&mut self.conn, code).await.unwrap()
     }
 
     /// Wait for the client task to finish.
-    pub async fn join(&mut self) {
+    pub(crate) async fn join(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.await.unwrap();
         }

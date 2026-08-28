@@ -6,12 +6,9 @@ use super::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::sharding;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("Error parsing query: {0}")]
     Parse(#[from] pg_raw_parse::Error),
-
-    #[error("only CSV is supported for sharded copy")]
-    OnlyCsv,
 
     #[error("no sharding column in CSV")]
     NoShardingColumn,
@@ -31,15 +28,6 @@ pub enum Error {
     #[error("empty query")]
     EmptyQuery,
 
-    #[error("not in sync")]
-    NotInSync,
-
-    #[error("no query in buffer")]
-    NoQueryInBuffer,
-
-    #[error("copy out of sync")]
-    CopyOutOfSync,
-
     #[error("exceeded maximum number of rows in CSV parser")]
     MaxCsvParserRows,
 
@@ -51,9 +39,6 @@ pub enum Error {
 
     #[error("unexpected header extension")]
     BinaryHeaderExtension,
-
-    #[error("set shard syntax error")]
-    SetShard,
 
     #[error("no multi tenant id")]
     MultiTenantId,
@@ -73,9 +58,6 @@ pub enum Error {
     #[error("query is blocked by plugin \"{0}\"")]
     BlockedByPlugin(String),
 
-    #[error("this command requires a transaction")]
-    RequiresTransaction,
-
     #[error("two-phase transaction control statements are not allowed when two-phase is enabled")]
     NoTwoPc,
 
@@ -85,20 +67,11 @@ pub enum Error {
     #[error("cross-shard truncate not supported when schema-sharding is used")]
     CrossShardTruncateSchemaSharding,
 
-    #[error("prepared statement \"{0}\" doesn't exist")]
-    PreparedStatementDoesntExist(String),
-
     #[error("column decode error")]
     ColumnDecode,
 
     #[error("table decode error")]
     TableDecode,
-
-    #[error("parameter ${0} not in bind")]
-    BindParameterMissing(i32),
-
-    #[error("statement is not a SELECT")]
-    NotASelect,
 
     #[error("rewrite: {0}")]
     Rewrite(#[from] RewriteError),
@@ -108,6 +81,9 @@ pub enum Error {
 
     #[error("multi-statement queries cannot mix SET with other commands")]
     MultiStatementMixedSet,
+
+    #[error("multi-query statement cannot be safely executed")]
+    MultiStatementSafety,
 
     #[error("unmapped sharding key was specified")]
     UnmappedShardKey(String),

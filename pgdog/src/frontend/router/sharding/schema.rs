@@ -4,7 +4,7 @@ use crate::{
 };
 
 #[derive(Debug, Default, Clone)]
-pub struct SchemaSharder {
+pub(crate) struct SchemaSharder {
     catch_all: bool,
     current: Option<Shard>,
     schema: Option<String>,
@@ -12,7 +12,7 @@ pub struct SchemaSharder {
 
 impl SchemaSharder {
     /// Resolve current schema.
-    pub fn resolve(&mut self, schema: Option<Schema<'_>>, schemas: &ShardedSchemas) {
+    pub(crate) fn resolve(&mut self, schema: Option<Schema<'_>>, schemas: &ShardedSchemas) {
         if schemas.is_empty() {
             return;
         }
@@ -30,7 +30,7 @@ impl SchemaSharder {
         }
     }
 
-    pub fn get(&self) -> Option<(Shard, &str)> {
+    pub(crate) fn get(&self) -> Option<(Shard, &str)> {
         if let Some(current) = self.current.as_ref()
             && let Some(schema) = self.schema.as_ref()
         {

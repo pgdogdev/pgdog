@@ -40,13 +40,13 @@ const LOOKUP_ENTRY_OVERHEAD: usize = 80;
 /// with the cluster-scoped cache, this fully qualifies the entry:
 /// two tables with identical lookup queries can't collide.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LookupTable {
+pub(crate) struct LookupTable {
     /// Table schema, if configured.
-    pub schema: Option<String>,
+    pub(crate) schema: Option<String>,
     /// Table name, if configured.
-    pub name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Sharded column name.
-    pub column: String,
+    pub(crate) column: String,
 }
 
 impl From<&ShardedTable> for LookupTable {
@@ -158,20 +158,20 @@ impl Eq for dyn KeyView + '_ {}
 /// A lookup recorded on a cache miss, resolved by the query engine
 /// before the statement routes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PendingLookup {
+pub(crate) struct PendingLookup {
     /// The sharded table the value routes through.
-    pub table: LookupTable,
+    pub(crate) table: LookupTable,
     /// Lookup query, with a `$1` placeholder for the value.
-    pub query: String,
+    pub(crate) query: String,
     /// Sharding key value, normalized to text.
-    pub value: String,
+    pub(crate) value: String,
 }
 
 /// How a bare sharding key value (a `pgdog_sharding_key` comment or
 /// `SET pgdog.sharding_key`) routes: either straight to a shard, or
 /// through a lookup that has to run first.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ShardOrLookup {
+pub(crate) enum ShardOrLookup {
     /// The value hashed to this shard.
     Shard(Shard),
     /// The value must be translated through a lookup before hashing.
@@ -187,18 +187,18 @@ pub enum ShardOrLookup {
 /// cross-statement optimization; correctness doesn't depend on it
 /// retaining anything.
 #[derive(Debug, Clone, Default)]
-pub struct ResolvedLookups {
+pub(crate) struct ResolvedLookups {
     map: HashMap<CacheKey, Arc<str>>,
 }
 
 impl ResolvedLookups {
     /// Get the translation resolved for a sharding key value.
-    pub fn get(&self, table: &LookupTable, value: &str) -> Option<Arc<str>> {
+    pub(crate) fn get(&self, table: &LookupTable, value: &str) -> Option<Arc<str>> {
         self.get_view(&(table, value))
     }
 
     /// Like [`Self::get`], keyed straight off the sharded table.
-    pub fn get_for_table(&self, table: &ShardedTable, value: &str) -> Option<Arc<str>> {
+    pub(crate) fn get_for_table(&self, table: &ShardedTable, value: &str) -> Option<Arc<str>> {
         self.get_view(&(table, value))
     }
 
@@ -320,18 +320,18 @@ pub(crate) fn shard_for_pending(
 /// misses. Shared between the cluster's lookup cache, which records
 /// them, and the cluster's metrics, which report them.
 #[derive(Debug, Default)]
-pub struct LookupStats {
+pub(crate) struct LookupStats {
     /// Cache hits.
-    pub hits: AtomicU64,
+    pub(crate) hits: AtomicU64,
     /// Cache misses.
-    pub misses: AtomicU64,
+    pub(crate) misses: AtomicU64,
     /// Entries evicted to stay within the memory bound.
-    pub evictions: AtomicU64,
+    pub(crate) evictions: AtomicU64,
     /// Lookup queries run: misses resolved by querying a shard.
-    pub lookups: AtomicU64,
+    pub(crate) lookups: AtomicU64,
     /// Total time spent running lookup queries, in microseconds.
     /// Divided by `lookups`, the average lookup latency.
-    pub lookup_time_us: AtomicU64,
+    pub(crate) lookup_time_us: AtomicU64,
 }
 
 impl LookupStats {
@@ -345,7 +345,7 @@ impl LookupStats {
 /// Sharding key lookup cache. Bounded by approximate memory use;
 /// the least recently used translations are evicted first.
 #[derive(Debug, Clone)]
-pub struct LookupCache {
+pub(crate) struct LookupCache {
     // (Sharded table, sharding key value) => translated value.
     cache: Cache<CacheKey, Arc<str>>,
     stats: Arc<LookupStats>,
@@ -360,7 +360,7 @@ impl Default for LookupCache {
 impl LookupCache {
     /// Create a cache bounded to approximately `max_bytes` of memory.
     /// The least recently used translations are evicted when full.
-    pub fn new(max_bytes: u64) -> Self {
+    pub(crate) fn new(max_bytes: u64) -> Self {
         let stats = Arc::new(LookupStats::default());
         let evictions = stats.clone();
         Self {
@@ -386,13 +386,13 @@ impl LookupCache {
 
     /// Get the cached translation for a sharding key value.
     /// `None` means the value hasn't been translated yet.
-    pub fn get(&self, table: &LookupTable, value: &str) -> Option<Arc<str>> {
+    pub(crate) fn get(&self, table: &LookupTable, value: &str) -> Option<Arc<str>> {
         self.get_view(&(table, value))
     }
 
     /// Like [`Self::get`], keyed straight off the sharded table: the
     /// hit path allocates nothing.
-    pub fn get_for_table(&self, table: &ShardedTable, value: &str) -> Option<Arc<str>> {
+    pub(crate) fn get_for_table(&self, table: &ShardedTable, value: &str) -> Option<Arc<str>> {
         self.get_view(&(table, value))
     }
 
@@ -406,19 +406,19 @@ impl LookupCache {
     }
 
     /// Cache the result of a lookup query.
-    pub fn insert(&self, table: LookupTable, value: String, translated: Arc<str>) {
+    pub(crate) fn insert(&self, table: LookupTable, value: String, translated: Arc<str>) {
         self.cache.insert(CacheKey { table, value }, translated);
     }
 
     /// Lookup metrics recorded by this cache.
-    pub fn stats(&self) -> &Arc<LookupStats> {
+    pub(crate) fn stats(&self) -> &Arc<LookupStats> {
         &self.stats
     }
 
     /// Approximate memory used by cached translations, in bytes,
     /// and the number of entries. Runs the cache's pending
     /// maintenance first so the numbers are current.
-    pub fn size(&self) -> (u64, u64) {
+    pub(crate) fn size(&self) -> (u64, u64) {
         self.cache.run_pending_tasks();
         (self.cache.weighted_size(), self.cache.entry_count())
     }

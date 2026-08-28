@@ -149,7 +149,7 @@ where
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("invalid node identifier: {0}")]
     InvalidNodeId(String),
 
@@ -164,7 +164,7 @@ pub enum Error {
 }
 
 #[derive(Debug)]
-pub struct UniqueId {
+pub(crate) struct UniqueId {
     node_id: u64,
     id_offset: u64,
     standard: Mutex<State>,
@@ -208,7 +208,7 @@ impl UniqueId {
     }
 
     /// Get (and initialize, if necessary) the unique ID generator.
-    pub fn generator() -> Result<&'static UniqueId, Error> {
+    pub(crate) fn generator() -> Result<&'static UniqueId, Error> {
         UNIQUE_ID.get_or_try_init(|| {
             let config = config();
             Self::new(config.config.general.unique_id_function)
@@ -216,7 +216,7 @@ impl UniqueId {
     }
 
     /// Generate a globally unique, monotonically increasing identifier.
-    pub fn next_id(&self) -> i64 {
+    pub(crate) fn next_id(&self) -> i64 {
         match self.function {
             UniqueIdFunction::Compact => {
                 self.compact.lock().next_id(self.node_id, self.id_offset) as i64

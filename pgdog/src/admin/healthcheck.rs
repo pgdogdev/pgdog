@@ -2,7 +2,7 @@ use super::prelude::*;
 use crate::backend::{databases::databases, pool::monitor::Monitor};
 
 #[derive(Default)]
-pub struct Healthcheck {
+pub(crate) struct Healthcheck {
     id: Option<u64>,
 }
 

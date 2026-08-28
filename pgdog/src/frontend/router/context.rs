@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct RouterContext<'a> {
+pub(crate) struct RouterContext<'a> {
     /// Bound parameters to the query.
     pub(super) bind: Option<StatementParameters<'a>>,
     /// Query we're looking it.
@@ -30,17 +30,19 @@ pub struct RouterContext<'a> {
     /// Sticky omnisharded index.
     pub(super) sticky: Sticky,
     /// AST.
-    pub(super) ast: Option<Ast>,
+    pub(super) ast: Option<&'a Ast>,
     /// Schema.
     pub(super) schema: Schema,
     /// Sharding key translations resolved for this statement. Routing
     /// reads these before the lookup cache, so a second routing pass
     /// after resolving lookups can't miss.
     pub(super) resolved_lookups: ResolvedLookups,
+    /// Using extended protocol.
+    pub(super) extended: bool,
 }
 
 impl<'a> RouterContext<'a> {
-    pub fn new(
+    pub(crate) fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
         params: &'a Parameters,
@@ -52,6 +54,10 @@ impl<'a> RouterContext<'a> {
         let copy_mode = buffer.is_copy();
 
         Ok(Self {
+            extended: query
+                .as_ref()
+                .map(|query| query.extended())
+                .unwrap_or_default(),
             bind,
             parameter_hints: ParameterHints::from(params),
             cluster,
@@ -61,23 +67,23 @@ impl<'a> RouterContext<'a> {
             two_pc: cluster.two_pc_enabled(),
             sticky,
             query,
-            ast: buffer.ast.clone(),
+            ast: buffer.ast.as_ref(),
             schema: cluster.schema(),
             resolved_lookups: ResolvedLookups::default(),
         })
     }
 
     /// Attach sharding key translations resolved for this statement.
-    pub fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
+    pub(crate) fn with_resolved_lookups(mut self, resolved: ResolvedLookups) -> Self {
         self.resolved_lookups = resolved;
         self
     }
 
-    pub fn in_transaction(&self) -> bool {
+    pub(crate) fn in_transaction(&self) -> bool {
         self.transaction.is_some()
     }
 
-    pub fn transaction(&self) -> &Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> &Option<TransactionType> {
         &self.transaction
     }
 }

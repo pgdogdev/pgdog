@@ -200,7 +200,7 @@ mod tests {
     use crate::backend::schema::columns::StatsColumn as SchemaColumn;
     use crate::backend::schema::{Relation, Schema};
     use crate::backend::{ShardedTables, ShardingSchema};
-    use crate::config::PreparedStatements as PreparedStatementsLevel;
+    use crate::config::PreparedStatementsLevel;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::test_utils::set_env_var;

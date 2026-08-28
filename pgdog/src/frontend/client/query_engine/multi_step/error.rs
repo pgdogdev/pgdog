@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::net::ErrorResponse;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Update(#[from] UpdateError),
 
@@ -27,7 +27,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Error)]
-pub enum UpdateError {
+pub(crate) enum UpdateError {
     #[error("sharding key updates are forbidden")]
     Disabled,
 

@@ -1,5 +1,5 @@
-pub struct Schema<'a> {
-    pub name: &'a str,
+pub(crate) struct Schema<'a> {
+    pub(crate) name: &'a str,
 }
 
 impl<'a> From<&'a str> for Schema<'a> {

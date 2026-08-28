@@ -1,14 +1,15 @@
-use super::{c_string_bytes, code, prelude::*};
+use super::{code, prelude::*};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CopyFail {
+pub(crate) struct CopyFail {
     error: Bytes,
 }
 
 impl CopyFail {
-    pub fn new(error: impl AsRef<str>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(error: impl AsRef<str>) -> Self {
         Self {
-            error: c_string_bytes(error.as_ref()),
+            error: super::c_string_bytes(error.as_ref()),
         }
     }
 }
@@ -37,7 +38,7 @@ impl Protocol for CopyFail {
 }
 
 impl CopyFail {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.error.len() + 4
     }
 }

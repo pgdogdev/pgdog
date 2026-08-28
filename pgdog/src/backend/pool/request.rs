@@ -4,10 +4,10 @@ use crate::net::messages::FrontendPid;
 
 /// Connection request.
 #[derive(Clone, Debug, Copy)]
-pub struct Request {
-    pub id: FrontendPid,
-    pub created_at: Instant,
-    pub read: bool,
+pub(crate) struct Request {
+    pub(crate) id: FrontendPid,
+    pub(crate) created_at: Instant,
+    pub(crate) read: bool,
 
     // Load balancer uses this to determine if primary should be allowed to read.
     // Propagated from `User.read_only` setting.
@@ -15,7 +15,7 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn new(id: FrontendPid, read: bool, read_only: bool) -> Self {
+    pub(crate) fn new(id: FrontendPid, read: bool, read_only: bool) -> Self {
         Self {
             id,
             created_at: Instant::now(),
@@ -24,7 +24,7 @@ impl Request {
         }
     }
 
-    pub fn unrouted(id: FrontendPid) -> Self {
+    pub(crate) fn unrouted(id: FrontendPid) -> Self {
         Self {
             id,
             created_at: Instant::now(),

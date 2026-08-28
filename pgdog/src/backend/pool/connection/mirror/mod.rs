@@ -21,31 +21,31 @@ use crate::tasks;
 use super::Error;
 use crate::util::safe_sleep;
 
-pub mod buffer_with_delay;
-pub mod handler;
-pub mod request;
+pub(crate) mod buffer_with_delay;
+pub(crate) mod handler;
+pub(crate) mod request;
 
-pub use buffer_with_delay::*;
-pub use handler::*;
-pub use request::*;
+pub(crate) use buffer_with_delay::*;
+pub(crate) use handler::*;
+pub(crate) use request::*;
 
 /// Mirror handler. One is created for each client connected
 /// to PgDog.
 #[derive(Debug)]
-pub struct Mirror {
+pub(crate) struct Mirror {
     /// Random identifier for this mirror connection.
-    pub id: FrontendPid,
+    pub(crate) id: FrontendPid,
     /// Mirror's prepared statements. Should be similar
     /// to client's statements, if exposure is high.
-    pub prepared_statements: PreparedStatements,
+    pub(crate) prepared_statements: PreparedStatements,
     /// Mirror connection parameters.
-    pub params: Parameters,
+    pub(crate) params: Parameters,
     /// Timeouts.
-    pub timeouts: Timeouts,
+    pub(crate) timeouts: Timeouts,
     /// Stream that absorbs all data.
-    pub stream: Stream,
+    pub(crate) stream: Stream,
     /// Transaction state.
-    pub transaction: Option<TransactionType>,
+    pub(crate) transaction: Option<TransactionType>,
 }
 
 impl Mirror {
@@ -75,7 +75,7 @@ impl Mirror {
     ///
     /// Handler for sending queries to the background task.
     ///
-    pub fn spawn(
+    pub(crate) fn spawn(
         _source_db: &str,
         cluster: &Cluster,
         mirror_config: Option<&crate::config::MirrorConfig>,
@@ -143,7 +143,7 @@ impl Mirror {
     }
 
     /// Handle a single mirror request.
-    pub async fn handle(
+    pub(crate) async fn handle(
         &mut self,
         request: &mut MirrorRequest,
         query_engine: &mut QueryEngine,
@@ -170,7 +170,7 @@ mod test {
 
     use crate::{
         backend::pool::Request,
-        config::{self, PoolerMode, PreparedStatements as PreparedStatementsLevel},
+        config::{self, PoolerMode, PreparedStatementsLevel},
         net::{Parameter, Parameters, Query},
     };
 

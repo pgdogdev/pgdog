@@ -22,7 +22,7 @@ use crate::net::ErrorResponse;
 static COPIES: Lazy<TableCopies> = Lazy::new(TableCopies::default);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TableCopy {
+pub(crate) struct TableCopy {
     pub(crate) schema: Arc<String>,
     pub(crate) table: Arc<String>,
 }
@@ -102,7 +102,7 @@ impl Drop for TableCopy {
 }
 
 #[derive(Default, Clone)]
-pub struct TableCopies {
+pub(crate) struct TableCopies {
     copies: Arc<DashMap<TableCopy, TableCopyState>>,
 }
 
@@ -124,7 +124,7 @@ static REPLICATION_SLOTS: Lazy<ReplicationSlots> = Lazy::new(ReplicationSlots::d
 
 /// Replication slot.
 #[derive(Debug, Clone)]
-pub struct ReplicationSlot {
+pub(crate) struct ReplicationSlot {
     inner: pgdog_stats::ReplicationSlot,
 }
 
@@ -199,7 +199,7 @@ impl Drop for ReplicationSlot {
 }
 
 #[derive(Default, Clone, Debug)]
-pub struct ReplicationSlots {
+pub(crate) struct ReplicationSlots {
     slots: Arc<DashMap<String, ReplicationSlot>>,
 }
 
@@ -218,7 +218,7 @@ impl Deref for ReplicationSlots {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-pub struct SchemaStatement {
+pub(crate) struct SchemaStatement {
     task: SchemaStatementTask,
 }
 
@@ -350,7 +350,7 @@ impl Drop for SchemaStatement {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct SchemaStatements {
+pub(crate) struct SchemaStatements {
     stmts: Arc<DashSet<SchemaStatementTask>>,
     id: Arc<AtomicI64>,
 }

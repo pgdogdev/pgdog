@@ -22,9 +22,9 @@ use crate::net::messages::FrontendPid;
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
-pub mod monitor;
+pub(crate) mod monitor;
 mod oids;
-pub mod role_detector;
+pub(crate) mod role_detector;
 
 use monitor::*;
 pub(crate) use oids::{CanonicalOids, Oids};
@@ -77,18 +77,18 @@ impl Shard {
     }
 
     /// Get connection to the primary database.
-    pub async fn primary(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
     }
 
     /// Get connection to one of the replica databases, using the configured
     /// load balancing algorithm.
-    pub async fn replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, request: &Request) -> Result<Guard, Error> {
         self.lb.get(request).await
     }
 
     /// Get connection to primary if configured, otherwise replica.
-    pub async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary_or_replica(&self, request: &Request) -> Result<Guard, Error> {
         match self.primary(request).await {
             Ok(primary) => Ok(primary),
             _ => self.replica(request).await,
@@ -99,7 +99,7 @@ impl Shard {
     ///
     /// This is done during configuration reloading, if no significant changes are made to
     /// the configuration.
-    pub fn move_conns_to(&self, destination: &Shard) -> Result<(), Error> {
+    pub(crate) fn move_conns_to(&self, destination: &Shard) -> Result<(), Error> {
         self.lb.move_conns_to(&destination.lb)?;
 
         Ok(())
@@ -112,7 +112,7 @@ impl Shard {
     }
 
     /// Listen for notifications on channel.
-    pub async fn listen(&self, channel: &str) -> Result<Listener, Error> {
+    pub(crate) async fn listen(&self, channel: &str) -> Result<Listener, Error> {
         match self.pub_sub.load_full().deref() {
             Some(listener) => listener.listen(channel).await,
             _ => Err(Error::PubSubDisabled),
@@ -120,7 +120,7 @@ impl Shard {
     }
 
     /// Notify channel with optional payload (payload can be empty string).
-    pub async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
+    pub(crate) async fn notify(&self, channel: &str, payload: &str) -> Result<(), Error> {
         match self.pub_sub.load_full().deref() {
             Some(listener) => listener.notify(channel, payload).await,
             _ => Err(Error::PubSubDisabled),
@@ -183,24 +183,24 @@ impl Shard {
     }
 
     /// Check that the shard LB targets are all launched.
-    pub fn online(&self) -> bool {
+    pub(crate) fn online(&self) -> bool {
         self.lb.online()
     }
 
     /// Bring every pool online.
-    pub fn launch(&self) {
+    pub(crate) fn launch(&self) {
         self.lb.launch();
         ShardMonitor::run(self);
         self.init_pub_sub();
     }
 
     /// Returns true if the shard has a primary database.
-    pub fn has_primary(&self) -> bool {
+    pub(crate) fn has_primary(&self) -> bool {
         self.lb.primary().is_some() || self.lb.role_detection_enabled()
     }
 
     /// Returns true if the shard has any replica databases.
-    pub fn has_replicas(&self) -> bool {
+    pub(crate) fn has_replicas(&self) -> bool {
         self.lb.has_replicas()
     }
 
@@ -213,14 +213,14 @@ impl Shard {
     ///
     /// If these connection pools aren't running the query sent by this client, this is a no-op.
     ///
-    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         self.lb.cancel(id).await?;
 
         Ok(())
     }
 
     /// Get all connection pools.
-    pub fn pools(&self) -> Vec<Pool> {
+    pub(crate) fn pools(&self) -> Vec<Pool> {
         self.pools_with_roles()
             .into_iter()
             .map(|(_, pool)| pool)
@@ -228,12 +228,12 @@ impl Shard {
     }
 
     /// Get a reference to all pools managed by this shard.
-    pub fn pool_iter(&self) -> impl Iterator<Item = &Pool> {
+    pub(crate) fn pool_iter(&self) -> impl Iterator<Item = &Pool> {
         self.lb.targets.iter().map(|target| &target.pool)
     }
 
     /// Get all connection pools along with their roles (i.e., primary or replica).
-    pub fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
+    pub(crate) fn pools_with_roles(&self) -> Vec<(Role, Pool)> {
         let mut pools = vec![];
 
         pools.extend(
@@ -247,12 +247,12 @@ impl Shard {
     }
 
     /// Get all connection pools with bans and their role in the shard.
-    pub fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
+    pub(crate) fn pools_with_roles_and_bans(&self) -> Vec<(Role, Ban, Pool)> {
         self.lb.pools_with_roles_and_bans()
     }
 
     /// Shutdown every pool and maintenance task in this shard.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         self.comms.shutdown.cancel();
         self.shutdown_pub_sub();
         self.lb.shutdown();
@@ -262,28 +262,28 @@ impl Shard {
         &self.comms
     }
 
-    pub fn number(&self) -> usize {
+    pub(crate) fn number(&self) -> usize {
         self.number
     }
 
-    pub fn identifier(&self) -> &User {
+    pub(crate) fn identifier(&self) -> &User {
         &self.identifier
     }
 
     /// Get currently loaded schema for this shard, or an empty schema if
     /// the schema was not yet loaded.
-    pub fn schema(&self) -> Schema {
+    pub(crate) fn schema(&self) -> Schema {
         self.schema.get().cloned().unwrap_or_default()
     }
 
     /// Re-detect primary/replica roles and re-build
     /// the shard routing logic.
-    pub fn redetect_roles(&self) -> bool {
+    pub(crate) fn redetect_roles(&self) -> bool {
         self.lb.redetect_roles()
     }
 
     /// Get parameters from first available connection pool.
-    pub async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         self.lb.params(request).await
     }
 
@@ -471,10 +471,8 @@ mod test {
                 ..Address::new_test()
             },
             config: super::super::Config {
-                inner: pgdog_stats::Config {
-                    role_detection: true,
-                    ..Default::default()
-                },
+                role_detection: true,
+                ..Default::default()
             },
         }];
 

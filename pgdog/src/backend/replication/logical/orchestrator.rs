@@ -8,6 +8,7 @@ use crate::{
     util::{format_bytes, human_duration, random_string},
 };
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction, RewriteMode};
+use pgdog_stats::Databases;
 use std::{fmt::Display, sync::Arc, time::Duration};
 use tokio::{select, sync::Mutex, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -79,11 +80,7 @@ impl Orchestrator {
     /// Replace the publisher entirely (discards LSN state).  Only valid
     /// when starting a fresh replication phase, e.g. after cutover.
     fn refresh_publisher(&mut self) {
-        let publisher = Publisher::new(
-            &self.publication,
-            config().config.general.query_parser_engine,
-            self.replication_slot.clone(),
-        );
+        let publisher = Publisher::new(&self.publication, self.replication_slot.clone());
         self.publisher = Arc::new(Mutex::new(publisher));
     }
 
@@ -232,6 +229,14 @@ impl Orchestrator {
 
         lag.values().copied().max().map(|lag| lag as u64)
     }
+
+    /// The two ends of the migration this orchestrator drives.
+    pub(crate) fn databases(&self) -> Databases {
+        Databases {
+            source: self.source.identifier().database.clone(),
+            destination: self.destination.identifier().database.clone(),
+        }
+    }
 }
 
 impl Display for Orchestrator {
@@ -247,7 +252,7 @@ impl Display for Orchestrator {
 
 #[derive(Debug, Display)]
 #[display("{orchestrator}")]
-pub struct ReplicationWaiter {
+pub(crate) struct ReplicationWaiter {
     orchestrator: Orchestrator,
     waiter: Waiter,
     config: Arc<ConfigAndUsers>,
@@ -286,6 +291,11 @@ impl Display for CutoverReason {
 impl ReplicationWaiter {
     pub(crate) async fn wait(&mut self) -> Result<(), Error> {
         self.waiter.wait().await
+    }
+
+    /// The two ends of the migration this waiter replicates.
+    pub(crate) fn databases(&self) -> Databases {
+        self.orchestrator.databases()
     }
 
     pub(crate) fn stop(&self) {
@@ -562,11 +572,7 @@ mod tests {
             let cluster = Cluster::new_test(config);
             let publication = "test_pub".to_owned();
             let replication_slot = "test_slot".to_owned();
-            let publisher = Publisher::new(
-                &publication,
-                config.config.general.query_parser_engine,
-                replication_slot.clone(),
-            );
+            let publisher = Publisher::new(&publication, replication_slot.clone());
             Self {
                 source: cluster.clone(),
                 destination: cluster,

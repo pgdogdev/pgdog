@@ -3,25 +3,17 @@ use pgdog_config::Role;
 use crate::frontend::router::parser::route::Shard;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ExplainTrace {
+pub(crate) struct ExplainTrace {
     summary: ExplainSummary,
     steps: Vec<ExplainEntry>,
 }
 
 impl ExplainTrace {
-    pub fn new(summary: ExplainSummary, steps: Vec<ExplainEntry>) -> Self {
+    pub(crate) fn new(summary: ExplainSummary, steps: Vec<ExplainEntry>) -> Self {
         Self { summary, steps }
     }
 
-    pub fn summary(&self) -> &ExplainSummary {
-        &self.summary
-    }
-
-    pub fn steps(&self) -> &[ExplainEntry] {
-        &self.steps
-    }
-
-    pub fn render_lines(&self) -> Vec<String> {
+    pub(crate) fn render_lines(&self) -> Vec<String> {
         let mut lines = vec![String::new(), "PgDog Routing:".to_string()];
         lines.push(format!(
             "  Summary: shard={} role={}",
@@ -42,19 +34,19 @@ impl ExplainTrace {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ExplainSummary {
-    pub shard: Shard,
-    pub read: bool,
+pub(crate) struct ExplainSummary {
+    pub(crate) shard: Shard,
+    pub(crate) read: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplainEntry {
-    pub shard: Option<Shard>,
-    pub description: String,
+pub(crate) struct ExplainEntry {
+    pub(crate) shard: Option<Shard>,
+    pub(crate) description: String,
 }
 
 impl ExplainEntry {
-    pub fn new(shard: Option<Shard>, description: impl Into<String>) -> Self {
+    pub(crate) fn new(shard: Option<Shard>, description: impl Into<String>) -> Self {
         Self {
             shard,
             description: description.into(),
@@ -77,22 +69,22 @@ impl ExplainEntry {
 
 /// EXPLAIN recorder.
 #[derive(Debug, Default)]
-pub struct ExplainRecorder {
+pub(crate) struct ExplainRecorder {
     entries: Vec<ExplainEntry>,
     comment: Option<ExplainEntry>,
     plugin: Option<ExplainEntry>,
 }
 
 impl ExplainRecorder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn record_entry(&mut self, shard: Option<Shard>, description: impl Into<String>) {
+    pub(crate) fn record_entry(&mut self, shard: Option<Shard>, description: impl Into<String>) {
         self.entries.push(ExplainEntry::new(shard, description));
     }
 
-    pub fn record_comment_override(&mut self, shard: Shard, role: Option<Role>) {
+    pub(crate) fn record_comment_override(&mut self, shard: Shard, role: Option<Role>) {
         let mut description = match shard {
             Shard::Direct(_) | Shard::Multi(_) | Shard::All => {
                 format!("manual override to shard={}", shard)
@@ -106,7 +98,7 @@ impl ExplainRecorder {
         self.comment = Some(ExplainEntry::new(Some(shard), description));
     }
 
-    pub fn record_plugin_override(
+    pub(crate) fn record_plugin_override(
         &mut self,
         plugin: impl Into<String>,
         shard: Option<Shard>,
@@ -125,7 +117,7 @@ impl ExplainRecorder {
         self.plugin = Some(ExplainEntry::new(shard, description));
     }
 
-    pub fn finalize(mut self, summary: ExplainSummary) -> ExplainTrace {
+    pub(crate) fn finalize(mut self, summary: ExplainSummary) -> ExplainTrace {
         if let Some(comment) = self.comment.take() {
             self.entries.insert(0, comment);
         }
@@ -187,7 +179,7 @@ mod tests {
         });
 
         let descriptions: Vec<&str> = trace
-            .steps()
+            .steps
             .iter()
             .map(|entry| entry.description.as_str())
             .collect();
@@ -207,12 +199,12 @@ mod tests {
             read: false,
         });
 
-        assert_eq!(trace.steps().len(), 1);
+        assert_eq!(trace.steps.len(), 1);
         assert_eq!(
-            trace.steps()[0].description,
+            trace.steps[0].description,
             "no sharding key matched; broadcasting"
         );
-        assert!(trace.steps()[0].shard.is_none());
+        assert!(trace.steps[0].shard.is_none());
     }
 
     #[test]
@@ -223,7 +215,7 @@ mod tests {
         });
 
         assert_eq!(
-            trace.steps()[0].description,
+            trace.steps[0].description,
             "multiple shards matched: [1, 5]"
         );
     }

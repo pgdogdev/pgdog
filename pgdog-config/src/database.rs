@@ -216,6 +216,10 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn is_role_auto(&self) -> bool {
+        self.role == Role::Auto
+    }
+
     fn port() -> u16 {
         5432
     }

@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use pgdog_config::QueryParserEngine;
 use pgdog_postgres_types::Oid;
 use rand::Rng;
 
@@ -46,7 +45,7 @@ fn xlog_copy_data(payload: Bytes) -> CopyData {
         system_clock: 0,
         bytes: payload,
     };
-    CopyData::bytes(xlog.to_bytes())
+    CopyData::new(&xlog.to_bytes())
 }
 
 fn make_sharded_table() -> Table {
@@ -79,7 +78,6 @@ fn make_sharded_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -113,7 +111,6 @@ fn make_sharded_test_b_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -205,7 +202,6 @@ fn sharded_test_b_relation_copy_data(oid: Oid) -> CopyData {
 fn insert_copy_data(oid: Oid, id: &str, value: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(id), text_column(value)],
@@ -907,7 +903,6 @@ fn make_posts_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -947,7 +942,6 @@ fn posts_relation_copy_data(oid: Oid) -> CopyData {
 fn posts_insert_copy_data(oid: Oid, id: &str, title: &str, body: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(id), text_column(title), text_column(body)],
@@ -1284,7 +1278,6 @@ fn make_full_identity_sharded_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -1327,7 +1320,6 @@ fn make_full_identity_omni_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: QueryParserEngine::default(),
     }
 }
 
@@ -1500,7 +1492,6 @@ fn full_omni_dedup_relation_copy_data(oid: Oid) -> CopyData {
 fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
     xlog_copy_data(
         XLogInsert {
-            xid: None,
             oid,
             tuple_data: TupleData {
                 columns: vec![text_column(a), text_column(b)],
@@ -2259,7 +2250,6 @@ fn make_settings_table() -> Table {
             },
         ],
         lsn: Lsn::default(),
-        query_parser_engine: pgdog_config::QueryParserEngine::default(),
     }
 }
 

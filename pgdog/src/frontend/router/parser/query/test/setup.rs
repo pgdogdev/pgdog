@@ -108,7 +108,7 @@ impl QueryParserTest {
     /// Enable rewriting of simple-protocol PREPARE/EXECUTE statements.
     pub(crate) fn with_full_prepared_statements(mut self) -> Self {
         self.prepared
-            .set_level(pgdog_config::PreparedStatements::Full);
+            .set_level(pgdog_config::PreparedStatementsLevel::Full);
         self
     }
 

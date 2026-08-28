@@ -5,27 +5,33 @@
 //! [`ReshardTask`](crate::api::resharding::ReshardTask).
 
 use crate::api::Task;
-use crate::api::async_task::{AsyncTaskContext, Empty};
+use crate::api::task::TaskContext;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use pgdog_stats::{CopyDataDefinition, CopyDataStatus, TaskDefinition};
 
 /// Bulk-copy table data from a source database to a target, returning the
 /// orchestrator so the composing task can thread it into the next phase.
-#[derive(Display, Debug, bon::Builder)]
-#[display("copy_data {orchestrator}")]
+#[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
-    pub orchestrator: Orchestrator,
+    pub(crate) orchestrator: Orchestrator,
     /// Require a usable replica identity per table. Only streaming needs it,
     /// so a sync-only migration passes `false`. See `Publisher::data_sync`.
-    pub require_replica_identity: bool,
+    pub(crate) require_replica_identity: bool,
 }
 
 impl Task for CopyDataTask {
-    type Status = Empty;
+    type Status = CopyDataStatus;
     type Output = Orchestrator;
     type Error = Error;
 
-    async fn run(self, ctx: AsyncTaskContext<Self>) -> Result<Orchestrator, Error> {
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        CopyDataDefinition {
+            databases: self.orchestrator.databases(),
+        }
+    }
+
+    async fn run(self, ctx: TaskContext<Self>) -> Result<Orchestrator, Error> {
         let token = ctx.cancellation_token();
         let orchestrator = self.orchestrator;
 

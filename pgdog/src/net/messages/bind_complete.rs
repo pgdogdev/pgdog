@@ -3,7 +3,7 @@ use super::code;
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct BindComplete;
+pub(crate) struct BindComplete;
 
 impl FromBytes for BindComplete {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {

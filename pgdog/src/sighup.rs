@@ -1,7 +1,7 @@
 #[cfg(target_family = "unix")]
 use tokio::signal::unix::*;
 
-pub struct Sighup {
+pub(crate) struct Sighup {
     #[cfg(target_family = "unix")]
     sig: Signal,
 }

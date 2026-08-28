@@ -9,15 +9,15 @@ use super::tuple_data::TupleData;
 
 /// WAL DELETE record. Use with [`Table::delete`](crate::backend::replication::logical::publisher::Table::delete).
 #[derive(Debug, Clone)]
-pub struct Delete {
-    pub oid: Oid,
-    pub key: Option<TupleData>,
-    pub old: Option<TupleData>,
+pub(crate) struct Delete {
+    pub(crate) oid: Oid,
+    pub(crate) key: Option<TupleData>,
+    pub(crate) old: Option<TupleData>,
 }
 
 impl Delete {
     /// Returns identity columns stripped of nulls, ready for [bind](crate::net::messages::replication::TupleData::to_bind).
-    pub fn key_non_null(&self) -> Option<TupleData> {
+    pub(crate) fn key_non_null(&self) -> Option<TupleData> {
         if let Some(ref key) = self.key {
             let columns = key
                 .columns

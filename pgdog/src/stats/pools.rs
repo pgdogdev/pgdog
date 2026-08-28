@@ -3,12 +3,12 @@ use crate::util::millis;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct PoolMetric {
-    pub name: String,
-    pub measurements: Vec<Measurement>,
-    pub help: String,
-    pub unit: Option<String>,
-    pub metric_type: Option<String>,
+pub(crate) struct PoolMetric {
+    pub(crate) name: String,
+    pub(crate) measurements: Vec<Measurement>,
+    pub(crate) help: String,
+    pub(crate) unit: Option<String>,
+    pub(crate) metric_type: Option<String>,
 }
 
 impl OpenMetric for PoolMetric {
@@ -37,12 +37,12 @@ impl OpenMetric for PoolMetric {
     }
 }
 
-pub struct Pools {
+pub(crate) struct Pools {
     metrics: Vec<Metric>,
 }
 
 impl Pools {
-    pub fn load() -> Pools {
+    pub(crate) fn load() -> Pools {
         let mut metrics = vec![];
         let mut max_connections = vec![];
         let mut cl_waiting = vec![];
@@ -787,7 +787,7 @@ impl Pools {
         Pools { metrics }
     }
 
-    pub fn into_metrics(self) -> Vec<Metric> {
+    pub(crate) fn into_metrics(self) -> Vec<Metric> {
         self.metrics
     }
 }

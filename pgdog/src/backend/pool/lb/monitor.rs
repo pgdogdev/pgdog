@@ -53,25 +53,9 @@ impl Monitor {
         };
 
         loop {
-            let mut check_offline = false;
-
             select! {
                 _ = interval.tick() => {}
-                _ = self.replicas.maintenance.notified() => {
-                    check_offline = true;
-                }
-            }
-
-            if check_offline {
-                let offline = self
-                    .replicas
-                    .targets
-                    .iter()
-                    .all(|target| !target.pool.lock().online);
-
-                if offline {
-                    break;
-                }
+                _ = self.replicas.maintenance.cancelled() => break,
             }
 
             self.ban_check(&replica_ban_threshold);

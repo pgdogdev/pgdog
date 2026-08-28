@@ -1,7 +1,7 @@
 //! Binary COPY format.
-pub mod header;
-pub mod stream;
-pub mod tuple;
+pub(crate) mod header;
+pub(crate) mod stream;
+pub(crate) mod tuple;
 
-pub use stream::BinaryStream;
-pub use tuple::Data;
+pub(crate) use stream::BinaryStream;
+pub(crate) use tuple::Data;

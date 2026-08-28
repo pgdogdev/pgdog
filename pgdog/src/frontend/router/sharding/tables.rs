@@ -10,28 +10,28 @@ use super::Mapping;
 
 /// Runtime representation of a sharded table, derived from [`pgdog_config::ShardedTableConfig`].
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct ShardedTable {
-    pub database: String,
-    pub name: Option<String>,
-    pub schema: Option<String>,
-    pub column: String,
-    pub primary: bool,
-    pub centroids: Vec<Vector>,
-    pub data_type: DataType,
-    pub centroid_probes: usize,
-    pub hasher: Hasher,
-    pub mapping: Option<Mapping>,
-    pub lookup_query: Option<String>,
-    pub lookup_result: LookupResult,
+pub(crate) struct ShardedTable {
+    pub(crate) database: String,
+    pub(crate) name: Option<String>,
+    pub(crate) schema: Option<String>,
+    pub(crate) column: String,
+    pub(crate) primary: bool,
+    pub(crate) centroids: Vec<Vector>,
+    pub(crate) data_type: DataType,
+    pub(crate) centroid_probes: usize,
+    pub(crate) hasher: Hasher,
+    pub(crate) mapping: Option<Mapping>,
+    pub(crate) lookup_query: Option<String>,
+    pub(crate) lookup_result: LookupResult,
 }
 
 #[derive(Debug)]
-pub struct Key<'a> {
-    pub table: &'a ShardedTable,
-    pub position: usize,
+pub(crate) struct Key<'a> {
+    pub(crate) table: &'a ShardedTable,
+    pub(crate) position: usize,
 }
 
-pub struct Tables<'a> {
+pub(crate) struct Tables<'a> {
     schema: &'a ShardingSchema,
 }
 

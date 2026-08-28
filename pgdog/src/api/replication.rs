@@ -17,26 +17,10 @@ use tokio::select;
 use tokio_util::sync::CancellationToken;
 
 use crate::api::Task;
-use crate::api::async_task::{AsyncTaskContext, AsyncTaskId};
+use crate::api::task::{TaskContext, TaskId};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::ReplicationWaiter;
-
-/// Stages of logical replication, reported as the task's status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
-pub(crate) enum ReplicationStatus {
-    /// Streaming changes to catch the destination up.
-    #[display("replicating")]
-    Replicating,
-    /// Cutting traffic over to the destination.
-    #[display("cutting over")]
-    CuttingOver,
-    /// Cutting traffic back to the original after a prior cutover (rollback).
-    #[display("rolling back")]
-    RollingBack,
-    /// Winding down on a stop request.
-    #[display("stopping")]
-    Stopping,
-}
+use pgdog_stats::{ReplicationDefinition, ReplicationStatus, TaskDefinition};
 
 /// Direction of a replication task: the initial migration (`Forward`) or the
 /// post-cutover reverse stream that backs a rollback (`Reverse`). A `CUTOVER`
@@ -50,36 +34,32 @@ pub(crate) enum Direction {
 }
 
 /// Run the replication by driving a [`ReplicationWaiter`] to completion.
-#[derive(Display, Debug, bon::Builder)]
-#[display("replication {waiter}{}", match direction {
-    Direction::Forward => "",
-    Direction::Reverse => " (reverse)",
-})]
+#[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationTask {
     /// The running replication waiter this task drives to completion.
-    pub waiter: ReplicationWaiter,
+    pub(crate) waiter: ReplicationWaiter,
     /// Cut over automatically once the destination has caught up, instead
     /// of waiting for an operator `CUTOVER`.
     #[builder(default)]
-    pub auto_cutover: bool,
+    pub(crate) auto_cutover: bool,
     /// Replication direction. `Reverse` marks the post-cutover stream that
     /// backs a rollback; it only affects reported status, not control flow.
     #[builder(default)]
-    pub direction: Direction,
+    pub(crate) direction: Direction,
 }
 
 /// Cutover tokens of the replication tasks currently awaiting an operator
 /// `CUTOVER`, keyed by the root task id they belong to. A cutover token is
 /// *separate* from the task's `STOP_TASK` cancellation token — signalling it
 /// means "cut over", not "abandon".
-static CUTOVERS: LazyLock<Mutex<HashMap<AsyncTaskId, CancellationToken>>> =
+static CUTOVERS: LazyLock<Mutex<HashMap<TaskId, CancellationToken>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Guard held by a running replication task: removes its cutover
 /// registration on drop. Awaiting [CutoverWaiter::requested]
 /// resolves when an operator `CUTOVER` targets the task.
 struct CutoverWaiter {
-    root_id: AsyncTaskId,
+    root_id: TaskId,
     token: CancellationToken,
 }
 
@@ -106,7 +86,15 @@ impl Task for ReplicationTask {
         Duration::from_secs(60)
     }
 
-    async fn run(mut self, ctx: AsyncTaskContext<Self>) -> Result<(), Error> {
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        ReplicationDefinition {
+            databases: self.waiter.databases(),
+            reverse: self.direction == Direction::Reverse,
+            auto_cutover: self.auto_cutover,
+        }
+    }
+
+    async fn run(mut self, ctx: TaskContext<Self>) -> Result<(), Error> {
         let token = ctx.cancellation_token();
 
         ctx.set_status(ReplicationStatus::Replicating);
@@ -138,7 +126,7 @@ impl ReplicationTask {
     /// Perform the actual cutover for running replication.
     async fn perform_cutover(
         &mut self,
-        ctx: &AsyncTaskContext<Self>,
+        ctx: &TaskContext<Self>,
         token: &CancellationToken,
     ) -> Result<(), Error> {
         ctx.set_status(match self.direction {
@@ -149,7 +137,7 @@ impl ReplicationTask {
     }
 
     /// Trigger a cutover on a running replication task.
-    pub(crate) fn trigger_cutover(target: Option<AsyncTaskId>) -> bool {
+    pub(crate) fn trigger_cutover(target: Option<TaskId>) -> bool {
         let tokens = CUTOVERS.lock();
 
         let token = match target {
@@ -169,7 +157,7 @@ impl ReplicationTask {
 
     /// Register this task (by its `root_id`) to receive operator cutovers for
     /// as long as the returned guard is held.
-    fn register_cutover(root_id: AsyncTaskId) -> CutoverWaiter {
+    fn register_cutover(root_id: TaskId) -> CutoverWaiter {
         let token = CancellationToken::new();
         CUTOVERS.lock().insert(root_id, token.clone());
         CutoverWaiter { root_id, token }
@@ -191,9 +179,9 @@ mod tests {
     async fn cutover_delivers_even_when_buffered() {
         let _guard = CUTOVER_TEST_LOCK.lock().await;
         // Cutover lands before the task awaits: still delivered (latches).
-        let waiter = ReplicationTask::register_cutover(AsyncTaskId::from(1));
+        let waiter = ReplicationTask::register_cutover(TaskId::new(1));
         assert!(
-            ReplicationTask::trigger_cutover(Some(AsyncTaskId::from(1))),
+            ReplicationTask::trigger_cutover(Some(TaskId::new(1))),
             "the named task must receive the cutover"
         );
 
@@ -207,10 +195,10 @@ mod tests {
         let _guard = CUTOVER_TEST_LOCK.lock().await;
         // A cutover for one id must never disturb a task registered under a
         // different id — the whole point of keying by task id.
-        let waiter = ReplicationTask::register_cutover(AsyncTaskId::from(7));
+        let waiter = ReplicationTask::register_cutover(TaskId::new(7));
 
         assert!(
-            !ReplicationTask::trigger_cutover(Some(AsyncTaskId::from(8))),
+            !ReplicationTask::trigger_cutover(Some(TaskId::new(8))),
             "no task is registered under id 8"
         );
         assert!(
@@ -220,7 +208,7 @@ mod tests {
             "a cutover for a different id leaked to this task"
         );
 
-        assert!(ReplicationTask::trigger_cutover(Some(AsyncTaskId::from(7))));
+        assert!(ReplicationTask::trigger_cutover(Some(TaskId::new(7))));
         tokio::time::timeout(Duration::from_secs(1), waiter.requested())
             .await
             .expect("targeted cutover was not delivered");
@@ -231,8 +219,8 @@ mod tests {
         let _guard = CUTOVER_TEST_LOCK.lock().await;
         // No id: the lowest-id (first) registered task is cut over, and only
         // it.
-        let first = ReplicationTask::register_cutover(AsyncTaskId::from(3));
-        let second = ReplicationTask::register_cutover(AsyncTaskId::from(9));
+        let first = ReplicationTask::register_cutover(TaskId::new(3));
+        let second = ReplicationTask::register_cutover(TaskId::new(9));
 
         assert!(
             ReplicationTask::trigger_cutover(None),
@@ -256,12 +244,12 @@ mod tests {
         // A cutover to a task that never consumes it must die with that task,
         // never reaching the next one. Regression guard for the signal leak.
         {
-            let first = ReplicationTask::register_cutover(AsyncTaskId::from(1));
-            assert!(ReplicationTask::trigger_cutover(Some(AsyncTaskId::from(1))));
+            let first = ReplicationTask::register_cutover(TaskId::new(1));
+            assert!(ReplicationTask::trigger_cutover(Some(TaskId::new(1))));
             drop(first); // ends without ever awaiting `requested()`
         }
 
-        let next = ReplicationTask::register_cutover(AsyncTaskId::from(2));
+        let next = ReplicationTask::register_cutover(TaskId::new(2));
         assert!(
             tokio::time::timeout(Duration::from_millis(200), next.requested())
                 .await
@@ -275,8 +263,6 @@ mod tests {
         let _guard = CUTOVER_TEST_LOCK.lock().await;
         // Nothing registered: `CUTOVER` (with or without an id) is rejected.
         assert!(!ReplicationTask::trigger_cutover(None));
-        assert!(!ReplicationTask::trigger_cutover(Some(AsyncTaskId::from(
-            404
-        ))));
+        assert!(!ReplicationTask::trigger_cutover(Some(TaskId::new(404))));
     }
 }

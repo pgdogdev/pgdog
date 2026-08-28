@@ -11,7 +11,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PasswordSource {
+pub(crate) enum PasswordSource {
     Config,
     RdsIam,
     AzureIdentity,
@@ -30,7 +30,7 @@ impl Display for PasswordSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Password {
+pub(crate) struct Password {
     pub(crate) password: String,
     pub(crate) valid: Arc<AtomicBool>,
     pub(crate) source: PasswordSource,

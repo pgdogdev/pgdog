@@ -3,15 +3,13 @@
 use crate::net::Decoder;
 use std::collections::BTreeSet;
 
-use super::{
-    Datum, Double, Float, Format, FromDataType, Numeric, RowDescription, code, prelude::*,
-};
-pub use pgdog_postgres_types::{Data, ToDataRowColumn};
+use super::{Datum, Format, FromDataType, code, prelude::*};
+pub(crate) use pgdog_postgres_types::{Data, ToDataRowColumn};
 use pgdog_stats::Lsn;
 
 /// DataRow message.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct DataRow {
+pub(crate) struct DataRow {
     columns: Vec<Data>,
 }
 
@@ -23,19 +21,19 @@ impl Default for DataRow {
 
 impl DataRow {
     /// New data row.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { columns: vec![] }
     }
 
     /// Add a column to the data row.
-    pub fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
+    pub(crate) fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
         self.columns.push(value.to_data_row_column());
         self
     }
 
     /// Insert column at index. If row is smaller than index,
     /// columns will be prefilled with NULLs.
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         index: usize,
         value: impl ToDataRowColumn,
@@ -53,7 +51,7 @@ impl DataRow {
     /// Drop columns by 0-based index, ignoring indexes out of bounds.
     // FIXME(sage): Fairly certain this is never a disjoint set of indices,
     // just a number of columns to remove at the end
-    pub fn drop_columns(&mut self, drop: &BTreeSet<usize>) {
+    pub(crate) fn drop_columns(&mut self, drop: &BTreeSet<usize>) {
         let mut idx = 0;
         self.columns.retain(|_| {
             idx += 1;
@@ -62,7 +60,7 @@ impl DataRow {
     }
 
     /// Create data row from columns.
-    pub fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
+    pub(crate) fn from_columns(columns: Vec<impl ToDataRowColumn>) -> Self {
         let mut dr = Self::new();
         for column in columns {
             dr.add(column);
@@ -72,39 +70,23 @@ impl DataRow {
 
     /// Get data for column at index.
     #[inline]
-    pub fn column(&self, index: usize) -> Option<Bytes> {
+    pub(crate) fn column(&self, index: usize) -> Option<Bytes> {
         self.columns.get(index).cloned().map(|d| d.data)
     }
 
     /// Get integer at index with text/binary encoding.
-    pub fn get_int(&self, index: usize, text: bool) -> Option<i64> {
+    pub(crate) fn get_int(&self, index: usize, text: bool) -> Option<i64> {
         self.get::<i64>(index, if text { Format::Text } else { Format::Binary })
     }
 
     // Get float at index with text/binary encoding.
-    pub fn get_float(&self, index: usize, text: bool) -> Option<f64> {
-        self.get::<Float>(index, if text { Format::Text } else { Format::Binary })
-            .map(|float| float.0 as f64)
-    }
-
-    // Get numeric at index with text/binary encoding.
-    pub fn get_numeric(&self, index: usize, text: bool) -> Option<Numeric> {
-        self.get::<Numeric>(index, if text { Format::Text } else { Format::Binary })
-    }
-
-    // Get double at index with text/binary encoding.
-    pub fn get_double(&self, index: usize, text: bool) -> Option<f64> {
-        self.get::<Double>(index, if text { Format::Text } else { Format::Binary })
-            .map(|double| double.0)
-    }
-
     /// Get text value at index.
-    pub fn get_text(&self, index: usize) -> Option<String> {
+    pub(crate) fn get_text(&self, index: usize) -> Option<String> {
         self.get::<String>(index, Format::Text)
     }
 
     /// Get column at index given format encoding.
-    pub fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
+    pub(crate) fn get<T: FromDataType>(&self, index: usize, format: Format) -> Option<T> {
         self.column(index)
             .and_then(|col| T::decode(&col, format).ok())
     }
@@ -115,16 +97,15 @@ impl DataRow {
     }
 
     /// Get column at index given row description.
-    pub fn get_column<'a>(
+    pub(crate) fn get_column(
         &self,
         index: usize,
-        decoder: &'a Decoder,
-    ) -> Result<Option<Column<'a>>, Error> {
+        decoder: &Decoder,
+    ) -> Result<Option<Column>, Error> {
         if let Some(field) = decoder.row_description().field(index)
             && let Some(data) = self.columns.get(index)
         {
             return Ok(Some(Column {
-                name: field.name.as_str(),
                 value: Datum::new(
                     &data.data,
                     field.data_type(),
@@ -140,49 +121,26 @@ impl DataRow {
     /// Get the column at index given row description. Error if not present.
     /// This should only be used when the absence of a column represents a bug
     /// in pgdog.
-    pub fn get_column_checked<'a>(
+    pub(crate) fn get_column_checked(
         &self,
         idx: usize,
-        decoder: &'a Decoder,
-    ) -> Result<Column<'a>, Error> {
+        decoder: &Decoder,
+    ) -> Result<Column, Error> {
         self.get_column(idx, decoder)?
             .ok_or(Error::RequiredColumnMissing(idx))
     }
 
-    /// Render the data row.
-    pub fn into_row<'a>(&self, rd: &'a RowDescription) -> Result<Vec<Column<'a>>, Error> {
-        let mut row = vec![];
-
-        for (index, field) in rd.fields.iter().enumerate() {
-            if let Some(data) = self.columns.get(index) {
-                row.push(Column {
-                    name: field.name.as_str(),
-                    value: Datum::new(&data.data, field.data_type(), field.format(), data.is_null)?,
-                });
-            }
-        }
-
-        Ok(row)
-    }
-
     /// How many columns in the data row.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.columns.len()
-    }
-
-    /// No columns.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 
 /// Column with data type mapped to a Rust type.
 #[derive(Debug, Clone)]
-pub struct Column<'a> {
-    /// Column name.
-    pub name: &'a str,
+pub(crate) struct Column {
     /// Column value.
-    pub value: Datum,
+    pub(crate) value: Datum,
 }
 
 impl FromBytes for DataRow {
@@ -241,7 +199,7 @@ impl From<DataRow> for Lsn {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::{Decoder, Field};
+    use crate::net::{Decoder, Field, RowDescription};
     use std::assert_matches;
 
     #[test]

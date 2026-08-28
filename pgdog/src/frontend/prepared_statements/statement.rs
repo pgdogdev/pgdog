@@ -3,7 +3,7 @@ use crate::{net::Prepare, stats::memory::MemoryUsage};
 use super::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct Statement {
+pub(crate) struct Statement {
     pub(super) stmt: StatementType,
     pub(super) row_description: Option<RowDescription>,
     pub(super) cache_key: CacheKey,
@@ -80,14 +80,6 @@ impl Statement {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn query(&self) -> &str {
-        match self.stmt {
-            StatementType::Parse { ref parse, .. } => parse.query(),
-            StatementType::Prepare { ref prepare, .. } => prepare.query(),
-        }
-    }
-
     pub(super) fn cache_key(&self) -> &CacheKey {
         &self.cache_key
     }
@@ -98,6 +90,20 @@ impl Statement {
         } = self.stmt
         {
             *rewrite = Some(parse.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Statement, StatementType};
+
+    impl Statement {
+        pub(crate) fn query(&self) -> &str {
+            match self.stmt {
+                StatementType::Parse { ref parse, .. } => parse.query(),
+                StatementType::Prepare { ref prepare, .. } => prepare.query(),
+            }
         }
     }
 }

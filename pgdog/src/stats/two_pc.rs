@@ -4,12 +4,12 @@ use crate::frontend::client::query_engine::two_pc::Manager;
 
 use super::{Measurement, Metric, OpenMetric};
 
-pub struct TwoPc {
+pub(crate) struct TwoPc {
     recovered_total: u64,
 }
 
 impl TwoPc {
-    pub fn load() -> Metric {
+    pub(crate) fn load() -> Metric {
         let stats = Manager::get().stats();
         Metric::new(Self {
             recovered_total: stats.recovered_total(),

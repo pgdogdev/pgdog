@@ -3,8 +3,8 @@
 use futures::future::try_join_all;
 use parking_lot::Mutex;
 use pgdog_config::{
-    LoadSchema, PreparedStatements, QueryParser, QueryParserEngine, QueryParserLevel, Rewrite,
-    RewriteMode, users::PasswordKind,
+    LoadSchema, PreparedStatementsLevel, QueryParser, QueryParserLevel, Rewrite, RewriteMode,
+    users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -35,7 +35,7 @@ pub(crate) use schema_loader::SchemaLoader;
 
 #[derive(Clone, Debug, Default)]
 /// Database configuration.
-pub struct PoolConfig {
+pub(crate) struct PoolConfig {
     /// Database address.
     pub(crate) address: Address,
     /// Pool settings.
@@ -46,7 +46,7 @@ pub struct PoolConfig {
 /// belonging to the same database cluster.
 /// Mapped to a singular `User`, see "databases: HashMap<User, Cluster>" in backend/databases.rs
 #[derive(Clone, Debug)]
-pub struct Cluster {
+pub(crate) struct Cluster {
     identifier: Arc<DatabaseUser>,
     shards: Vec<Shard>,
     passwords: Vec<PasswordKind>,
@@ -63,12 +63,11 @@ pub struct Cluster {
     two_phase_commit_auto: bool,
     readiness: Arc<Readiness>,
     rewrite: Rewrite,
-    prepared_statements: PreparedStatements,
+    prepared_statements: PreparedStatementsLevel,
     dry_run: bool,
     expanded_explain: bool,
     query_parser: QueryParserLevel,
     client_connection_recovery: ConnectionRecovery,
-    query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
     reload_schema_on_ddl: bool,
@@ -118,7 +117,6 @@ impl Default for Cluster {
             expanded_explain: Default::default(),
             query_parser: Default::default(),
             client_connection_recovery: Default::default(),
-            query_parser_engine: Default::default(),
             log_min_duration_parse: Default::default(),
             log_query_sample_length: Default::default(),
             reload_schema_on_ddl: Default::default(),
@@ -141,35 +139,33 @@ impl Default for Cluster {
 
 /// Sharding configuration from the cluster.
 #[derive(Debug, Clone, Default)]
-pub struct ShardingSchema {
+pub(crate) struct ShardingSchema {
     /// Number of shards.
-    pub shards: usize,
+    pub(crate) shards: usize,
     /// Sharded tables.
-    pub tables: ShardedTables,
+    pub(crate) tables: ShardedTables,
     /// Schemas.
-    pub schemas: ShardedSchemas,
+    pub(crate) schemas: ShardedSchemas,
     /// Rewrite config.
-    pub rewrite: Rewrite,
-    /// Query parser engine.
-    pub query_parser_engine: QueryParserEngine,
-    pub log_min_duration_parse: Option<Duration>,
-    pub log_query_sample_length: usize,
+    pub(crate) rewrite: Rewrite,
+    pub(crate) log_min_duration_parse: Option<Duration>,
+    pub(crate) log_query_sample_length: usize,
 }
 
 impl ShardingSchema {
-    pub fn tables(&self) -> &ShardedTables {
+    pub(crate) fn tables(&self) -> &ShardedTables {
         &self.tables
     }
 }
 
 #[derive(Debug)]
-pub struct ClusterShardConfig {
-    pub primary: Option<PoolConfig>,
-    pub replicas: Vec<PoolConfig>,
+pub(crate) struct ClusterShardConfig {
+    pub(crate) primary: Option<PoolConfig>,
+    pub(crate) replicas: Vec<PoolConfig>,
 }
 
 impl ClusterShardConfig {
-    pub fn pooler_mode(&self) -> PoolerMode {
+    pub(crate) fn pooler_mode(&self) -> PoolerMode {
         // One of these will exist.
 
         if let Some(ref primary) = self.primary {
@@ -185,7 +181,7 @@ impl ClusterShardConfig {
 
 /// Cluster creation config.
 #[derive(Debug)]
-pub struct ClusterConfig<'a> {
+pub(crate) struct ClusterConfig<'a> {
     name: &'a str,
     shards: &'a [ClusterShardConfig],
     lb_strategy: LoadBalancingStrategy,
@@ -202,11 +198,10 @@ pub struct ClusterConfig<'a> {
     two_pc_auto: bool,
     sharded_schemas: ShardedSchemas,
     rewrite: &'a Rewrite,
-    prepared_statements: &'a PreparedStatements,
+    prepared_statements: &'a PreparedStatementsLevel,
     dry_run: bool,
     expanded_explain: bool,
     query_parser: QueryParserLevel,
-    query_parser_engine: QueryParserEngine,
     log_min_duration_parse: Option<Duration>,
     log_query_sample_length: usize,
     client_connection_recovery: ConnectionRecovery,
@@ -276,7 +271,6 @@ impl<'a> ClusterConfig<'a> {
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
             query_parser: query_parser.level,
-            query_parser_engine: query_parser.engine,
             log_min_duration_parse: general.log_min_duration_parse(),
             log_query_sample_length: general.log_query_sample_length,
             client_connection_recovery: general.client_connection_recovery,
@@ -303,7 +297,7 @@ impl<'a> ClusterConfig<'a> {
 
 impl Cluster {
     /// Create new cluster of shards.
-    pub fn new(config: ClusterConfig) -> Self {
+    pub(crate) fn new(config: ClusterConfig) -> Self {
         let ClusterConfig {
             name,
             shards,
@@ -327,7 +321,6 @@ impl Cluster {
             query_parser,
             client_connection_recovery,
             lsn_check_interval,
-            query_parser_engine,
             log_min_duration_parse,
             log_query_sample_length,
             reload_schema_on_ddl,
@@ -396,7 +389,6 @@ impl Cluster {
             expanded_explain,
             query_parser,
             client_connection_recovery,
-            query_parser_engine,
             log_min_duration_parse,
             log_query_sample_length,
             reload_schema_on_ddl,
@@ -419,7 +411,7 @@ impl Cluster {
     }
 
     /// Change config to work with logical replication streaming.
-    pub fn logical_stream(&self) -> Self {
+    pub(crate) fn logical_stream(&self) -> Self {
         let mut cluster = self.clone();
         // Disable rewrites, we are only sending valid statements.
         cluster.rewrite.enabled = false;
@@ -429,13 +421,13 @@ impl Cluster {
     }
 
     /// Get a connection to a primary of the given shard.
-    pub async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.primary(request).await
     }
 
     /// Get a connection to a replica of the given shard.
-    pub async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
+    pub(crate) async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.replica(request).await
     }
@@ -460,7 +452,7 @@ impl Cluster {
     }
 
     /// Cancel a query executed by one of the shards.
-    pub async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
+    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
         for shard in &self.shards {
             shard.cancel(id).await?;
         }
@@ -473,74 +465,74 @@ impl Cluster {
         &self.shards
     }
 
-    pub fn passwords(&self) -> &[PasswordKind] {
+    pub(crate) fn passwords(&self) -> &[PasswordKind] {
         &self.passwords
     }
 
     /// Get user identity which should match the TLS certificate it provided
     /// when connecting.
-    pub fn identity(&self) -> Option<&str> {
+    pub(crate) fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
     }
 
     /// This user must present a client TLS certificate when connecting over TLS.
-    pub fn tls_client_certificate_required(&self) -> bool {
+    pub(crate) fn tls_client_certificate_required(&self) -> bool {
         self.tls_client_certificate_required
     }
 
     /// User name.
-    pub fn user(&self) -> &str {
+    pub(crate) fn user(&self) -> &str {
         &self.identifier.user
     }
 
     /// Cluster name (database name).
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.identifier.database
     }
 
     /// Get unique cluster identifier.
-    pub fn identifier(&self) -> Arc<DatabaseUser> {
+    pub(crate) fn identifier(&self) -> Arc<DatabaseUser> {
         self.identifier.clone()
     }
 
     /// Get pooler mode.
-    pub fn pooler_mode(&self) -> PoolerMode {
+    pub(crate) fn pooler_mode(&self) -> PoolerMode {
         self.pooler_mode
     }
 
     // Get sharded tables if any.
-    pub fn sharded_tables(&self) -> &[ShardedTable] {
+    pub(crate) fn sharded_tables(&self) -> &[ShardedTable] {
         self.sharded_tables.tables()
     }
 
     /// Get query rewrite config.
-    pub fn rewrite(&self) -> &Rewrite {
+    pub(crate) fn rewrite(&self) -> &Rewrite {
         &self.rewrite
     }
 
-    pub fn query_parser(&self) -> QueryParserLevel {
+    pub(crate) fn query_parser(&self) -> QueryParserLevel {
         self.query_parser
     }
 
-    pub fn prepared_statements(&self) -> &PreparedStatements {
+    pub(crate) fn prepared_statements(&self) -> &PreparedStatementsLevel {
         &self.prepared_statements
     }
 
-    pub fn client_connection_recovery(&self) -> &ConnectionRecovery {
+    pub(crate) fn client_connection_recovery(&self) -> &ConnectionRecovery {
         &self.client_connection_recovery
     }
 
-    pub fn dry_run(&self) -> bool {
+    pub(crate) fn dry_run(&self) -> bool {
         self.dry_run
     }
 
-    pub fn expanded_explain(&self) -> bool {
+    pub(crate) fn expanded_explain(&self) -> bool {
         self.expanded_explain
     }
 
     /// A cluster is read_only if zero shards have a primary,
     /// or if `read_only` for the corresponding `User` is set to true.
-    pub fn read_only(&self) -> bool {
+    pub(crate) fn read_only(&self) -> bool {
         if self.read_only {
             return true;
         }
@@ -555,7 +547,7 @@ impl Cluster {
     }
 
     /// This cluster is write_only if zero shards have a replica.
-    pub fn write_only(&self) -> bool {
+    pub(crate) fn write_only(&self) -> bool {
         for shard in &self.shards {
             if shard.has_replicas() {
                 return false;
@@ -566,22 +558,22 @@ impl Cluster {
     }
 
     /// This database/user pair is responsible for schema management.
-    pub fn schema_admin(&self) -> bool {
+    pub(crate) fn schema_admin(&self) -> bool {
         self.schema_admin
     }
 
     /// Change schema owner attribute.
-    pub fn toggle_schema_admin(&mut self, owner: bool) {
+    pub(crate) fn toggle_schema_admin(&mut self, owner: bool) {
         self.schema_admin = owner;
     }
 
-    pub fn stats(&self) -> Arc<Mutex<ClusterMetrics>> {
+    pub(crate) fn stats(&self) -> Arc<Mutex<ClusterMetrics>> {
         self.stats.clone()
     }
 
     /// We'll need the query router to figure out
     /// where a query should go.
-    pub fn router_needed(&self) -> bool {
+    pub(crate) fn router_needed(&self) -> bool {
         !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
     }
 
@@ -597,31 +589,30 @@ impl Cluster {
                 self.multi_tenant().is_some()
                     || self.router_needed()
                     || self.dry_run()
-                    || self.prepared_statements() == &PreparedStatements::Full
+                    || self.prepared_statements() == &PreparedStatementsLevel::Full
                     || self.regex_parser.use_parser(request)
             }
         }
     }
 
     /// Multi-tenant config.
-    pub fn multi_tenant(&self) -> &Option<MultiTenant> {
+    pub(crate) fn multi_tenant(&self) -> &Option<MultiTenant> {
         &self.multi_tenant
     }
 
     /// Get all data required for sharding.
-    pub fn sharding_schema(&self) -> ShardingSchema {
+    pub(crate) fn sharding_schema(&self) -> ShardingSchema {
         ShardingSchema {
             shards: self.shards.len(),
             tables: self.sharded_tables.clone(),
             schemas: self.sharded_schemas.clone(),
             rewrite: self.rewrite.clone(),
-            query_parser_engine: self.query_parser_engine,
             log_min_duration_parse: self.log_min_duration_parse,
             log_query_sample_length: self.log_query_sample_length,
         }
     }
 
-    pub fn reload_schema(&self) -> bool {
+    pub(crate) fn reload_schema(&self) -> bool {
         self.reload_schema_on_ddl && self.load_schema()
     }
 
@@ -634,7 +625,7 @@ impl Cluster {
     }
 
     /// Get currently loaded schema from shard 0.
-    pub fn schema(&self) -> Schema {
+    pub(crate) fn schema(&self) -> Schema {
         self.shards
             .first()
             .map(|shard| shard.schema())
@@ -642,7 +633,7 @@ impl Cluster {
     }
 
     /// Read/write strategy
-    pub fn read_write_strategy(&self) -> &ReadWriteStrategy {
+    pub(crate) fn read_write_strategy(&self) -> &ReadWriteStrategy {
         &self.rw_strategy
     }
 
@@ -657,51 +648,51 @@ impl Cluster {
     }
 
     /// Cross-shard queries disabled for this cluster.
-    pub fn cross_shard_disabled(&self) -> bool {
+    pub(crate) fn cross_shard_disabled(&self) -> bool {
         self.cross_shard_disabled
     }
 
     /// Two-phase commit enabled.
-    pub fn two_pc_enabled(&self) -> bool {
+    pub(crate) fn two_pc_enabled(&self) -> bool {
         self.two_phase_commit
     }
 
     /// Two-phase commit transactions started automatically
     /// for single-statement cross-shard writes.
-    pub fn two_pc_auto_enabled(&self) -> bool {
+    pub(crate) fn two_pc_auto_enabled(&self) -> bool {
         self.two_phase_commit_auto && self.two_pc_enabled()
     }
 
     /// How many parallel COPY commands can we
     /// run to re-shard this cluster.
-    pub fn resharding_parallel_copies(&self) -> usize {
+    pub(crate) fn resharding_parallel_copies(&self) -> usize {
         self.resharding_parallel_copies
     }
 
     /// Maximum retries for a per-table copy during resharding.
-    pub fn resharding_copy_retry_max_attempts(&self) -> usize {
+    pub(crate) fn resharding_copy_retry_max_attempts(&self) -> usize {
         self.resharding_copy_retry_max_attempts
     }
 
     /// How long a sharding key lookup query can run before the
     /// statement waiting on it fails.
-    pub fn sharding_lookup_timeout(&self) -> Duration {
+    pub(crate) fn sharding_lookup_timeout(&self) -> Duration {
         self.sharding_lookup_timeout
     }
 
     /// Base delay between table copy retry attempts. Doubles each attempt, capped at 32×.
-    pub fn resharding_copy_retry_min_delay(&self) -> &Duration {
+    pub(crate) fn resharding_copy_retry_min_delay(&self) -> &Duration {
         &self.resharding_copy_retry_min_delay
     }
 
     /// Maximum consecutive replication-subscriber errors before the error is propagated.
     /// `0` means retry indefinitely.
-    pub fn resharding_replication_retry_max_attempts(&self) -> usize {
+    pub(crate) fn resharding_replication_retry_max_attempts(&self) -> usize {
         self.resharding_replication_retry_max_attempts
     }
 
     /// Base delay between replication-subscriber retry attempts.
-    pub fn resharding_replication_retry_min_delay(&self) -> Duration {
+    pub(crate) fn resharding_replication_retry_min_delay(&self) -> Duration {
         self.resharding_replication_retry_min_delay
     }
 
@@ -723,7 +714,7 @@ impl Cluster {
     /// Run a parameterized query on one shard, picked round-robin, and
     /// return all rows. The answer is only authoritative if every shard
     /// has the same data, e.g. an omnisharded table.
-    pub async fn fetch_all_round_robin<T: From<DataRow>>(
+    pub(crate) async fn fetch_all_round_robin<T: From<DataRow>>(
         &self,
         query: &str,
         params: &[BindParameter],
@@ -770,7 +761,7 @@ mod test {
     use super::{Cluster, DatabaseUser};
 
     impl Cluster {
-        pub fn new_test(config: &ConfigAndUsers) -> Self {
+        pub(crate) fn new_test(config: &ConfigAndUsers) -> Self {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
@@ -898,14 +889,14 @@ mod test {
             }
         }
 
-        pub fn new_test_single_shard(config: &ConfigAndUsers) -> Cluster {
+        pub(crate) fn new_test_single_shard(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             cluster.shards.pop();
 
             cluster
         }
 
-        pub fn new_test_session_mode(config: &ConfigAndUsers) -> Cluster {
+        pub(crate) fn new_test_session_mode(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             cluster.pooler_mode = PoolerMode::Session;
             cluster
@@ -913,7 +904,7 @@ mod test {
 
         /// Two shards targeting different databases on the same server.
         /// Gives separate lock namespaces without needing two Postgres instances.
-        pub fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
+        pub(crate) fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             let shard1 = cluster.shards.last_mut().unwrap();
             *shard1 = Shard::new(ShardConfig {
@@ -940,7 +931,7 @@ mod test {
             cluster
         }
 
-        pub fn new_test_single_primary(config: &ConfigAndUsers) -> Cluster {
+        pub(crate) fn new_test_single_primary(config: &ConfigAndUsers) -> Cluster {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
                 database: "pgdog".into(),
@@ -973,7 +964,7 @@ mod test {
             }
         }
 
-        pub fn new_test_single_replica(config: &ConfigAndUsers) -> Cluster {
+        pub(crate) fn new_test_single_replica(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test_single_shard(config);
             let identifier = cluster.identifier.clone();
             cluster.shards[0] = Shard::new(ShardConfig {

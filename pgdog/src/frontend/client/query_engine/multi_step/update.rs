@@ -77,28 +77,41 @@ impl<'a> UpdateMulti<'a> {
             return Ok(());
         }
 
-        // Fetch the old row from whatever shard it is on.
-        let row = self.fetch_row(context).await?;
-
-        if let Some(row) = row {
-            self.insert_row(context, row).await?;
-        } else {
+        if self.move_row(context).await?.is_none() {
             // This happens, but the UPDATE's WHERE clause
             // doesn't match any rows, so this whole thing is a no-op.
             self.engine
-                .fake_command_response(context, "UPDATE 0", None::<Option<_>>)
+                .fake_command_response(context, "UPDATE 0", None)
                 .await?;
         }
 
         Ok(())
     }
 
-    /// Create row.
-    pub(super) async fn insert_row(
+    /// Delete the row from the original shard and move it to the new one.
+    ///
+    /// Returns `None` if no row was returned by the DELETE query.
+    pub(super) async fn move_row(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        row: Row,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<()>, Error> {
+        if !context.in_transaction() || !self.engine.backend.is_multishard()
+        // Do this check at the last possible moment.
+        // Just in case we change how transactions are
+        // routed in the future.
+        {
+            self.engine.cleanup_backend(context)?;
+            return Err(UpdateError::TransactionRequired.into());
+        }
+
+        if self.has_destructive_on_delete_reference(context)? {
+            return Err(UpdateError::ForeignKeyOnDelete.into());
+        }
+
+        let Some(row) = self.delete_and_fetch_row(context).await? else {
+            return Ok(None);
+        };
+
         let mut request = self.rewrite.build_insert_request(
             context.client_request,
             &row.row_description,
@@ -106,55 +119,30 @@ impl<'a> UpdateMulti<'a> {
         )?;
         self.route(&mut request, context)?;
 
-        let original_shard = context.client_request.route().shard();
-        let new_shard = request.route().shard();
+        debug!("[update] executing multi-shard insert/delete");
 
-        // The new row maps to the same shard as the old row.
-        // We don't need to do the multi-step UPDATE anymore.
-        // Forward the original request as-is.
-        if original_shard.is_direct() && new_shard == original_shard {
-            debug!("[update] selected row is on the same shard");
-            self.execute_original(context).await
-        } else {
-            debug!("[update] executing multi-shard insert/delete");
-
-            // Check if we are allowed to do this operation by the config.
-            if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
-                self.engine
-                    .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
-                    .await?;
-                return Ok(());
-            }
-
-            if !context.in_transaction() || !self.engine.backend.is_multishard()
-            // Do this check at the last possible moment.
-            // Just in case we change how transactions are
-            // routed in the future.
-            {
-                self.engine.cleanup_backend(context)?;
-                return Err(UpdateError::TransactionRequired.into());
-            }
-
-            if self.has_destructive_on_delete_reference(context)? {
-                return Err(UpdateError::ForeignKeyOnDelete.into());
-            }
-
-            self.delete_row(context).await?;
-            self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
-                .await?;
-
+        // Check if we are allowed to do this operation by the config.
+        if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
             self.engine
-                .process_server_message(context, CommandComplete::new("UPDATE 1").message()) // We only allow to update one row at a time.
+                .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
                 .await?;
-            self.engine
-                .process_server_message(
-                    context,
-                    ReadyForQuery::in_transaction(context.in_transaction()).message(),
-                )
-                .await?;
-
-            Ok(())
+            return Ok(Some(()));
         }
+
+        self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
+            .await?;
+
+        self.engine
+            .process_server_message(context, CommandComplete::new("UPDATE 1").message()) // We only allow to update one row at a time.
+            .await?;
+        self.engine
+            .process_server_message(
+                context,
+                ReadyForQuery::in_transaction(context.in_transaction()).message(),
+            )
+            .await?;
+
+        Ok(Some(()))
     }
 
     fn has_destructive_on_delete_reference(
@@ -232,22 +220,11 @@ impl<'a> UpdateMulti<'a> {
         Ok(())
     }
 
-    pub(super) async fn delete_row(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-    ) -> Result<(), Error> {
-        let mut request = self.rewrite.delete.build_request(context.client_request)?;
-        self.route(&mut request, context)?;
-
-        self.execute_request_internal(context, &mut request, false)
-            .await
-    }
-
-    pub(super) async fn fetch_row(
+    pub(super) async fn delete_and_fetch_row(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<Option<Row>, Error> {
-        let mut request = self.rewrite.select.build_request(context.client_request)?;
+        let mut request = self.rewrite.delete.build_request(context.client_request)?;
         self.route(&mut request, context)?;
 
         self.engine

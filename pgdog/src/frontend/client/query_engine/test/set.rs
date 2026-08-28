@@ -2,7 +2,10 @@ use crate::{
     backend::databases::reload_from_existing,
     config::{config, load_test_sharded, set},
     expect_message,
-    net::{CommandComplete, ErrorResponse, ReadyForQuery, parameter::ParameterValue},
+    net::{
+        BindComplete, CommandComplete, ErrorResponse, NoData, ParameterDescription, ParseComplete,
+        ReadyForQuery, parameter::ParameterValue,
+    },
 };
 
 use super::prelude::*;
@@ -40,6 +43,34 @@ async fn test_set() {
     );
 
     assert!(!test_client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_set_statement_describe() {
+    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+
+    test_client
+        .send(Parse::named("set", "SET application_name TO 'described'"))
+        .await;
+    test_client.send(Bind::new_statement("set")).await;
+    test_client.send(Describe::new_statement("set")).await;
+    test_client.send(Execute::new()).await;
+    test_client.send(Sync).await;
+    test_client.try_process().await.unwrap();
+
+    assert!(!test_client.backend_connected());
+    expect_message!(test_client.read().await, ParseComplete);
+    expect_message!(test_client.read().await, BindComplete);
+    expect_message!(test_client.read().await, ParameterDescription);
+    expect_message!(test_client.read().await, NoData);
+    assert_eq!(
+        expect_message!(test_client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    assert_eq!(
+        expect_message!(test_client.read().await, ReadyForQuery).status,
+        'I'
+    );
 }
 
 #[tokio::test]

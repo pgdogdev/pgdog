@@ -9,19 +9,14 @@ use crate::util::safe_timeout;
 use super::*;
 
 #[derive(Debug, Clone)]
-pub enum ClusterCheck {
+pub(crate) enum ClusterCheck {
     Ok,
     Offline,
 }
 
 impl QueryEngine {
-    #[cfg(test)]
-    pub fn backend(&mut self) -> &mut Connection {
-        &mut self.backend
-    }
-
     /// Check that the cluster is still valid and online.
-    pub async fn cluster_check(
+    pub(crate) async fn cluster_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<ClusterCheck, Error> {
@@ -229,5 +224,19 @@ impl QueryEngine {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::backend::pool::Connection;
+
+    use super::QueryEngine;
+
+    impl QueryEngine {
+        /// Get mutable reference to the backend connection.
+        pub(crate) fn backend(&mut self) -> &mut Connection {
+            &mut self.backend
+        }
     }
 }

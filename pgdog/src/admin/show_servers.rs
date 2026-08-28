@@ -12,7 +12,7 @@ use crate::{
 use super::prelude::*;
 
 /// SHOW SERVERS command.
-pub struct ShowServers {
+pub(crate) struct ShowServers {
     row: NamedRow,
 }
 

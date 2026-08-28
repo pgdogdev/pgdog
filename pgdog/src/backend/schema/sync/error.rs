@@ -2,7 +2,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("{0}")]
     Backend(#[from] crate::backend::Error),
 

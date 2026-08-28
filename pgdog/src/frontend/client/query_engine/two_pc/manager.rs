@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::{select, sync::Notify, time::Instant};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -39,7 +40,7 @@ static MAINTENANCE: Duration = Duration::from_millis(333);
 
 /// Two-phase commit transaction manager.
 #[derive(Debug, Clone)]
-pub struct Manager {
+pub(crate) struct Manager {
     inner: Arc<Mutex<Inner>>,
     notify: Arc<InnerNotify>,
     stats: Arc<TwoPcStats>,
@@ -48,7 +49,7 @@ pub struct Manager {
 
 impl Manager {
     /// Get transaction manager instance.
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         MANAGER.clone()
     }
 
@@ -58,8 +59,7 @@ impl Manager {
             notify: Arc::new(InnerNotify {
                 notify: Notify::new(),
                 offline: AtomicBool::new(false),
-                done_flag: AtomicBool::new(false),
-                done: Notify::new(),
+                done: CancellationToken::new(),
             }),
             stats: Arc::new(TwoPcStats::default()),
             wal: Arc::new(ArcSwapOption::empty()),
@@ -82,7 +82,7 @@ impl Manager {
     ///   the checkpointer is disabled.
     /// - `segment_size`: Maximum size of a WAL segment. Soft limit.
     ///
-    pub async fn enable_wal(
+    pub(crate) async fn enable_wal(
         &self,
         wal_directory: &PathBuf,
         checkpoint_interval: Option<Duration>,
@@ -108,12 +108,12 @@ impl Manager {
     }
 
     /// Get all active two-phase transactions.
-    pub fn transactions(&self) -> HashMap<TwoPcTransaction, TransactionInfo> {
+    pub(crate) fn transactions(&self) -> HashMap<TwoPcTransaction, TransactionInfo> {
         self.inner.lock().transactions.clone()
     }
 
     /// Process-level 2PC counters.
-    pub fn stats(&self) -> Arc<TwoPcStats> {
+    pub(crate) fn stats(&self) -> Arc<TwoPcStats> {
         Arc::clone(&self.stats)
     }
 
@@ -132,7 +132,7 @@ impl Manager {
     /// or until a fixed timeout elapses.
     ///
     /// No-op if the transaction was never registered or is already gone.
-    pub async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
+    pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
         const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
         let deadline = Instant::now() + WAIT_TIMEOUT;
@@ -321,8 +321,7 @@ impl Manager {
                 notify.notify.notify_one();
             } else if notify.offline.load(Ordering::Relaxed) {
                 // No more transactions to cleanup.
-                notify.done_flag.store(true, Ordering::Relaxed);
-                notify.done.notify_waiters();
+                notify.done.cancel();
 
                 if let Some(wal) = manager.wal.load_full() {
                     wal.shutdown();
@@ -396,28 +395,27 @@ impl Manager {
     /// Shutdown manager and wait for all transactions to be cleaned up.
     /// Once the monitor has drained the cleanup queue, the WAL is shut
     /// down too so any final End records make it to disk before exit.
-    pub async fn shutdown(&self) {
-        if self.notify.done_flag.load(Ordering::Relaxed) {
+    pub(crate) async fn shutdown(&self) {
+        if self.notify.done.is_cancelled() {
             return;
         }
 
-        let waiter = self.notify.done.notified();
         self.notify.offline.store(true, Ordering::Relaxed);
         self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
         info!("[2pc] cleaning up {} two-phase transactions", transactions);
 
-        waiter.await;
+        self.notify.done.cancelled().await;
 
         info!("[2pc] manager shutdown successful");
     }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct TransactionInfo {
-    pub phase: TwoPcPhase,
-    pub identifier: Arc<User>,
+pub(crate) struct TransactionInfo {
+    pub(crate) phase: TwoPcPhase,
+    pub(crate) identifier: Arc<User>,
 }
 
 #[derive(Default, Debug)]
@@ -431,6 +429,5 @@ struct Inner {
 struct InnerNotify {
     notify: Notify,
     offline: AtomicBool,
-    done_flag: AtomicBool,
-    done: Notify,
+    done: CancellationToken,
 }

@@ -11,8 +11,8 @@ use super::super::super::prelude::*;
 use super::string::unescape;
 
 #[derive(Clone, Default)]
-pub struct TupleData {
-    pub columns: Vec<Column>,
+pub(crate) struct TupleData {
+    pub(crate) columns: Vec<Column>,
 }
 
 impl std::fmt::Debug for TupleData {
@@ -31,7 +31,7 @@ impl std::fmt::Debug for TupleData {
 }
 
 impl TupleData {
-    pub fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
+    pub(crate) fn from_buffer(bytes: &mut Bytes) -> Result<Self, Error> {
         if bytes.remaining() < 2 {
             return Err(Error::UnexpectedPayload);
         }
@@ -83,7 +83,7 @@ impl TupleData {
         Ok(Self { columns })
     }
 
-    pub fn to_sql(&self) -> Result<String, Error> {
+    pub(crate) fn to_sql(&self) -> Result<String, Error> {
         let columns = self
             .columns
             .iter()
@@ -96,7 +96,7 @@ impl TupleData {
     /// Create a [`Bind`] message from this tuple. Column index N maps to parameter `$N+1`.
     /// Used by [`Table`](crate::backend::replication::logical::publisher::Table) DML methods
     /// — the `$N` they emit must agree with the column ordering of the tuple passed here.
-    pub fn to_bind(&self, name: &str) -> Bind {
+    pub(crate) fn to_bind(&self, name: &str) -> Bind {
         let (params, codes): (Vec<_>, Vec<_>) = self
             .columns
             .iter()
@@ -116,7 +116,7 @@ impl TupleData {
     }
 
     /// Does this tuple contain any unchanged-TOAST (`'u'`) column?
-    pub fn has_toasted(&self) -> bool {
+    pub(crate) fn has_toasted(&self) -> bool {
         self.columns
             .iter()
             .any(|c| c.identifier == Identifier::Toasted)
@@ -125,14 +125,14 @@ impl TupleData {
     /// Are every column in this tuple unchanged-TOAST (`'u'`)?
     ///
     /// True when nothing changed — used to detect no-op UPDATEs before routing.
-    pub fn all_toasted(&self) -> bool {
+    pub(crate) fn all_toasted(&self) -> bool {
         self.columns
             .iter()
             .all(|c| c.identifier == Identifier::Toasted)
     }
 
     /// Return a copy with unchanged-TOAST (`'u'`) columns removed.
-    pub fn without_toasted(&self) -> TupleData {
+    pub(crate) fn without_toasted(&self) -> TupleData {
         TupleData {
             columns: self
                 .columns
@@ -154,7 +154,7 @@ impl TupleData {
     ///
     /// Both tuples must have the same column count; mismatches are a schema-change
     /// race that is not recoverable here and should surface as an upstream error.
-    pub fn fill_toasted_from(&self, source: &TupleData) -> Result<TupleData, Error> {
+    pub(crate) fn fill_toasted_from(&self, source: &TupleData) -> Result<TupleData, Error> {
         if self.columns.len() != source.columns.len() {
             return Err(Error::InvariantViolation(format!(
                 "fill_toasted_from: column count mismatch ({} vs {}); schema-change race?",
@@ -187,23 +187,23 @@ impl TupleData {
 
 /// Explains what's inside the column.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Identifier {
+pub(crate) enum Identifier {
     Format(Format),
     Null,
     Toasted,
 }
 
 #[derive(Debug, Clone)]
-pub struct Column {
-    pub identifier: Identifier,
-    pub len: i32,
-    pub data: Bytes,
+pub(crate) struct Column {
+    pub(crate) identifier: Identifier,
+    pub(crate) len: i32,
+    pub(crate) data: Bytes,
 }
 
 impl Column {
     /// Convert column to SQL representation,
     /// if it's encoded with UTF-8 compatible encoding.
-    pub fn to_sql(&self) -> Result<String, Error> {
+    pub(crate) fn to_sql(&self) -> Result<String, Error> {
         match self.identifier {
             Identifier::Null => Ok("NULL".into()),
             Identifier::Format(Format::Binary) => Err(Error::NotTextEncoding),
@@ -213,12 +213,6 @@ impl Column {
                 Err(_) => Err(Error::NotTextEncoding),
             },
         }
-    }
-
-    /// Get UTF-8 representation of the data,
-    /// if data is encoded with UTF-8.
-    pub fn as_str(&self) -> Option<&str> {
-        from_utf8(&self.data[..]).ok()
     }
 }
 
@@ -353,11 +347,11 @@ mod test {
         };
         let filled = new.fill_toasted_from(&old).unwrap();
         // col0: from new (unchanged — was present)
-        assert_eq!(filled.columns[0].as_str(), Some("a"));
+        assert_eq!(&*filled.columns[0].data, b"a");
         // col1: from old (was toasted in new)
-        assert_eq!(filled.columns[1].as_str(), Some("b_old"));
+        assert_eq!(&*filled.columns[1].data, b"b_old");
         // col2: from new
-        assert_eq!(filled.columns[2].as_str(), Some("c"));
+        assert_eq!(&*filled.columns[2].data, b"c");
         assert!(
             !filled.has_toasted(),
             "filled tuple must contain no toasted markers"
@@ -374,8 +368,8 @@ mod test {
             columns: vec![text_col("x_old"), text_col("y_old")],
         };
         let filled = new.fill_toasted_from(&old).unwrap();
-        assert_eq!(filled.columns[0].as_str(), Some("x"));
-        assert_eq!(filled.columns[1].as_str(), Some("y"));
+        assert_eq!(&*filled.columns[0].data, b"x");
+        assert_eq!(&*filled.columns[1].data, b"y");
     }
 
     #[test]
@@ -388,8 +382,8 @@ mod test {
             columns: vec![text_col("p"), text_col("q")],
         };
         let filled = new.fill_toasted_from(&old).unwrap();
-        assert_eq!(filled.columns[0].as_str(), Some("p"));
-        assert_eq!(filled.columns[1].as_str(), Some("q"));
+        assert_eq!(&*filled.columns[0].data, b"p");
+        assert_eq!(&*filled.columns[1].data, b"q");
         assert!(!filled.has_toasted());
     }
 

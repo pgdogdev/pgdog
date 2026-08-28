@@ -1,19 +1,19 @@
 use crate::frontend::router::parser::Shard;
 
 #[derive(Debug)]
-pub struct NotifyCommand {
-    pub channel: String,
-    pub payload: String,
-    pub shard: Shard,
+pub(crate) struct NotifyCommand {
+    pub(crate) channel: String,
+    pub(crate) payload: String,
+    pub(crate) shard: Shard,
 }
 
 #[derive(Debug, Default)]
-pub struct NotifyBuffer {
+pub(crate) struct NotifyBuffer {
     commands: Vec<NotifyCommand>,
 }
 
 impl NotifyBuffer {
-    pub fn add(&mut self, channel: String, payload: String, shard: Shard) {
+    pub(crate) fn add(&mut self, channel: String, payload: String, shard: Shard) {
         self.commands.push(NotifyCommand {
             channel,
             payload,
@@ -21,11 +21,11 @@ impl NotifyBuffer {
         });
     }
 
-    pub fn drain(&mut self) -> impl Iterator<Item = NotifyCommand> + '_ {
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = NotifyCommand> + '_ {
         self.commands.drain(..)
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.commands.clear();
     }
 }

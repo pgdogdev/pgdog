@@ -16,33 +16,33 @@ use crate::config::{Database, ServerAuth, User, config};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
-pub struct Address {
+pub(crate) struct Address {
     /// Server host.
-    pub host: String,
+    pub(crate) host: String,
     /// Server port.
-    pub port: u16,
+    pub(crate) port: u16,
     /// PostgreSQL database name.
-    pub database_name: String,
+    pub(crate) database_name: String,
     /// Username.
-    pub user: String,
+    pub(crate) user: String,
     /// Password.
-    pub passwords: Vec<Password>,
+    pub(crate) passwords: Vec<Password>,
     /// Server auth mode for backend connections.
     #[serde(default)]
-    pub server_auth: ServerAuth,
+    pub(crate) server_auth: ServerAuth,
     /// Optional IAM region override.
-    pub server_iam_region: Option<String>,
+    pub(crate) server_iam_region: Option<String>,
     /// Vault path to fetch dynamic credentials from.
     #[serde(default)]
-    pub vault_path: Option<String>,
+    pub(crate) vault_path: Option<String>,
     /// Percentage of the Vault lease after which credentials are refreshed.
     #[serde(default)]
-    pub vault_refresh_percent: Option<u8>,
+    pub(crate) vault_refresh_percent: Option<u8>,
     /// Database number (in the config).
-    pub database_number: usize,
+    pub(crate) database_number: usize,
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
-    pub configured_role: Role,
+    pub(crate) configured_role: Role,
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -200,7 +200,7 @@ impl Address {
     /// Test convention: `new_test()` represents a primary. Tests that need
     /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
     #[cfg(test)]
-    pub fn new_test() -> Self {
+    pub(crate) fn new_test() -> Self {
         Self {
             host: "127.0.0.1".into(),
             port: 5432,

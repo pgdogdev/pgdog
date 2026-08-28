@@ -27,7 +27,7 @@ impl QueryParser {
             Ok(Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                set_config: false,
             })
         }
     }
@@ -65,17 +65,10 @@ impl QueryParser {
     /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
     /// all multi-statement queries are forwarded to the server verbatim.
     pub(super) fn try_multi_set<'a>(
-        &mut self,
+        &self,
         stmts: impl IntoIterator<Item = &'a nodes::RawStmt>,
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {
-        // In session mode, pass through without validation — the server
-        // owns the session and can handle mixed SET + other statements.
-        if context.is_session_mode() {
-            return Ok(Some(Command::Query(Route::write(
-                context.shards_calculator.shard(),
-            ))));
-        }
         let mut has_other = false;
 
         let params = stmts
@@ -99,7 +92,7 @@ impl QueryParser {
             Ok(Some(Command::Set {
                 params,
                 route: Route::write(context.shards_calculator.shard()),
-                behave_like_select: false,
+                set_config: false,
             }))
         }
     }

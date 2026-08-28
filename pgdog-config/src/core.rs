@@ -9,8 +9,8 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatements, QueryParser,
-    QueryParserEngine, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
+    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatementsLevel,
+    QueryParser, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
     ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
 
@@ -23,7 +23,7 @@ use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
 use super::rewrite::Rewrite;
 use super::sharding::{OmnishardedTables, ShardedMappingDeprecated};
-use super::users::{Admin, Plugin, Users};
+use super::users::{Admin, Plugin, User, Users};
 use super::vault::Vault;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -150,10 +150,10 @@ impl ConfigAndUsers {
     }
 
     /// Prepared statements are enabled.
-    pub fn prepared_statements(&self) -> PreparedStatements {
+    pub fn prepared_statements(&self) -> PreparedStatementsLevel {
         // Disable prepared statements automatically in session mode
         if self.config.general.pooler_mode == PoolerMode::Session {
-            PreparedStatements::Disabled
+            PreparedStatementsLevel::Disabled
         } else {
             self.config.general.prepared_statements
         }
@@ -314,6 +314,23 @@ impl Config {
                 });
         }
         databases
+    }
+
+    /// Names of the database clusters this user connects to.
+    ///
+    /// `all_databases` wins over an explicit `databases` list. Use
+    /// [`User::has_database`] to ask about one name instead of expanding all
+    /// of them; the two follow the same rule.
+    pub fn user_databases(&self, user: &User) -> Vec<String> {
+        if user.all_databases {
+            let mut names: Vec<String> = self.databases().into_keys().collect();
+            names.sort();
+            names
+        } else if !user.databases.is_empty() {
+            user.databases.clone()
+        } else {
+            vec![user.database.clone()]
+        }
     }
 
     pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
@@ -614,19 +631,6 @@ impl Config {
             self.general.query_parser = QueryParserLevel::On;
         }
 
-        let raw_query_parser = self.general.query_parser_engine == QueryParserEngine::PgQueryRaw
-            || self
-                .query_parsers
-                .iter()
-                .any(|query_parser| query_parser.engine == QueryParserEngine::PgQueryRaw);
-
-        if raw_query_parser && self.memory.stack_size < 32 * 1024 * 1024 {
-            self.memory.stack_size = 32 * 1024 * 1024;
-            warn!(
-                r#""pg_query_raw" parser engine requires a large thread stack, setting it to 32MiB for each Tokio worker"#
-            );
-        }
-
         if !self.sharded_mappings.is_empty() {
             warn!(
                 "`[[sharded_mappings]]` config is deprecated, use `[[sharded_tables.mapping]]` instead"
@@ -729,11 +733,56 @@ impl Config {
 mod tests {
     use super::*;
     use crate::{FlexibleType, ShardedMappingConfig, ShardedMappingList, ShardedMappingRange};
-    use crate::{PoolerMode, PreparedStatements, ServerAuth};
+    use crate::{PoolerMode, PreparedStatementsLevel, ServerAuth};
 
     use std::io::Write;
     use std::time::Duration;
     use tempfile::NamedTempFile;
+
+    /// `has_database` must answer for one name exactly what `user_databases`
+    /// expands to, or the pooler and the views that ask per name disagree.
+    #[test]
+    fn has_database_agrees_with_user_databases() {
+        let database = |name: &str| Database {
+            name: name.into(),
+            ..Default::default()
+        };
+        let config = Config {
+            databases: vec![database("alpha"), database("beta"), database("gamma")],
+            ..Default::default()
+        };
+
+        let single = User {
+            database: "beta".into(),
+            ..Default::default()
+        };
+        let listed = User {
+            database: "beta".into(),
+            databases: vec!["alpha".into(), "gamma".into()],
+            ..Default::default()
+        };
+        let every = User {
+            database: "beta".into(),
+            databases: vec!["alpha".into()],
+            all_databases: true,
+            ..Default::default()
+        };
+
+        for user in [&single, &listed, &every] {
+            let expanded = config.user_databases(user);
+            for name in ["alpha", "beta", "gamma"] {
+                assert_eq!(
+                    user.has_database(name),
+                    expanded.iter().any(|database| database == name),
+                    "{} on {}",
+                    user.database,
+                    name
+                );
+            }
+        }
+
+        assert!(!single.has_database("missing"));
+    }
 
     #[test]
     fn test_basic() {
@@ -850,37 +899,37 @@ database_name = "postgres"
 
         // Test transaction mode (default) - prepared statements should be enabled
         config.config.general.pooler_mode = PoolerMode::Transaction;
-        config.config.general.prepared_statements = PreparedStatements::Extended;
+        config.config.general.prepared_statements = PreparedStatementsLevel::Extended;
         assert_eq!(
             config.prepared_statements(),
-            PreparedStatements::Extended,
+            PreparedStatementsLevel::Extended,
             "Prepared statements should be enabled in transaction mode"
         );
 
         // Test session mode - prepared statements should be disabled
         config.config.general.pooler_mode = PoolerMode::Session;
-        config.config.general.prepared_statements = PreparedStatements::Extended;
+        config.config.general.prepared_statements = PreparedStatementsLevel::Extended;
         assert_eq!(
             config.prepared_statements(),
-            PreparedStatements::Disabled,
+            PreparedStatementsLevel::Disabled,
             "Prepared statements should be disabled in session mode"
         );
 
         // Test session mode with full prepared statements - should still be disabled
         config.config.general.pooler_mode = PoolerMode::Session;
-        config.config.general.prepared_statements = PreparedStatements::Full;
+        config.config.general.prepared_statements = PreparedStatementsLevel::Full;
         assert_eq!(
             config.prepared_statements(),
-            PreparedStatements::Disabled,
+            PreparedStatementsLevel::Disabled,
             "Prepared statements should be disabled in session mode even when set to Full"
         );
 
         // Test transaction mode with disabled prepared statements - should remain disabled
         config.config.general.pooler_mode = PoolerMode::Transaction;
-        config.config.general.prepared_statements = PreparedStatements::Disabled;
+        config.config.general.prepared_statements = PreparedStatementsLevel::Disabled;
         assert_eq!(
             config.prepared_statements(),
-            PreparedStatements::Disabled,
+            PreparedStatementsLevel::Disabled,
             "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode"
         );
     }

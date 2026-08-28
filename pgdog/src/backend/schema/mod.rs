@@ -1,10 +1,10 @@
 //! Schema operations.
-pub mod cache;
-pub mod columns;
-pub mod relation;
-pub mod sync;
+pub(crate) mod cache;
+pub(crate) mod columns;
+pub(crate) mod relation;
+pub(crate) mod sync;
 
-pub use pgdog_stats::{
+pub(crate) use pgdog_stats::{
     Relation as StatsRelation, Relations as StatsRelations, Schema as StatsSchema, SchemaInner,
 };
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use std::{collections::HashMap, ops::Deref};
 use tracing::info;
 
 pub(crate) use cache::SchemaCache;
-pub use relation::Relation;
+pub(crate) use relation::Relation;
 
 use super::{Cluster, Error, Server, pool::Request};
 use crate::frontend::router::parser::Table;
@@ -24,7 +24,7 @@ static SETUP: &str = include_str!("setup.sql");
 
 /// Load schema from database.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Hash)]
-pub struct Schema {
+pub(crate) struct Schema {
     inner: StatsSchema,
 }
 
@@ -44,7 +44,7 @@ impl DerefMut for Schema {
 
 impl Schema {
     /// Load schema from a server connection.
-    pub async fn load(server: &mut Server) -> Result<Self, Error> {
+    pub(crate) async fn load(server: &mut Server) -> Result<Self, Error> {
         let mut relations: StatsRelations = HashMap::new();
         for relation in Relation::load(server).await? {
             relations
@@ -117,7 +117,7 @@ impl Schema {
     }
 
     /// Install PgDog functions and schema.
-    pub async fn setup(server: &mut Server) -> Result<(), Error> {
+    pub(crate) async fn setup(server: &mut Server) -> Result<(), Error> {
         server.execute_checked(SETUP).await?;
         Ok(())
     }
@@ -173,7 +173,7 @@ impl Schema {
     }
 
     /// Install PgDog-specific functions and triggers.
-    pub async fn install(cluster: &Cluster) -> Result<(), Error> {
+    pub(crate) async fn install(cluster: &Cluster) -> Result<(), Error> {
         let shards = cluster.shards();
         let sharded_tables = cluster.sharded_tables();
 
@@ -231,7 +231,7 @@ impl Schema {
     }
 
     /// Get all tables.
-    pub fn tables(&self) -> Vec<&StatsRelation> {
+    pub(crate) fn tables(&self) -> Vec<&StatsRelation> {
         self.inner
             .relations
             .values()
@@ -241,7 +241,7 @@ impl Schema {
     }
 
     /// Get search path components.
-    pub fn search_path(&self) -> &[String] {
+    pub(crate) fn search_path(&self) -> &[String] {
         &self.inner.search_path
     }
 }

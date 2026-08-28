@@ -1,4 +1,4 @@
-use pgdog_config::PreparedStatements as PreparedStatementsLevel;
+use pgdog_config::PreparedStatementsLevel;
 
 use crate::{
     expect_message,

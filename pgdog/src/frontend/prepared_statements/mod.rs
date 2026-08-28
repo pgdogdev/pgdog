@@ -7,19 +7,19 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
 use crate::{
-    config::PreparedStatements as PreparedStatementsLevel,
+    config::PreparedStatementsLevel,
     frontend::RewritePlan,
     net::{Parse, Prepare, ProtocolMessage},
 };
 
 mod cache_key;
 mod cached_statement;
-pub mod error;
-pub mod global_cache;
+pub(crate) mod error;
+pub(crate) mod global_cache;
 mod maintenance;
 mod prelude;
-pub mod rewrite;
-pub mod statement;
+pub(crate) mod rewrite;
+pub(crate) mod statement;
 
 pub(crate) use cache_key::CacheKey;
 pub(crate) use cached_statement::global_name;
@@ -27,14 +27,14 @@ pub(crate) use cached_statement::{CachedStmt, Counter};
 pub(crate) use error::Error;
 pub(crate) use global_cache::GlobalCache;
 // Maintenance tasks are spawned in main.rs.
-pub use maintenance::*;
+pub(crate) use maintenance::*;
 pub(crate) use rewrite::Rewrite;
 pub(crate) use statement::{Statement, StatementType};
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
 #[derive(Clone, Debug)]
-pub struct PreparedStatements {
+pub(crate) struct PreparedStatements {
     pub(super) global: Arc<RwLock<GlobalCache>>,
     // mapping the client statement name -> __pgdog__ name from global cache
     pub(super) local: HashMap<String, String>,
@@ -135,7 +135,7 @@ impl PreparedStatements {
 
     /// Get the global unique name for a prepared statement
     /// using the name the client gave us as key.
-    pub fn name(&self, name: &str) -> Option<&String> {
+    pub(crate) fn name(&self, name: &str) -> Option<&String> {
         self.local.get(name)
     }
 

@@ -1,5 +1,3 @@
-use rand::{Rng, rng};
-
 use crate::{
     backend::pool::connection::binding::Binding,
     expect_message,
@@ -226,15 +224,17 @@ async fn test_row_same_shard_no_transaction() {
 #[tokio::test]
 async fn test_no_rows_updated() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
-    let id = rng().random::<i64>();
+
+    // Ensure that we generate 2 random IDs consistent with the same shard.
+    let shard_0_id_1 = client.random_id_for_shard(0);
+    let shard_0_id_2 = client.random_id_for_shard(0);
 
     // Transaction not required because
     // it'll check for existing row first (on the same shard).
     client
         .send_simple(Query::new(format!(
             "UPDATE sharded SET id = {} WHERE id = {}",
-            id,
-            id + 1
+            shard_0_id_1, shard_0_id_2
         )))
         .await;
     let cc = client.read().await;

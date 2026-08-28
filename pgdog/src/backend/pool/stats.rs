@@ -17,7 +17,7 @@ use pgdog_stats::memory::MemoryStats as StatsMemoryStats;
 use pgdog_stats::pool::Stats as StatsStats;
 
 #[derive(Debug, Clone, Default, Copy)]
-pub struct Stats {
+pub(crate) struct Stats {
     inner: StatsStats,
 }
 
@@ -37,7 +37,7 @@ impl DerefMut for Stats {
 
 impl Stats {
     /// Calculate averages.
-    pub fn calc_averages(&mut self, time: Duration) {
+    pub(crate) fn calc_averages(&mut self, time: Duration) {
         self.inner.calc_averages(time);
     }
 }
@@ -45,8 +45,8 @@ impl Stats {
 /// Statistics calculated for the network buffer used
 /// by clients and servers.
 #[derive(Debug, Clone, Default, Copy)]
-pub struct MemoryStats {
-    pub inner: StatsMemoryStats,
+pub(crate) struct MemoryStats {
+    pub(crate) inner: StatsMemoryStats,
 }
 
 impl Deref for MemoryStats {
@@ -65,7 +65,7 @@ impl DerefMut for MemoryStats {
 
 impl MemoryStats {
     /// Create new memory stats tracker.
-    pub fn new(config: &Memory) -> Self {
+    pub(crate) fn new(config: &Memory) -> Self {
         Self {
             inner: StatsMemoryStats {
                 buffer: MessageBufferStats {
@@ -76,11 +76,6 @@ impl MemoryStats {
                 stream: config.net_buffer,
             },
         }
-    }
-
-    /// Calculate total memory usage.
-    pub fn total(&self) -> usize {
-        self.buffer.bytes_alloc + self.prepared_statements + self.stream
     }
 }
 

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Copy, Default)]
-pub enum TwoPcPhase {
+pub(crate) enum TwoPcPhase {
     #[default]
     Phase1,
     Phase2,

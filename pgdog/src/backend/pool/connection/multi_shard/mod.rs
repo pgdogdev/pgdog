@@ -20,7 +20,7 @@ mod error;
 mod test;
 mod validator;
 
-pub use error::Error;
+pub(crate) use error::Error;
 use validator::Validator;
 
 #[derive(Default, Debug)]
@@ -46,7 +46,7 @@ struct RequestState {
 
 /// Multi-shard state.
 #[derive(Default, Debug)]
-pub struct MultiShard {
+pub(crate) struct MultiShard {
     /// Number of shards we are connected to.
     shards: usize,
     /// Route the query is taking.

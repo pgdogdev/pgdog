@@ -16,7 +16,7 @@ use crate::{config::config, tasks};
 const BATCH_SIZE: usize = 10;
 
 /// Run the push exporter loop. Exits only if the task is cancelled.
-pub async fn run() {
+pub(crate) async fn run() {
     let client = reqwest::Client::new();
     let otel_config = config().config.otel.clone();
     let interval = Duration::from_millis(otel_config.push_interval);

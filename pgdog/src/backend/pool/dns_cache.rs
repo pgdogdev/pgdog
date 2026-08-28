@@ -22,7 +22,7 @@ static DNS_CACHE: Lazy<Arc<DnsCache>> = Lazy::new(|| Arc::new(DnsCache::new()));
 
 /// Cached DNS lookup result with the time it was stored.
 #[derive(Debug, Clone, Copy)]
-pub struct CacheEntry {
+pub(crate) struct CacheEntry {
     time: Instant,
     ip: IpAddr,
 }
@@ -36,7 +36,7 @@ impl Deref for CacheEntry {
 }
 
 /// Shared hostname-to-IP cache backed by the system DNS resolver.
-pub struct DnsCache {
+pub(crate) struct DnsCache {
     resolver: Arc<Resolver<TokioConnectionProvider>>,
     cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
 }
@@ -49,12 +49,12 @@ impl Default for DnsCache {
 
 impl DnsCache {
     /// Retrieve the global DNS cache instance.
-    pub fn global() -> Arc<DnsCache> {
+    pub(crate) fn global() -> Arc<DnsCache> {
         DNS_CACHE.clone()
     }
 
     /// Create a new DNS cache instance.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // Initialize the Resolver with system config (e.g., /etc/resolv.conf on Unix)
         let resolver = Resolver::builder(TokioConnectionProvider::default())
             .unwrap()
@@ -67,7 +67,7 @@ impl DnsCache {
     }
 
     /// Resolve hostname to socket address string.
-    pub async fn resolve(&self, hostname: &str) -> Result<IpAddr, Error> {
+    pub(crate) async fn resolve(&self, hostname: &str) -> Result<IpAddr, Error> {
         if let Some(ip) = self.get_cached_ip(hostname) {
             return Ok(ip);
         }
@@ -141,12 +141,12 @@ impl DnsCache {
 
 #[cfg(test)]
 impl DnsCache {
-    pub fn clear_cache_for_testing(&self) {
+    pub(crate) fn clear_cache_for_testing(&self) {
         let mut cache = self.cache.write();
         cache.clear();
     }
 
-    pub fn cached_ip_for_testing(&self, hostname: &str) -> Option<IpAddr> {
+    pub(crate) fn cached_ip_for_testing(&self, hostname: &str) -> Option<IpAddr> {
         self.get_cached_ip(hostname)
     }
 }

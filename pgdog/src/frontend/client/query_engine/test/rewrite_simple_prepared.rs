@@ -1,4 +1,4 @@
-use pgdog_config::PreparedStatements;
+use pgdog_config::PreparedStatementsLevel;
 
 use crate::config::load_test;
 
@@ -20,7 +20,7 @@ async fn test_rewrite_prepare() {
     load_test();
 
     change_config(|general| {
-        general.prepared_statements = PreparedStatements::Full;
+        general.prepared_statements = PreparedStatementsLevel::Full;
     });
 
     let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
@@ -65,7 +65,7 @@ async fn test_reprepare_releases_previous_statement() {
     load_test();
 
     change_config(|general| {
-        general.prepared_statements = PreparedStatements::Full;
+        general.prepared_statements = PreparedStatementsLevel::Full;
     });
 
     let global = crate::frontend::PreparedStatements::global();

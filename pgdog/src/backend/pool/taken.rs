@@ -144,7 +144,7 @@ mod tests {
         let mut taken = Taken::default();
         let frontend = FrontendPid::new();
         let backend = BackendPid::for_test(1);
-        let cancel_key = key(backend.pid());
+        let cancel_key = key(backend.pid);
 
         taken.take(frontend, backend, cancel_key.clone());
         assert_eq!(taken.len(), 1);
@@ -173,10 +173,10 @@ mod tests {
         let frontend = FrontendPid::new();
         let backend = BackendPid::for_test(2);
 
-        taken.take(frontend, backend, key(backend.pid()));
+        taken.take(frontend, backend, key(backend.pid));
         assert_eq!(
             taken.cancel_key(frontend).map(|k| k.pid()),
-            Some(backend.pid())
+            Some(backend.pid)
         );
     }
 
@@ -186,14 +186,14 @@ mod tests {
         let (fa, ba) = (FrontendPid::new(), BackendPid::for_test(3));
         let (fb, bb) = (FrontendPid::new(), BackendPid::for_test(4));
 
-        taken.take(fa, ba, key(ba.pid()));
-        taken.take(fb, bb, key(bb.pid()));
+        taken.take(fa, ba, key(ba.pid));
+        taken.take(fb, bb, key(bb.pid));
         assert_eq!(taken.len(), 2);
 
         taken.check_in(ba).unwrap();
         assert_eq!(taken.len(), 1);
         assert_eq!(taken.cancel_key(fa), None);
-        assert_eq!(taken.cancel_key(fb).map(|k| k.pid()), Some(bb.pid()));
+        assert_eq!(taken.cancel_key(fb).map(|k| k.pid()), Some(bb.pid));
 
         taken.check_in(bb).unwrap();
         assert!(taken.is_empty());
@@ -215,8 +215,8 @@ mod tests {
         let frontend = FrontendPid::new();
         let backend_a = BackendPid::for_test(5);
         let backend_b = BackendPid::for_test(6);
-        let key_a = key(backend_a.pid());
-        let key_b = key(backend_b.pid());
+        let key_a = key(backend_a.pid);
+        let key_b = key(backend_b.pid);
 
         // Step 1: take A.
         taken.take(frontend, backend_a, key_a.clone());
@@ -252,14 +252,14 @@ mod tests {
         let backend_a = BackendPid::for_test(7);
         let backend_b = BackendPid::for_test(8);
 
-        taken.take(frontend, backend_a, key(backend_a.pid()));
+        taken.take(frontend, backend_a, key(backend_a.pid));
         taken.check_in(backend_a).unwrap();
         assert!(taken.is_empty());
 
-        taken.take(frontend, backend_b, key(backend_b.pid()));
+        taken.take(frontend, backend_b, key(backend_b.pid));
         assert_eq!(
             taken.cancel_key(frontend).map(|k| k.pid()),
-            Some(backend_b.pid())
+            Some(backend_b.pid)
         );
         taken.check_in(backend_b).unwrap();
         assert!(taken.is_empty());
@@ -271,8 +271,8 @@ mod tests {
         let (fa, ba) = (FrontendPid::new(), BackendPid::for_test(10));
         let (fb, bb) = (FrontendPid::new(), BackendPid::for_test(11));
 
-        taken.take(fa, ba, key(ba.pid()));
-        taken.take(fb, bb, key(bb.pid()));
+        taken.take(fa, ba, key(ba.pid));
+        taken.take(fb, bb, key(bb.pid));
         assert_eq!(taken.locked_count(), 0);
 
         taken.set_locked(ba, true);
@@ -291,7 +291,7 @@ mod tests {
         let frontend = FrontendPid::new();
         let backend = BackendPid::for_test(12);
 
-        taken.take(frontend, backend, key(backend.pid()));
+        taken.take(frontend, backend, key(backend.pid));
         taken.set_locked(backend, true);
         assert_eq!(taken.locked_count(), 1);
 
@@ -317,8 +317,8 @@ mod tests {
         let backend_a = BackendPid::for_test(14);
         let backend_b = BackendPid::for_test(15);
 
-        taken.take(frontend, backend_a, key(backend_a.pid()));
-        taken.take(frontend, backend_b, key(backend_b.pid()));
+        taken.take(frontend, backend_a, key(backend_a.pid));
+        taken.take(frontend, backend_b, key(backend_b.pid));
 
         // Stale A tries to set locked. Must not affect B.
         taken.set_locked(backend_a, true);
@@ -335,7 +335,7 @@ mod tests {
         let frontend = FrontendPid::new();
         let backend = BackendPid::for_test(9);
 
-        taken.take(frontend, backend, key(backend.pid()));
+        taken.take(frontend, backend, key(backend.pid));
         taken.check_in(backend).unwrap();
         assert_eq!(
             taken.check_in(backend).unwrap_err(),
