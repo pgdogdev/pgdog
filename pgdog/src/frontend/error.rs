@@ -21,6 +21,9 @@ pub(crate) enum Error {
     #[error("{0}")]
     Router(#[from] super::router::Error),
 
+    #[error("prepared statement invalidated again after retry, giving up")]
+    RetryExhausted,
+
     #[error("unexpected message: {0}")]
     UnexpectedMessage(char),
 

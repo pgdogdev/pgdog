@@ -621,7 +621,13 @@ impl Client {
                 }
             }
             QueryEngineResult::Retry => {
-                return Box::pin(self.client_messages(query_engine)).await;
+                match query_engine
+                    .handle(&mut QueryEngineContext::new(self))
+                    .await?
+                {
+                    QueryEngineResult::Done(_) => {}
+                    _ => return Err(Error::RetryExhausted),
+                }
             }
         }
 
