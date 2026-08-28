@@ -248,7 +248,7 @@ impl GlobalCache {
     }
 
     /// Remove statement from global cache.
-    pub(crate) fn remove(&mut self, name: &str) {
+    fn remove(&mut self, name: &str) {
         if let Some(stmt) = self.names.remove(name) {
             self.statements.remove(stmt.cache_key());
         }
