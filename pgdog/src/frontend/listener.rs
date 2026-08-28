@@ -274,3 +274,27 @@ impl Listener {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_bind_ipv4_applies_configured_backlog() {
+        let listener = Listener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert!(addr.is_ipv4());
+        assert_ne!(addr.port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_bind_ipv6() {
+        let listener = Listener::bind("[::1]:0").await.unwrap();
+        assert!(listener.local_addr().unwrap().is_ipv6());
+    }
+
+    #[tokio::test]
+    async fn test_bind_unresolvable_address_errors() {
+        assert!(Listener::bind("host.invalid:0").await.is_err());
+    }
+}
