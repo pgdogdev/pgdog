@@ -15,8 +15,7 @@ use crate::{
 
 use super::hooks::schema::schema_changed;
 use super::*;
-use crate::frontend::ClientRequest;
-use crate::net::{Close, messages};
+use crate::net::Close;
 use tracing::{debug, error};
 
 impl QueryEngine {
@@ -97,6 +96,7 @@ impl QueryEngine {
                     .await?;
 
                 while self.backend.has_more_messages()
+                    && !context.retry
                     && !self.backend.in_copy_mode()
                     && !self.streaming
                 {
@@ -162,7 +162,7 @@ impl QueryEngine {
         if code == 'E'
             && self.backend.schema_changed()
             && context.transaction().is_none()
-            && Box::pin(self.retry_statement(context)).await?
+            && Box::pin(self.reprepare_statement(context)).await?
         {
             context.retry = true;
             return Ok(());
@@ -282,7 +282,7 @@ impl QueryEngine {
 
     /// If we encounter a cache invalidated error & we're not in a transaction,
     /// then, handle it on our end instead of forwarding the error to the client.
-    pub(crate) async fn retry_statement(
+    pub(crate) async fn reprepare_statement(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<bool, Error> {
@@ -322,17 +322,14 @@ impl QueryEngine {
             .close_many(Close::named(statement_to_close))
             .await?;
 
-        // Send the Parse and a Flush to cache the new statement
-        let mut client_request = ClientRequest::default();
-        client_request.route = context.client_request.route.clone();
-
-        client_request.push(ProtocolMessage::from(parse.clone()));
-        client_request.push(ProtocolMessage::from(messages::Flush));
-
-        self.backend.send(&client_request).await?;
-
-        let parse_complete = self.backend.read().await?;
-        Ok(parse_complete.code() == '1')
+        // Send the Parse to cache the new statement
+        self.backend
+            .send_ignore(
+                &ProtocolMessage::from(parse.clone()),
+                context.client_request.route(),
+            )
+            .await?;
+        Ok(true)
     }
 
     async fn emit_explain_rows(

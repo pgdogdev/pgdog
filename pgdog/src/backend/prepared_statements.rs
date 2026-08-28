@@ -155,8 +155,9 @@ impl PreparedStatements {
     ///
     pub(super) fn handle_ignore(&mut self, request: &ProtocolMessage) -> Result<(), Error> {
         match request {
-            ProtocolMessage::Parse(_) => {
+            ProtocolMessage::Parse(parse) => {
                 self.state.add_ignore('1');
+                self.parses.push_back(parse.name().to_string());
                 Ok(())
             }
             _ => Err(Error::UnsupportedHandleIgnore(request.code())),
