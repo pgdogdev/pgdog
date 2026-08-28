@@ -107,7 +107,7 @@ async fn cached_query_alter_parse_describe() -> Result<(), Box<dyn std::error::E
     // Fetch the actual amount of columns
     let mut shard0 = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:5432/shard_0").await?;
     let expected: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'sharded'",
+        "SELECT COUNT(*) FROM pg_attribute WHERE attrelid = 'sharded'::regclass AND attnum > 0 AND NOT attisdropped",
     )
     .fetch_one(&mut shard0)
     .await?;

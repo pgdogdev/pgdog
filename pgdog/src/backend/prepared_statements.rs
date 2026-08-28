@@ -275,7 +275,8 @@ impl PreparedStatements {
                 let mut rewritten = self.rewrite_parse_data_types(&mut parse);
 
                 if !parse.anonymous() {
-                    if self.contains(parse.name()) {
+                    if self.contains(parse.name()) || self.parses.iter().any(|s| s == parse.name())
+                    {
                         // TODO(lev): perform the same in errored transaction check
                         // as we do for PREPARE below.
                         self.state.add_simulated(ParseComplete.message());
