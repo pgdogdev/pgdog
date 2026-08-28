@@ -59,6 +59,7 @@
         "idle_healthcheck_delay": 5000,
         "idle_healthcheck_interval": 30000,
         "idle_timeout": 60000,
+        "listen_backlog": 1024,
         "load_balancing_strategy": "random",
         "load_schema": "auto",
         "log_connections": true,
@@ -877,6 +878,13 @@
           "type": "integer",
           "format": "uint64",
           "default": 60000,
+          "minimum": 0
+        },
+        "listen_backlog": {
+          "description": "Maximum length of the queue of pending (not yet accepted) client connections,\npassed to `listen(2)`. The kernel caps the effective value at `net.core.somaxconn`,\nso raise both together. Increase this to absorb connection storms, e.g. a large\nclient fleet reconnecting at once after a rolling deploy.\n\n**Note:** This setting cannot be changed at runtime.\n\n_Default:_ `1024`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#listen_backlog>",
+          "type": "integer",
+          "format": "uint32",
+          "default": 1024,
           "minimum": 0
         },
         "load_balancing_strategy": {

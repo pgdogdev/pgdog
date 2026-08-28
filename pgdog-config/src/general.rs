@@ -95,6 +95,19 @@ pub struct General {
     #[serde(default = "General::port")]
     pub port: u16,
 
+    /// Maximum length of the queue of pending (not yet accepted) client connections,
+    /// passed to `listen(2)`. The kernel caps the effective value at `net.core.somaxconn`,
+    /// so raise both together. Increase this to absorb connection storms, e.g. a large
+    /// client fleet reconnecting at once after a rolling deploy.
+    ///
+    /// **Note:** This setting cannot be changed at runtime.
+    ///
+    /// _Default:_ `1024`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#listen_backlog>
+    #[serde(default = "General::listen_backlog")]
+    pub listen_backlog: u32,
+
     /// Number of Tokio threads to spawn at pooler startup. In multi-core systems, the recommended setting is two (2) per virtual CPU. The value `0` means to spawn no threads and use the current thread runtime.
     ///
     /// **Note:** This setting cannot be changed at runtime.
@@ -887,6 +900,7 @@ impl Default for General {
         Self {
             host: Self::host(),
             port: Self::port(),
+            listen_backlog: Self::listen_backlog(),
             workers: Self::workers(),
             default_pool_size: Self::default_pool_size(),
             min_pool_size: Self::min_pool_size(),
@@ -1043,6 +1057,10 @@ impl General {
 
     pub fn port() -> u16 {
         Self::env_or_default("PGDOG_PORT", 6432)
+    }
+
+    fn listen_backlog() -> u32 {
+        Self::env_or_default("PGDOG_LISTEN_BACKLOG", 1024)
     }
 
     fn workers() -> usize {

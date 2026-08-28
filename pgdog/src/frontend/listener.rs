@@ -10,7 +10,7 @@ use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
 use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
 use tokio::signal::ctrl_c;
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
@@ -36,10 +36,50 @@ impl Listener {
         }
     }
 
+    /// Bind the listening socket with the configured `listen_backlog`.
+    ///
+    /// `TcpListener::bind` hardcodes a backlog of 1024, which caps the queue of
+    /// pending connections regardless of `net.core.somaxconn`; large client fleets
+    /// reconnecting at once (e.g. a rolling deploy) overflow it and their SYNs are
+    /// silently dropped onto the retransmission timer.
+    async fn bind(addr: &str) -> Result<TcpListener, Error> {
+        let backlog = config().config.general.listen_backlog;
+        Ok(Self::bind_first(lookup_host(addr).await?, backlog, addr)?)
+    }
+
+    /// Bind to the first candidate address that accepts the bind, like
+    /// `TcpListener::bind` does, but with a configurable listen backlog.
+    fn bind_first(
+        candidates: impl Iterator<Item = SocketAddr>,
+        backlog: u32,
+        requested: &str,
+    ) -> Result<TcpListener, std::io::Error> {
+        let mut last_err = None;
+        for addr in candidates {
+            let socket = if addr.is_ipv4() {
+                TcpSocket::new_v4()?
+            } else {
+                TcpSocket::new_v6()?
+            };
+            #[cfg(not(windows))]
+            socket.set_reuseaddr(true)?;
+            match socket.bind(addr) {
+                Ok(()) => return socket.listen(backlog),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("no address to bind: {}", requested),
+            )
+        }))
+    }
+
     /// Listen for client connections and handle them.
     pub(crate) async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
-        let listener = TcpListener::bind(&self.addr).await?;
+        let listener = Self::bind(&self.addr).await?;
         let shutdown_signal = comms().shutting_down();
         let mut sighup = Sighup::new()?;
         let mut shutting_down = false;
@@ -247,5 +287,53 @@ impl Listener {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_bind_ipv4_applies_configured_backlog() {
+        let listener = Listener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert!(addr.is_ipv4());
+        assert_ne!(addr.port(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_bind_ipv6() {
+        let listener = Listener::bind("[::1]:0").await.unwrap();
+        assert!(listener.local_addr().unwrap().is_ipv6());
+    }
+
+    #[tokio::test]
+    async fn test_bind_unresolvable_address_errors() {
+        assert!(Listener::bind("host.invalid:0").await.is_err());
+    }
+
+    #[test]
+    fn test_bind_first_empty_resolution_errors() {
+        let err = Listener::bind_first(std::iter::empty(), 1024, "nowhere:0").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AddrNotAvailable);
+    }
+
+    #[tokio::test]
+    async fn test_bind_first_falls_back_to_next_candidate() {
+        // 198.51.100.1 (TEST-NET-2) is not a local interface, so the bind
+        // fails and the next candidate is tried, matching TcpListener::bind.
+        let candidates: Vec<SocketAddr> = vec![
+            "198.51.100.1:0".parse().unwrap(),
+            "127.0.0.1:0".parse().unwrap(),
+        ];
+        let listener = Listener::bind_first(candidates.into_iter(), 1024, "test:0").unwrap();
+        assert!(listener.local_addr().unwrap().ip().is_loopback());
+    }
+
+    #[tokio::test]
+    async fn test_bind_first_reports_last_bind_error() {
+        let candidates: Vec<SocketAddr> = vec!["198.51.100.1:0".parse().unwrap()];
+        assert!(Listener::bind_first(candidates.into_iter(), 1024, "test:0").is_err());
     }
 }
