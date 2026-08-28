@@ -260,13 +260,19 @@ impl QueryEngine {
             && !context.pipeline.is_done()
             && context.pipeline.is_simple()
             && !context.in_error(); // On error, pipeline is done executing.
-        if !drop_message {
+        // Possible the client may have already received before the error in retry case.
+        let duplicate = matches!(code, '1' | 't' | 'T' | 'n') && self.delivered.contains(&code);
+
+        if !drop_message && !duplicate {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
             if flush {
                 context.stream.send_flush(&message).await?;
             } else {
                 context.stream.send(&message).await?;
+            }
+            if matches!(code, '1' | 't' | 'T' | 'n') {
+                self.delivered.push(code);
             }
         }
 

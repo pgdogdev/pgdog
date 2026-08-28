@@ -61,6 +61,9 @@ pub(crate) struct QueryEngine {
     stats: Stats,
     backend: Connection,
     streaming: bool,
+    // Track ParseComplete / ParameterDescription / RowDescription / NoData
+    // already received for the present ClientRequest
+    delivered: Vec<char>,
     two_pc: TwoPc,
     notify_buffer: NotifyBuffer,
     pending_explain: Option<ExplainResponseState>,
@@ -90,6 +93,7 @@ impl QueryEngine {
             hooks: QueryEngineHooks::new(),
             stats: Stats::default(),
             streaming: bool::default(),
+            delivered: Vec::new(),
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
@@ -290,6 +294,7 @@ impl QueryEngine {
         if context.retry {
             Ok(QueryEngineResult::Retry)
         } else {
+            self.delivered.clear();
             Ok(QueryEngineResult::Done(context.transaction()))
         }
     }
