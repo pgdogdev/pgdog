@@ -75,6 +75,25 @@ impl Message {
             payload: Bytes::new(),
         }
     }
+
+    pub fn new_describe_statement(name: &str) -> Self {
+        let mut payload = BytesMut::new();
+        payload.put_u8(b'S');
+        payload.put(name.as_bytes());
+        payload.put_u8(0);
+
+        Self {
+            payload: payload.freeze(),
+            code: 'D',
+        }
+    }
+
+    pub fn new_sync() -> Self {
+        Self {
+            code: 'S',
+            payload: Bytes::new(),
+        }
+    }
 }
 
 /// Create a startup message.

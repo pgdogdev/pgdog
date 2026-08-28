@@ -1089,7 +1089,6 @@ impl Server {
     #[inline]
     pub(crate) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
-        self.prepared_statements.clear();
     }
 
     #[inline]

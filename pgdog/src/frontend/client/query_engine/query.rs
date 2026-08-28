@@ -268,9 +268,17 @@ impl QueryEngine {
             } else {
                 context.stream.send(&message).await?;
             }
+            // When `retry_statement` method is replaying a *partially-answered* request
+            // (e.g. a cross-shard Describe where one shard succeeded before another errored)
+            // we track these to ensure they won't be sent twice to the Client
+            // ParseComplete / ParameterDescription / RowDescription / NoData
+            if matches!(code, '1' | 't' | 'T' | 'n') {
+                self.forwarded.push(code);
+            }
         }
 
         if code == 'Z' {
+            self.forwarded.clear();
             self.pending_explain = None;
         }
         self.hooks.on_server_message(context, &message)?;
@@ -288,7 +296,6 @@ impl QueryEngine {
         self.backend.reset_schema_changed();
 
         // Cover both [Bind, Execute] and [Parse, Describe] cases that can cause the error.
-        // TODO: Write a test case for [Parse, Describe] now that Go test cases are deleted.
         let mut bind: Option<&str> = None;
         let mut describe: Option<&str> = None;
         for message in &context.client_request.messages {
@@ -317,37 +324,49 @@ impl QueryEngine {
             return Ok(false);
         };
 
+        self.backend.drain().await?;
+
         // Free the old statement.
         self.backend
             .close_many(Close::named(statement_to_close))
             .await?;
 
-        if bind.is_some() {
+        // Send the Parse and a Flush to cache the new statement
+        // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
+        {
             let mut client_request = ClientRequest::default();
             client_request.route = context.client_request.route.clone();
 
-            // Send the Parse, Describe, Sync to cache the new statement
-            // (this only occurs if the original message had a Bind; it may just be a Parse/Describe)
             client_request.push(ProtocolMessage::from(parse.clone()));
-            client_request.push(ProtocolMessage::Describe(
-                messages::Describe::new_statement(statement_to_close),
-            ));
-            client_request.push(ProtocolMessage::Sync(messages::Sync));
+            client_request.push(ProtocolMessage::from(messages::Flush));
 
             self.handle_request_and_maybe_forward(client_request, context, false)
                 .await?;
         }
 
         // Forward the original messages.
-        self.handle_request_and_maybe_forward(context.client_request.clone(), context, true)
-            .await?;
+        {
+            let mut client_request = ClientRequest::default();
+            client_request.route = context.client_request.route.clone();
+            for message in &context.client_request.messages {
+                // We already sent a Parse in the last cycle to re-validate.
+                if !matches!(message, ProtocolMessage::Parse(_)) {
+                    client_request.push(message.clone());
+                }
+            }
+
+            self.handle_request_and_maybe_forward(client_request, context, true)
+                .await?;
+        }
 
         self.retrying = false;
         Ok(true)
     }
 
-    // TODO: docs
-    pub(crate) async fn handle_request_and_maybe_forward(
+    /// Helper method for `retry_statement` to handle `client_request` and then drain the backend,
+    /// forwarding the Server's `Message`s to the client only when `forward` is true.
+    /// Prevents `Message`s from being double forwarded in cross-shard mixed situations.
+    async fn handle_request_and_maybe_forward(
         &mut self,
         client_request: ClientRequest,
         context: &mut QueryEngineContext<'_>,
@@ -357,12 +376,28 @@ impl QueryEngine {
             .handle_client_request(&client_request, &mut self.router, self.streaming)
             .await?;
 
+        let mut already_forwarded = if forward {
+            std::mem::take(&mut self.forwarded)
+        } else {
+            Vec::new()
+        };
+
         while self.backend.has_more_messages() {
             let message = self.read_server_message().await?;
 
-            if forward {
-                Box::pin(self.process_server_message(context, message)).await?;
+            if !forward {
+                continue;
             }
+
+            if let Some(position) = already_forwarded
+                .iter()
+                .position(|code| *code == message.code())
+            {
+                already_forwarded.remove(position);
+                continue;
+            }
+
+            Box::pin(self.process_server_message(context, message)).await?;
         }
 
         Ok(())

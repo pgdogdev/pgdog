@@ -42,6 +42,58 @@ impl Binding {
         }
     }
 
+    // Did the schema change and prepared statements are broken.
+    pub(crate) fn schema_changed(&self) -> bool {
+        match self {
+            Binding::Direct(shard, _) => shard.schema_changed(),
+            Binding::MultiShard(shards, _) => shards.iter().any(|shard| shard.schema_changed()),
+            _ => false,
+        }
+    }
+
+    // Reset the schema changed flag on the server(s) the client is connected to.
+    pub(crate) fn reset_schema_changed(&mut self) {
+        match self {
+            Binding::Direct(shard, _) => shard.reset_schema_changed(),
+            Binding::MultiShard(shards, _) => shards
+                .iter_mut()
+                .for_each(|shard| shard.reset_schema_changed()),
+            _ => {}
+        }
+    }
+
+    // Read every server until it's drained
+    pub(crate) async fn drain(&mut self) -> Result<(), Error> {
+        match self {
+            Binding::Direct(shard, _) => shard.drain().await?,
+            Binding::MultiShard(shards, _) => {
+                for shard in shards {
+                    shard.drain().await?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    // Forward the Close message to the server(s) the client is connected to.
+    pub(crate) async fn close_many(&mut self, close_message: Close) -> Result<(), Error> {
+        match self {
+            Binding::Direct(shard, _) => shard.close_many(&[close_message]).await?,
+            Binding::MultiShard(shards, _) => {
+                for shard in shards {
+                    shard
+                        .close_many(std::slice::from_ref(&close_message))
+                        .await?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     /// Close connections and indicate to servers that
     /// they are probably broken and should not be re-used.
     pub(crate) fn force_close(&mut self) {
