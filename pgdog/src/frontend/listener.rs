@@ -44,29 +44,36 @@ impl Listener {
     /// silently dropped onto the retransmission timer.
     async fn bind(addr: &str) -> Result<TcpListener, Error> {
         let backlog = config().config.general.listen_backlog;
-        let addr = Self::first_addr(addr, lookup_host(addr).await?)?;
-        let socket = if addr.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
-        #[cfg(not(windows))]
-        socket.set_reuseaddr(true)?;
-        socket.bind(addr)?;
-        Ok(socket.listen(backlog)?)
+        Ok(Self::bind_first(lookup_host(addr).await?, backlog, addr)?)
     }
 
-    /// First resolved address, or `AddrNotAvailable` when resolution yields none.
-    fn first_addr(
+    /// Bind to the first candidate address that accepts the bind, like
+    /// `TcpListener::bind` does, but with a configurable listen backlog.
+    fn bind_first(
+        candidates: impl Iterator<Item = SocketAddr>,
+        backlog: u32,
         requested: &str,
-        mut resolved: impl Iterator<Item = SocketAddr>,
-    ) -> Result<SocketAddr, std::io::Error> {
-        resolved.next().ok_or_else(|| {
+    ) -> Result<TcpListener, std::io::Error> {
+        let mut last_err = None;
+        for addr in candidates {
+            let socket = if addr.is_ipv4() {
+                TcpSocket::new_v4()?
+            } else {
+                TcpSocket::new_v6()?
+            };
+            #[cfg(not(windows))]
+            socket.set_reuseaddr(true)?;
+            match socket.bind(addr) {
+                Ok(()) => return socket.listen(backlog),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
             std::io::Error::new(
                 ErrorKind::AddrNotAvailable,
                 format!("no address to bind: {}", requested),
             )
-        })
+        }))
     }
 
     /// Listen for client connections and handle them.
@@ -307,15 +314,26 @@ mod test {
     }
 
     #[test]
-    fn test_first_addr_empty_resolution_errors() {
-        let err = Listener::first_addr("nowhere:0", std::iter::empty()).unwrap_err();
+    fn test_bind_first_empty_resolution_errors() {
+        let err = Listener::bind_first(std::iter::empty(), 1024, "nowhere:0").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::AddrNotAvailable);
     }
 
-    #[test]
-    fn test_first_addr_takes_first() {
-        let addrs: Vec<SocketAddr> = vec!["127.0.0.1:6432".parse().unwrap()];
-        let addr = Listener::first_addr("localhost:6432", addrs.into_iter()).unwrap();
-        assert!(addr.is_ipv4());
+    #[tokio::test]
+    async fn test_bind_first_falls_back_to_next_candidate() {
+        // 198.51.100.1 (TEST-NET-2) is not a local interface, so the bind
+        // fails and the next candidate is tried, matching TcpListener::bind.
+        let candidates: Vec<SocketAddr> = vec![
+            "198.51.100.1:0".parse().unwrap(),
+            "127.0.0.1:0".parse().unwrap(),
+        ];
+        let listener = Listener::bind_first(candidates.into_iter(), 1024, "test:0").unwrap();
+        assert!(listener.local_addr().unwrap().ip().is_loopback());
+    }
+
+    #[tokio::test]
+    async fn test_bind_first_reports_last_bind_error() {
+        let candidates: Vec<SocketAddr> = vec!["198.51.100.1:0".parse().unwrap()];
+        assert!(Listener::bind_first(candidates.into_iter(), 1024, "test:0").is_err());
     }
 }
