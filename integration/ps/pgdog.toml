@@ -1,0 +1,16 @@
+[general]
+prepared_statements_limit = 250
+default_pool_size = 100
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+role = "replica"
+read_only = true
+
+[admin]
+password = "pgdog"
