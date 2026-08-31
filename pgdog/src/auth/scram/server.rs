@@ -434,6 +434,13 @@ mod tests {
         Authentication::from_bytes(message.to_bytes()).expect("parse auth")
     }
 
+    fn sasl_continue(auth: Authentication) -> Option<String> {
+        match auth {
+            Authentication::SaslContinue(data) => Some(data),
+            _ => None,
+        }
+    }
+
     fn spawn_handle(
         mut stream: Stream,
         cbind: &[u8],
@@ -465,9 +472,7 @@ mod tests {
             .await
             .unwrap();
 
-        let Authentication::SaslContinue(data) = read_auth(&mut client_stream).await else {
-            panic!("expected SaslContinue");
-        };
+        let data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
         let scram_client = scram_client
             .handle_server_first(&data)
             .expect("server first");
@@ -575,9 +580,7 @@ mod tests {
             .await
             .unwrap();
 
-        let Authentication::SaslContinue(data) = read_auth(&mut client_stream).await else {
-            panic!("expected SaslContinue");
-        };
+        let data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
         client.server_first(&data).expect("server first");
         client_stream
             .send_flush(&Password::PasswordMessage {
@@ -592,5 +595,168 @@ mod tests {
             .expect("join")
             .expect("handle");
         assert!(ok);
+    }
+
+    #[test]
+    fn sasl_continue_none_unless_continue() {
+        assert_eq!(sasl_continue(Authentication::Ok), None);
+        assert_eq!(
+            sasl_continue(Authentication::SaslContinue("r=nonce".into())).as_deref(),
+            Some("r=nonce")
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_non_sasl_initial() {
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        client_stream
+            .send_flush(&Password::new_password("pgdog"))
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            hashed_server().handle(&mut server_stream),
+        )
+        .await
+        .expect("non-SASL initial must fail without waiting for a proof")
+        .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_error_response() {
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        client_stream
+            .send_flush(&ErrorResponse::syntax("client aborted"))
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            hashed_server().handle(&mut server_stream),
+        )
+        .await
+        .expect("ErrorResponse must fail without waiting for a proof")
+        .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn handle_plus_rejects_wrong_password() {
+        let cb_data = b"tls-server-end-point-bytes";
+        let (server_stream, mut client_stream) = connected_pair().await;
+        let task = spawn_handle(server_stream, cb_data);
+
+        let scram_client = scram::ScramClient::new_with_channel_binding(
+            "user",
+            "wrong",
+            None,
+            "tls-server-end-point",
+            cb_data.to_vec(),
+        );
+        let (scram_client, client_first) = scram_client.client_first();
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256_PLUS.to_string(),
+                response: client_first,
+            })
+            .await
+            .unwrap();
+
+        let data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
+        let scram_client = scram_client
+            .handle_server_first(&data)
+            .expect("server first");
+        let (_scram_client, client_final) = scram_client.client_final();
+        client_stream
+            .send_flush(&Password::PasswordMessage {
+                response: client_final,
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("wrong-password PLUS handshake timed out")
+            .expect("join")
+            .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn handle_plain_plus_accepts_correct_password() {
+        let cb_data = b"tls-server-end-point-bytes";
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        server_stream.set_tls_server_end_point(cb_data.to_vec());
+        let server = Server::new(&[PasswordKind::Plain("pgdog".to_string())]);
+        let task = tokio::spawn(async move { server.handle(&mut server_stream).await });
+
+        let scram_client = scram::ScramClient::new_with_channel_binding(
+            "user",
+            "pgdog",
+            None,
+            "tls-server-end-point",
+            cb_data.to_vec(),
+        );
+        let (scram_client, client_first) = scram_client.client_first();
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256_PLUS.to_string(),
+                response: client_first,
+            })
+            .await
+            .unwrap();
+
+        let data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
+        let scram_client = scram_client
+            .handle_server_first(&data)
+            .expect("server first");
+        let (_scram_client, client_final) = scram_client.client_final();
+        client_stream
+            .send_flush(&Password::PasswordMessage {
+                response: client_final,
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("plain PLUS handshake timed out")
+            .expect("join")
+            .expect("handle");
+        assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_sasl_initial_as_client_final() {
+        let cb_data = b"tls-server-end-point-bytes";
+        let (server_stream, mut client_stream) = connected_pair().await;
+        let task = spawn_handle(server_stream, cb_data);
+
+        let mut client = Client::new("user", "pgdog");
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256.to_string(),
+                response: client.first().expect("client first"),
+            })
+            .await
+            .unwrap();
+
+        let _data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256.to_string(),
+                response: "n,,n=user,r=nonce".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("client-final SASLInitial must fail without hanging")
+            .expect("join")
+            .expect("handle");
+        assert!(!ok);
     }
 }

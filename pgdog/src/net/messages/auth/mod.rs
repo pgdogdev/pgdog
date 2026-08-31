@@ -164,61 +164,62 @@ impl ToBytes for Authentication {
 mod tests {
     use super::*;
 
+    fn sasl_mechanisms(auth: Authentication) -> Option<Vec<String>> {
+        match auth {
+            Authentication::Sasl(mechanisms) => Some(mechanisms),
+            _ => None,
+        }
+    }
+
+    fn decoded(auth: Authentication) -> Authentication {
+        Authentication::from_bytes(auth.to_bytes()).unwrap()
+    }
+
+    #[test]
+    fn sasl_mechanisms_none_unless_sasl() {
+        assert_eq!(sasl_mechanisms(Authentication::Ok), None);
+        assert_eq!(
+            sasl_mechanisms(Authentication::Sasl(vec!["SCRAM-SHA-256".into()])),
+            Some(vec!["SCRAM-SHA-256".into()])
+        );
+    }
+
     #[test]
     fn scram_advertises_sha_256_only() {
-        let auth = Authentication::from_bytes(Authentication::scram().to_bytes()).unwrap();
-        match auth {
-            Authentication::Sasl(mechanisms) => {
-                assert_eq!(mechanisms, vec![Authentication::SCRAM_SHA_256]);
-            }
-            other => panic!("expected Sasl, got {other:?}"),
-        }
+        assert_eq!(
+            sasl_mechanisms(decoded(Authentication::scram())).expect("Sasl"),
+            vec![Authentication::SCRAM_SHA_256]
+        );
     }
 
     #[test]
     fn scram_plus_advertises_plus_then_sha_256() {
-        let auth = Authentication::from_bytes(Authentication::scram_plus().to_bytes()).unwrap();
-        match auth {
-            Authentication::Sasl(mechanisms) => {
-                assert_eq!(
-                    mechanisms,
-                    vec![
-                        Authentication::SCRAM_SHA_256_PLUS,
-                        Authentication::SCRAM_SHA_256
-                    ]
-                );
-            }
-            other => panic!("expected Sasl, got {other:?}"),
-        }
+        assert_eq!(
+            sasl_mechanisms(decoded(Authentication::scram_plus())).expect("Sasl"),
+            vec![
+                Authentication::SCRAM_SHA_256_PLUS,
+                Authentication::SCRAM_SHA_256
+            ]
+        );
     }
 
     #[test]
     fn scram_challenge_encodes_plus_then_sha_256_when_cbind_present() {
-        let auth =
-            Authentication::from_bytes(scram_challenge(Some(&[1, 2, 3])).to_bytes()).unwrap();
-        match auth {
-            Authentication::Sasl(mechanisms) => {
-                assert_eq!(
-                    mechanisms,
-                    vec![
-                        Authentication::SCRAM_SHA_256_PLUS,
-                        Authentication::SCRAM_SHA_256
-                    ]
-                );
-            }
-            other => panic!("expected Sasl, got {other:?}"),
-        }
+        assert_eq!(
+            sasl_mechanisms(decoded(scram_challenge(Some(&[1, 2, 3])))).expect("Sasl"),
+            vec![
+                Authentication::SCRAM_SHA_256_PLUS,
+                Authentication::SCRAM_SHA_256
+            ]
+        );
     }
 
     #[test]
     fn scram_challenge_encodes_sha_256_only_when_cbind_absent() {
-        let auth = Authentication::from_bytes(scram_challenge(None).to_bytes()).unwrap();
-        match auth {
-            Authentication::Sasl(mechanisms) => {
-                assert_eq!(mechanisms, vec![Authentication::SCRAM_SHA_256]);
-            }
-            other => panic!("expected Sasl, got {other:?}"),
-        }
+        assert_eq!(
+            sasl_mechanisms(decoded(scram_challenge(None))).expect("Sasl"),
+            vec![Authentication::SCRAM_SHA_256]
+        );
     }
 
     #[test]
