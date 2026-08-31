@@ -556,12 +556,10 @@ mod test {
         crate::logger();
 
         let config = Config {
-            inner: pgdog_stats::Config {
-                max: 1,
-                min: 1,
-                healthcheck_timeout: Duration::from_millis(10),
-                ..Config::default().inner
-            },
+            max: 1,
+            min: 1,
+            healthcheck_timeout: Duration::from_millis(10),
+            ..Config::default()
         };
 
         let pool = Pool::new(&PoolConfig {
@@ -591,11 +589,9 @@ mod test {
         crate::logger();
 
         let config = Config {
-            inner: pgdog_stats::Config {
-                max: 5,
-                min: 2,
-                ..Config::default().inner
-            },
+            max: 5,
+            min: 2,
+            ..Config::default()
         };
 
         let pool = Pool::new(&PoolConfig {

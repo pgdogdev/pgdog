@@ -3,7 +3,6 @@ use crate::{
     frontend::{
         Client, ClientRequest, PreparedStatements,
         client::{ClientRequestSettings, Sticky, TransactionType},
-        router::parser::rewrite::statement::plan::RewriteResult,
     },
     net::{FrontendPid, Parameters, Stream},
 };
@@ -39,8 +38,6 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) rollback: bool,
     /// Sticky config:
     pub(super) sticky: Sticky,
-    /// Rewrite result.
-    pub(super) rewrite_result: Option<RewriteResult>,
     /// Client TCP address, used for `application_name_add_host`.
     pub(super) client_addr: SocketAddr,
 }
@@ -63,7 +60,6 @@ impl<'a> QueryEngineContext<'a> {
             pipeline: Pipeline::None,
             rollback: false,
             sticky: client.sticky,
-            rewrite_result: None,
             client_addr: client.addr,
         }
     }
@@ -95,7 +91,6 @@ impl<'a> QueryEngineContext<'a> {
             pipeline: Pipeline::None,
             rollback: false,
             sticky: Sticky::new(),
-            rewrite_result: None,
             client_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
         }
     }

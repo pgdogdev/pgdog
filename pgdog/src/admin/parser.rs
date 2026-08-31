@@ -157,13 +157,18 @@ pub(crate) struct Parser;
 impl Parser {
     /// Parse the query and return a command we can execute.
     pub(crate) fn parse(sql: &str) -> Result<ParseResult, Error> {
+        let sql = sql.trim();
+
         // Handle SET separately because
         // we're about to clobber valid SQL syntax below.
         if is_set_statement(sql) {
-            return Ok(ParseResult::Set(Set::parse(sql)?));
+            return Ok(ParseResult::Set(Set::parse(&sql.to_lowercase())?));
         }
 
         if let Ok(show) = get_show_variable(sql) {
+            let sql = sql.to_lowercase();
+            let sql = sql.as_str();
+
             return Ok(match show.as_str() {
                 "clients" => ParseResult::ShowClients(ShowClients::parse(sql)?),
                 "pools" => ParseResult::ShowPools(ShowPools::parse(sql)?),
@@ -193,7 +198,7 @@ impl Parser {
             });
         }
 
-        let sql = sql.trim().replace(";", "").to_lowercase();
+        let sql = sql.replace(";", "").to_lowercase();
         let mut iter = sql.split(" ");
 
         Ok(match iter.next().ok_or(Error::Syntax)?.trim() {

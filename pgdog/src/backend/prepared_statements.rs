@@ -16,7 +16,7 @@ use crate::{
 };
 use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
-use pgdog_stats::PreparedStatementsConfig;
+use pgdog_config::prepared_statements::PreparedStatementsConfig;
 
 use super::{Error, Oids};
 use super::{
@@ -659,7 +659,7 @@ pub(crate) mod test {
         Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
         messages::ReadyForQuery,
     };
-    use pgdog_config::PreparedStatements as PreparedStatementsLevel;
+    use pgdog_config::PreparedStatementsLevel;
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
     fn new_extended_anonymous() -> PreparedStatements {

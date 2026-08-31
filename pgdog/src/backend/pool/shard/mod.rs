@@ -471,10 +471,8 @@ mod test {
                 ..Address::new_test()
             },
             config: super::super::Config {
-                inner: pgdog_stats::Config {
-                    role_detection: true,
-                    ..Default::default()
-                },
+                role_detection: true,
+                ..Default::default()
             },
         }];
 

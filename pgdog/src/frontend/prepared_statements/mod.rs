@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
 use crate::{
-    config::PreparedStatements as PreparedStatementsLevel,
+    config::PreparedStatementsLevel,
     frontend::RewritePlan,
     net::{Parse, Prepare, ProtocolMessage},
 };

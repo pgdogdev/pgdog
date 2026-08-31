@@ -22,6 +22,7 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        query_planner: Option<RewriteResult>,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
         if !self.transaction_error_check(context).await? {
@@ -67,7 +68,11 @@ impl QueryEngine {
             .request_settings
             .timeouts
             .query_timeout(&self.stats.state);
-        let result = safe_timeout(query_timeout, self.client_server_exchange(context)).await;
+        let result = safe_timeout(
+            query_timeout,
+            self.client_server_exchange(context, query_planner),
+        )
+        .await;
 
         match result {
             Ok(response) => response?,
@@ -85,8 +90,9 @@ impl QueryEngine {
     async fn client_server_exchange(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        rewrite_result: Option<RewriteResult>,
     ) -> Result<(), Error> {
-        match context.rewrite_result.take() {
+        match rewrite_result {
             Some(RewriteResult::InsertSplit(requests)) => {
                 Box::pin(multi_step::InsertMulti::from_engine(self, requests).execute(context))
                     .await?;

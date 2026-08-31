@@ -10,10 +10,11 @@ use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
 use parking_lot::{Mutex, RawMutex};
+use pgdog_config::pool::ShardNodes;
 use pgdog_config::users::PasswordKind;
 use pgdog_config::util::normalize_identifier;
 use pgdog_config::{
-    QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
+    EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
 use tracing::{debug, error, info, warn};
@@ -28,15 +29,13 @@ use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
-    config::{
-        ConfigAndUsers, Role, ShardedMappingDeprecated, User as ConfigUser, config, load, set,
-    },
+    config::{ConfigAndUsers, ShardedMappingDeprecated, User as ConfigUser, config, load, set},
     net::{messages::FrontendPid, tls},
 };
 
 use super::{
     Cluster, ClusterShardConfig, Error, ShardedTables,
-    pool::{Address, ClusterConfig, Config},
+    pool::{Address, ClusterConfig},
     reload_notify,
 };
 
@@ -555,29 +554,28 @@ fn new_pool(
     let general = &config.general;
     let databases = config.databases();
 
-    let shards = databases.get(&user.database).cloned()?;
+    let shards = databases.get(&user.database)?;
 
-    let mut shard_configs = vec![];
-    for user_databases in shards {
-        let has_single_replica = user_databases.len() == 1;
-        let primary = user_databases
-            .iter()
-            .find(|d| d.role == Role::Primary)
-            .map(|primary| PoolConfig {
-                address: Address::new(primary, user, primary.number),
-                config: Config::new(general, primary, user, has_single_replica),
-            });
-        let replicas = user_databases
-            .iter()
-            .filter(|d| matches!(d.role, Role::Replica | Role::Auto)) // Auto role is assumed read-only until proven otherwise.
-            .map(|replica| PoolConfig {
-                address: Address::new(replica, user, replica.number),
-                config: Config::new(general, replica, user, has_single_replica),
-            })
-            .collect::<Vec<_>>();
+    let shard_configs: Vec<ClusterShardConfig> = shards
+        .iter()
+        .map(|entries| {
+            let shard = ShardNodes::new(entries);
+            let pool = |database: &EnumeratedDatabase| PoolConfig {
+                address: Address::new(database, user, database.number),
+                config: pgdog_config::pool::PoolConfig::resolve(
+                    general,
+                    &shard,
+                    &database.database,
+                    user,
+                ),
+            };
 
-        shard_configs.push(ClusterShardConfig { primary, replicas });
-    }
+            ClusterShardConfig {
+                primary: shard.primary().map(&pool),
+                replicas: shard.replicas().map(&pool).collect(),
+            }
+        })
+        .collect();
 
     let sharded_tables: Vec<_> = config
         .sharded_tables
@@ -638,39 +636,13 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
     let schema_cache = SchemaCache::default();
 
     for user in &config.users.users {
-        let users = if user.databases.is_empty() && !user.all_databases {
-            vec![user.clone()]
-        } else if user.all_databases {
+        for database in config.config.user_databases(user) {
             let mut user = user.clone();
-            user.databases.clear(); // all_databases takes priority
-
-            config
-                .config
-                .databases()
-                .into_keys()
-                .map(|database| {
-                    let mut user = user.clone();
-                    user.database = database;
-                    user
-                })
-                .collect()
-        } else {
-            let mut user = user.clone();
-            let databases = user.databases.clone();
+            // FIXME: this is a hacky way to specify a single database entry
+            // through the user, since user can have different configs
             user.databases.clear();
+            user.database = database;
 
-            // User is mapped to multiple databases.
-            databases
-                .into_iter()
-                .map(|database| {
-                    let mut user = user.clone();
-                    user.database = database;
-                    user
-                })
-                .collect::<Vec<_>>()
-        };
-
-        for user in users {
             if let Some((user, cluster)) = new_pool(&user, &config.config, schema_cache.clone()) {
                 databases.insert(user, cluster);
             }

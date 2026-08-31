@@ -12,7 +12,7 @@ use bytes::{BufMut, BytesMut};
 use crate::{
     backend::databases::databases,
     config::{
-        PreparedStatements, config, load_test, load_test_replicas, load_test_sharded,
+        PreparedStatementsLevel, config, load_test, load_test_replicas, load_test_sharded,
         load_test_with_pooler_mode, set,
     },
     frontend::{
@@ -557,7 +557,7 @@ async fn test_anon_prepared_statements() {
     let (mut conn, mut client, _) = new_client!(false);
 
     let mut c = (*config()).clone();
-    c.config.general.prepared_statements = PreparedStatements::ExtendedAnonymous;
+    c.config.general.prepared_statements = PreparedStatementsLevel::ExtendedAnonymous;
     set(c).unwrap();
 
     let handle = tokio::spawn(async move {
@@ -593,7 +593,7 @@ async fn test_anon_prepared_statements_extended() {
     let (mut conn, mut client, _) = new_client!(false);
 
     let mut c = (*config()).clone();
-    c.config.general.prepared_statements = PreparedStatements::Extended;
+    c.config.general.prepared_statements = PreparedStatementsLevel::Extended;
     set(c).unwrap();
 
     let handle = tokio::spawn(async move {

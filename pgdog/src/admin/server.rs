@@ -48,7 +48,7 @@ impl AdminServer {
 
         let query = Query::from_bytes(message.to_bytes())?;
 
-        let messages = match Parser::parse(&query.query().to_lowercase()) {
+        let messages = match Parser::parse(query.query()) {
             Ok(command) => {
                 let mut messages = command.execute().await?;
                 messages.push(CommandComplete::new(command.name()).message());
