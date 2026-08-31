@@ -22,9 +22,7 @@ impl ConfigWatcher {
             .await
             .expect("config watcher never closes");
 
-        let val = self.rx.borrow_and_update().clone();
-
-        val
+        self.rx.borrow_and_update().clone()
     }
 }
 
