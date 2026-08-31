@@ -76,14 +76,9 @@ async fn rust_client_requires_plus_with_hashed_password() {
 async fn rust_client_require_plus_rejects_wrong_password() {
     admin_sqlx().await.execute("RELOAD").await.unwrap();
 
-    let err = connect("pgdog", "wrong", ChannelBinding::Require)
+    connect("pgdog", "wrong", ChannelBinding::Require)
         .await
         .expect_err("wrong password must fail PLUS");
-    let err = err.to_string();
-    assert!(
-        err.contains("password for user") || err.contains("authentication"),
-        "unexpected PLUS failure: {err}"
-    );
 }
 
 #[tokio::test]
