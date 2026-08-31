@@ -22,6 +22,7 @@ use crate::net::messages::FrontendPid;
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
+pub(crate) mod failover_signal;
 pub(crate) mod monitor;
 mod oids;
 pub(crate) mod role_detector;
@@ -79,6 +80,11 @@ impl Shard {
     /// Get connection to the primary database.
     pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
+    }
+
+    /// Get the primary connection pool.
+    pub(super) fn primary_target(&self) -> Option<&Pool> {
+        self.lb.primary()
     }
 
     /// Get connection to one of the replica databases, using the configured
