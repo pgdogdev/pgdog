@@ -203,7 +203,12 @@ impl Client {
             }
 
             AuthType::Scram => {
-                stream.send_flush(&Authentication::scram()).await?;
+                let challenge = if stream.tls_server_end_point().is_some() {
+                    Authentication::scram_plus()
+                } else {
+                    Authentication::scram()
+                };
+                stream.send_flush(&challenge).await?;
 
                 let scram = Server::new(passwords);
                 let res = scram.handle(stream).await;

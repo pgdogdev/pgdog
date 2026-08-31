@@ -4098,7 +4098,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scram"
 version = "0.6.0"
-source = "git+https://github.com/pgdogdev/scram.git?rev=053e108210a35232efe60023ec43288fd601d8c4#053e108210a35232efe60023ec43288fd601d8c4"
+source = "git+https://github.com/abnegate/scram.git?rev=b641be3932a3e4b24705aa3a6848d4aa0e8d2fa9#b641be3932a3e4b24705aa3a6848d4aa0e8d2fa9"
 dependencies = [
  "aws-lc-rs",
  "base64 0.13.1",

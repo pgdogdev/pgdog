@@ -143,18 +143,42 @@ impl Server {
         }
     }
 
+    fn scram_server<P: AuthenticationProvider>(
+        provider: P,
+        plus: bool,
+        cbind: Option<Vec<u8>>,
+    ) -> ScramServer<P> {
+        match (plus, cbind) {
+            (true, Some(data)) => ScramServer::new_with_channel_binding(
+                provider,
+                "tls-server-end-point".to_string(),
+                data,
+            ),
+            _ => ScramServer::new(provider),
+        }
+    }
+
     /// Handle authentication.
     pub(crate) async fn handle(self, stream: &mut Stream) -> Result<bool, Error> {
-        let scram = match self.provider {
-            Provider::Plain(plain) => Scram::Plain(ScramServer::new(plain)),
-            Provider::Hashed(hashed) => Scram::Hashed(ScramServer::new(hashed)),
-        };
-
         // SASLInitialResponse / client-first phase.
-        let client_response = match Self::read_password(stream).await? {
-            Some(Password::SASLInitialResponse { response, .. }) => response,
+        let (mechanism, client_response) = match Self::read_password(stream).await? {
+            Some(Password::SASLInitialResponse { name, response }) => (name, response),
             Some(_) => return Ok(false),
             None => return Ok(false),
+        };
+
+        let plus = mechanism == Authentication::SCRAM_SHA_256_PLUS;
+        if plus && stream.tls_server_end_point().is_none() {
+            return Ok(false);
+        }
+        if !plus && mechanism != Authentication::SCRAM_SHA_256 {
+            return Ok(false);
+        }
+
+        let cbind = stream.tls_server_end_point().map(ToOwned::to_owned);
+        let scram = match self.provider {
+            Provider::Plain(plain) => Scram::Plain(Self::scram_server(plain, plus, cbind)),
+            Provider::Hashed(hashed) => Scram::Hashed(Self::scram_server(hashed, plus, cbind)),
         };
 
         let (scram_final, reply) = match &scram {
@@ -304,6 +328,60 @@ mod tests {
         assert_eq!(
             scram_login("user", "pgdog", &hash),
             AuthenticationStatus::Authenticated,
+        );
+    }
+
+    fn scram_plus_login(password: &str, hash: &str, cb_data: &[u8]) -> AuthenticationStatus {
+        let provider = HashedPassword {
+            hash: hash.to_string(),
+        };
+        let scram_server = Server::scram_server(provider, true, Some(cb_data.to_vec()));
+        let scram_client = scram::ScramClient::new_with_channel_binding(
+            "user",
+            password,
+            None,
+            "tls-server-end-point",
+            cb_data.to_vec(),
+        );
+
+        let (scram_client, client_first) = scram_client.client_first();
+        let server_first_state = scram_server
+            .handle_client_first(&client_first)
+            .expect("server handle client first");
+        let (server_client_final, server_first_msg) = server_first_state.server_first();
+        let scram_client = scram_client
+            .handle_server_first(&server_first_msg)
+            .expect("client handle server first");
+        let (scram_client, client_final) = scram_client.client_final();
+        let server_final = server_client_final
+            .handle_client_final(&client_final)
+            .expect("server handle client final");
+        let (status, server_final_msg) = server_final.server_final();
+
+        if status == AuthenticationStatus::Authenticated {
+            scram_client
+                .handle_server_final(&server_final_msg)
+                .expect("client verify server final");
+        }
+
+        status
+    }
+
+    #[test]
+    fn hashed_scram_plus_accepts_correct_password() {
+        let cb_data = b"tls-server-end-point-bytes";
+        assert_eq!(
+            scram_plus_login("pgdog", SCRAM_HASH, cb_data),
+            AuthenticationStatus::Authenticated,
+        );
+    }
+
+    #[test]
+    fn hashed_scram_plus_rejects_wrong_password() {
+        let cb_data = b"tls-server-end-point-bytes";
+        assert_eq!(
+            scram_plus_login("wrong", SCRAM_HASH, cb_data),
+            AuthenticationStatus::NotAuthenticated,
         );
     }
 
