@@ -1,3 +1,7 @@
+use crate::frontend::client::query_engine::TempTableChange;
+use pg_raw_parse::raw::OnCommitAction::ONCOMMIT_DROP;
+use std::ffi::c_char;
+
 use super::*;
 
 impl QueryParser {
@@ -24,11 +28,23 @@ impl QueryParser {
         use nodes::ObjectType;
         let mut shard = Shard::All;
         let mut schema_changed = false;
+        let mut temp_table = None;
 
         match node {
             Node::CreateStmt(stmt) => {
                 schema_changed = true;
                 shard = Self::shard_ddl_table(stmt.relation(), schema)?.unwrap_or(Shard::All);
+                if let Some(rv) = stmt.relation()
+                    && rv.relpersistence == b't' as c_char
+                {
+                    temp_table = Some(TempTableChange::Create {
+                        name: rv
+                            .relname()
+                            .expect("CREATE TABLE always has table name")
+                            .to_owned(),
+                        drop_on_commit: stmt.oncommit == ONCOMMIT_DROP,
+                    });
+                }
             }
 
             Node::CreateSeqStmt(stmt) => {
@@ -41,19 +57,20 @@ impl QueryParser {
                 | ObjectType::OBJECT_VIEW
                 | ObjectType::OBJECT_SEQUENCE => {
                     let table = Table::try_from(stmt.objects()).ok();
-                    if let Some(table) = table
-                        && let Some(schema) = schema.schemas.get(table.schema())
-                    {
-                        shard = schema.shard().into();
+                    if let Some(table) = table {
+                        temp_table = Some(TempTableChange::Drop(table.name.to_owned()));
+                        if let Some(schema) = schema.schemas.get(table.schema()) {
+                            shard = schema.shard().into();
+                        }
                     }
                     schema_changed = true;
                 }
 
                 ObjectType::OBJECT_SCHEMA => {
-                    if let Some(string) = stmt.objects().first().and_then(Node::as_str)
-                        && let Some(schema) = schema.schemas.get(Some(string.into()))
-                    {
-                        shard = schema.shard().into();
+                    if let Some(string) = stmt.objects().first().and_then(Node::as_str) {
+                        if let Some(schema) = schema.schemas.get(Some(string.into())) {
+                            shard = schema.shard().into();
+                        }
                     }
                 }
 
@@ -203,7 +220,9 @@ impl QueryParser {
         calculator.push(ShardWithPriority::new_table(shard));
 
         Ok(Command::Query(
-            Route::write(calculator.shard()).with_schema_changed(schema_changed),
+            Route::write(calculator.shard())
+                .with_schema_changed(schema_changed)
+                .with_temp_table_change(temp_table),
         ))
     }
 
