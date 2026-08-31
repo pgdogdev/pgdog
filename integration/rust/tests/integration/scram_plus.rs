@@ -78,8 +78,7 @@ async fn rust_client_require_plus_rejects_wrong_password() {
 
     let err = connect("pgdog", "wrong", ChannelBinding::Require)
         .await
-        .err()
-        .expect("wrong password must fail PLUS");
+        .expect_err("wrong password must fail PLUS");
     let err = err.to_string();
     assert!(
         err.contains("password for user") || err.contains("authentication"),
