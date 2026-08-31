@@ -289,6 +289,19 @@ pub struct User {
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#password>
     pub password: Option<String>,
+    /// Runtime marker: `password` was learned from a client through passthrough
+    /// authentication instead of being read from `users.toml`. Lets PgDog evict
+    /// the credential if the server rejects it. Internal field, never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub password_from_passthrough: bool,
+    /// Runtime marker: this whole entry was discovered through passthrough
+    /// authentication (the user is not present in `users.toml`). Lets PgDog
+    /// remove the entry if the server rejects its credential. Internal field,
+    /// never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub created_by_passthrough: bool,
     /// Multiple passwords for this user, all of which will be attempted during auth to server and client.
     #[serde(default)]
     pub passwords: Vec<String>,

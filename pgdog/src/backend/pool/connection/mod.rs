@@ -385,6 +385,8 @@ impl Connection {
                 }
             }
 
+            // Unverified `add` is fine here: these credentials were already
+            // in use by this authenticated session before the reload.
             databases::add(user)?;
         }
 

@@ -213,6 +213,21 @@ impl Server {
                             addr
                         );
                         auth_secret.valid(false);
+                        // A passthrough-learned credential the server rejects
+                        // can never work again (e.g. the server-side password
+                        // rotated): evict it so the pool stops retrying it and
+                        // the next client login can store the current one.
+                        if let super::pool::password::PasswordSource::Passthrough {
+                            user,
+                            database,
+                        } = &auth_secret.source
+                        {
+                            super::databases::passthrough_password_rejected(
+                                user,
+                                database,
+                                &auth_secret.password,
+                            );
+                        }
                         continue;
                     } else {
                         return Err(Error::ConnectionError(error));

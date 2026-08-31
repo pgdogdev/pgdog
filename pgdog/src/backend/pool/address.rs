@@ -94,7 +94,25 @@ impl Address {
                 user.passwords()
                     .into_iter()
                     .filter(|p| matches!(p, PasswordKind::Plain(_)))
-                    .map(|p| p.to_string().into())
+                    .map(|p| {
+                        let password = p.to_string();
+                        // Tag passthrough-learned credentials with the config
+                        // identity storing them, so the connection code can
+                        // evict them when the server rejects them.
+                        if user.password_from_passthrough
+                            && user.password.as_deref() == Some(password.as_str())
+                        {
+                            Password::new(
+                                &password,
+                                PasswordSource::Passthrough {
+                                    user: user.name.clone(),
+                                    database: user.database.clone(),
+                                },
+                            )
+                        } else {
+                            password.into()
+                        }
+                    })
                     .collect()
             },
             server_auth,

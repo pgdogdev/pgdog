@@ -16,6 +16,13 @@ pub enum PasswordSource {
     RdsIam,
     AzureIdentity,
     Vault,
+    /// Learned from a client through passthrough authentication. Carries the
+    /// config identity of the user entry storing the credential, so it can be
+    /// evicted when the server rejects it.
+    Passthrough {
+        user: String,
+        database: String,
+    },
 }
 
 impl Display for PasswordSource {
@@ -25,6 +32,7 @@ impl Display for PasswordSource {
             Self::RdsIam => write!(f, "rds iam"),
             Self::AzureIdentity => write!(f, "azure workload identity"),
             Self::Vault => write!(f, "vault"),
+            Self::Passthrough { .. } => write!(f, "passthrough"),
         }
     }
 }

@@ -9,6 +9,7 @@ pub enum ConnectReason {
     PubSub,
     Probe,
     Healthcheck,
+    PassthroughVerify,
     #[default]
     Other,
 }
@@ -23,6 +24,7 @@ impl Display for ConnectReason {
             Self::PubSub => "pub/sub",
             Self::Probe => "probe",
             Self::Healthcheck => "healthcheck",
+            Self::PassthroughVerify => "passthrough verify",
             Self::Other => "other",
         };
 
