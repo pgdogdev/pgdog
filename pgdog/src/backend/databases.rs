@@ -77,6 +77,8 @@ pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Resul
     // 4. Shutdown all databases.
     old_databases.shutdown();
 
+    super::reload_signal::notify();
+
     Ok(())
 }
 

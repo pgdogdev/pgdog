@@ -11,6 +11,7 @@ pub(crate) mod prepared_statements;
 pub(crate) mod protocol;
 pub(crate) mod pub_sub;
 pub(crate) mod reload_notify;
+pub(crate) mod reload_signal;
 pub(crate) mod replication;
 pub(crate) mod schema;
 pub(crate) mod server;
