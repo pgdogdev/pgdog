@@ -68,9 +68,10 @@ impl QueryParser {
 
                 ObjectType::OBJECT_SCHEMA => {
                     if let Some(string) = stmt.objects().first().and_then(Node::as_str)
-                        && let Some(schema) = schema.schemas.get(Some(string.into())) {
-                            shard = schema.shard().into();
-                        }
+                        && let Some(schema) = schema.schemas.get(Some(string.into()))
+                    {
+                        shard = schema.shard().into();
+                    }
                 }
 
                 _ => (),
