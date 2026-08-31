@@ -4,15 +4,12 @@ use crate::net::messages::Datum;
 #[derive(Debug)]
 pub(super) struct Count {
     pub(super) column: usize,
-    total: Option<i64>,
+    total: i64,
 }
 
 impl Count {
     pub(super) fn new(column: usize) -> Self {
-        Self {
-            column,
-            total: None,
-        }
+        Self { column, total: 0 }
     }
 
     pub(super) fn accumulate(&mut self, value: Datum) -> Result<(), TypeError> {
@@ -20,7 +17,7 @@ impl Count {
             return Ok(());
         }
 
-        *self.total.get_or_insert(0) += value.as_i64()?;
+        self.total += value.as_i64()?;
         Ok(())
     }
 
@@ -28,7 +25,7 @@ impl Count {
         self.finalize_i64().into()
     }
 
-    pub(super) fn finalize_i64(self) -> Option<i64> {
+    pub(super) fn finalize_i64(self) -> i64 {
         self.total
     }
 }
@@ -48,5 +45,5 @@ fn count_with_only_null() {
     let mut state = Count::new(0);
     state.accumulate(Datum::Null).unwrap();
     state.accumulate(Datum::Null).unwrap();
-    assert_eq!(state.finalize(), Datum::Null);
+    assert_eq!(state.finalize(), 0i64.into());
 }

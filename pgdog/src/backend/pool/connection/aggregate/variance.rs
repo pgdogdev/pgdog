@@ -59,9 +59,7 @@ impl Variance {
         // ref https://open.maricopa.edu/haasstatistics/chapter/4-4-calculating-variance/
         let sumsq = self.sumsq.finalize();
         let sum = self.sum.finalize();
-        let Some(count) = self.count.finalize_i64() else {
-            return Ok(Datum::Null);
-        };
+        let count = self.count.finalize_i64();
 
         match (sumsq, sum) {
             (Datum::Numeric(sumsq), Datum::Numeric(sum)) => {

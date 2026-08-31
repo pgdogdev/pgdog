@@ -53,4 +53,12 @@ mod tests {
         state.accumulate(1i64.into()).unwrap();
         assert_matches!(state.accumulate(1f64.into()), Err(_));
     }
+
+    #[test]
+    fn empty_sum_returns_null() {
+        let mut state = Sum::new(0);
+        state.accumulate(Datum::Null).unwrap();
+        state.accumulate(Datum::Null).unwrap();
+        assert_eq!(state.finalize(), Datum::Null);
+    }
 }
