@@ -76,6 +76,8 @@ impl Pools {
         let mut avg_cleaned = vec![];
         let mut total_rollbacks = vec![];
         let mut avg_rollbacks = vec![];
+        let mut total_client_idle_xact_timeouts = vec![];
+        let mut avg_client_idle_xact_timeouts = vec![];
         let mut total_connect_time = vec![];
         let mut avg_connect_time = vec![];
         let mut total_connect_count = vec![];
@@ -271,6 +273,16 @@ impl Pools {
                     avg_rollbacks.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rollbacks.into(),
+                    });
+
+                    total_client_idle_xact_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.client_idle_xact_timeouts.into(),
+                    });
+
+                    avg_client_idle_xact_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.client_idle_xact_timeouts.into(),
                     });
 
                     total_connect_time.push(Measurement {
@@ -644,6 +656,24 @@ impl Pools {
             help:
                 "Average number of abandoned transactions that had to be rolled back automatically."
                     .into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_client_idle_xact_timeouts".into(),
+            measurements: total_client_idle_xact_timeouts,
+            help: "Total number of clients disconnected for exceeding client_idle_in_transaction_timeout."
+                .into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_client_idle_xact_timeouts".into(),
+            measurements: avg_client_idle_xact_timeouts,
+            help: "Average number of clients disconnected for exceeding client_idle_in_transaction_timeout."
+                .into(),
             unit: None,
             metric_type: None,
         }));

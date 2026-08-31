@@ -395,6 +395,10 @@ impl Pool {
         self.comms().ready.notify_waiters();
     }
 
+    pub(crate) fn client_idle_xact_timeout(&self) {
+        self.lock().stats.counts.client_idle_xact_timeouts += 1;
+    }
+
     /// Pool exclusive lock.
     #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {

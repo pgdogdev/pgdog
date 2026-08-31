@@ -50,6 +50,7 @@ impl Add<Counts> for PoolCounts {
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.bind_count + rhs.bind,
             rollbacks: self.rollbacks + rhs.rollbacks,
+            client_idle_xact_timeouts: self.client_idle_xact_timeouts,
             healthchecks: self.healthchecks + rhs.healthchecks,
             close: self.close + rhs.close,
             errors: self.errors + rhs.errors,

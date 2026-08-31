@@ -85,6 +85,20 @@ impl Binding {
         }
     }
 
+    /// Record a `client_idle_in_transaction_timeout` disconnect against
+    /// every pool this client currently holds a checkout from.
+    pub(crate) fn record_client_idle_xact_timeout(&self) {
+        match self {
+            Binding::Direct(guard, _) => guard.record_client_idle_xact_timeout(),
+            Binding::MultiShard(guards, _) => {
+                for guard in guards {
+                    guard.record_client_idle_xact_timeout();
+                }
+            }
+            Binding::Admin(_) | Binding::NotConnected => (),
+        }
+    }
+
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
             Binding::Direct(guard, _) => guard.read().await,

@@ -71,6 +71,12 @@ impl Guard {
         self.locked
     }
 
+    /// Record that the client holding this checkout was disconnected
+    /// for exceeding `client_idle_in_transaction_timeout`.
+    pub(crate) fn record_client_idle_xact_timeout(&self) {
+        self.pool.client_idle_xact_timeout();
+    }
+
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
     fn cleanup(&mut self) {
