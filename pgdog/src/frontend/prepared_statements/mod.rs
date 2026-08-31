@@ -168,9 +168,9 @@ impl PreparedStatements {
 
     /// Close all prepared statements on this client.
     ///
-    /// This only happens when the client disconnects. This will update
-    /// the global usage counters of all of client's prepared statements.
-    pub(super) fn close_all(&mut self) {
+    /// Called when the client disconnects or runs `DISCARD`. Updates
+    /// the global usage counters of all of the client's prepared statements.
+    pub(crate) fn close_all(&mut self) {
         if !self.local.is_empty() {
             let mut global = self.global.write();
 
