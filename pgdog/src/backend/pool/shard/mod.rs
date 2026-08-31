@@ -27,6 +27,7 @@ pub(crate) mod monitor;
 mod oids;
 pub(crate) mod role_detector;
 
+use failover_signal::{FailoverSignal, FailoverSignalWatcher};
 use monitor::*;
 pub(crate) use oids::{CanonicalOids, Oids};
 use role_detector::*;
@@ -80,11 +81,6 @@ impl Shard {
     /// Get connection to the primary database.
     pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
-    }
-
-    /// Get the primary connection pool.
-    pub(super) fn primary_target(&self) -> Option<&Pool> {
-        self.lb.primary()
     }
 
     /// Get connection to one of the replica databases, using the configured
@@ -316,6 +312,18 @@ impl Shard {
         }
     }
 
+    /// Signal that a failover has taken place.
+    pub(super) fn signal_failover(&self) {
+        if self.lb.primary().is_some() {
+            self.failover_signal.notify();
+        }
+    }
+
+    /// Listen for a failover event in real-time.
+    pub(crate) fn failover_listener(&self) -> FailoverSignalWatcher {
+        self.failover_signal.watch()
+    }
+
     /// Shutdown pub/sub listener.
     fn shutdown_pub_sub(&self) {
         if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(None)).deref() {
@@ -346,6 +354,7 @@ pub(crate) struct ShardInner {
     pub_sub_enabled: bool,
     schema_cache: SchemaCache,
     oids: Arc<Oids>,
+    failover_signal: FailoverSignal,
 }
 
 impl ShardInner {
@@ -379,6 +388,7 @@ impl ShardInner {
             pub_sub_enabled,
             schema_cache,
             oids,
+            failover_signal: FailoverSignal::new(),
         }
     }
 }

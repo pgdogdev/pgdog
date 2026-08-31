@@ -95,9 +95,7 @@ impl ShardMonitor {
                     self.shard.identifier()
                 );
 
-                if let Some(primary) = self.shard.primary_target() {
-                    failover_signal::notify(primary.addr());
-                }
+                self.shard.signal_failover();
             }
 
             update_replica_lag(&self.shard.pools());
