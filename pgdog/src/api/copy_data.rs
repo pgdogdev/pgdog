@@ -10,8 +10,7 @@ use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
 use pgdog_stats::{CopyDataDefinition, CopyDataStatus, TaskDefinition};
 
-/// Bulk-copy table data from a source database to a target, returning the
-/// orchestrator so the composing task can thread it into the next phase.
+/// Bulk-copy table data from a source database to a target.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
     pub(crate) orchestrator: Orchestrator,
@@ -22,7 +21,7 @@ pub(crate) struct CopyDataTask {
 
 impl Task for CopyDataTask {
     type Status = CopyDataStatus;
-    type Output = Orchestrator;
+    type Output = ();
     type Error = Error;
 
     fn definition(&self) -> impl Into<TaskDefinition> {
@@ -31,9 +30,8 @@ impl Task for CopyDataTask {
         }
     }
 
-    async fn run(self, ctx: TaskContext<Self>) -> Result<Orchestrator, Error> {
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
         let token = ctx.cancellation_token();
-        let orchestrator = self.orchestrator;
 
         // Don't start a sync that's already cancelled. Once it's running, the
         // token is threaded into the copy workers, which abort their COPY loops
@@ -42,10 +40,8 @@ impl Task for CopyDataTask {
             return Err(Error::DataSyncAborted);
         }
 
-        orchestrator
+        self.orchestrator
             .data_sync(&token, self.require_replica_identity)
-            .await?;
-
-        Ok(orchestrator)
+            .await
     }
 }

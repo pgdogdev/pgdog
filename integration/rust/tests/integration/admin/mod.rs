@@ -1,6 +1,7 @@
 //! Integration tests asserting admin command output over the wire.
 //!
 //! Each submodule connects to the live PgDog admin database (`rust::setup::admin_sqlx`).
+pub mod resharding;
 pub mod show_config;
 pub mod show_version;
 pub mod tasks;
@@ -9,8 +10,8 @@ use sqlx::{Column, Executor, Pool, Postgres, Row, TypeInfo};
 
 /// Wire layout expected from `SHOW TASKS`.
 const SHOW_TASKS_LAYOUT: &[(&str, &str)] = &[
-    ("parent_id", "INT8"),
     ("id", "INT8"),
+    ("parent_id", "INT8"),
     ("type", "TEXT"),
     ("status", "TEXT"),
     ("inner_status", "TEXT"),

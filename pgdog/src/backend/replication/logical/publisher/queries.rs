@@ -58,12 +58,12 @@ impl PublicationTable {
     pub(crate) async fn load(
         publication: &str,
         server: &mut Server,
-    ) -> Result<Vec<PublicationTable>, Error> {
+    ) -> Result<Vec<PublicationTable>, crate::backend::Error> {
         // fetch_all (simple query protocol) is required: replication connections
         // do not support the extended query protocol (error 08P01).
-        Ok(server
+        server
             .fetch_all(TABLES.replace("$1", &quote_literal(publication)))
-            .await?)
+            .await
     }
 
     pub(crate) fn destination_name(&self) -> &str {

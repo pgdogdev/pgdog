@@ -64,20 +64,23 @@ impl Task for ReshardTask {
         // cooperatively (they'd otherwise outlive this task).
         let _token = ctx.cancellation_token();
         let mut orchestrator = self.orchestrator;
+        let schema_sync = SchemaSyncTask::builder()
+            .databases(orchestrator.databases())
+            .publication(orchestrator.publication().to_owned())
+            .ignore_errors(true);
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.
         if !self.skip_schema_sync {
             ctx.set_status(ReshardStatus::SchemaSync);
-            orchestrator = ctx
-                .run(
-                    SchemaSyncTask::builder()
-                        .orchestrator(orchestrator)
-                        .phase(SchemaSyncPhase::Pre)
-                        .ignore_errors(true)
-                        .build(),
-                )
+            ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Pre).build())
                 .await?;
+
+            // The pre-data sync changed the destination's schema, so its pools
+            // reloaded. `SchemaSync::reload_destination` refreshes only its own
+            // cluster refs, so the orchestrator still holds stale ones.
+            orchestrator.refresh()?;
+            orchestrator.refresh_publisher();
         }
 
         // From the data copy onward the orchestrator may hold replication slots
@@ -90,35 +93,23 @@ impl Task for ReshardTask {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
-                orchestrator = ctx
-                    .run(
-                        CopyDataTask::builder()
-                            .orchestrator(orchestrator)
-                            // Only streaming needs replica identity, not a sync-only copy.
-                            .require_replica_identity(!self.sync_only)
-                            .build(),
-                    )
-                    .await?;
+                ctx.run(
+                    CopyDataTask::builder()
+                        .orchestrator(orchestrator.clone())
+                        // Only streaming needs replica identity, not a sync-only copy.
+                        .require_replica_identity(!self.sync_only)
+                        .build(),
+                )
+                .await?;
             }
 
             // Post-data schema sync (secondary indexes, constraints): the
             // second half of schema sync, after the bulk load.
+            // It reuses dump schema from the earlier schema_sync
+            // calls if they were executed.
             if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::FinalizingSchema);
-
-                // The bulk copy above can run for hours; pools may have reloaded
-                // meanwhile, leaving our cluster refs stale. Re-fetch them before
-                // touching the destination.
-                orchestrator.refresh()?;
-
-                orchestrator = ctx
-                    .run(
-                        SchemaSyncTask::builder()
-                            .orchestrator(orchestrator)
-                            .phase(SchemaSyncPhase::Post)
-                            .ignore_errors(true)
-                            .build(),
-                    )
+                ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Post).build())
                     .await?;
             }
 
@@ -139,6 +130,7 @@ impl Task for ReshardTask {
                     ReplicationTask::builder()
                         .waiter(waiter)
                         .auto_cutover(self.auto_cutover)
+                        .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Cutover).build())
                         .build(),
                 )
                 .await?;
