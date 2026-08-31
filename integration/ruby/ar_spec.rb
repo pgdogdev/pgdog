@@ -204,6 +204,9 @@ describe 'active record' do
         end
 
         ActiveRecord::Base.connection.execute 'DISCARD ALL'
+        # DISCARD ALL deallocates prepared statements, so ActiveRecord has to
+        # forget the names it cached.
+        ActiveRecord::Base.connection.clear_cache!
 
         5.times do |i|
           record = Sharded.where(value: "test_#{i}").first
