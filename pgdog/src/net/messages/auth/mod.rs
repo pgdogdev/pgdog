@@ -47,6 +47,13 @@ impl Authentication {
     }
 }
 
+pub(crate) fn scram_challenge(tls_server_end_point: Option<&[u8]>) -> Authentication {
+    match tls_server_end_point {
+        Some(_) => Authentication::scram_plus(),
+        None => Authentication::scram(),
+    }
+}
+
 impl FromBytes for Authentication {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'R');
@@ -180,6 +187,35 @@ mod tests {
                         Authentication::SCRAM_SHA_256
                     ]
                 );
+            }
+            other => panic!("expected Sasl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scram_challenge_encodes_plus_then_sha_256_when_cbind_present() {
+        let auth =
+            Authentication::from_bytes(scram_challenge(Some(&[1, 2, 3])).to_bytes()).unwrap();
+        match auth {
+            Authentication::Sasl(mechanisms) => {
+                assert_eq!(
+                    mechanisms,
+                    vec![
+                        Authentication::SCRAM_SHA_256_PLUS,
+                        Authentication::SCRAM_SHA_256
+                    ]
+                );
+            }
+            other => panic!("expected Sasl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scram_challenge_encodes_sha_256_only_when_cbind_absent() {
+        let auth = Authentication::from_bytes(scram_challenge(None).to_bytes()).unwrap();
+        match auth {
+            Authentication::Sasl(mechanisms) => {
+                assert_eq!(mechanisms, vec![Authentication::SCRAM_SHA_256]);
             }
             other => panic!("expected Sasl, got {other:?}"),
         }

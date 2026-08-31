@@ -147,14 +147,15 @@ impl Server {
         provider: P,
         plus: bool,
         cbind: Option<Vec<u8>>,
-    ) -> ScramServer<P> {
+    ) -> Result<ScramServer<P>, Error> {
         match (plus, cbind) {
-            (true, Some(data)) => ScramServer::new_with_channel_binding(
+            (true, Some(data)) => Ok(ScramServer::new_with_channel_binding(
                 provider,
                 "tls-server-end-point".to_string(),
                 data,
-            ),
-            _ => ScramServer::new(provider),
+            )),
+            (true, None) => Err(Error::UnexpectedMessage('p')),
+            (false, _) => Ok(ScramServer::new(provider)),
         }
     }
 
@@ -176,9 +177,13 @@ impl Server {
         }
 
         let cbind = stream.tls_server_end_point().map(ToOwned::to_owned);
+        if cbind.is_some() && client_response.starts_with("y,") {
+            return Ok(false);
+        }
+
         let scram = match self.provider {
-            Provider::Plain(plain) => Scram::Plain(Self::scram_server(plain, plus, cbind)),
-            Provider::Hashed(hashed) => Scram::Hashed(Self::scram_server(hashed, plus, cbind)),
+            Provider::Plain(plain) => Scram::Plain(Self::scram_server(plain, plus, cbind)?),
+            Provider::Hashed(hashed) => Scram::Hashed(Self::scram_server(hashed, plus, cbind)?),
         };
 
         let (scram_final, reply) = match &scram {
@@ -335,7 +340,8 @@ mod tests {
         let provider = HashedPassword {
             hash: hash.to_string(),
         };
-        let scram_server = Server::scram_server(provider, true, Some(cb_data.to_vec()));
+        let scram_server = Server::scram_server(provider, true, Some(cb_data.to_vec()))
+            .expect("PLUS server requires cbind");
         let scram_client = scram::ScramClient::new_with_channel_binding(
             "user",
             password,
@@ -395,5 +401,152 @@ mod tests {
             scram_login("user", "wrong", &hash),
             AuthenticationStatus::NotAuthenticated,
         );
+    }
+
+    #[test]
+    fn scram_server_plus_without_cbind_errors() {
+        let provider = HashedPassword {
+            hash: SCRAM_HASH.to_string(),
+        };
+        assert!(matches!(
+            Server::scram_server(provider, true, None),
+            Err(Error::UnexpectedMessage('p'))
+        ));
+    }
+
+    async fn connected_pair() -> (Stream, Stream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move { tokio::net::TcpStream::connect(addr).await.unwrap() });
+        let (ours, _) = listener.accept().await.unwrap();
+        (
+            Stream::plain(ours, 4096),
+            Stream::plain(peer.await.unwrap(), 4096),
+        )
+    }
+
+    fn hashed_server() -> Server {
+        Server::new(&[PasswordKind::Hashed(SCRAM_HASH.to_string())])
+    }
+
+    async fn read_auth(stream: &mut Stream) -> Authentication {
+        let message = stream.read().await.expect("auth message");
+        Authentication::from_bytes(message.to_bytes()).expect("parse auth")
+    }
+
+    fn spawn_handle(
+        mut stream: Stream,
+        cbind: &[u8],
+    ) -> tokio::task::JoinHandle<Result<bool, Error>> {
+        stream.set_tls_server_end_point(cbind.to_vec());
+        let server = hashed_server();
+        tokio::spawn(async move { server.handle(&mut stream).await })
+    }
+
+    #[tokio::test]
+    async fn handle_plus_accepts_correct_password() {
+        let cb_data = b"tls-server-end-point-bytes";
+        let (server_stream, mut client_stream) = connected_pair().await;
+        let task = spawn_handle(server_stream, cb_data);
+
+        let scram_client = scram::ScramClient::new_with_channel_binding(
+            "user",
+            "pgdog",
+            None,
+            "tls-server-end-point",
+            cb_data.to_vec(),
+        );
+        let (scram_client, client_first) = scram_client.client_first();
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256_PLUS.to_string(),
+                response: client_first,
+            })
+            .await
+            .unwrap();
+
+        let Authentication::SaslContinue(data) = read_auth(&mut client_stream).await else {
+            panic!("expected SaslContinue");
+        };
+        let scram_client = scram_client
+            .handle_server_first(&data)
+            .expect("server first");
+        let (_scram_client, client_final) = scram_client.client_final();
+        client_stream
+            .send_flush(&Password::PasswordMessage {
+                response: client_final,
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("PLUS handshake timed out")
+            .expect("join")
+            .expect("handle");
+        assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn handle_rejects_y_when_cbind_present() {
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        server_stream.set_tls_server_end_point(b"tls-server-end-point-bytes".to_vec());
+
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256.to_string(),
+                response: "y,,n=user,r=nonce".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            hashed_server().handle(&mut server_stream),
+        )
+        .await
+        .expect("y downgrade must fail without waiting for a proof")
+        .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn handle_sha256_n_succeeds_with_cbind() {
+        let cb_data = b"tls-server-end-point-bytes";
+        let (server_stream, mut client_stream) = connected_pair().await;
+        let task = spawn_handle(server_stream, cb_data);
+
+        let mut client = Client::new("user", "pgdog");
+        let client_first = client.first().expect("client first");
+        assert!(
+            client_first.starts_with("n,,"),
+            "non-PLUS client first must use GS2 n: {client_first}"
+        );
+
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256.to_string(),
+                response: client_first,
+            })
+            .await
+            .unwrap();
+
+        let Authentication::SaslContinue(data) = read_auth(&mut client_stream).await else {
+            panic!("expected SaslContinue");
+        };
+        client.server_first(&data).expect("server first");
+        client_stream
+            .send_flush(&Password::PasswordMessage {
+                response: client.last().expect("client final"),
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("n handshake timed out")
+            .expect("join")
+            .expect("handle");
+        assert!(ok);
     }
 }

@@ -170,6 +170,11 @@ impl Stream {
         self.tls_server_end_point.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_tls_server_end_point(&mut self, data: Vec<u8>) {
+        self.tls_server_end_point = Some(data);
+    }
+
     /// Get peer address if any. We're not using UNIX sockets (yet)
     /// so the peer address should always be available.
     pub(crate) fn peer_addr(&self) -> PeerAddr {

@@ -40,7 +40,7 @@ pub(crate) mod row_description;
 pub(crate) mod sync;
 pub(crate) mod terminate;
 
-pub(crate) use auth::{Authentication, Password};
+pub(crate) use auth::{Authentication, Password, scram_challenge};
 pub(crate) use backend_key::BackendKeyData;
 pub(crate) use backend_pid::BackendPid;
 pub(crate) use bind::{Bind, Format, ParameterWithFormat};

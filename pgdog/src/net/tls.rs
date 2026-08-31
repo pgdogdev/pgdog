@@ -114,9 +114,9 @@ pub(crate) fn acceptor() -> Option<Arc<TlsListener>> {
 /// DER-encoded end-entity certificate, using the certificate's own
 /// signature hash (MD5 and SHA-1 are upgraded to SHA-256).
 ///
-/// Returns `None` when the signature algorithm does not name a single
-/// hash (Ed25519, Ed448, RSASSA-PSS, …). PostgreSQL leaves PLUS undefined
-/// in those cases; we do the same and simply do not advertise it.
+/// Returns `None` when we cannot name a single hash from the signature
+/// OID (Ed25519, Ed448, RSASSA-PSS, …). RSA-PSS parameters are not
+/// parsed, so we do not advertise PLUS in those cases.
 pub(crate) fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
     use aws_lc_rs::digest::{self, digest};
     use x509_parser::certificate::X509Certificate;
