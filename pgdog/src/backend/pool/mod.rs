@@ -9,6 +9,7 @@ pub(crate) mod connection;
 pub(crate) mod dns_cache;
 pub(crate) mod ee;
 pub(crate) mod error;
+pub(crate) mod failover_signal;
 pub(crate) mod guard;
 pub(crate) mod healthcheck;
 pub(crate) mod inner;
@@ -31,6 +32,7 @@ pub(crate) use cluster::{Cluster, ClusterConfig, ClusterShardConfig, PoolConfig,
 pub(crate) use cluster_metrics::ClusterMetrics;
 pub(crate) use connection::Connection;
 pub(crate) use error::Error;
+pub(super) use failover_signal::ClusterFailoverSignalWatcher;
 pub(crate) use guard::Guard;
 pub(crate) use healthcheck::Healtcheck;
 pub(crate) use lb::LoadBalancer;

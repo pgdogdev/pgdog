@@ -23,7 +23,8 @@ use crate::{
 };
 
 use super::{
-    Address, CanonicalOids, ClusterMetrics, Config, Error, Guard, Request, Shard, ShardConfig,
+    Address, CanonicalOids, ClusterFailoverSignalWatcher, ClusterMetrics, Config, Error, Guard,
+    Request, Shard, ShardConfig,
 };
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
@@ -85,6 +86,7 @@ pub(crate) struct Cluster {
     schema_loader: Box<dyn SchemaLoader>,
     canonical_oids: Option<Arc<CanonicalOids>>,
     read_only: bool,
+    failover_signal: ClusterFailoverSignalWatcher,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -133,6 +135,7 @@ impl Default for Cluster {
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
             read_only: Default::default(),
+            failover_signal: ClusterFailoverSignalWatcher::default(),
         }
     }
 }
@@ -351,25 +354,29 @@ impl Cluster {
             ..Default::default()
         }));
 
+        let shard_pools = shards
+            .iter()
+            .enumerate()
+            .map(|(number, config)| {
+                Shard::new(ShardConfig {
+                    number,
+                    primary: config.primary.as_ref(),
+                    replicas: &config.replicas,
+                    lb_strategy,
+                    rw_split,
+                    identifier: identifier.clone(),
+                    lsn_check_interval,
+                    pub_sub_enabled,
+                    schema_cache: schema_cache.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let failover_signal = ClusterFailoverSignalWatcher::new(&shard_pools);
+
         Self {
             identifier: identifier.clone(),
-            shards: shards
-                .iter()
-                .enumerate()
-                .map(|(number, config)| {
-                    Shard::new(ShardConfig {
-                        number,
-                        primary: config.primary.as_ref(),
-                        replicas: &config.replicas,
-                        lb_strategy,
-                        rw_split,
-                        identifier: identifier.clone(),
-                        lsn_check_interval,
-                        pub_sub_enabled,
-                        schema_cache: schema_cache.clone(),
-                    })
-                })
-                .collect(),
+            shards: shard_pools,
             passwords,
             pooler_mode,
             sharded_tables,
@@ -407,6 +414,7 @@ impl Cluster {
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
             read_only,
+            failover_signal,
         }
     }
 
@@ -732,6 +740,12 @@ impl Cluster {
 
     pub(crate) fn is_canonicalizing_oids(&self) -> bool {
         self.canonical_oids.is_some()
+    }
+
+    /// Listen for failover signal from one or more shards.
+    #[allow(unused)]
+    pub(crate) fn failover_signal(&mut self) -> &mut ClusterFailoverSignalWatcher {
+        &mut self.failover_signal
     }
 }
 
