@@ -23,3 +23,12 @@ database = "pgdog"
 server_user = "pgdog"
 server_password = "pgdog"
 read_only = true
+
+# Pre-configured pool with no `server_role`: the plugin's grant must fill the
+# gap so `impersonate:auditor` still runs queries as `auditor`, not as the
+# `pgdog` service account.
+[[users]]
+name = "auditor"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"

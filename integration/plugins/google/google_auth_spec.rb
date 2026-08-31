@@ -15,7 +15,7 @@ TOKEN_RESPONSES = {
     scope: 'openid email https://www.googleapis.com/auth/cloud-platform',
     expires_in: '3600',
     email: 'alice@example.com',
-    verified_email: true
+    verified_email: 'true'
   },
   'expired-google-token' => {
     audience: 'gcloud-client',
@@ -23,7 +23,7 @@ TOKEN_RESPONSES = {
     scope: 'https://www.googleapis.com/auth/cloud-platform',
     expires_in: '0',
     email: 'alice@example.com',
-    verified_email: true
+    verified_email: 'true'
   },
   'wrong-email-token' => {
     audience: 'gcloud-client',
@@ -31,7 +31,7 @@ TOKEN_RESPONSES = {
     scope: 'https://www.googleapis.com/auth/cloud-platform',
     expires_in: '3600',
     email: 'bob@example.com',
-    verified_email: true
+    verified_email: 'true'
   },
   'missing-scope-token' => {
     audience: 'gcloud-client',
@@ -39,7 +39,23 @@ TOKEN_RESPONSES = {
     scope: 'openid email',
     expires_in: '3600',
     email: 'alice@example.com',
-    verified_email: true
+    verified_email: 'true'
+  },
+  'dave-google-token' => {
+    audience: 'gcloud-client',
+    user_id: '2222222222',
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    expires_in: '3600',
+    email: 'dave@example.com',
+    verified_email: 'true'
+  },
+  'carol-google-token' => {
+    audience: 'gcloud-client',
+    user_id: '3333333333',
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    expires_in: '3600',
+    email: 'carol@example.com',
+    verified_email: 'true'
   }
 }.freeze
 
@@ -119,6 +135,14 @@ describe 'Google access-token authentication plugin' do
     conn.close
   end
 
+  it 'impersonates the Google identity on a pre-configured pool' do
+    # alice's users.toml entry has no `server_role`; the plugin's grant fills
+    # it, so queries run as the authenticated identity, not the service account.
+    conn = connect('alice@example.com', 'valid-google-token')
+    expect(conn.exec('SELECT current_user AS u')[0]['u']).to eq('alice@example.com')
+    conn.close
+  end
+
   it 'skips excluded users so PostgreSQL passthrough can authenticate them' do
     conn = connect('pgdog', 'pgdog')
     expect(conn.exec('SELECT 1 AS n')[0]['n'].to_i).to eq(1)
@@ -143,5 +167,26 @@ describe 'Google access-token authentication plugin' do
   it 'rejects a token missing a required scope' do
     expect { connect('alice@example.com', 'missing-scope-token') }
       .to raise_error(PG::ConnectionBad, GENERIC_AUTH_ERROR)
+  end
+
+  it 'rejects a valid login for an identity with no pool when provisioning is off' do
+    expect { connect('carol@example.com', 'carol-google-token') }
+      .to raise_error(PG::ConnectionBad, GENERIC_AUTH_ERROR)
+  end
+
+  # Keep this last: it leaves dave's pool unable to connect to Postgres.
+  it 'fails the connection when the impersonated role does not exist in Postgres' do
+    # dave authenticates and has a configured pool, but setup.sql never created
+    # his Postgres role: the backend refuses the `role` startup parameter, so
+    # the login (or, with cached server parameters, the first query) fails
+    # rather than falling back to the service account.
+    expect do
+      conn = connect('dave@example.com', 'dave-google-token')
+      begin
+        conn.exec('SELECT current_user')
+      ensure
+        conn.close
+      end
+    end.to raise_error(PG::Error)
   end
 end

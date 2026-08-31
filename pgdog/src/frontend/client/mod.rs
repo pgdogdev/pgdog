@@ -389,14 +389,17 @@ impl Client {
                             derived_user = grant.derived_user.clone();
                             let effective = derived_user.as_deref().unwrap_or(user);
 
-                            // Auto-provision a pool for the derived user when the
-                            // plugin asked for it and no cluster exists yet.
-                            if grant.provision
-                                && databases::databases()
-                                    .cluster((effective, database))
-                                    .is_err()
-                            {
-                                let provisioned = config::User {
+                            // Reconcile the grant with the derived user's pool:
+                            // fill backend-credential gaps (e.g. `server_role`
+                            // for impersonation) on an existing entry, or
+                            // provision a new pool when the plugin asked for
+                            // it. Without a pool and without `provision`,
+                            // `Connection::new` below fails the login.
+                            let exists = databases::databases()
+                                .cluster((effective, database))
+                                .is_ok();
+                            if exists || grant.provision {
+                                let granted = config::User {
                                     name: effective.to_string(),
                                     database: database.to_string(),
                                     server_user: grant.server_user.clone(),
@@ -405,7 +408,7 @@ impl Client {
                                     read_only: grant.read_only,
                                     ..Default::default()
                                 };
-                                databases::add_authenticated(provisioned)?;
+                                databases::add_authenticated(granted)?;
                             }
                         }
                         AuthResult::Ok

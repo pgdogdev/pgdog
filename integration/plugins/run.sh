@@ -61,6 +61,9 @@ main() {
   stop_pgdog
 
   # Phase 3: Google access-token plugin with a local tokeninfo mock.
+  PGPASSWORD=pgdog psql -h 127.0.0.1 -p 5432 -U pgdog -d pgdog -v ON_ERROR_STOP=1 \
+    -f "${SCRIPT_DIR}/google/setup.sql"
+
   run_pgdog "${SCRIPT_DIR}/google"
   wait_for_pgdog
   pushd "${SCRIPT_DIR}" >/dev/null

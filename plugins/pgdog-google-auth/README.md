@@ -77,9 +77,16 @@ For preconfigured pools, add the derived user to `users.toml`:
 name = "alice@example.com"
 database = "app"
 server_user = "pgdog_service"
-server_role = "alice"
 # Render server_password here from the approved secret manager.
 ```
+
+With `impersonate = true` (the default), the plugin's grant fills in
+`server_role` at login with the derived Google identity, so queries run as
+`alice@example.com` rather than as `pgdog_service`. The PostgreSQL role must
+already exist and be granted to the service account (see below); otherwise the
+backend refuses the `role` startup parameter and the login fails. An explicit
+`server_role` in `users.toml` takes precedence over the grant; PgDog logs a
+warning when they differ.
 
 Do not commit backend passwords. Render `users.toml` from the approved secret
 manager or use auto-provisioning with `server_password_env`.

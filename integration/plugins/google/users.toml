@@ -1,5 +1,19 @@
+# Pre-configured pool without `server_role`: the plugin's grant fills it in on
+# login, so queries run as "alice@example.com", not as the service account.
+# `setup.sql` creates the role and grants it to `pgdog`.
 [[users]]
 name = "alice@example.com"
 database = "pgdog"
 server_user = "pgdog"
 server_password = "pgdog"
+
+# Same shape, but `setup.sql` deliberately does NOT create the Postgres role,
+# so the backend connection (and therefore the login) must fail.
+[[users]]
+name = "dave@example.com"
+database = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+
+# carol@example.com has no [[users]] entry and provisioning is off: her valid
+# Google login must fail because there is no pool for her identity.

@@ -11,5 +11,12 @@ DROP ROLE IF EXISTS reporting;
 CREATE ROLE reporting NOLOGIN;
 GRANT reporting TO pgdog;
 
+-- Role impersonated via `impersonate:auditor`. Unlike `reporting`, its pool is
+-- pre-configured in users.toml (without `server_role`), so the plugin's grant
+-- has to fill the gap rather than provision the pool.
+DROP ROLE IF EXISTS auditor;
+CREATE ROLE auditor NOLOGIN;
+GRANT auditor TO pgdog;
+
 -- Target table for the read-only pool INSERT rejection test.
 CREATE TABLE IF NOT EXISTS auth_test (id BIGINT);

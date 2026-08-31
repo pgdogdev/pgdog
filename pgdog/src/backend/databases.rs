@@ -417,6 +417,16 @@ pub fn add_authenticated(user: ConfigUser) -> Result<AuthResult, Error> {
         if existing.server_role.is_none() && user.server_role.is_some() {
             existing.server_role = user.server_role.clone();
             changed = true;
+        } else if let (Some(configured), Some(granted)) = (&existing.server_role, &user.server_role)
+            && configured != granted
+        {
+            // The plugin asked to impersonate a different role than the one
+            // configured; the configured value wins, so queries will not run
+            // as the authenticated identity.
+            warn!(
+                r#"user "{}" on database "{}": configured server_role "{}" overrides plugin-granted server_role "{}""#,
+                existing.name, existing.database, configured, granted
+            );
         }
         if existing.read_only.is_none() && user.read_only.is_some() {
             existing.read_only = user.read_only;
@@ -1137,6 +1147,80 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_authenticated_fills_server_role_gap() {
+        setup_config(
+            crate::config::PassthroughAuth::Disabled,
+            vec![ConfigUser {
+                name: "alice@example.com".to_string(),
+                database: "db1".to_string(),
+                server_user: Some("service".to_string()),
+                server_password: Some("secret".to_string()),
+                ..Default::default()
+            }],
+        );
+
+        let granted = ConfigUser {
+            name: "alice@example.com".to_string(),
+            database: "db1".to_string(),
+            server_role: Some("alice@example.com".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            add_authenticated(granted)
+                .expect("add_authenticated")
+                .is_ok()
+        );
+
+        let config = crate::config::config();
+        let found = config
+            .users
+            .find(&make_user("alice@example.com", None))
+            .expect("user exists");
+        // The grant filled the missing role; configured credentials stayed.
+        assert_eq!(found.server_role.as_deref(), Some("alice@example.com"));
+        assert_eq!(found.server_user.as_deref(), Some("service"));
+        assert_eq!(found.server_password.as_deref(), Some("secret"));
+
+        // The rebuilt pool impersonates the role via the startup packet.
+        let cluster = databases()
+            .cluster(("alice@example.com", "db1"))
+            .expect("cluster exists");
+        assert_eq!(cluster.server_role(), Some("alice@example.com"));
+    }
+
+    #[tokio::test]
+    async fn test_add_authenticated_keeps_configured_server_role() {
+        setup_config(
+            crate::config::PassthroughAuth::Disabled,
+            vec![ConfigUser {
+                name: "bob".to_string(),
+                database: "db1".to_string(),
+                server_role: Some("analytics".to_string()),
+                ..Default::default()
+            }],
+        );
+
+        let granted = ConfigUser {
+            name: "bob".to_string(),
+            database: "db1".to_string(),
+            server_role: Some("bob".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            add_authenticated(granted)
+                .expect("add_authenticated")
+                .is_ok()
+        );
+
+        let config = crate::config::config();
+        let found = config
+            .users
+            .find(&make_user("bob", None))
+            .expect("user exists");
+        assert_eq!(found.server_role.as_deref(), Some("analytics"));
     }
 
     #[tokio::test]

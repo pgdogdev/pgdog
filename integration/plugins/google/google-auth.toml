@@ -1,6 +1,6 @@
 tokeninfo_url = "http://127.0.0.1:18080/tokeninfo"
 require_tls = false
 require_user_match = true
-allowed_emails = ["alice@example.com"]
+allowed_emails = ["alice@example.com", "dave@example.com", "carol@example.com"]
 allowed_audiences = ["gcloud-client"]
 required_scopes = ["https://www.googleapis.com/auth/cloud-platform"]

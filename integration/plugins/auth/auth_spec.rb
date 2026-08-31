@@ -88,6 +88,14 @@ describe 'authentication plugin' do
     conn.close
   end
 
+  it 'impersonates the derived role on a pre-configured pool' do
+    # `auditor` is configured in users.toml without `server_role`; the grant
+    # must fill it in so queries do not run as the `pgdog` service account.
+    conn = connect('auditor', 'impersonate:auditor')
+    expect(current_user(conn)).to eq('auditor')
+    conn.close
+  end
+
   it 'keeps the impersonated role across connection reuse and cleanup' do
     conn = connect('reporting', 'impersonate:reporting')
 

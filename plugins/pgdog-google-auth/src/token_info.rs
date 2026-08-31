@@ -24,21 +24,51 @@ struct TokenInfo {
     scope: Option<String>,
     expires_in: Option<String>,
     email: Option<String>,
-    #[serde(alias = "email_verified", deserialize_with = "deserialize_str_bool")]
+    #[serde(
+        default,
+        alias = "email_verified",
+        deserialize_with = "deserialize_str_bool"
+    )]
     verified_email: Option<bool>,
 }
 
+/// Google's tokeninfo endpoint stringifies booleans (`"email_verified":
+/// "true"`), while other identity endpoints use real JSON booleans; accept
+/// both. `deserialize_with` disables serde's implicit missing-field handling
+/// for `Option`, hence the explicit `default` on the field above.
 fn deserialize_str_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
-    let s: &str = serde::de::Deserialize::deserialize(deserializer)?;
+    struct StrBool;
 
-    match s {
-        "true" => Ok(Some(true)),
-        "false" => Ok(Some(false)),
-        _ => Err(serde::de::Error::unknown_variant(s, &["true", "false"])),
+    impl serde::de::Visitor<'_> for StrBool {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(r#"a boolean or "true"/"false""#)
+        }
+
+        fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match value {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(E::unknown_variant(value, &["true", "false"])),
+            }
+        }
     }
+
+    deserializer.deserialize_any(StrBool).map(Some)
 }
 
 pub(crate) fn authenticate(
@@ -433,6 +463,26 @@ mod tests {
         assert_eq!(
             validate(&settings(), "alice@example.com", token_info).expect("token should validate"),
             "alice@example.com"
+        );
+    }
+
+    #[test]
+    fn accepts_boolean_and_missing_email_verified() {
+        // Other Google identity endpoints send a real JSON boolean.
+        let token_info: TokenInfo = serde_json::from_str(
+            r#"{"expires_in": "3600", "email": "alice@example.com", "email_verified": true}"#,
+        )
+        .expect("parse boolean email_verified");
+        assert_eq!(token_info.verified_email, Some(true));
+
+        // Tokens without the email scope omit the field entirely.
+        let token_info: TokenInfo =
+            serde_json::from_str(r#"{"expires_in": "3600"}"#).expect("parse missing field");
+        assert_eq!(token_info.verified_email, None);
+
+        assert!(
+            serde_json::from_str::<TokenInfo>(r#"{"expires_in": "3600", "email_verified": "yes"}"#)
+                .is_err()
         );
     }
 
