@@ -79,7 +79,7 @@ impl Variance {
                     return Ok(f64::NAN.into());
                 };
                 Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt)
-                    .as_f64()
+                    .map(|d| d.as_f64())
                     .into())
             }
             // Variance functions only return double or numeric, but sum
@@ -97,7 +97,7 @@ impl Variance {
                     return Ok(f64::NAN.into());
                 };
                 Ok(compute_variance(*sumsq, sum, count, self.sample, self.sqrt)
-                    .as_f64()
+                    .map(|d| d.as_f64())
                     .into())
             }
             // We're manually casting sumsq to be numeric,
@@ -108,7 +108,17 @@ impl Variance {
     }
 }
 
-fn compute_variance(sumsq: Decimal, sum: Decimal, count: i64, sample: bool, sqrt: bool) -> Decimal {
+fn compute_variance(
+    sumsq: Decimal,
+    sum: Decimal,
+    count: i64,
+    sample: bool,
+    sqrt: bool,
+) -> Option<Decimal> {
+    if count <= 1 {
+        return None;
+    }
+
     let sumsq = sumsq.normalize();
     let sum = sum.normalize();
     let count = Decimal::from(count);
@@ -119,7 +129,7 @@ fn compute_variance(sumsq: Decimal, sum: Decimal, count: i64, sample: bool, sqrt
     if sqrt {
         result = result.sqrt().unwrap_or(Decimal::ZERO);
     }
-    result
+    Some(result)
 }
 
 #[test]
@@ -144,4 +154,22 @@ fn test_var_pop() {
         .accumulate(dec!(808).into(), 40f64.into(), 2i64.into())
         .unwrap();
     assert_eq!(Datum::from(20.0f64), state.finalize().unwrap());
+}
+
+#[test]
+fn test_empty_variance() {
+    let mut state = Variance::new(0, 0, 0, false, false);
+    state
+        .accumulate(dec!(0).into(), dec!(0).into(), 0i64.into())
+        .unwrap();
+    assert_eq!(Datum::Null, state.finalize().unwrap());
+}
+
+#[test]
+fn test_single_item_variance() {
+    let mut state = Variance::new(0, 0, 0, false, false);
+    state
+        .accumulate(dec!(1).into(), dec!(1).into(), 1i64.into())
+        .unwrap();
+    assert_eq!(Datum::Null, state.finalize().unwrap());
 }
