@@ -220,4 +220,15 @@ mod tests {
             other => panic!("expected Sasl, got {other:?}"),
         }
     }
+
+    #[test]
+    fn sasl_without_mechanisms_is_unexpected_payload() {
+        let mut payload = Payload::named('R');
+        payload.put_i32(10);
+        payload.put_u8(0);
+        assert!(matches!(
+            Authentication::from_bytes(payload.freeze()),
+            Err(Error::UnexpectedPayload)
+        ));
+    }
 }

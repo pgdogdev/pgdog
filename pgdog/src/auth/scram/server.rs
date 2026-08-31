@@ -488,6 +488,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_plus_without_cbind_refuses() {
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: Authentication::SCRAM_SHA_256_PLUS.to_string(),
+                response: "p=tls-server-end-point,,n=user,r=nonce".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            hashed_server().handle(&mut server_stream),
+        )
+        .await
+        .expect("PLUS without cbind must fail without waiting for a proof")
+        .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn handle_unknown_mechanism_refuses() {
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+        server_stream.set_tls_server_end_point(b"tls-server-end-point-bytes".to_vec());
+
+        client_stream
+            .send_flush(&Password::SASLInitialResponse {
+                name: "SCRAM-SHA-1".to_string(),
+                response: "n,,n=user,r=nonce".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let ok = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            hashed_server().handle(&mut server_stream),
+        )
+        .await
+        .expect("unknown mechanism must fail without waiting for a proof")
+        .expect("handle");
+        assert!(!ok);
+    }
+
+    #[tokio::test]
     async fn handle_rejects_y_when_cbind_present() {
         let (mut server_stream, mut client_stream) = connected_pair().await;
         server_stream.set_tls_server_end_point(b"tls-server-end-point-bytes".to_vec());

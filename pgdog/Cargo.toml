@@ -41,7 +41,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 fnv = "1"
 itoa = "1"
 ryu = "1"
-scram = { git = "https://github.com/abnegate/scram.git", rev = "b641be3932a3e4b24705aa3a6848d4aa0e8d2fa9" }
+scram = { git = "https://github.com/pgdogdev/scram.git", rev = "ee15a47f1051dc79589e8db666be7014c1e23fba" }
 base64 = "0.22"
 md5 = "0.7"
 futures = "0.3"
