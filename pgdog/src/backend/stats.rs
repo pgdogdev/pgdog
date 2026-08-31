@@ -238,6 +238,13 @@ impl Stats {
         self.local.last_checkout.errors += 1;
     }
 
+    /// The client holding this connection was disconnected for exceeding
+    /// `client_idle_in_transaction_timeout`.
+    pub(crate) fn client_idle_xact_timeout(&mut self) {
+        self.local.total.client_idle_xact_timeouts += 1;
+        self.local.last_checkout.client_idle_xact_timeouts += 1;
+    }
+
     /// A query has been completed.
     pub(crate) fn query(&mut self, now: Instant, idle_in_transaction: bool) {
         self.local.total.queries += 1;

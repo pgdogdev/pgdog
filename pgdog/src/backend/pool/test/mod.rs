@@ -351,17 +351,6 @@ async fn test_force_close() {
     assert_eq!(pool.lock().force_close, 1);
 }
 
-#[test]
-fn test_client_idle_xact_timeout_count() {
-    let pool = Pool::new(&PoolConfig {
-        address: Address::new_test(),
-        config: Config::default(),
-    });
-    assert_eq!(pool.state().stats.counts.client_idle_xact_timeouts, 0);
-    pool.client_idle_xact_timeout();
-    assert_eq!(pool.state().stats.counts.client_idle_xact_timeouts, 1);
-}
-
 #[tokio::test]
 async fn test_server_force_close_discards_connection() {
     crate::logger();

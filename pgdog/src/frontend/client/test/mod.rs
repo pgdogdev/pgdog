@@ -344,7 +344,15 @@ async fn test_client_idle_in_transaction_timeout_pool_stat() {
     handle.await.unwrap();
 
     let pools = databases().cluster(("pgdog", "pgdog")).unwrap().shards()[0].pools();
-    assert_eq!(pools[0].state().stats.counts.client_idle_xact_timeouts, 1);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let counts = pools[0].state().stats.counts.client_idle_xact_timeouts;
+        if counts == 1 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "timeout was never checked in");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
