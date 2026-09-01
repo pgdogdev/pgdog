@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 use crate::sharding::ShardedSchema;
@@ -170,6 +171,34 @@ impl ConfigAndUsers {
 
     pub fn pub_sub_enabled(&self) -> bool {
         self.config.general.pub_sub_channel_size > 0
+    }
+
+    /// Resolve `client_idle_timeout` for a connecting user/database pair.
+    ///
+    /// Precedence is user, then database, then general, matching
+    /// [`crate::pool::PoolConfig::resolve`]. `0` at any level means the
+    /// client is exempt from the timeout.
+    pub fn client_idle_timeout(&self, user: &str, database: &str) -> Duration {
+        let millis = self
+            .users
+            .users
+            .iter()
+            .find(|u| u.name == user && u.has_database(database))
+            .and_then(|u| u.client_idle_timeout)
+            .or_else(|| {
+                self.config
+                    .databases
+                    .iter()
+                    .find(|d| d.name == database)
+                    .and_then(|d| d.client_idle_timeout)
+            })
+            .unwrap_or(self.config.general.client_idle_timeout);
+
+        if millis == 0 {
+            Duration::MAX
+        } else {
+            Duration::from_millis(millis)
+        }
     }
 }
 
@@ -782,6 +811,87 @@ mod tests {
         }
 
         assert!(!single.has_database("missing"));
+    }
+
+    #[test]
+    fn client_idle_timeout_falls_back_to_general() {
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_idle_timeout("alice", "production"),
+            Duration::from_millis(60_000)
+        );
+    }
+
+    #[test]
+    fn client_idle_timeout_database_overrides_general() {
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                databases: vec![Database {
+                    name: "production".into(),
+                    client_idle_timeout: Some(0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_idle_timeout("alice", "production"),
+            Duration::MAX
+        );
+    }
+
+    #[test]
+    fn client_idle_timeout_user_overrides_database() {
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                databases: vec![Database {
+                    name: "production".into(),
+                    client_idle_timeout: Some(30_000),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![User {
+                    name: "alice".into(),
+                    database: "production".into(),
+                    client_idle_timeout: Some(0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_idle_timeout("alice", "production"),
+            Duration::MAX
+        );
+        // A different user on the same database isn't exempt.
+        assert_eq!(
+            config.client_idle_timeout("bob", "production"),
+            Duration::from_millis(30_000)
+        );
     }
 
     #[test]

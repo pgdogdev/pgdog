@@ -191,6 +191,12 @@ pub struct Database {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout>
     pub idle_timeout: Option<u64>,
+    /// Overrides the `client_idle_timeout` setting. Client connections to this database that haven't sent any queries for this long will be disconnected.
+    ///
+    /// **Note:** Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#client_idle_timeout>
+    pub client_idle_timeout: Option<u64>,
     /// Sets the `default_transaction_read_only` connection parameter to `on` on all server connections to this database. Clients can still override it with `SET`.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#read_only>

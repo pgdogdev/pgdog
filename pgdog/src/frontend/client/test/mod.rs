@@ -291,6 +291,31 @@ async fn test_client_idle_timeout() {
 }
 
 #[tokio::test]
+async fn test_client_idle_timeout_user_override() {
+    let (conn, mut client, _inner) = new_client!(false);
+
+    let mut config = (*config()).clone();
+    // General timeout is short, but this user is exempt.
+    config.config.general.client_idle_timeout = 25;
+    config.users.add_or_replace(pgdog_config::User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        client_idle_timeout: Some(0),
+        ..Default::default()
+    });
+    set(config).unwrap();
+
+    assert!(
+        timeout(Duration::from_millis(50), client.buffer(State::Idle))
+            .await
+            .is_err(),
+        "user override should exempt this client from the idle timeout"
+    );
+
+    drop(conn);
+}
+
+#[tokio::test]
 async fn test_parse_describe_flush_bind_execute_close_sync() {
     let (mut conn, mut client, _) = new_client!(false);
 

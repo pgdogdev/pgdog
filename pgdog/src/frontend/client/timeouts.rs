@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{config::General, frontend::ClientRequest, state::State};
+use crate::{config::ConfigAndUsers, frontend::ClientRequest, state::State};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Timeouts {
@@ -20,11 +20,11 @@ impl Default for Timeouts {
 }
 
 impl Timeouts {
-    pub(crate) fn from_config(general: &General) -> Self {
+    pub(crate) fn from_config(config: &ConfigAndUsers, user: &str, database: &str) -> Self {
         Self {
-            query_timeout: general.query_timeout(),
-            client_idle_timeout: general.client_idle_timeout(),
-            idle_in_transaction_timeout: general.client_idle_in_transaction_timeout(),
+            query_timeout: config.config.general.query_timeout(),
+            client_idle_timeout: config.client_idle_timeout(user, database),
+            idle_in_transaction_timeout: config.config.general.client_idle_in_transaction_timeout(),
         }
     }
 
@@ -74,7 +74,7 @@ mod test {
     #[test]
     fn test_idle_in_transaction_timeout() {
         let config = config(); // Will be default.
-        let timeout = Timeouts::from_config(&config.config.general);
+        let timeout = Timeouts::from_config(&config, "postgres", "postgres");
 
         let actual =
             timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::default());
@@ -86,5 +86,36 @@ mod test {
             &ClientRequest::from(vec![Query::new("SELECT 1").into()]),
         );
         assert_eq!(actual, Duration::MAX);
+    }
+
+    #[test]
+    fn from_config_uses_per_user_client_idle_timeout_override() {
+        use pgdog_config::{Config, ConfigAndUsers, General, User, Users};
+
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![User {
+                    name: "listener".into(),
+                    database: "pgdog".into(),
+                    client_idle_timeout: Some(0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let timeouts = Timeouts::from_config(&config, "listener", "pgdog");
+        assert_eq!(timeouts.client_idle_timeout, Duration::MAX);
+
+        let timeouts = Timeouts::from_config(&config, "other", "pgdog");
+        assert_eq!(timeouts.client_idle_timeout, Duration::from_millis(60_000));
     }
 }

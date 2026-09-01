@@ -420,7 +420,7 @@ impl Client {
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
-            timeouts: Timeouts::from_config(&config.config.general),
+            timeouts: Timeouts::from_config(&config, user, database),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 config.config.memory.message_buffer,
@@ -448,6 +448,7 @@ impl Client {
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.level = config().config.general.prepared_statements;
+        let (user, database) = user_database_from_params(&params);
 
         Self {
             stream,
@@ -458,7 +459,7 @@ impl Client {
             prepared_statements,
             admin: false,
             transaction: None,
-            timeouts: Timeouts::from_config(&config().config.general),
+            timeouts: Timeouts::from_config(&config(), user, database),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 4096,
@@ -642,7 +643,8 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
-        self.timeouts = Timeouts::from_config(&config.config.general);
+        let (user, database) = user_database_from_params(&self.params);
+        self.timeouts = Timeouts::from_config(&config, user, database);
         self.query_log_stdout = config.config.general.query_log_stdout;
         self.query_size_limit = config.config.general.query_size_limit;
         self.stream_buffer
