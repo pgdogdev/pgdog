@@ -188,13 +188,13 @@ impl ConfigAndUsers {
             self.users
                 .users
                 .iter()
+                .rev()
                 .filter(|u| u.name == user && u.has_database(database))
                 // Overrides resolve per-setting: the last matching entry that
                 // configures the setting wins. Entries without the setting
                 // (including bare entries appended by passthrough auth) fall
                 // back to earlier matching entries rather than erasing them.
-                .filter_map(|u| u.client_idle_timeout)
-                .last()
+                .find_map(|u| u.client_idle_timeout)
                 .or_else(|| self.config.database_client_idle_timeout(database))
                 .unwrap_or(self.config.general.client_idle_timeout)
         };
@@ -988,6 +988,7 @@ mod tests {
     fn client_idle_timeout_ignores_overrides_for_admin_database() {
         // The admin database is virtual and never part of pool construction;
         // a wildcard user override must not leak onto admin console sessions.
+        let admin = Admin::default();
         let config = ConfigAndUsers {
             config: Config {
                 general: General {
@@ -998,7 +999,7 @@ mod tests {
             },
             users: Users {
                 users: vec![User {
-                    name: config_admin_user(),
+                    name: admin.user.clone(),
                     all_databases: true,
                     client_idle_timeout: Some(0),
                     ..Default::default()
@@ -1008,21 +1009,15 @@ mod tests {
             ..Default::default()
         };
 
-        let admin_user = config.config.admin.user.clone();
-        let admin_database = config.config.admin.name.clone();
         assert_eq!(
-            config.client_idle_timeout(&admin_user, &admin_database),
+            config.client_idle_timeout(&admin.user, &admin.name),
             Duration::from_millis(60_000)
         );
         // The same user connecting to a regular database keeps the override.
         assert_eq!(
-            config.client_idle_timeout(&admin_user, "production"),
+            config.client_idle_timeout(&admin.user, "production"),
             Duration::MAX
         );
-    }
-
-    fn config_admin_user() -> String {
-        ConfigAndUsers::default().config.admin.user
     }
 
     #[test]
