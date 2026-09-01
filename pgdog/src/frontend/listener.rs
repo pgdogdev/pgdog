@@ -10,6 +10,7 @@ use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
 use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
+use crate::stats::logins::LoginTimer;
 use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
 use tokio::signal::ctrl_c;
 use tokio::{select, spawn};
@@ -204,6 +205,7 @@ impl Listener {
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
         let tls = acceptor();
+        let mut login_timer = LoginTimer::new();
 
         loop {
             let startup = match Startup::from_stream(&mut stream).await {
@@ -222,6 +224,7 @@ impl Listener {
 
             match startup {
                 Startup::Ssl => {
+                    login_timer.engage();
                     if let Some(tls) = tls.as_ref() {
                         stream.send_flush(&SslReply::Yes).await?;
                         let plain = stream.take()?;
@@ -248,6 +251,7 @@ impl Listener {
                 }
 
                 Startup::GssEnc => {
+                    login_timer.engage();
                     // GSS encryption is not yet supported; reject and wait for a normal startup.
                     stream.send_flush(&SslReply::No).await?;
                 }
@@ -257,6 +261,7 @@ impl Listener {
                     params,
                     unrecognized_options,
                 } => {
+                    login_timer.engage();
                     let negotiated = version
                         .negotiated()
                         .ok_or_else(|| net::Error::UnsupportedStartup(version.as_i32()))?;
@@ -273,11 +278,20 @@ impl Listener {
                             .await?;
                     }
 
-                    Box::pin(Client::spawn(stream, params, addr, config, negotiated)).await?;
+                    Box::pin(Client::spawn(
+                        stream,
+                        params,
+                        addr,
+                        config,
+                        negotiated,
+                        login_timer,
+                    ))
+                    .await?;
                     break;
                 }
 
                 Startup::Cancel { ref id } => {
+                    login_timer.disarm();
                     if comms().verify_cancel(id) {
                         let _ = databases().cancel(FrontendPid::from(id)).await;
                     }
