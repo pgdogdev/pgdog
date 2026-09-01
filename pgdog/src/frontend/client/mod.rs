@@ -650,10 +650,10 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
-        let timeouts_current = self
-            .timeouts_config
-            .upgrade()
-            .is_some_and(|previous| Arc::ptr_eq(&previous, &config));
+        // Our own weak handle keeps the old allocation from being freed and
+        // reused, so pointer equality can't suffer ABA and no refcount
+        // traffic (`Weak::upgrade`) is needed on this hot path.
+        let timeouts_current = std::ptr::eq(self.timeouts_config.as_ptr(), Arc::as_ptr(&config));
         if !timeouts_current {
             let (user, database) = user_database_from_params(&self.params);
             self.timeouts = Timeouts::from_config(&config, user, database);

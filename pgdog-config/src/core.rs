@@ -179,26 +179,25 @@ impl ConfigAndUsers {
     /// [`crate::pool::PoolConfig::resolve`]. `0` at any level means the
     /// client is exempt from the timeout.
     pub fn client_idle_timeout(&self, user: &str, database: &str) -> Duration {
-        let millis = self
-            .users
-            .users
-            .iter()
-            .rev()
-            // Pool construction inserts users in configuration order, so the
-            // last matching entry is the effective one for this pair.
-            .find(|u| u.name == user && u.has_database(database))
-            .and_then(|u| u.client_idle_timeout)
-            .or_else(|| {
-                // A logical database can have several entries (shards and
-                // replicas). Use the first configured override rather than
-                // requiring it to be on the first physical server entry.
-                self.config
-                    .databases
-                    .iter()
-                    .filter(|d| d.name == database)
-                    .find_map(|d| d.client_idle_timeout)
-            })
-            .unwrap_or(self.config.general.client_idle_timeout);
+        // The admin database is virtual and never part of pool construction;
+        // user and database overrides don't apply to it.
+        let admin = &self.config.admin;
+        let millis = if user == admin.user && database == admin.name {
+            self.config.general.client_idle_timeout
+        } else {
+            self.users
+                .users
+                .iter()
+                .filter(|u| u.name == user && u.has_database(database))
+                // Overrides resolve per-setting: the last matching entry that
+                // configures the setting wins. Entries without the setting
+                // (including bare entries appended by passthrough auth) fall
+                // back to earlier matching entries rather than erasing them.
+                .filter_map(|u| u.client_idle_timeout)
+                .last()
+                .or_else(|| self.config.database_client_idle_timeout(database))
+                .unwrap_or(self.config.general.client_idle_timeout)
+        };
 
         if millis == 0 {
             Duration::MAX
@@ -368,6 +367,18 @@ impl Config {
         }
     }
 
+    /// Effective `client_idle_timeout` override for a logical database.
+    ///
+    /// A logical database can have several entries (shards and replicas); the
+    /// first configured override wins, so it doesn't have to be on the first
+    /// physical server entry. [`Config::check`] warns about conflicting values.
+    pub fn database_client_idle_timeout(&self, name: &str) -> Option<u64> {
+        self.databases
+            .iter()
+            .filter(|d| d.name == name)
+            .find_map(|d| d.client_idle_timeout)
+    }
+
     pub fn omnisharded_tables(&self) -> HashMap<String, Vec<OmnishardedTable>> {
         let mut tables = HashMap::new();
 
@@ -524,16 +535,15 @@ impl Config {
                     );
                 }
                 if let Some(client_idle_timeout) = database.client_idle_timeout {
-                    if existing
-                        .client_idle_timeout
-                        .is_some_and(|existing| existing != client_idle_timeout)
-                    {
-                        warn!(
-                            "database \"{}\" (shard={}, role={}) has a conflicting \"client_idle_timeout\" setting, using the first configured value",
-                            database.name, database.shard, database.role,
-                        );
-                    } else if existing.client_idle_timeout.is_none() {
-                        existing.client_idle_timeout = Some(client_idle_timeout);
+                    match existing.client_idle_timeout {
+                        Some(first) if first != client_idle_timeout => {
+                            warn!(
+                                "database \"{}\" (shard={}, role={}) has a conflicting \"client_idle_timeout\" setting, using the first configured value",
+                                database.name, database.shard, database.role,
+                            );
+                        }
+                        Some(_) => {}
+                        None => existing.client_idle_timeout = Some(client_idle_timeout),
                     }
                 }
                 let auto = existing.role == Role::Auto || database.role == Role::Auto;
@@ -932,6 +942,87 @@ mod tests {
             config.client_idle_timeout("bob", "production"),
             Duration::from_millis(30_000)
         );
+    }
+
+    #[test]
+    fn client_idle_timeout_survives_later_entry_without_override() {
+        // A later matching entry that doesn't configure the setting must not
+        // erase an earlier matching override. Passthrough auth appends bare
+        // entries (name + database + password only) at the end of the list,
+        // which would otherwise shadow a wildcard exemption.
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![
+                    User {
+                        name: "listener".into(),
+                        all_databases: true,
+                        client_idle_timeout: Some(0),
+                        ..Default::default()
+                    },
+                    // Bare entry appended by passthrough auth on first login.
+                    User {
+                        name: "listener".into(),
+                        database: "production".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_idle_timeout("listener", "production"),
+            Duration::MAX
+        );
+    }
+
+    #[test]
+    fn client_idle_timeout_ignores_overrides_for_admin_database() {
+        // The admin database is virtual and never part of pool construction;
+        // a wildcard user override must not leak onto admin console sessions.
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![User {
+                    name: config_admin_user(),
+                    all_databases: true,
+                    client_idle_timeout: Some(0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let admin_user = config.config.admin.user.clone();
+        let admin_database = config.config.admin.name.clone();
+        assert_eq!(
+            config.client_idle_timeout(&admin_user, &admin_database),
+            Duration::from_millis(60_000)
+        );
+        // The same user connecting to a regular database keeps the override.
+        assert_eq!(
+            config.client_idle_timeout(&admin_user, "production"),
+            Duration::MAX
+        );
+    }
+
+    fn config_admin_user() -> String {
+        ConfigAndUsers::default().config.admin.user
     }
 
     #[test]

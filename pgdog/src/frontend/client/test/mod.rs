@@ -294,7 +294,8 @@ async fn test_client_idle_timeout() {
 #[tokio::test]
 async fn test_client_idle_timeout_user_override() {
     crate::logger();
-    let (conn, mut client) = parallel_test_client().await;
+    // Keep `_conn` alive so the client's stream stays open while idle.
+    let (_conn, mut client) = parallel_test_client().await;
 
     let mut config = (*config()).clone();
     // General timeout is short, but this user is exempt.
@@ -314,8 +315,6 @@ async fn test_client_idle_timeout_user_override() {
             .is_err(),
         "user override should exempt this client from the idle timeout"
     );
-
-    drop(conn);
 }
 
 #[tokio::test]
