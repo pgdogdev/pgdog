@@ -730,7 +730,7 @@
           "minimum": 0
         },
         "client_idle_timeout": {
-          "description": "Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>",
+          "description": "Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.\n\n**Note:** Set to `0` to disable the client idle timeout entirely. Can be overridden per-user or per-database.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>",
           "type": "integer",
           "format": "uint64",
           "default": 9223372036854775807,

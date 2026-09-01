@@ -517,6 +517,8 @@ pub struct General {
 
     /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
     ///
+    /// **Note:** Set to `0` to disable the client idle timeout entirely. Can be overridden per-user or per-database.
+    ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
