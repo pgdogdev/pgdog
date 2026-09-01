@@ -418,7 +418,7 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber = CopySubscriber::new(&copy, &cluster, &cluster).unwrap();
+        let mut subscriber = CopySubscriber::new(&copy, &Cluster::default(), &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::default().to_bytes());
