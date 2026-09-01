@@ -248,22 +248,13 @@ impl OpenMetric for LoginDuration {
         let mut cumulative = 0u64;
         for (bound, count) in BUCKETS_MS.iter().zip(&self.buckets) {
             cumulative += count;
-            writeln!(
-                f,
-                "{}{}_bucket{{le=\"{}\"}} {}",
-                prefix, name, bound, cumulative
-            )?;
+            writeln!(f, "{prefix}{name}_bucket{{le=\"{bound}\"}} {cumulative}")?;
         }
         let total = cumulative + self.overflow;
-        writeln!(f, "{}{}_bucket{{le=\"+Inf\"}} {}", prefix, name, total)?;
-        writeln!(
-            f,
-            "{}{}_sum {:.3}",
-            prefix,
-            name,
-            self.sum_micros as f64 / 1_000.0
-        )?;
-        writeln!(f, "{}{}_count {}", prefix, name, total)?;
+        let sum_ms = self.sum_micros as f64 / 1_000.0;
+        writeln!(f, "{prefix}{name}_bucket{{le=\"+Inf\"}} {total}")?;
+        writeln!(f, "{prefix}{name}_sum {sum_ms:.3}")?;
+        writeln!(f, "{prefix}{name}_count {total}")?;
         Ok(())
     }
 }
