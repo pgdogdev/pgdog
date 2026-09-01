@@ -40,6 +40,7 @@ pub(crate) struct ParallelConnection {
     rx: Receiver<ParallelReply>,
     stop: CancellationToken,
     address: Address,
+    shard: usize,
 }
 
 impl ParallelConnection {
@@ -78,7 +79,7 @@ impl ParallelConnection {
     }
 
     // Move server connection into its own Tokio task.
-    pub(crate) fn new(server: Server) -> Result<Self, Error> {
+    pub(crate) fn new(server: Server, shard: usize) -> Result<Self, Error> {
         // Ideally we don't hardcode these. PgDog
         // can use a lot of memory if this is high.
         let (tx1, rx1) = channel(4096);
@@ -104,6 +105,7 @@ impl ParallelConnection {
             tx: tx1,
             rx: rx2,
             stop,
+            shard,
         })
     }
 
@@ -116,6 +118,11 @@ impl ParallelConnection {
             ParallelReply::Server(server) => Ok(*server),
             _ => Err(Error::ParallelConnection),
         }
+    }
+
+    /// Get the shard number this connection is connected to.
+    pub(super) fn shard_number(&self) -> usize {
+        self.shard
     }
 }
 
@@ -211,7 +218,7 @@ mod test {
     #[tokio::test]
     async fn test_parallel_connection() {
         let server = test_server().await;
-        let mut parallel = ParallelConnection::new(server).unwrap();
+        let mut parallel = ParallelConnection::new(server, 0).unwrap();
 
         parallel
             .send_one(&Parse::named("test", "SELECT $1::bigint").into())

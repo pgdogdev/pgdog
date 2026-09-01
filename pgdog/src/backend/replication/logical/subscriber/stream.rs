@@ -18,14 +18,12 @@ use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_
 use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
-use super::PipelinedConnection;
-use super::StreamContext;
 use super::omni_ownership::OmniOwnership;
+use super::{OverlappingShardsCheck, PipelinedConnection, StreamContext};
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
     backend::{Cluster, ConnectReason, Server},
-    config::Role,
     frontend::router::parser::Shard,
     net::{
         Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
@@ -94,8 +92,11 @@ impl Statement {
 
 #[derive(Debug)]
 pub(crate) struct StreamSubscriber {
+    /// Source cluster.
+    source: Cluster,
+
     /// Destination cluster.
-    cluster: Cluster,
+    dest: Cluster,
 
     // Relation markers sent by the publisher.
     // Happens once per connection.
@@ -136,10 +137,16 @@ pub(crate) struct StreamSubscriber {
 }
 
 impl StreamSubscriber {
-    pub(crate) fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
-        let cluster = cluster.logical_stream();
+    pub(crate) fn new(
+        source: &Cluster,
+        dest: &Cluster,
+        tables: &[Table],
+        partition: OmniOwnership,
+    ) -> Self {
+        let dest = dest.with_replication_settings_override();
         Self {
-            cluster,
+            source: source.clone(),
+            dest,
             relations: HashMap::new(),
             statements: HashMap::new(),
             table_lsns: HashMap::new(),
@@ -167,31 +174,34 @@ impl StreamSubscriber {
         }
     }
 
-    // Connect to all the shards.
-    //
-    // The transaction-control prepare and the omni FULL-identity validation run
-    // synchronously on the raw `Server` connections (both are one-shot,
-    // request/response query flows). Only once they succeed are the connections
-    // moved into their per-shard pipelined tasks for the streaming apply path.
+    // Connect to all shards.
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
-        let mut conns: Vec<Server> = vec![];
+        let mut conns = vec![];
+        let overlap_check = OverlappingShardsCheck::new(&self.source);
 
-        for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(r, _)| r == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Replication)
-                .await?;
-            conns.push(primary);
+        let dest_shards = self.dest.shards();
+
+        if dest_shards.is_empty() {
+            return Err(Error::DestinationNoShards);
+        }
+
+        for (shard_number, shard) in self.dest.shards().iter().enumerate() {
+            if overlap_check.overlaps(shard)? {
+                continue;
+            }
+
+            let primary = shard.primary_standalone(ConnectReason::Replication).await?;
+            conns.push((shard_number, primary));
+        }
+
+        if conns.is_empty() {
+            return Err(Error::SourceDestinationIdentical);
         }
 
         // Transaction control statements.
         //
         // TODO: Figure out if we need to use them?
-        for server in &mut conns {
+        for (_, server) in &mut conns {
             let begin = Parse::named("__pgdog_repl_begin", "BEGIN");
             let commit = Parse::named("__pgdog_repl_commit", "COMMIT");
 
@@ -217,20 +227,24 @@ impl StreamSubscriber {
         let omni_full: Vec<Table> = self
             .tables
             .values()
-            .filter(|t| {
-                t.is_identity_full() && !t.is_sharded(&self.cluster.sharding_schema().tables)
-            })
+            .filter(|t| t.is_identity_full() && !t.is_sharded(&self.dest.sharding_schema().tables))
             .cloned()
             .collect();
         if !omni_full.is_empty() {
-            self.validate_full_identity_omni_has_unique_index(&mut conns, &omni_full)
-                .await?;
+            self.validate_full_identity_omni_has_unique_index(
+                &mut conns
+                    .iter_mut()
+                    .map(|(_, server)| server)
+                    .collect::<Vec<_>>(),
+                &omni_full,
+            )
+            .await?;
         }
 
         // Hand each connection to its background pipelining task.
         self.connections = conns
             .into_iter()
-            .map(PipelinedConnection::new)
+            .map(|(number, server)| PipelinedConnection::new(server, number))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
@@ -254,7 +268,12 @@ impl StreamSubscriber {
         // hands the `Bind` over without cloning it, and multi-target
         // writes clone once per extra target.
         let mut pending: Option<usize> = None;
-        for shard in 0..n_conns {
+        for (idx, shard) in self
+            .connections
+            .iter()
+            .enumerate()
+            .map(|(idx, conn)| (idx, conn.shard_number()))
+        {
             let target = match val {
                 // With a single destination shard the router collapses Shard::All
                 // to Direct(0), bypassing the partition ownership check.  Apply
@@ -267,7 +286,7 @@ impl StreamSubscriber {
             if !target {
                 continue;
             }
-            if let Some(previous) = pending.replace(shard) {
+            if let Some(previous) = pending.replace(idx) {
                 self.connections[previous]
                     .execute(bind.clone(), is_direct)
                     .await?;
@@ -295,7 +314,7 @@ impl StreamSubscriber {
             } else {
                 statements.insert.parse()
             };
-            let ctx = StreamContext::new(&self.cluster, &insert.tuple_data, parse).await?;
+            let ctx = StreamContext::new(&self.dest, &insert.tuple_data, parse).await?;
             {
                 let (shard, bind) = ctx.into_parts();
                 self.send(&shard, bind).await?;
@@ -389,7 +408,7 @@ impl StreamSubscriber {
             .update
             .parse()
             .clone();
-        let ctx = StreamContext::new(&self.cluster, new, &parse).await?;
+        let ctx = StreamContext::new(&self.dest, new, &parse).await?;
         {
             let (shard, bind) = ctx.into_parts();
             self.send(&shard, bind).await?;
@@ -416,7 +435,7 @@ impl StreamSubscriber {
         let shape_stmt = self
             .ensure_update_shape_for(oid, &table, &present, false)
             .await?;
-        let ctx = StreamContext::new(&self.cluster, &partial_new, shape_stmt.parse()).await?;
+        let ctx = StreamContext::new(&self.dest, &partial_new, shape_stmt.parse()).await?;
         {
             let (shard, bind) = ctx.into_parts();
             self.send(&shard, bind).await?;
@@ -472,7 +491,7 @@ impl StreamSubscriber {
     /// Route a tuple to its shard without constructing a `Bind`.
     /// Used when the bind merges multiple tuples (FULL identity UPDATE/DELETE).
     async fn shard_for(&self, tuple: &TupleData, parse: &Parse) -> Result<Shard, Error> {
-        Ok(StreamContext::new(&self.cluster, tuple, parse)
+        Ok(StreamContext::new(&self.dest, tuple, parse)
             .await?
             .shard()
             .clone())
@@ -723,7 +742,7 @@ impl StreamSubscriber {
 
                 debug!("queries for table {} already prepared", dest_key);
             } else {
-                let omni = !table.is_sharded(&self.cluster.sharding_schema().tables);
+                let omni = !table.is_sharded(&self.dest.sharding_schema().tables);
 
                 let statements = if table.is_identity_full() {
                     // ── FULL identity path ──────────────────────────────────────────────
@@ -932,7 +951,7 @@ impl StreamSubscriber {
     /// the complete set of missing indexes across the cluster in a single error.
     async fn validate_full_identity_omni_has_unique_index(
         &self,
-        servers: &mut [Server],
+        servers: &mut [&mut Server],
         tables: &[Table],
     ) -> Result<(), Error> {
         // Fan out to all shards concurrently; each gets one IN-list query.
@@ -1028,7 +1047,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], OmniOwnership::test())
+        StreamSubscriber::new(&Cluster::default(), &cluster, &[], OmniOwnership::test())
     }
 
     #[test]
