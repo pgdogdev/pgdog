@@ -639,6 +639,9 @@ impl Server {
                 let error = ErrorResponse::from_bytes(message.to_bytes())?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
+                if error.code == "25P03" {
+                    self.stats.idle_xact_timeout();
+                }
 
                 // Non-recoverable, Postgres is about to close the connection,
                 // by no fault of ours or theirs.
@@ -3060,6 +3063,23 @@ pub(crate) mod test {
             server.stats().total().idle_in_transaction_time,
             final_idle_time,
         );
+    }
+
+    #[tokio::test]
+    async fn test_idle_in_transaction_timeout_count() {
+        let mut server = test_server().await;
+
+        server
+            .execute("SET idle_in_transaction_session_timeout TO 50")
+            .await
+            .unwrap();
+        server.execute("BEGIN").await.unwrap();
+        server.execute("SELECT 1").await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(server.read().await.is_err());
+        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
+        assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 
     #[tokio::test]
