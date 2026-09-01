@@ -241,6 +241,7 @@ impl Listener {
                             config.config.memory.net_buffer,
                             tls_identity,
                             tls_client_certificate,
+                            tls.server_end_point().map(|data| data.to_vec()),
                         );
                     } else {
                         stream.send_flush(&SslReply::No).await?;
