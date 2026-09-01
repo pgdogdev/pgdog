@@ -404,6 +404,15 @@
       "description": "Database settings configure which databases PgDog is managing. This is a TOML list of hosts, ports, and other settings like database roles (primary or replica).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/>",
       "type": "object",
       "properties": {
+        "client_idle_timeout": {
+          "description": "Overrides the `client_idle_timeout` setting. Client connections to this database that haven't sent any queries for this long will be disconnected.\n\n**Note:** Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#client_idle_timeout>",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "database_name": {
           "description": "Name of the PostgreSQL database on the server PgDog will connect to. If not set, this defaults to `name`.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#database_name>",
           "type": [

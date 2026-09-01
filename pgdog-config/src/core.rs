@@ -183,14 +183,20 @@ impl ConfigAndUsers {
             .users
             .users
             .iter()
+            .rev()
+            // Pool construction inserts users in configuration order, so the
+            // last matching entry is the effective one for this pair.
             .find(|u| u.name == user && u.has_database(database))
             .and_then(|u| u.client_idle_timeout)
             .or_else(|| {
+                // A logical database can have several entries (shards and
+                // replicas). Use the first configured override rather than
+                // requiring it to be on the first physical server entry.
                 self.config
                     .databases
                     .iter()
-                    .find(|d| d.name == database)
-                    .and_then(|d| d.client_idle_timeout)
+                    .filter(|d| d.name == database)
+                    .find_map(|d| d.client_idle_timeout)
             })
             .unwrap_or(self.config.general.client_idle_timeout);
 
@@ -496,6 +502,7 @@ impl Config {
 
         struct Check {
             pooler_mode: Option<PoolerMode>,
+            client_idle_timeout: Option<u64>,
             role: Role,
             role_warned: bool,
             parser_warned: bool,
@@ -515,6 +522,19 @@ impl Config {
                         "database \"{}\" (shard={}, role={}) has a different \"pooler_mode\" setting, ignoring",
                         database.name, database.shard, database.role,
                     );
+                }
+                if let Some(client_idle_timeout) = database.client_idle_timeout {
+                    if existing
+                        .client_idle_timeout
+                        .is_some_and(|existing| existing != client_idle_timeout)
+                    {
+                        warn!(
+                            "database \"{}\" (shard={}, role={}) has a conflicting \"client_idle_timeout\" setting, using the first configured value",
+                            database.name, database.shard, database.role,
+                        );
+                    } else if existing.client_idle_timeout.is_none() {
+                        existing.client_idle_timeout = Some(client_idle_timeout);
+                    }
                 }
                 let auto = existing.role == Role::Auto || database.role == Role::Auto;
                 if auto && existing.role != database.role && !existing.role_warned {
@@ -552,6 +572,7 @@ impl Config {
                     database.name.clone(),
                     Check {
                         pooler_mode: database.pooler_mode,
+                        client_idle_timeout: database.client_idle_timeout,
                         role: database.role,
                         role_warned: false,
                         parser_warned: false,
@@ -840,11 +861,17 @@ mod tests {
                     client_idle_timeout: 60_000,
                     ..Default::default()
                 },
-                databases: vec![Database {
-                    name: "production".into(),
-                    client_idle_timeout: Some(0),
-                    ..Default::default()
-                }],
+                databases: vec![
+                    Database {
+                        name: "production".into(),
+                        ..Default::default()
+                    },
+                    Database {
+                        name: "production".into(),
+                        client_idle_timeout: Some(0),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             },
             ..Default::default()
@@ -872,12 +899,20 @@ mod tests {
                 ..Default::default()
             },
             users: Users {
-                users: vec![User {
-                    name: "alice".into(),
-                    database: "production".into(),
-                    client_idle_timeout: Some(0),
-                    ..Default::default()
-                }],
+                users: vec![
+                    User {
+                        name: "alice".into(),
+                        all_databases: true,
+                        client_idle_timeout: Some(45_000),
+                        ..Default::default()
+                    },
+                    User {
+                        name: "alice".into(),
+                        database: "production".into(),
+                        client_idle_timeout: Some(0),
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             },
             ..Default::default()
@@ -886,6 +921,11 @@ mod tests {
         assert_eq!(
             config.client_idle_timeout("alice", "production"),
             Duration::MAX
+        );
+        // The earlier wildcard entry still applies where it is the effective user.
+        assert_eq!(
+            config.client_idle_timeout("alice", "other"),
+            Duration::from_millis(45_000)
         );
         // A different user on the same database isn't exempt.
         assert_eq!(
