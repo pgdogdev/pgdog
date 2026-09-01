@@ -265,7 +265,8 @@ async fn test_abrupt_disconnect() {
 
 #[tokio::test]
 async fn test_client_idle_timeout() {
-    let (mut conn, mut client, _inner) = new_client!(false);
+    crate::logger();
+    let (mut conn, mut client) = parallel_test_client().await;
 
     let mut config = (*config()).clone();
     config.config.general.client_idle_timeout = 25;
@@ -292,7 +293,8 @@ async fn test_client_idle_timeout() {
 
 #[tokio::test]
 async fn test_client_idle_timeout_user_override() {
-    let (conn, mut client, _inner) = new_client!(false);
+    crate::logger();
+    let (conn, mut client) = parallel_test_client().await;
 
     let mut config = (*config()).clone();
     // General timeout is short, but this user is exempt.
@@ -300,6 +302,7 @@ async fn test_client_idle_timeout_user_override() {
     config.users.add_or_replace(pgdog_config::User {
         name: "pgdog".into(),
         database: "pgdog".into(),
+        password: Some("pgdog".into()),
         client_idle_timeout: Some(0),
         ..Default::default()
     });
