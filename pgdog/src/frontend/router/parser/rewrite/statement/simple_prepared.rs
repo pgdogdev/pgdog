@@ -179,7 +179,6 @@ mod tests {
             let stmt = pg_raw_parse::parse(sql)?;
             let mut rewrite = StatementRewrite::new(StatementRewriteContext {
                 extended: false,
-                prepared: false,
                 prepared_statements: &mut self.ps,
                 schema: &self.schema,
                 db_schema: &self.db_schema,

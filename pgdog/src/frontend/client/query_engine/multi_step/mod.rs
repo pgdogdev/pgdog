@@ -1,14 +1,9 @@
-pub(crate) mod error;
+pub mod error;
 pub(crate) mod forward_check;
 pub(crate) mod insert;
-pub(crate) mod state;
-pub(crate) mod update;
-
-pub(crate) use error::{Error, UpdateError};
-pub(crate) use forward_check::*;
-pub(crate) use insert::InsertMulti;
-pub(crate) use state::{CommandType, MultiServerState};
-pub(crate) use update::UpdateMulti;
-
+pub mod normal;
+pub mod shared;
 #[cfg(test)]
 mod test;
+pub mod types;
+pub mod update;

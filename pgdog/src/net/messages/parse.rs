@@ -145,7 +145,6 @@ impl Parse {
         rewritten
     }
 
-    #[cfg(test)]
     pub(crate) fn with_data_types(&self, data_types: &[u32]) -> Self {
         let mut bytes = BytesMut::new();
         bytes.put_u16(data_types.len() as _);

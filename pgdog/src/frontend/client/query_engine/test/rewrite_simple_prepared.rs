@@ -10,7 +10,8 @@ async fn run_test(client: &mut Client, messages: &[ProtocolMessage]) -> Vec<Prot
     let mut engine = QueryEngine::from_client(client).unwrap();
     let mut context = QueryEngineContext::new(client);
 
-    assert!(engine.parse_and_rewrite(&mut context).unwrap().is_some());
+    engine.parse_and_rewrite(&mut context).await.unwrap();
+    assert!(context.client_request.ast.is_some());
 
     client.client_request.messages.clone()
 }
