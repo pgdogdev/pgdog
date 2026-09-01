@@ -44,8 +44,8 @@ pub struct Counts {
     pub bind_count: usize,
     /// Number of times the pool had to rollback unfinished transactions.
     pub rollbacks: usize,
-    /// Clients disconnected for exceeding `client_idle_in_transaction_timeout`.
-    pub client_idle_xact_timeouts: usize,
+    /// Server connections terminated by Postgres with SQLSTATE `25P03`.
+    pub idle_xact_timeouts: usize,
     /// Number of times the pool sent the health check query.
     pub healthchecks: usize,
     /// Total count of Close messages sent to server connections.
@@ -95,9 +95,9 @@ impl Sub for Counts {
             parse_count: self.parse_count.saturating_sub(rhs.parse_count),
             bind_count: self.bind_count.saturating_sub(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
-            client_idle_xact_timeouts: self
-                .client_idle_xact_timeouts
-                .saturating_sub(rhs.client_idle_xact_timeouts),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_sub(rhs.idle_xact_timeouts),
             healthchecks: self.healthchecks.saturating_sub(rhs.healthchecks),
             close: self.close.saturating_sub(rhs.close),
             errors: self.errors.saturating_sub(rhs.errors),
@@ -135,9 +135,9 @@ impl Add for Counts {
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
             bind_count: self.bind_count.saturating_add(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
-            client_idle_xact_timeouts: self
-                .client_idle_xact_timeouts
-                .saturating_add(rhs.client_idle_xact_timeouts),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_add(rhs.idle_xact_timeouts),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
             errors: self.errors.saturating_add(rhs.errors),
@@ -176,7 +176,7 @@ impl Div<usize> for Counts {
             parse_count: self.parse_count.checked_div(rhs).unwrap_or(0),
             bind_count: self.bind_count.checked_div(rhs).unwrap_or(0),
             rollbacks: self.rollbacks.checked_div(rhs).unwrap_or(0),
-            client_idle_xact_timeouts: self.client_idle_xact_timeouts.checked_div(rhs).unwrap_or(0),
+            idle_xact_timeouts: self.idle_xact_timeouts.checked_div(rhs).unwrap_or(0),
             healthchecks: self.healthchecks.checked_div(rhs).unwrap_or(0),
             close: self.close.checked_div(rhs).unwrap_or(0),
             errors: self.errors.checked_div(rhs).unwrap_or(0),

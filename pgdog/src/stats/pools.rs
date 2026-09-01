@@ -76,8 +76,8 @@ impl Pools {
         let mut avg_cleaned = vec![];
         let mut total_rollbacks = vec![];
         let mut avg_rollbacks = vec![];
-        let mut total_client_idle_xact_timeouts = vec![];
-        let mut avg_client_idle_xact_timeouts = vec![];
+        let mut total_idle_xact_timeouts = vec![];
+        let mut avg_idle_xact_timeouts = vec![];
         let mut total_connect_time = vec![];
         let mut avg_connect_time = vec![];
         let mut total_connect_count = vec![];
@@ -275,14 +275,14 @@ impl Pools {
                         measurement: averages.rollbacks.into(),
                     });
 
-                    total_client_idle_xact_timeouts.push(Measurement {
+                    total_idle_xact_timeouts.push(Measurement {
                         labels: labels.clone(),
-                        measurement: totals.client_idle_xact_timeouts.into(),
+                        measurement: totals.idle_xact_timeouts.into(),
                     });
 
-                    avg_client_idle_xact_timeouts.push(Measurement {
+                    avg_idle_xact_timeouts.push(Measurement {
                         labels: labels.clone(),
-                        measurement: averages.client_idle_xact_timeouts.into(),
+                        measurement: averages.idle_xact_timeouts.into(),
                     });
 
                     total_connect_time.push(Measurement {
@@ -661,18 +661,18 @@ impl Pools {
         }));
 
         metrics.push(Metric::new(PoolMetric {
-            name: "total_client_idle_xact_timeouts".into(),
-            measurements: total_client_idle_xact_timeouts,
-            help: "Total number of clients disconnected for exceeding client_idle_in_transaction_timeout."
+            name: "total_idle_xact_timeouts".into(),
+            measurements: total_idle_xact_timeouts,
+            help: "Total number of server connections terminated by Postgres with idle-in-transaction session timeout (25P03)."
                 .into(),
             unit: None,
             metric_type: Some("counter".into()),
         }));
 
         metrics.push(Metric::new(PoolMetric {
-            name: "avg_client_idle_xact_timeouts".into(),
-            measurements: avg_client_idle_xact_timeouts,
-            help: "Average number of clients disconnected for exceeding client_idle_in_transaction_timeout."
+            name: "avg_idle_xact_timeouts".into(),
+            measurements: avg_idle_xact_timeouts,
+            help: "Average number of server connections terminated by Postgres with idle-in-transaction session timeout (25P03)."
                 .into(),
             unit: None,
             metric_type: None,

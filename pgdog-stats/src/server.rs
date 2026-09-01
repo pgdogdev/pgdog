@@ -17,7 +17,7 @@ pub struct Counts {
     pub queries: usize,
     pub rollbacks: usize,
     pub errors: usize,
-    pub client_idle_xact_timeouts: usize,
+    pub idle_xact_timeouts: usize,
     pub prepared_statements: usize,
     pub query_time: Duration,
     pub transaction_time: Duration,
@@ -51,8 +51,7 @@ impl Add<Counts> for PoolCounts {
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.bind_count + rhs.bind,
             rollbacks: self.rollbacks + rhs.rollbacks,
-            client_idle_xact_timeouts: self.client_idle_xact_timeouts
-                + rhs.client_idle_xact_timeouts,
+            idle_xact_timeouts: self.idle_xact_timeouts + rhs.idle_xact_timeouts,
             healthchecks: self.healthchecks + rhs.healthchecks,
             close: self.close + rhs.close,
             errors: self.errors + rhs.errors,
@@ -83,9 +82,9 @@ impl Add for Counts {
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
-            client_idle_xact_timeouts: self
-                .client_idle_xact_timeouts
-                .saturating_add(rhs.client_idle_xact_timeouts),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_add(rhs.idle_xact_timeouts),
             prepared_statements: self.prepared_statements + rhs.prepared_statements,
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.transaction_time.saturating_add(rhs.transaction_time),
@@ -138,16 +137,16 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_client_idle_xact_timeouts_propagate_to_pool() {
+    fn test_idle_xact_timeouts_propagate_to_pool() {
         let pool = PoolCounts {
-            client_idle_xact_timeouts: 2,
+            idle_xact_timeouts: 2,
             ..Default::default()
         };
         let server = Counts {
-            client_idle_xact_timeouts: 3,
+            idle_xact_timeouts: 3,
             ..Default::default()
         };
 
-        assert_eq!((pool + server).client_idle_xact_timeouts, 5);
+        assert_eq!((pool + server).idle_xact_timeouts, 5);
     }
 }

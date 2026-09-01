@@ -119,10 +119,6 @@ impl QueryEngine {
         self.stats.state
     }
 
-    pub(crate) fn record_client_idle_xact_timeout(&mut self) {
-        self.backend.record_client_idle_xact_timeout();
-    }
-
     /// Handle client request.
     pub(crate) async fn handle(
         &mut self,
