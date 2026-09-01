@@ -20,10 +20,19 @@ impl Default for Timeouts {
 }
 
 impl Timeouts {
-    pub(crate) fn from_config(config: &ConfigAndUsers, user: &str, database: &str) -> Self {
+    pub(crate) fn from_config(
+        config: &ConfigAndUsers,
+        user: &str,
+        database: &str,
+        admin: bool,
+    ) -> Self {
         Self {
             query_timeout: config.config.general.query_timeout(),
-            client_idle_timeout: config.client_idle_timeout(user, database),
+            client_idle_timeout: if admin {
+                config.config.general.client_idle_timeout()
+            } else {
+                config.client_idle_timeout(user, database)
+            },
             idle_in_transaction_timeout: config.config.general.client_idle_in_transaction_timeout(),
         }
     }
@@ -74,7 +83,7 @@ mod test {
     #[test]
     fn test_idle_in_transaction_timeout() {
         let config = config(); // Will be default.
-        let timeout = Timeouts::from_config(&config, "postgres", "postgres");
+        let timeout = Timeouts::from_config(&config, "postgres", "postgres", false);
 
         let actual =
             timeout.client_idle_timeout(&State::IdleInTransaction, &ClientRequest::default());
@@ -112,10 +121,45 @@ mod test {
             ..Default::default()
         };
 
-        let timeouts = Timeouts::from_config(&config, "listener", "pgdog");
+        let timeouts = Timeouts::from_config(&config, "listener", "pgdog", false);
         assert_eq!(timeouts.client_idle_timeout, Duration::MAX);
 
-        let timeouts = Timeouts::from_config(&config, "other", "pgdog");
+        let timeouts = Timeouts::from_config(&config, "other", "pgdog", false);
         assert_eq!(timeouts.client_idle_timeout, Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn authenticated_admin_keeps_general_timeout_after_admin_config_changes() {
+        use pgdog_config::{Config, ConfigAndUsers, General, User, Users};
+
+        let mut config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 60_000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![User {
+                    name: "admin".into(),
+                    all_databases: true,
+                    client_idle_timeout: Some(0),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Simulate a reload that changes the configured admin identity while
+        // an existing admin session remains authenticated as admin/admin.
+        config.config.admin.user = "root".into();
+        config.config.admin.name = "control".into();
+
+        let admin = Timeouts::from_config(&config, "admin", "admin", true);
+        assert_eq!(admin.client_idle_timeout, Duration::from_millis(60_000));
+
+        let regular = Timeouts::from_config(&config, "admin", "admin", false);
+        assert_eq!(regular.client_idle_timeout, Duration::MAX);
     }
 }

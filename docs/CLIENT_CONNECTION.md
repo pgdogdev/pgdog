@@ -145,6 +145,18 @@ flowchart TD
 
 `self.buffer(client_state)` reads bytes from the client socket into a `ClientRequest` ([`frontend/client_request.rs`](../pgdog/src/frontend/client_request.rs)). A request is complete (`ClientRequest::is_complete()`) when the last message code is one of `{H, S, Q, c, f, F}`, or when a `CopyData` chunk reaches 4 KB. `'X'` (Terminate) triggers a graceful disconnect.
 
+### Client idle timeout
+
+At the start of each `buffer()` invocation, the client checks the cached `client_idle_timeout` for its authenticated startup user and logical database. Resolution precedence is:
+
+1. The last matching `[[users]]` entry that configures `client_idle_timeout`, including matches through `databases` or `all_databases`. A later matching entry without the setting does not erase an earlier override.
+2. The first configured non-`None` value among `[[databases]]` entries with the logical database name. Shards and replicas share this frontend policy, and conflicting values produce a configuration warning.
+3. `[general].client_idle_timeout`.
+
+A value of `0` at the selected level disables the timeout for that client. This can exempt intentionally quiet sessions such as `LISTEN`/`NOTIFY` subscribers without disabling idle-client protection globally. Authenticated admin sessions always use the general timeout because the admin database is virtual and has no user or backend database configuration.
+
+The resolved timeout is cached with a weak identity handle to the configuration snapshot. A reload is applied on the next `buffer()` invocation; a socket read already waiting when the reload occurs keeps its current deadline. The full configuration snapshot is released before awaiting the frontend socket, so an indefinitely idle client does not retain obsolete configuration data.
+
 ### Maintenance mode
 
 Before dispatching, `client_messages()` checks `maintenance_mode::waiter(&database)` ([`backend/maintenance_mode.rs`](../pgdog/src/backend/maintenance_mode.rs)). If a waiter is active and the client is not in a transaction, the client parks until `maintenance_mode::stop()` fires.

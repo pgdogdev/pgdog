@@ -373,7 +373,7 @@ pub struct User {
     pub idle_timeout: Option<u64>,
     /// Overrides [`client_idle_timeout`](https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout) for this user. Client connections that haven't sent any queries for this long will be disconnected.
     ///
-    /// **Note:** Set to `0` to exempt this user from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.
+    /// **Note:** Set to `0` to exempt this user from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods. If multiple entries for this user match through `database`, `databases`, or `all_databases`, the last matching entry that configures this setting is used; entries without an override do not erase an earlier one.
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#client_idle_timeout>
     pub client_idle_timeout: Option<u64>,

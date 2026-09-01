@@ -424,7 +424,7 @@ impl Client {
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
-            timeouts: Timeouts::from_config(&config, user, database),
+            timeouts: Timeouts::from_config(&config, user, database, admin),
             timeouts_config: Arc::downgrade(&config),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
@@ -465,7 +465,7 @@ impl Client {
             prepared_statements,
             admin: false,
             transaction: None,
-            timeouts: Timeouts::from_config(&config, user, database),
+            timeouts: Timeouts::from_config(&config, user, database, false),
             timeouts_config: Arc::downgrade(&config),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
@@ -656,13 +656,17 @@ impl Client {
         let timeouts_current = std::ptr::eq(self.timeouts_config.as_ptr(), Arc::as_ptr(&config));
         if !timeouts_current {
             let (user, database) = user_database_from_params(&self.params);
-            self.timeouts = Timeouts::from_config(&config, user, database);
+            self.timeouts = Timeouts::from_config(&config, user, database, self.admin);
             self.timeouts_config = Arc::downgrade(&config);
         }
         self.query_log_stdout = config.config.general.query_log_stdout;
         self.query_size_limit = config.config.general.query_size_limit;
         self.stream_buffer
             .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
+        // Do not retain a full configuration snapshot while waiting on an idle
+        // client. `timeouts_config` keeps only the weak identity handle needed
+        // to detect a reload on the next invocation.
+        drop(config);
 
         while !self.client_request.is_complete() {
             let idle_timeout = self

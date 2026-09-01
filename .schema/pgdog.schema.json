@@ -405,7 +405,7 @@
       "type": "object",
       "properties": {
         "client_idle_timeout": {
-          "description": "Overrides the `client_idle_timeout` setting. Client connections to this database that haven't sent any queries for this long will be disconnected.\n\n**Note:** Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#client_idle_timeout>",
+          "description": "Overrides the `client_idle_timeout` setting for this logical database. Client connections to this database that haven't sent any queries for this long will be disconnected.\n\nAll shards and replicas with the same `name` share one frontend timeout. The first configured non-`None` value is used, and conflicting values produce a warning. Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#client_idle_timeout>",
           "type": [
             "integer",
             "null"

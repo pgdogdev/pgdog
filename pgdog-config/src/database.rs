@@ -191,9 +191,9 @@ pub struct Database {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#idle_timeout>
     pub idle_timeout: Option<u64>,
-    /// Overrides the `client_idle_timeout` setting. Client connections to this database that haven't sent any queries for this long will be disconnected.
+    /// Overrides the `client_idle_timeout` setting for this logical database. Client connections to this database that haven't sent any queries for this long will be disconnected.
     ///
-    /// **Note:** Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.
+    /// All shards and replicas with the same `name` share one frontend timeout. The first configured non-`None` value is used, and conflicting values produce a warning. Set to `0` to exempt clients of this database from the client idle timeout entirely, e.g. for `LISTEN`/`NOTIFY` subscribers that are expected to stay quiet for long periods.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/databases/#client_idle_timeout>
     pub client_idle_timeout: Option<u64>,

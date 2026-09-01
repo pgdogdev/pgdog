@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use pgdog_config::{PoolerMode, QuerySizeLimitAction};
 use tokio::{
@@ -289,6 +292,42 @@ async fn test_client_idle_timeout() {
         .await
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn test_idle_client_does_not_retain_config_snapshot() {
+    crate::logger();
+
+    let mut initial = (*config()).clone();
+    initial.config.general.client_idle_timeout = 0;
+    initial.config.databases.clear();
+    initial.users.users.clear();
+    set(initial).unwrap();
+
+    let (conn, mut client) = parallel_test_client().await;
+    let previous = config();
+    let previous_weak = Arc::downgrade(&previous);
+    drop(previous);
+
+    let mut buffer = Box::pin(client.buffer(State::Idle));
+    assert!(
+        timeout(Duration::from_millis(10), &mut buffer)
+            .await
+            .is_err(),
+        "disabled idle timeout should leave the frontend read pending"
+    );
+
+    let mut replacement = (*config()).clone();
+    replacement.config.general.client_idle_timeout = 25;
+    set(replacement).unwrap();
+
+    assert!(
+        previous_weak.upgrade().is_none(),
+        "a pending idle read must not retain the previous configuration snapshot"
+    );
+
+    drop(buffer);
+    drop(conn);
 }
 
 #[tokio::test]

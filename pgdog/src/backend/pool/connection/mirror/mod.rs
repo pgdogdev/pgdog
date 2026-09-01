@@ -58,7 +58,7 @@ impl Mirror {
             id: FrontendPid::new(),
             prepared_statements,
             params: params.clone(),
-            timeouts: Timeouts::from_config(config, user, database),
+            timeouts: Timeouts::from_config(config, user, database, false),
             stream: Stream::dev_null(),
             transaction: None,
         }

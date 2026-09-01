@@ -176,8 +176,10 @@ impl ConfigAndUsers {
     /// Resolve `client_idle_timeout` for a connecting user/database pair.
     ///
     /// Precedence is user, then database, then general, matching
-    /// [`crate::pool::PoolConfig::resolve`]. `0` at any level means the
-    /// client is exempt from the timeout.
+    /// [`crate::pool::PoolConfig::resolve`]. Among overlapping user entries,
+    /// the last matching entry that configures this setting wins; entries
+    /// without an override do not erase an earlier one. `0` at any level means
+    /// the client is exempt from the timeout.
     pub fn client_idle_timeout(&self, user: &str, database: &str) -> Duration {
         // The admin database is virtual and never part of pool construction;
         // user and database overrides don't apply to it.
@@ -845,6 +847,36 @@ mod tests {
     }
 
     #[test]
+    fn config_check_handles_conflicting_client_idle_timeouts() {
+        let mut config = Config {
+            databases: vec![
+                Database {
+                    name: "production".into(),
+                    client_idle_timeout: Some(30_000),
+                    ..Default::default()
+                },
+                Database {
+                    name: "production".into(),
+                    client_idle_timeout: Some(60_000),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Exercises the conflict-warning path. Validation is diagnostic and
+        // must leave the entries untouched while resolution keeps the first
+        // configured value.
+        config.check();
+        assert_eq!(config.databases[0].client_idle_timeout, Some(30_000));
+        assert_eq!(config.databases[1].client_idle_timeout, Some(60_000));
+        assert_eq!(
+            config.database_client_idle_timeout("production"),
+            Some(30_000)
+        );
+    }
+
+    #[test]
     fn client_idle_timeout_falls_back_to_general() {
         let config = ConfigAndUsers {
             config: Config {
@@ -889,6 +921,38 @@ mod tests {
 
         assert_eq!(
             config.client_idle_timeout("alice", "production"),
+            Duration::MAX
+        );
+    }
+
+    #[test]
+    fn client_idle_timeout_user_can_enable_disabled_general_timeout() {
+        let config = ConfigAndUsers {
+            config: Config {
+                general: General {
+                    client_idle_timeout: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            users: Users {
+                users: vec![User {
+                    name: "alice".into(),
+                    database: "production".into(),
+                    client_idle_timeout: Some(25_000),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_idle_timeout("alice", "production"),
+            Duration::from_millis(25_000)
+        );
+        assert_eq!(
+            config.client_idle_timeout("bob", "production"),
             Duration::MAX
         );
     }
