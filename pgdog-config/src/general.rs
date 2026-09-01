@@ -1232,10 +1232,6 @@ impl General {
         Duration::from_millis(self.prepared_statements_ttl_jitter.min(ttl))
     }
 
-    pub fn client_idle_timeout(&self) -> Duration {
-        Duration::from_millis(self.client_idle_timeout)
-    }
-
     pub fn connect_attempt_delay(&self) -> Duration {
         Duration::from_millis(self.connect_attempt_delay)
     }
