@@ -350,6 +350,42 @@ mod test {
     }
 
     #[test]
+    fn success_after_disarm_records_nothing() {
+        let stats = test_stats();
+        let mut timer = LoginTimer::with_stats(stats);
+        timer.engage();
+        timer.disarm();
+        timer.success();
+        drop(timer);
+
+        assert_eq!(stats.completed.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.abandoned.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn global_stats_flow_end_to_end() {
+        let completed_before = logins().completed.load(Ordering::Relaxed);
+
+        let mut timer = LoginTimer::new();
+        timer.engage();
+        timer.success();
+        drop(timer);
+
+        // Other tests share the global stats, so assert deltas only.
+        assert!(logins().completed.load(Ordering::Relaxed) > completed_before);
+
+        let names: Vec<_> = Logins::load().iter().map(|metric| metric.name()).collect();
+        assert_eq!(names, ["logins_in_flight", "logins", "logins_abandoned"]);
+
+        let histogram = Logins::histogram();
+        assert_eq!(histogram.metric_type(), "histogram");
+        // Histograms render through render_measurements; the trait method
+        // returns nothing.
+        assert!(histogram.measurements().is_empty());
+        assert!(histogram.to_string().contains("login_duration_count"));
+    }
+
+    #[test]
     fn scalar_metrics_have_expected_names_and_types() {
         let stats = test_stats();
         let metrics = Logins::load_from(stats);
