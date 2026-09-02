@@ -129,8 +129,8 @@ impl ConfigAndUsers {
     /// the global key. Reject the config instead of failing at connect time.
     fn validate_database_tls(&self) -> Result<(), Error> {
         for database in &self.config.databases {
-            if database.tls_server_certificate.is_some()
-                != database.tls_server_private_key.is_some()
+            if database.tls.tls_server_certificate.is_some()
+                != database.tls.tls_server_private_key.is_some()
             {
                 return Err(Error::ParseError(format!(
                     "database \"{}\": \"tls_server_certificate\" and \"tls_server_private_key\" must both be set to present a client certificate to this server",
@@ -936,13 +936,13 @@ tls_server_private_key = "/certs/replica-client.key"
 
         let config: Config = toml::from_str(source).unwrap();
 
-        let primary = &config.databases[0];
+        let primary = &config.databases[0].tls;
         assert!(primary.tls_verify.is_none());
         assert!(primary.tls_server_ca_certificate.is_none());
         assert!(primary.tls_server_certificate.is_none());
         assert!(primary.tls_server_private_key.is_none());
 
-        let replica = &config.databases[1];
+        let replica = &config.databases[1].tls;
         assert_eq!(replica.tls_verify, Some(TlsVerifyMode::VerifyCa));
         assert_eq!(
             replica.tls_server_ca_certificate.as_deref(),
@@ -964,7 +964,10 @@ tls_server_private_key = "/certs/replica-client.key"
         config.config.databases.push(Database {
             name: "production".into(),
             host: "replica.internal".into(),
-            tls_server_certificate: Some("/certs/replica-client.pem".into()),
+            tls: crate::ServerTls {
+                tls_server_certificate: Some("/certs/replica-client.pem".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
 
@@ -973,13 +976,13 @@ tls_server_private_key = "/certs/replica-client.key"
         assert!(err.contains("tls_server_private_key"));
 
         // Key without a certificate is rejected the same way.
-        config.config.databases[0].tls_server_certificate = None;
-        config.config.databases[0].tls_server_private_key =
+        config.config.databases[0].tls.tls_server_certificate = None;
+        config.config.databases[0].tls.tls_server_private_key =
             Some("/certs/replica-client.key".into());
         assert!(config.check().is_err());
 
         // The complete pair passes.
-        config.config.databases[0].tls_server_certificate =
+        config.config.databases[0].tls.tls_server_certificate =
             Some("/certs/replica-client.pem".into());
         config.check().unwrap();
     }

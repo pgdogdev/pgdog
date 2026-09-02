@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use crate::config::{Database, General, TlsVerifyMode};
+use crate::config::{General, ServerTls, TlsVerifyMode};
 use arc_swap::ArcSwapOption;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
@@ -90,27 +90,6 @@ fn cached_client_config(key: &ConnectorConfigKey) -> Option<Arc<ClientConfig>> {
     CONNECTORS.read().get(key).cloned()
 }
 
-/// Per-database overrides of the `[general]` upstream TLS settings.
-/// Unset fields fall back to their global counterparts.
-#[derive(Default)]
-pub(crate) struct TlsOverrides<'a> {
-    pub(crate) verify: Option<TlsVerifyMode>,
-    pub(crate) ca_certificate: Option<&'a PathBuf>,
-    pub(crate) certificate: Option<&'a PathBuf>,
-    pub(crate) private_key: Option<&'a PathBuf>,
-}
-
-impl<'a> From<&'a Database> for TlsOverrides<'a> {
-    fn from(database: &'a Database) -> Self {
-        Self {
-            verify: database.tls_verify,
-            ca_certificate: database.tls_server_ca_certificate.as_ref(),
-            certificate: database.tls_server_certificate.as_ref(),
-            private_key: database.tls_server_private_key.as_ref(),
-        }
-    }
-}
-
 /// Upstream TLS settings for one server: per-database overrides applied over
 /// the global `[general]` values.
 pub(crate) struct UpstreamTlsSettings<'a> {
@@ -125,21 +104,26 @@ impl<'a> UpstreamTlsSettings<'a> {
     /// client certificate and key: they are a keypair, so setting either one
     /// per-database replaces the global pair (config validation guarantees
     /// both are set together).
-    pub(crate) fn resolve(general: &'a General, overrides: TlsOverrides<'a>) -> Self {
-        let (certificate, private_key) =
-            if overrides.certificate.is_some() || overrides.private_key.is_some() {
-                (overrides.certificate, overrides.private_key)
-            } else {
-                (
-                    general.tls_server_certificate.as_ref(),
-                    general.tls_server_private_key.as_ref(),
-                )
-            };
+    pub(crate) fn resolve(general: &'a General, overrides: &'a ServerTls) -> Self {
+        let (certificate, private_key) = if overrides.tls_server_certificate.is_some()
+            || overrides.tls_server_private_key.is_some()
+        {
+            (
+                overrides.tls_server_certificate.as_ref(),
+                overrides.tls_server_private_key.as_ref(),
+            )
+        } else {
+            (
+                general.tls_server_certificate.as_ref(),
+                general.tls_server_private_key.as_ref(),
+            )
+        };
 
         Self {
-            verify: overrides.verify.unwrap_or(general.tls_verify),
+            verify: overrides.tls_verify.unwrap_or(general.tls_verify),
             ca_certificate: overrides
-                .ca_certificate
+                .tls_server_ca_certificate
+                .as_ref()
                 .or(general.tls_server_ca_certificate.as_ref()),
             certificate,
             private_key,
@@ -296,12 +280,13 @@ pub(crate) fn reload() -> Result<(), Error> {
     // map also drops entries from previous configs. Nothing is swapped in
     // until the whole config validates.
     let mut connectors = HashMap::new();
-    let general_settings = UpstreamTlsSettings::resolve(general, TlsOverrides::default());
+    let no_overrides = ServerTls::default();
+    let general_settings = UpstreamTlsSettings::resolve(general, &no_overrides);
     let database_settings = config
         .config
         .databases
         .iter()
-        .map(|database| UpstreamTlsSettings::resolve(general, database.into()));
+        .map(|database| UpstreamTlsSettings::resolve(general, &database.tls));
 
     for settings in std::iter::once(general_settings).chain(database_settings) {
         if let Entry::Vacant(entry) = connectors.entry(settings.cache_key()) {
@@ -944,9 +929,9 @@ mod tests {
         );
 
         let config = crate::config::config();
+        let no_overrides = ServerTls::default();
         let general_key =
-            super::UpstreamTlsSettings::resolve(&config.config.general, TlsOverrides::default())
-                .cache_key();
+            super::UpstreamTlsSettings::resolve(&config.config.general, &no_overrides).cache_key();
         assert!(
             super::cached_client_config(&general_key).is_some(),
             "reload keeps the connector for the current config"
@@ -1067,7 +1052,8 @@ mod tests {
         };
 
         // No overrides: everything comes from [general].
-        let settings = UpstreamTlsSettings::resolve(&general, TlsOverrides::default());
+        let no_overrides = ServerTls::default();
+        let settings = UpstreamTlsSettings::resolve(&general, &no_overrides);
         assert_eq!(settings.verify, TlsVerifyMode::VerifyFull);
         assert_eq!(settings.ca_certificate, Some(&ca));
         assert_eq!(settings.certificate, Some(&cert));
@@ -1075,14 +1061,12 @@ mod tests {
 
         // Verify mode and CA override independently.
         let db_ca = PathBuf::from("/db/ca.pem");
-        let settings = UpstreamTlsSettings::resolve(
-            &general,
-            TlsOverrides {
-                verify: Some(TlsVerifyMode::VerifyCa),
-                ca_certificate: Some(&db_ca),
-                ..Default::default()
-            },
-        );
+        let overrides = ServerTls {
+            tls_verify: Some(TlsVerifyMode::VerifyCa),
+            tls_server_ca_certificate: Some(db_ca.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
         assert_eq!(settings.verify, TlsVerifyMode::VerifyCa);
         assert_eq!(settings.ca_certificate, Some(&db_ca));
         assert_eq!(settings.certificate, Some(&cert));
@@ -1092,27 +1076,23 @@ mod tests {
         // key must not leak in next to a per-database certificate.
         let db_cert = PathBuf::from("/db/client.pem");
         let db_key = PathBuf::from("/db/client.key");
-        let settings = UpstreamTlsSettings::resolve(
-            &general,
-            TlsOverrides {
-                certificate: Some(&db_cert),
-                private_key: Some(&db_key),
-                ..Default::default()
-            },
-        );
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            tls_server_private_key: Some(db_key.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
         assert_eq!(settings.certificate, Some(&db_cert));
         assert_eq!(settings.private_key, Some(&db_key));
         assert_eq!(settings.ca_certificate, Some(&ca));
 
         // Half a pair (rejected by config validation, but resolution must
         // still not mix the pairs).
-        let settings = UpstreamTlsSettings::resolve(
-            &general,
-            TlsOverrides {
-                certificate: Some(&db_cert),
-                ..Default::default()
-            },
-        );
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
         assert_eq!(settings.certificate, Some(&db_cert));
         assert_eq!(settings.private_key, None);
     }
@@ -1127,8 +1107,11 @@ mod tests {
         cfg.config.databases.push(crate::config::Database {
             name: "bad_tls".into(),
             host: "127.0.0.1".into(),
-            tls_verify: Some(TlsVerifyMode::VerifyFull),
-            tls_server_ca_certificate: Some(PathBuf::from("/nonexistent/ca.pem")),
+            tls: ServerTls {
+                tls_verify: Some(TlsVerifyMode::VerifyFull),
+                tls_server_ca_certificate: Some(PathBuf::from("/nonexistent/ca.pem")),
+                ..Default::default()
+            },
             ..Default::default()
         });
         crate::config::set(cfg).unwrap();

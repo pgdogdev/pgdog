@@ -251,7 +251,7 @@ impl Server {
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls = UpstreamTlsSettings::resolve(&config.config.general, addr.tls_overrides());
+        let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 
         // Only attempt TLS if not in Disabled mode
         if tls.verify != TlsVerifyMode::Disabled {
