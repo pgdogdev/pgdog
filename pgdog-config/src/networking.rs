@@ -8,7 +8,9 @@ use schemars::JsonSchema;
 /// TLS verification mode for connections to Postgres servers.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_verify>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy,
+)]
 #[serde(rename_all = "snake_case")]
 #[derive(JsonSchema)]
 pub enum TlsVerifyMode {

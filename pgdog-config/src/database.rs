@@ -3,10 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
+    path::PathBuf,
     str::FromStr,
 };
 
-use crate::RoleConfig;
+use crate::{RoleConfig, TlsVerifyMode};
 
 use super::pooling::PoolerMode;
 
@@ -209,6 +210,20 @@ pub struct Database {
     /// Used for weighted load balancing.
     #[serde(default = "Database::lb_weight")]
     pub lb_weight: u8,
+    /// Overrides the `tls_verify` setting for connections to this database.
+    /// Useful when servers in the same cluster require different TLS settings,
+    /// e.g., managed databases where each instance has its own CA.
+    pub tls_verify: Option<TlsVerifyMode>,
+    /// Overrides the `tls_server_ca_certificate` setting: the CA bundle used to
+    /// verify this server's certificate.
+    pub tls_server_ca_certificate: Option<PathBuf>,
+    /// Overrides the `tls_server_certificate` setting: the client certificate PgDog
+    /// presents to this server (mTLS). Must be set together with `tls_server_private_key`;
+    /// when set, the pair replaces the `[general]` pair for this database.
+    pub tls_server_certificate: Option<PathBuf>,
+    /// Overrides the `tls_server_private_key` setting: the private key for
+    /// `tls_server_certificate`. Must be set together with `tls_server_certificate`.
+    pub tls_server_private_key: Option<PathBuf>,
 
     /// Role-specific settings.
     #[serde(flatten, default)]

@@ -39,7 +39,7 @@ use crate::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
-        tls::connector_with_verify_mode,
+        tls::UpstreamTlsSettings,
     },
 };
 use crate::{net::tweak, state::State};
@@ -251,7 +251,14 @@ impl Server {
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls_mode = config.config.general.tls_verify;
+        let tls = UpstreamTlsSettings::resolve(
+            &config.config.general,
+            addr.tls_verify,
+            addr.tls_server_ca_certificate.as_ref(),
+            addr.tls_server_certificate.as_ref(),
+            addr.tls_server_private_key.as_ref(),
+        );
+        let tls_mode = tls.verify;
 
         // Only attempt TLS if not in Disabled mode
         if tls_mode != TlsVerifyMode::Disabled {
@@ -271,12 +278,7 @@ impl Server {
             if ssl == SslReply::Yes {
                 debug!("server supports TLS, initiating TLS handshake [{}]", addr);
 
-                let connector = connector_with_verify_mode(
-                    tls_mode,
-                    config.config.general.tls_server_ca_certificate.as_ref(),
-                    config.config.general.tls_server_certificate.as_ref(),
-                    config.config.general.tls_server_private_key.as_ref(),
-                )?;
+                let connector = tls.connector()?;
                 let plain = stream.take()?;
 
                 let server_name = ServerName::try_from(addr.host.clone())?;
