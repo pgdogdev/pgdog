@@ -1,6 +1,25 @@
 use crate::setup::{admin_sqlx, connections_sqlx};
 use rust_decimal::prelude::*;
-use sqlx::{Executor, Pool, Postgres, Row};
+use sqlx::{Column, Executor, Pool, Postgres, Row};
+
+#[tokio::test]
+async fn test_direct_stddev_hides_cross_shard_helpers() {
+    let conns = connections_sqlx().await;
+
+    setup_schema(&conns, "test_direct_stddev", "int8").await;
+    setup_data(&conns, "test_direct_stddev", TEST_DATA).await;
+
+    let row = conns[1]
+        .fetch_one(
+            "SELECT stddev_pop(value) AS deviation \
+             FROM test_direct_stddev WHERE customer_id = 1",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(row.columns().len(), 1);
+    assert_eq!(row.columns()[0].name(), "deviation");
+}
 
 #[tokio::test]
 async fn test_variance_numeric() {

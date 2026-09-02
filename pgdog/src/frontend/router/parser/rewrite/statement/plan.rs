@@ -30,6 +30,11 @@ pub(crate) struct RewritePlan {
     /// Rewritten SQL statement.
     pub(crate) stmt: Option<String>,
 
+    /// Rewritten SQL statement without cross-shard aggregate helper columns.
+    ///
+    /// Restored after routing when a query only needs one shard.
+    pub(crate) direct_stmt: Option<String>,
+
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
     pub(crate) prepare_rewrites: Vec<PrepareExecute>,
@@ -52,7 +57,10 @@ pub(crate) struct RewritePlan {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RewriteResult {
-    InPlace { offset: Option<OffsetPlan> },
+    InPlace {
+        offset: Option<OffsetPlan>,
+        direct_stmt: Option<String>,
+    },
     InsertSplit(Vec<ClientRequest>),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
@@ -61,8 +69,36 @@ impl RewriteResult {
     pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
         match self {
             Self::InPlace {
-                offset: Some(offset),
-            } => offset.apply_after_parser(request),
+                offset,
+                direct_stmt,
+            } => {
+                if request.is_executable()
+                    && request
+                        .route
+                        .as_ref()
+                        .is_some_and(|route| !route.is_cross_shard())
+                    && let Some(stmt) = direct_stmt
+                {
+                    for message in request.messages.iter_mut() {
+                        match message {
+                            ProtocolMessage::Query(query) => query.set_query(stmt),
+                            ProtocolMessage::Parse(parse) => {
+                                parse.set_query(stmt);
+                                if !parse.anonymous() {
+                                    PreparedStatements::global().write().rewrite(parse);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some(offset) = offset {
+                    offset.apply_after_parser(request)?;
+                }
+
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -163,6 +199,7 @@ impl RewritePlan {
 
         Ok(RewriteResult::InPlace {
             offset: self.offset.clone(),
+            direct_stmt: self.direct_stmt.clone(),
         })
     }
 }

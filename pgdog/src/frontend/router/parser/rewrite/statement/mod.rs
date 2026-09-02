@@ -166,8 +166,15 @@ impl<'a> StatementRewrite<'a> {
             return Err(err);
         }
 
-        if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
+        if matches!(stmt.stmt(), Node::SelectStmt(_)) {
+            let direct_stmt = pg_raw_parse::deparse(&*stmt)?.as_str().to_owned();
+            let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() else {
+                unreachable!("statement was checked to be SELECT");
+            };
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+            if !plan.aggregates.is_noop() {
+                plan.direct_stmt = Some(direct_stmt);
+            }
             self.limit_offset(&select, &mut plan);
         }
 
