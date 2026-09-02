@@ -10,7 +10,9 @@ use crate::backend::{ShardedTables, replication::ShardedSchemas};
 use crate::frontend::ClientRequest;
 use crate::frontend::client::query_engine::QueryEngineContext;
 use crate::frontend::client::query_engine::multi_step::error::Error;
-use crate::frontend::client::query_engine::multi_step::types::{QueryPlanner, ResponseHistory, SaveKey, StatementSource, StepRequest, StepResponses};
+use crate::frontend::client::query_engine::multi_step::types::{
+    QueryPlanner, ResponseHistory, SaveKey, StatementSource, StepRequest, StepResponses,
+};
 use crate::frontend::client::test::TestClient;
 use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::{AstContext, Cache, Error as ParserError};

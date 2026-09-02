@@ -22,7 +22,6 @@ pub(crate) struct StepResponses {
 pub(crate) enum SaveKey {
     ShardingKeyUpdateDelete,
     ShardingKeyUpdateInsert,
-
     //TODO: Dynamic(String); when we have subqueries; we must dynamically generate names.
 }
 
