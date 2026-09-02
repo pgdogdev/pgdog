@@ -428,7 +428,7 @@ impl QueryPlanner {
 
         let new_route = match check_request {
             StepRequest::Statement(statement) => statement.route,
-            StepRequest::Raw(_) => unreachable!("build_request always returns a routed statement"),
+            StepRequest::Raw => unreachable!("build_request always returns a routed statement"),
         };
 
         let same_shard = match original_request.route.as_ref() {

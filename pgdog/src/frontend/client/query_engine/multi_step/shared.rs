@@ -20,30 +20,6 @@ use bytes::Buf;
 use indexmap::IndexSet;
 use pg_raw_parse::{NodeMut, walk};
 
-impl StepRequest {
-    /// Resolves every dynamic part of current `Step` against prior `Step` responses.
-    /// `Ok(None)` = the `Step` resolves to nothing and is skipped.
-    pub(crate) fn assemble(&self, map: &ResponseHistory) -> Result<Option<ClientRequest>, Error> {
-        match self {
-            Self::Raw(request) => Ok(Some(*request.clone())),
-            Self::Statement(statement) => statement.assemble(map),
-        }
-    }
-
-    pub(crate) fn route(&self) -> Option<&Route> {
-        match self {
-            Self::Raw(request) => request.route.as_ref(),
-            Self::Statement(statement) => Some(&statement.route),
-        }
-    }
-}
-
-impl From<ClientRequest> for StepRequest {
-    fn from(request: ClientRequest) -> Self {
-        Self::Raw(Box::new(request))
-    }
-}
-
 impl StatementRequest {
     /// Construct a `ClientRequest` based on statically/dynamically resolving the current `Step`
     /// based on prior `Step` responses. Handles both simple and extended protocol.
@@ -159,8 +135,8 @@ impl QueryEngine {
         for step in &planner.steps {
             let assembled;
             let client_request = match &step.request {
-                StepRequest::Raw(request) => request.as_ref(),
-                request => match request.assemble(&map)? {
+                StepRequest::Raw => context.client_request,
+                StepRequest::Statement(statement) => match statement.assemble(&map)? {
                     Some(request) => {
                         assembled = request;
                         &assembled

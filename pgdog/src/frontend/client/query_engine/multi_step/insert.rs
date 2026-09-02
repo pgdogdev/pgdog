@@ -1,7 +1,7 @@
 use crate::frontend::BufferedQuery;
 use crate::frontend::client::query_engine::multi_step::error::{Error, InsertError};
 use crate::frontend::client::query_engine::multi_step::types::{
-    ForwardToClient, QueryPlanner, ResponseHistory, Step,
+    ForwardToClient, QueryPlanner, ResponseHistory, Step, StepRequest,
 };
 use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::{AstContext, Cache};
@@ -85,7 +85,7 @@ impl QueryPlanner {
     ) -> Result<bool, Error> {
         // All tuples map to the same shard: send the original multi-row INSERT
         // as a single statement, skipping the multi-step path entirely.
-        if let Some(shard_n) = Self::uniform_shard(steps) {
+        if let Some(shard_n) = Self::uniform_shard(context.client_request, steps) {
             context.client_request.route = Some(Route::write(ShardWithPriority::new_table(
                 Shard::Direct(shard_n),
             )));
@@ -105,10 +105,17 @@ impl QueryPlanner {
     /// If every split routes to the same `Shard::Direct(n)`, return that shard
     /// number. Returns `None` when the splits span multiple shards or contain
     /// any non-direct routing.
-    fn uniform_shard(steps: &[Step]) -> Option<usize> {
-        let direct_shard = |step: &Step| match step.request.route()?.shard() {
-            Shard::Direct(n) => Some(*n),
-            _ => None,
+    fn uniform_shard(original_request: &ClientRequest, steps: &[Step]) -> Option<usize> {
+        let direct_shard = |step: &Step| {
+            let route = match &step.request {
+                StepRequest::Raw => original_request.route(),
+                StepRequest::Statement(statement) => &statement.route,
+            };
+
+            match route.shard() {
+                Shard::Direct(n) => Some(*n),
+                _ => None,
+            }
         };
 
         let first = direct_shard(steps.first()?)?;

@@ -1,4 +1,3 @@
-use crate::frontend::ClientRequest;
 use crate::frontend::client::query_engine::QueryEngineContext;
 use crate::frontend::client::query_engine::multi_step::error::Error;
 use crate::frontend::router::{Ast, Route};
@@ -72,7 +71,7 @@ pub(crate) struct Step {
 #[derive(Debug, Clone)]
 pub(crate) enum StepRequest {
     /// The client's own `ClientRequest` as-is.
-    Raw(Box<ClientRequest>),
+    Raw,
 
     // We're dynamically putting something together.
     Statement(Box<StatementRequest>),
