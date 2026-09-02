@@ -1,6 +1,7 @@
 //! Configuration.
 
 // Submodules
+pub(crate) mod changed;
 pub(crate) mod convert;
 pub(crate) mod core;
 pub(crate) mod database;
@@ -68,6 +69,7 @@ pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
         table.load_centroids()?;
     }
     CONFIG.store(Arc::new(config.clone()));
+    changed::notify(CONFIG.load_full());
     Ok(config)
 }
 

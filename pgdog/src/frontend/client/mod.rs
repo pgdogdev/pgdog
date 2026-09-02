@@ -26,7 +26,7 @@ use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
-    Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
+    Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
 use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
 use crate::state::State;
@@ -207,7 +207,8 @@ impl Client {
             }
 
             AuthType::Scram => {
-                stream.send_flush(&Authentication::scram()).await?;
+                let challenge = scram_challenge(stream.tls_server_end_point());
+                stream.send_flush(&challenge).await?;
 
                 let scram = Server::new(passwords);
                 let res = scram.handle(stream).await;

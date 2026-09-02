@@ -2439,8 +2439,10 @@ dependencies = [
  "chrono",
  "futures-util",
  "libc",
+ "native-tls",
  "ordered-float",
  "parking_lot",
+ "postgres-native-tls",
  "rand 0.9.4",
  "reqwest",
  "rust_decimal",
@@ -3286,6 +3288,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]
@@ -3394,6 +3397,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef4de47bb81477e0c3deaf153a1b10ae176484713ff1640969f4cb96b653ebc"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -4069,7 +4084,9 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
+ "indexmap 2.14.0",
  "ref-cast",
  "schemars_derive",
  "serde",
@@ -4098,7 +4115,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scram"
 version = "0.6.0"
-source = "git+https://github.com/pgdogdev/scram.git?rev=053e108210a35232efe60023ec43288fd601d8c4#053e108210a35232efe60023ec43288fd601d8c4"
+source = "git+https://github.com/pgdogdev/scram.git?rev=ee15a47f1051dc79589e8db666be7014c1e23fba#ee15a47f1051dc79589e8db666be7014c1e23fba"
 dependencies = [
  "aws-lc-rs",
  "base64 0.13.1",
@@ -4901,6 +4918,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio",
 ]
 
 [[package]]

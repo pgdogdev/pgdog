@@ -25,7 +25,7 @@ pgdog-postgres-types = { path = "./pgdog-postgres-types"}
 pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "c5b3b75" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
-schemars = { version = "1.2.1", features = ["uuid1"] }
+schemars = { version = "1.2.1", features = ["uuid1", "chrono04", "indexmap2"] }
 serde_json = "1.0"
 indexmap = { version = "2.14", features = ["serde"] }
 serde_with = { version = "3.22", features = ["macros", "schemars_1"] }

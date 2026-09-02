@@ -31,6 +31,7 @@ pub mod reset;
 pub mod rewrite;
 pub mod rewrite_omni;
 pub mod savepoint;
+pub mod scram_plus;
 pub mod set_config;
 pub mod set_in_transaction;
 pub mod set_sharding_key;

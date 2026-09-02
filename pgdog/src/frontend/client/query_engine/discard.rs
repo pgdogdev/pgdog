@@ -9,10 +9,13 @@ impl QueryEngine {
     pub(super) async fn discard(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        target: DiscardTarget,
         extended: bool,
     ) -> Result<(), Error> {
         let _extended = extended;
-        context.prepared_statements.close_all();
+        if target == DiscardTarget::All {
+            context.prepared_statements.close_all();
+        }
         let bytes_sent = context
             .stream
             .send_many(&[

@@ -4,7 +4,7 @@ use super::{
     Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
     rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
 };
-use crate::frontend::router::sharding::PendingLookup;
+use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
 
 /// The shard destination for a query.
@@ -75,7 +75,7 @@ impl From<Vec<usize>> for Shard {
 
 /// Path a query should take and any transformations
 /// that should be applied to the response.
-#[derive(Debug, Clone, Default, PartialEq, derive_builder::Builder)]
+#[derive(Debug, Clone, Default, derive_builder::Builder)]
 pub(crate) struct Route {
     /// Computed shard. This is where the query carrying
     /// this route will go no matter what.
@@ -120,6 +120,8 @@ pub(crate) struct Route {
     /// The query engine resolves them and routes the query again;
     /// the query doesn't execute while any are unresolved.
     pending_lookups: Vec<PendingLookup>,
+    /// The temporary table being created/dropped if present
+    pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
 }
 
 impl Display for Route {
@@ -369,6 +371,11 @@ impl Route {
 
     pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
         self.rewrite_plan = plan;
+    }
+
+    pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
+        self.temp_table_change = temp_table;
+        self
     }
 }
 

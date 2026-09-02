@@ -238,6 +238,13 @@ impl Stats {
         self.local.last_checkout.errors += 1;
     }
 
+    /// Postgres disconnected this connection because it exceeded
+    /// `idle_in_transaction_session_timeout`.
+    pub(crate) fn idle_xact_timeout(&mut self) {
+        self.local.total.idle_xact_timeouts += 1;
+        self.local.last_checkout.idle_xact_timeouts += 1;
+    }
+
     /// A query has been completed.
     pub(crate) fn query(&mut self, now: Instant, idle_in_transaction: bool) {
         self.local.total.queries += 1;

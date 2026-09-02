@@ -2,14 +2,16 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
+        BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
+        Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         router::{Route, parser::Shard},
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
-
+use fnv::FnvHashMap;
+use temp_table::TempTableState;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -35,6 +37,7 @@ pub(crate) mod route_query;
 pub(crate) mod set;
 pub(crate) mod split;
 pub(crate) mod start_transaction;
+mod temp_table;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -48,6 +51,7 @@ pub(crate) use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
 pub(crate) use split::Pipeline;
+pub(in crate::frontend) use temp_table::TempTableChange;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
 
@@ -70,6 +74,7 @@ pub(crate) struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
+    temp_tables: FnvHashMap<String, TempTableState>,
 }
 
 impl QueryEngine {
@@ -97,6 +102,7 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
+            temp_tables: Default::default(),
         })
     }
 
@@ -270,7 +276,9 @@ impl QueryEngine {
             }
             Command::Copy(_) => self.execute(context, rewrite_result).await?,
             Command::Deallocate => self.deallocate(context).await?,
-            Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::Discard { target, extended } => {
+                self.discard(context, *target, *extended).await?
+            }
             Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 

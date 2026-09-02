@@ -1,6 +1,7 @@
 //! TLS configuration.
 
 use std::{
+    ops::Deref,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -25,7 +26,31 @@ use crate::config::config;
 
 use super::Error;
 
-static ACCEPTOR: ArcSwapOption<TlsAcceptor> = ArcSwapOption::const_empty();
+/// TLS acceptor plus the `tls-server-end-point` binding for the leaf
+/// certificate it will present. Kept together so a reload cannot pair a
+/// new acceptor with an old hash (or the reverse) on an in-flight login.
+pub(crate) struct TlsListener {
+    acceptor: TlsAcceptor,
+    server_end_point: Option<Vec<u8>>,
+}
+
+impl TlsListener {
+    /// Channel-binding data for SCRAM-SHA-256-PLUS, if the leaf certificate
+    /// uses a hash RFC 5929 can name.
+    pub(crate) fn server_end_point(&self) -> Option<&[u8]> {
+        self.server_end_point.as_deref()
+    }
+}
+
+impl Deref for TlsListener {
+    type Target = TlsAcceptor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.acceptor
+    }
+}
+
+static ACCEPTOR: ArcSwapOption<TlsListener> = ArcSwapOption::const_empty();
 static ACCEPTOR_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 static CONNECTOR: ArcSwapOption<ConnectorCacheEntry> = ArcSwapOption::const_empty();
@@ -81,8 +106,59 @@ fn increment_connector_build_count() {
 fn increment_connector_build_count() {}
 
 /// Get the current TLS acceptor snapshot, if TLS is enabled.
-pub(crate) fn acceptor() -> Option<Arc<TlsAcceptor>> {
+pub(crate) fn acceptor() -> Option<Arc<TlsListener>> {
     ACCEPTOR.load_full()
+}
+
+/// RFC 5929 hash named by a signature OID. MD5 and SHA-1 upgrade to SHA-256.
+/// `None` for algorithms that do not name a single hash (Ed25519, RSASSA-PSS, …).
+fn digest_for_signature_oid(oid: &str) -> Option<&'static aws_lc_rs::digest::Algorithm> {
+    use aws_lc_rs::digest;
+    Some(match oid {
+        // MD5 / SHA-1 → SHA-256 (RFC 5929 §4.1)
+        "1.2.840.113549.1.1.4" // md5WithRSAEncryption
+        | "1.2.840.113549.1.1.5" // sha1WithRSAEncryption
+        | "1.2.840.10045.4.1" // ecdsa-with-SHA1
+        | "1.2.840.10040.4.3" // dsaWithSHA1
+        | "1.2.840.113549.2.5" // md5
+        | "1.3.14.3.2.26" // sha1
+        // SHA-256
+        | "1.2.840.113549.1.1.11" // sha256WithRSAEncryption
+        | "1.2.840.10045.4.3.2" // ecdsa-with-SHA256
+        | "2.16.840.1.101.3.4.3.2" // dsa-with-sha256
+        | "2.16.840.1.101.3.4.2.1" => &digest::SHA256, // id-sha256
+        // SHA-384
+        "1.2.840.113549.1.1.12" // sha384WithRSAEncryption
+        | "1.2.840.10045.4.3.3" // ecdsa-with-SHA384
+        | "2.16.840.1.101.3.4.2.2" => &digest::SHA384, // id-sha384
+        // SHA-512
+        "1.2.840.113549.1.1.13" // sha512WithRSAEncryption
+        | "1.2.840.10045.4.3.4" // ecdsa-with-SHA512
+        | "2.16.840.1.101.3.4.2.3" => &digest::SHA512, // id-sha512
+        // SHA-224
+        "1.2.840.113549.1.1.14" // sha224WithRSAEncryption
+        | "1.2.840.10045.4.3.1" // ecdsa-with-SHA224
+        | "2.16.840.1.101.3.4.3.1" // dsa-with-sha224
+        | "2.16.840.1.101.3.4.2.4" => &digest::SHA224, // id-sha224
+        _ => return None,
+    })
+}
+
+/// RFC 5929 `tls-server-end-point` channel-binding data: the hash of the
+/// DER-encoded end-entity certificate, using the certificate's own
+/// signature hash (MD5 and SHA-1 are upgraded to SHA-256).
+///
+/// Returns `None` when we cannot name a single hash from the signature
+/// OID (Ed25519, Ed448, RSASSA-PSS, …). RSA-PSS parameters are not
+/// parsed, so we do not advertise PLUS in those cases.
+pub(crate) fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
+    use aws_lc_rs::digest::digest;
+    use x509_parser::certificate::X509Certificate;
+
+    let (_, parsed) = X509Certificate::from_der(cert.as_ref()).ok()?;
+    let oid = parsed.signature_algorithm.algorithm.to_id_string();
+    let algorithm = digest_for_signature_oid(&oid)?;
+    Some(digest(algorithm, cert.as_ref()).as_ref().to_vec())
 }
 
 /// Extract the hostname identity from the peer's TLS certificate, if present.
@@ -183,8 +259,9 @@ pub(crate) fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsAcceptor, Error> {
+fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsListener, Error> {
     let pem = CertificateDer::from_pem_file(cert)?;
+    let server_end_point = tls_server_end_point(&pem);
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let builder = rustls::ServerConfig::builder();
@@ -199,7 +276,10 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    Ok(TlsAcceptor::from(Arc::new(config)))
+    Ok(TlsListener {
+        acceptor: TlsAcceptor::from(Arc::new(config)),
+        server_end_point,
+    })
 }
 
 /// Build a client certificate verifier. Presented certificates are verified
@@ -582,6 +662,10 @@ mod tests {
         let second = super::acceptor().expect("acceptor initialized");
 
         assert!(Arc::ptr_eq(&first, &second), "cached acceptor reused");
+        assert!(
+            first.server_end_point().is_some(),
+            "test cert must produce tls-server-end-point data so PLUS can be advertised"
+        );
         assert_eq!(
             super::test_acceptor_build_count(),
             1,
@@ -843,6 +927,94 @@ mod tests {
         );
 
         super::test_reset_connector();
+    }
+
+    #[test]
+    fn tls_server_end_point_matches_sha256_of_test_cert() {
+        let pem = include_str!("../../tests/tls/cert.pem");
+        let cert: CertificateDer<'static> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .next()
+                .expect("test cert PEM has one block")
+                .expect("test cert parses");
+
+        let binding =
+            super::tls_server_end_point(&cert).expect("test cert uses a hash RFC 5929 can name");
+
+        // tests/tls/cert.pem is sha256WithRSAEncryption, so the binding is
+        // SHA-256 of the DER — the same value openssl x509 -fingerprint -sha256
+        // prints.
+        let expected = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, cert.as_ref());
+        assert_eq!(binding, expected.as_ref());
+    }
+
+    #[test]
+    fn digest_for_signature_oid_maps_every_named_rfc5929_hash() {
+        // Outcome is the digest length RFC 5929 / the OID name imply.
+        // SHA-1 and MD5 must upgrade to SHA-256 (32 bytes).
+        const SHA256: &[&str] = &[
+            "1.2.840.113549.1.1.4",
+            "1.2.840.113549.1.1.5",
+            "1.2.840.10045.4.1",
+            "1.2.840.10040.4.3",
+            "1.2.840.113549.2.5",
+            "1.3.14.3.2.26",
+            "1.2.840.113549.1.1.11",
+            "1.2.840.10045.4.3.2",
+            "2.16.840.1.101.3.4.3.2",
+            "2.16.840.1.101.3.4.2.1",
+        ];
+        const SHA384: &[&str] = &[
+            "1.2.840.113549.1.1.12",
+            "1.2.840.10045.4.3.3",
+            "2.16.840.1.101.3.4.2.2",
+        ];
+        const SHA512: &[&str] = &[
+            "1.2.840.113549.1.1.13",
+            "1.2.840.10045.4.3.4",
+            "2.16.840.1.101.3.4.2.3",
+        ];
+        const SHA224: &[&str] = &[
+            "1.2.840.113549.1.1.14",
+            "1.2.840.10045.4.3.1",
+            "2.16.840.1.101.3.4.3.1",
+            "2.16.840.1.101.3.4.2.4",
+        ];
+
+        let len = |oid: &str| {
+            super::digest_for_signature_oid(oid)
+                .map(|algo| aws_lc_rs::digest::digest(algo, b"").as_ref().len())
+        };
+
+        for oid in SHA256 {
+            assert_eq!(len(oid), Some(32), "{oid} must name SHA-256");
+        }
+        for oid in SHA384 {
+            assert_eq!(len(oid), Some(48), "{oid} must name SHA-384");
+        }
+        for oid in SHA512 {
+            assert_eq!(len(oid), Some(64), "{oid} must name SHA-512");
+        }
+        for oid in SHA224 {
+            assert_eq!(len(oid), Some(28), "{oid} must name SHA-224");
+        }
+
+        assert_eq!(
+            len("1.3.101.112"),
+            None,
+            "Ed25519 does not name a single hash"
+        );
+        assert_eq!(
+            len("1.2.840.113549.1.1.10"),
+            None,
+            "RSASSA-PSS parameters are not parsed"
+        );
+    }
+
+    #[test]
+    fn tls_server_end_point_none_for_unparseable_der() {
+        let cert = CertificateDer::from(b"not-a-certificate".to_vec());
+        assert_eq!(super::tls_server_end_point(&cert), None);
     }
 
     #[test]
