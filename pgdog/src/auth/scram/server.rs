@@ -6,6 +6,7 @@ use crate::net::messages::*;
 
 use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
+use tokio::task::spawn_blocking;
 use tracing::error;
 
 use rand::Rng;
@@ -31,6 +32,38 @@ pub(crate) struct UserPassword {
     iterations: u16,
 }
 
+impl UserPassword {
+    /// Derive the SCRAM hashes for all configured passwords.
+    ///
+    /// This runs PBKDF2 with thousands of iterations per password and is
+    /// CPU-bound: callers on the async runtime must push it to a blocking
+    /// thread.
+    fn hash(&self) -> PrecomputedPassword {
+        let iterations = NonZeroU32::new(self.iterations as u32)
+            .expect("SCRAM iteration count set in Server::new is non-zero");
+        let hashed_passwords = self
+            .passwords
+            .iter()
+            .map(|password| hash_password(password, iterations, &self.salt).to_vec())
+            .collect();
+        PrecomputedPassword {
+            hashed_passwords,
+            salt: self.salt.clone(),
+            iterations: self.iterations,
+        }
+    }
+}
+
+/// SCRAM hashes derived from [`UserPassword`] ahead of time, so the
+/// authentication provider doesn't run the expensive key derivation
+/// on the async runtime.
+#[derive(Clone)]
+struct PrecomputedPassword {
+    hashed_passwords: Vec<Vec<u8>>,
+    salt: Vec<u8>,
+    iterations: u16,
+}
+
 /// Used a prehashed password obtained from
 /// pg_shadow. This allows operators not to store
 /// passwords in plain text in the config.
@@ -44,28 +77,21 @@ pub(crate) struct HashedPassword {
 }
 
 enum Scram {
-    Plain(ScramServer<UserPassword>),
+    Plain(ScramServer<PrecomputedPassword>),
     Hashed(ScramServer<HashedPassword>),
 }
 
 enum ScramFinal<'a> {
-    Plain(ClientFinal<'a, UserPassword>),
+    Plain(ClientFinal<'a, PrecomputedPassword>),
     Hashed(ClientFinal<'a, HashedPassword>),
 }
 
 use base64::prelude::*;
 
-impl AuthenticationProvider for UserPassword {
+impl AuthenticationProvider for PrecomputedPassword {
     fn get_password_for(&self, _user: &str) -> Option<PasswordInfo> {
-        // TODO: This is slow. We should move it to its own thread pool.
-        let iterations = NonZeroU32::new(self.iterations as u32).unwrap();
-        let hashed_passwords = self
-            .passwords
-            .iter()
-            .map(|password| hash_password(password, iterations, &self.salt).to_vec())
-            .collect();
         Some(PasswordInfo::new_multi(
-            hashed_passwords,
+            self.hashed_passwords.clone(),
             self.iterations,
             self.salt.clone(),
         ))
@@ -182,7 +208,12 @@ impl Server {
         }
 
         let scram = match self.provider {
-            Provider::Plain(plain) => Scram::Plain(Self::scram_server(plain, plus, cbind)?),
+            Provider::Plain(plain) => {
+                // Key derivation is CPU-bound; keep it off the async runtime
+                // so connection storms don't stall other clients.
+                let precomputed = spawn_blocking(move || plain.hash()).await?;
+                Scram::Plain(Self::scram_server(precomputed, plus, cbind)?)
+            }
             Provider::Hashed(hashed) => Scram::Hashed(Self::scram_server(hashed, plus, cbind)?),
         };
 
@@ -230,6 +261,10 @@ mod tests {
     use super::*;
     use crate::auth::scram::Client;
     use scram::AuthenticationStatus;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use tokio::io::AsyncWriteExt;
+    use tokio::time::sleep;
 
     const SCRAM_HASH: &str = "SCRAM-SHA-256$4096:B6lJyg12n6SawAu1kD9maA==$huWaU6t+WsvcS9ZrDvocZeYtlLJ60hdP46tjszFBbW0=:706OTwYyqH5WpfNpZdgt0gxuP5ff4DPUpHYu3F3w6TY=";
 
@@ -237,13 +272,46 @@ mod tests {
     fn user_password_provider_generates_info() {
         let server = Server::new(&[PasswordKind::Plain("secret".to_string())]);
         let provider = match server.provider {
-            Provider::Plain(ref inner) => inner.clone(),
+            Provider::Plain(ref inner) => inner.hash(),
             _ => unreachable!(),
         };
 
         assert!(
             provider.get_password_for("user").is_some(),
             "plain provider should produce password info"
+        );
+    }
+
+    /// Drive a full SCRAM handshake between the pgdog Client and a
+    /// ScramServer over plain passwords hashed ahead of time, returning
+    /// the authentication status.
+    fn plain_scram_login(user: &str, password: &str, configured: &[&str]) -> AuthenticationStatus {
+        let server = Server::new(
+            &configured
+                .iter()
+                .map(|p| PasswordKind::Plain(p.to_string()))
+                .collect::<Vec<_>>(),
+        );
+        let provider = match server.provider {
+            Provider::Plain(ref inner) => inner.hash(),
+            _ => unreachable!(),
+        };
+        drive_scram_login(ScramServer::new(provider), user, password)
+    }
+
+    #[test]
+    fn precomputed_scram_accepts_any_configured_password() {
+        assert_eq!(
+            plain_scram_login("user", "pgdog", &["other", "pgdog"]),
+            AuthenticationStatus::Authenticated,
+        );
+    }
+
+    #[test]
+    fn precomputed_scram_rejects_wrong_password() {
+        assert_eq!(
+            plain_scram_login("user", "wrong", &["other", "pgdog"]),
+            AuthenticationStatus::NotAuthenticated,
         );
     }
 
@@ -271,7 +339,16 @@ mod tests {
         let provider = HashedPassword {
             hash: hash.to_string(),
         };
-        let scram_server = ScramServer::new(provider);
+        drive_scram_login(ScramServer::new(provider), user, password)
+    }
+
+    /// Drive a full SCRAM handshake between the pgdog Client and the given
+    /// ScramServer, returning the authentication status.
+    fn drive_scram_login<P: AuthenticationProvider>(
+        scram_server: ScramServer<P>,
+        user: &str,
+        password: &str,
+    ) -> AuthenticationStatus {
         let mut client = Client::new(user, password);
 
         let client_first = client.first().expect("client first");
@@ -388,6 +465,83 @@ mod tests {
         assert_eq!(
             scram_plus_login("wrong", SCRAM_HASH, cb_data),
             AuthenticationStatus::NotAuthenticated,
+        );
+    }
+
+    /// Key derivation for plain passwords must run off the async runtime.
+    /// On a single-threaded runtime, a concurrent ticker would be starved
+    /// for the entire PBKDF2 derivation if it ran inline on the worker.
+    #[tokio::test]
+    async fn scram_handshake_does_not_block_runtime() {
+        let passwords = (0..128)
+            .map(|i| PasswordKind::Plain(format!("password_{}", i)))
+            .collect::<Vec<_>>();
+        let server = Server::new(&passwords);
+
+        // Measure how long the derivation takes on this machine.
+        let plain = match server.provider {
+            Provider::Plain(ref inner) => inner.clone(),
+            _ => unreachable!(),
+        };
+        let started = Instant::now();
+        let _ = plain.hash();
+        let derivation = started.elapsed();
+
+        let (mut server_stream, mut client_stream) = connected_pair().await;
+
+        let client = tokio::spawn(async move {
+            let mut scram = Client::new("pgdog", "password_7");
+            client_stream
+                .send_flush(&Password::SASLInitialResponse {
+                    name: Authentication::SCRAM_SHA_256.to_string(),
+                    response: scram.first().expect("client first"),
+                })
+                .await
+                .unwrap();
+
+            let data = sasl_continue(read_auth(&mut client_stream).await).expect("SaslContinue");
+            scram.server_first(&data).expect("server first");
+            client_stream
+                .send_flush(&Password::PasswordMessage {
+                    response: scram.last().expect("client final"),
+                })
+                .await
+                .unwrap();
+
+            match read_auth(&mut client_stream).await {
+                Authentication::SaslFinal(data) => scram.server_last(&data).expect("server final"),
+                message => panic!("unexpected auth message: {:?}", message),
+            }
+        });
+
+        // Tick while the handshake runs, recording the longest time
+        // the runtime went without scheduling us.
+        let max_gap = Arc::new(Mutex::new(Duration::ZERO));
+        let gap = max_gap.clone();
+        let ticker = tokio::spawn(async move {
+            let mut last = Instant::now();
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                let now = Instant::now();
+                let mut max = gap.lock().unwrap();
+                *max = (*max).max(now - last);
+                last = now;
+            }
+        });
+
+        let authenticated = server.handle(&mut server_stream).await.expect("handshake");
+        server_stream.flush().await.unwrap();
+
+        client.await.unwrap();
+        ticker.abort();
+
+        assert!(authenticated, "handshake should authenticate");
+        let max_gap = *max_gap.lock().unwrap();
+        assert!(
+            max_gap < derivation / 2,
+            "runtime stalled for {:?} during a {:?} key derivation",
+            max_gap,
+            derivation,
         );
     }
 
