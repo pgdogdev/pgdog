@@ -14,6 +14,7 @@ use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::config::{Database, ServerAuth, TlsVerifyMode, User, config};
+use crate::net::tls::TlsOverrides;
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
@@ -197,6 +198,17 @@ impl Address {
         socket_addrs
             .next()
             .ok_or(Error::DnsResolutionFailed(self.host.clone()))
+    }
+
+    /// Per-server TLS overrides for connections to this address.
+    /// Unset fields fall back to the `[general]` settings.
+    pub(crate) fn tls_overrides(&self) -> TlsOverrides<'_> {
+        TlsOverrides {
+            verify: self.tls_verify,
+            ca_certificate: self.tls_server_ca_certificate.as_ref(),
+            certificate: self.tls_server_certificate.as_ref(),
+            private_key: self.tls_server_private_key.as_ref(),
+        }
     }
 
     /// A replacement for [`PartialEq`] which accounts for

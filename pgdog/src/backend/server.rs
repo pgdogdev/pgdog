@@ -251,20 +251,13 @@ impl Server {
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls = UpstreamTlsSettings::resolve(
-            &config.config.general,
-            addr.tls_verify,
-            addr.tls_server_ca_certificate.as_ref(),
-            addr.tls_server_certificate.as_ref(),
-            addr.tls_server_private_key.as_ref(),
-        );
-        let tls_mode = tls.verify;
+        let tls = UpstreamTlsSettings::resolve(&config.config.general, addr.tls_overrides());
 
         // Only attempt TLS if not in Disabled mode
-        if tls_mode != TlsVerifyMode::Disabled {
+        if tls.verify != TlsVerifyMode::Disabled {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
-                tls_mode, addr,
+                tls.verify, addr,
             );
 
             // Request TLS.
@@ -299,7 +292,9 @@ impl Server {
                         )));
                     }
                 }
-            } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
+            } else if tls.verify == TlsVerifyMode::VerifyFull
+                || tls.verify == TlsVerifyMode::VerifyCa
+            {
                 // If we require TLS but server doesn't support it, fail
                 error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
