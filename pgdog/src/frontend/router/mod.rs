@@ -12,7 +12,7 @@ pub(crate) mod sharding;
 
 pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
-pub(crate) use parser::{Ast, Command, QueryParser, RewritePlan, Route, SetParam};
+pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, RewritePlan, Route, SetParam};
 
 use super::ClientRequest;
 pub(crate) use context::RouterContext;
