@@ -1,5 +1,5 @@
 DROP TABLE IF EXISTS sharding_bench;
-CREATE TABLE sharding_bench (id BIGINT PRIMARY KEY, value TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE sharding_bench (id BIGINT, value TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 
 INSERT INTO sharding_bench VALUES (1, 'test1');
 INSERT INTO sharding_bench VALUES (2, 'test2');

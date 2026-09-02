@@ -36,3 +36,11 @@ host = "localhost"
 role = "replica"
 shard = 2
 database_name = "pgdog3"
+
+[[sharded_tables]]
+database = "pgdog"
+column = "id"
+name = "sharding_bench"
+
+[rewrite]
+split_inserts = "rewrite"
