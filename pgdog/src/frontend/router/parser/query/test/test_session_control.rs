@@ -1,6 +1,9 @@
 use pgdog_config::QueryParserLevel;
 
-use crate::{config::config, frontend::Command};
+use crate::{
+    config::config,
+    frontend::{Command, DiscardTarget},
+};
 
 use super::setup::*;
 
@@ -38,6 +41,27 @@ fn test_reset_all() {
         matches!(command, Command::ResetAll),
         "expected Command::ResetAll, got {command:#?}",
     );
+}
+
+#[test]
+fn test_discard_variants() {
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = QueryParserLevel::On;
+
+    for (query, expected) in [
+        ("DISCARD ALL", DiscardTarget::All),
+        ("DISCARD PLANS", DiscardTarget::Plans),
+        ("DISCARD SEQUENCES", DiscardTarget::Sequences),
+        ("DISCARD TEMP", DiscardTarget::Temp),
+        ("DISCARD TEMPORARY", DiscardTarget::Temp),
+    ] {
+        let mut test = QueryParserTest::new_single_primary(&config);
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(command, Command::Discard { target, .. } if target == expected),
+            "expected {expected:?} for {query}, got {command:#?}",
+        );
+    }
 }
 
 #[test]

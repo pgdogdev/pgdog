@@ -2,7 +2,8 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
+        BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
+        Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         router::{Route, parser::Shard},
     },
@@ -275,7 +276,9 @@ impl QueryEngine {
             }
             Command::Copy(_) => self.execute(context, rewrite_result).await?,
             Command::Deallocate => self.deallocate(context).await?,
-            Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::Discard { target, extended } => {
+                self.discard(context, *target, *extended).await?
+            }
             Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 

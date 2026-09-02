@@ -34,7 +34,7 @@ pub(crate) use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub(crate) use binary::BinaryStream;
 pub(crate) use cache::{Ast, AstContext, Cache};
 pub(crate) use column::Column;
-pub(crate) use command::{Command, SetParam};
+pub(crate) use command::{Command, DiscardTarget, SetParam};
 pub(crate) use comment::parse_edge_comment;
 pub(crate) use context::QueryParserContext;
 pub(crate) use copy::{CopyFormat, CopyParser};
