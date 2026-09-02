@@ -1,6 +1,6 @@
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{Bind, ProtocolMessage};
 use crate::unique_id::UniqueId;
 
 use super::insert::build_split_requests;
@@ -8,6 +8,21 @@ use super::offset::OffsetPlan;
 use super::{
     Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
 };
+
+fn apply_statement(request: &mut ClientRequest, stmt: &str) {
+    for message in request.messages.iter_mut() {
+        match message {
+            ProtocolMessage::Query(query) => query.set_query(stmt),
+            ProtocolMessage::Parse(parse) => {
+                parse.set_query(stmt);
+                if !parse.anonymous() {
+                    PreparedStatements::global().write().rewrite(parse);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Statement rewrite plan.
 ///
@@ -79,18 +94,7 @@ impl RewriteResult {
                         .is_some_and(|route| !route.is_cross_shard())
                     && let Some(stmt) = direct_stmt
                 {
-                    for message in request.messages.iter_mut() {
-                        match message {
-                            ProtocolMessage::Query(query) => query.set_query(stmt),
-                            ProtocolMessage::Parse(parse) => {
-                                parse.set_query(stmt);
-                                if !parse.anonymous() {
-                                    PreparedStatements::global().write().rewrite(parse);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+                    apply_statement(request, stmt);
                 }
 
                 if let Some(offset) = offset {
@@ -136,23 +140,6 @@ impl RewritePlan {
         Ok(())
     }
 
-    /// Apply the rewrite plan to a Parse message by updating the SQL.
-    pub(crate) fn apply_parse(&self, parse: &mut Parse) {
-        if let Some(ref stmt) = self.stmt {
-            parse.set_query(stmt);
-            if !parse.anonymous() {
-                PreparedStatements::global().write().rewrite(parse);
-            }
-        }
-    }
-
-    /// Apply the rewrite plan to a Query message by updating the SQL.
-    pub(crate) fn apply_query(&self, query: &mut Query) {
-        if let Some(ref stmt) = self.stmt {
-            query.set_query(stmt);
-        }
-    }
-
     /// Apply the rewrite plan to a ClientRequest.
     pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
@@ -172,12 +159,13 @@ impl RewritePlan {
                 });
         }
 
+        if let Some(stmt) = &self.stmt {
+            apply_statement(request, stmt);
+        }
+
         for message in request.messages.iter_mut() {
-            match message {
-                ProtocolMessage::Parse(parse) => self.apply_parse(parse),
-                ProtocolMessage::Query(query) => self.apply_query(query),
-                ProtocolMessage::Bind(bind) => self.apply_bind(bind)?,
-                _ => {}
+            if let ProtocolMessage::Bind(bind) = message {
+                self.apply_bind(bind)?;
             }
         }
 

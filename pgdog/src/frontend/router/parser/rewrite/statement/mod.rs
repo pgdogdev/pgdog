@@ -167,14 +167,26 @@ impl<'a> StatementRewrite<'a> {
         }
 
         if matches!(stmt.stmt(), Node::SelectStmt(_)) {
-            let direct_stmt = pg_raw_parse::deparse(&*stmt)?.as_str().to_owned();
             let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() else {
                 unreachable!("statement was checked to be SELECT");
             };
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
             if !plan.aggregates.is_noop() {
-                plan.direct_stmt = Some(direct_stmt);
+                aggregate::AggregatesRewrite::rollback_select(&mut select, mem, &plan.aggregates);
             }
+
+            if !plan.aggregates.is_noop() {
+                plan.direct_stmt = Some(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+
+                let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() else {
+                    unreachable!("statement was checked to be SELECT");
+                };
+                self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+            }
+
+            let NodeMut::SelectStmt(select) = stmt.stmt_mut() else {
+                unreachable!("statement was checked to be SELECT");
+            };
             self.limit_offset(&select, &mut plan);
         }
 
