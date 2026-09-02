@@ -35,6 +35,7 @@ pub mod set_config;
 pub mod set_in_transaction;
 pub mod set_sharding_key;
 pub mod shard_consistency;
+pub mod simple_prepared;
 pub mod stddev;
 pub mod sum;
 pub mod syntax_error;

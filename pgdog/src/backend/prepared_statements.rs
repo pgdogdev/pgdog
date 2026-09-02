@@ -87,6 +87,7 @@ pub(super) enum HandleResult {
         prepend: Prepare,
         rewrite: ProtocolMessage,
     },
+    PrependProtocolMessage(ProtocolMessage),
 }
 
 /// Server-specific prepared statements.
@@ -335,8 +336,28 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::EnsurePrepared(prepare) => {
-                if self.contains(prepare.name()) {
-                    return Ok(HandleResult::Drop);
+                let name = prepare.name();
+                if self.contains(name) {
+                    let entry = self.local_cache.get(name);
+                    let expired = self.config.ttl.is_some()
+                        && entry.is_some_and(|entry| entry.expired(Instant::now()));
+
+                    if expired {
+                        // Reached TTL limit for the given statement. Close it and re-Prepare on Postgres.
+
+                        self.state.add_ignore(ExecutionCode::CloseComplete); // (the Close)
+                        self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
+                        self.state.add_ignore(ExecutionCode::ReadyForQuery);
+
+                        self.parses.push_back(name.to_owned());
+
+                        // This will do Close => Prepare
+                        return Ok(HandleResult::PrependProtocolMessage(
+                            ProtocolMessage::Close(Close::named(name)),
+                        ));
+                    } else {
+                        return Ok(HandleResult::Drop);
+                    }
                 } else {
                     self.parses.push_back(prepare.name().to_string());
                     self.state.add_ignore('C');
@@ -910,6 +931,57 @@ pub(crate) mod test {
 
         let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
         assert!(!ps.forward(&mut ready_for_query).unwrap());
+        assert!(ps.done());
+    }
+
+    #[test]
+    fn ensure_prepared_re_prepares_after_ttl_expire() {
+        let mut ps = new_extended();
+        let config = ps.config;
+
+        // Configure with a TTL of Zero;
+        // Ensures that any subsequent requests will immediately be expired.
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(Duration::ZERO),
+            ttl_jitter: Duration::ZERO,
+            ..config
+        });
+
+        let name = "__stmt_ensure";
+        let prepare = ProtocolMessage::EnsurePrepared(SimplePrepare::new(
+            name,
+            "PREPARE __pgdog_template_name AS SELECT $1",
+        ));
+
+        assert_eq!(ps.handle(&prepare).unwrap(), HandleResult::Forward);
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(!ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
+        assert!(!ps.forward(&mut ready_for_query).unwrap());
+        assert!(ps.done());
+
+        // Will be expired (TTL zero)
+
+        let HandleResult::PrependProtocolMessage(protocol_message) = ps.handle(&prepare).unwrap()
+        else {
+            unreachable!("Should have it do Close -> Prepare");
+        };
+
+        assert!(matches!(protocol_message, ProtocolMessage::Close(_)));
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+        assert!(!ps.contains(name));
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(!ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        let mut rfq = Message::new(ReadyForQuery::idle().to_bytes());
+        assert!(!ps.forward(&mut rfq).unwrap());
         assert!(ps.done());
     }
 
