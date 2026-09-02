@@ -517,6 +517,8 @@ pub struct General {
 
     /// Close client connections that have been idle, i.e., haven't sent any queries, for this amount of time.
     ///
+    /// **Note:** Set to `0` to disable the client idle timeout entirely. Can be overridden per-user or per-database.
+    ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#client_idle_timeout>
     #[serde(default = "General::default_client_idle_timeout")]
     pub client_idle_timeout: u64,
@@ -1232,8 +1234,15 @@ impl General {
         Duration::from_millis(self.prepared_statements_ttl_jitter.min(ttl))
     }
 
+    /// Effective general client idle timeout.
+    ///
+    /// A configured value of `0` disables the timeout.
     pub fn client_idle_timeout(&self) -> Duration {
-        Duration::from_millis(self.client_idle_timeout)
+        if self.client_idle_timeout == 0 {
+            Duration::MAX
+        } else {
+            Duration::from_millis(self.client_idle_timeout)
+        }
     }
 
     pub fn connect_attempt_delay(&self) -> Duration {
@@ -1598,6 +1607,21 @@ impl General {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+
+    #[test]
+    fn client_idle_timeout_zero_is_disabled() {
+        let general = General {
+            client_idle_timeout: 0,
+            ..Default::default()
+        };
+        assert_eq!(general.client_idle_timeout(), Duration::MAX);
+
+        let general = General {
+            client_idle_timeout: 25_000,
+            ..Default::default()
+        };
+        assert_eq!(general.client_idle_timeout(), Duration::from_millis(25_000));
+    }
 
     #[test]
     fn test_prepared_statements_ttl_defaults() {

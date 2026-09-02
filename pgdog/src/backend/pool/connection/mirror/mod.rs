@@ -19,7 +19,7 @@ use crate::net::{FrontendPid, Parameter, Parameters, Stream};
 use crate::tasks;
 
 use super::Error;
-use crate::util::safe_sleep;
+use crate::util::{safe_sleep, user_database_from_params};
 
 pub(crate) mod buffer_with_delay;
 pub(crate) mod handler;
@@ -52,12 +52,13 @@ impl Mirror {
     fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.set_level(config.prepared_statements());
+        let (user, database) = user_database_from_params(params);
 
         Self {
             id: FrontendPid::new(),
             prepared_statements,
             params: params.clone(),
-            timeouts: Timeouts::from_config(&config.config.general),
+            timeouts: Timeouts::from_config(config, user, database, false),
             stream: Stream::dev_null(),
             transaction: None,
         }

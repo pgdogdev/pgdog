@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use pgdog_config::{PoolerMode, QuerySizeLimitAction};
 use tokio::{
@@ -265,7 +268,8 @@ async fn test_abrupt_disconnect() {
 
 #[tokio::test]
 async fn test_client_idle_timeout() {
-    let (mut conn, mut client, _inner) = new_client!(false);
+    crate::logger();
+    let (mut conn, mut client) = parallel_test_client().await;
 
     let mut config = (*config()).clone();
     config.config.general.client_idle_timeout = 25;
@@ -287,6 +291,68 @@ async fn test_client_idle_timeout() {
         )
         .await
         .is_err()
+    );
+}
+
+#[tokio::test]
+async fn test_idle_client_does_not_retain_config_snapshot() {
+    crate::logger();
+
+    let mut initial = (*config()).clone();
+    initial.config.general.client_idle_timeout = 0;
+    initial.config.databases.clear();
+    initial.users.users.clear();
+    set(initial).unwrap();
+
+    let (conn, mut client) = parallel_test_client().await;
+    let previous = config();
+    let previous_weak = Arc::downgrade(&previous);
+    drop(previous);
+
+    let mut buffer = Box::pin(client.buffer(State::Idle));
+    assert!(
+        timeout(Duration::from_millis(10), &mut buffer)
+            .await
+            .is_err(),
+        "disabled idle timeout should leave the frontend read pending"
+    );
+
+    let mut replacement = (*config()).clone();
+    replacement.config.general.client_idle_timeout = 25;
+    set(replacement).unwrap();
+
+    assert!(
+        previous_weak.upgrade().is_none(),
+        "a pending idle read must not retain the previous configuration snapshot"
+    );
+
+    drop(buffer);
+    drop(conn);
+}
+
+#[tokio::test]
+async fn test_client_idle_timeout_user_override() {
+    crate::logger();
+    // Keep `_conn` alive so the client's stream stays open while idle.
+    let (_conn, mut client) = parallel_test_client().await;
+
+    let mut config = (*config()).clone();
+    // General timeout is short, but this user is exempt.
+    config.config.general.client_idle_timeout = 25;
+    config.users.add_or_replace(pgdog_config::User {
+        name: "pgdog".into(),
+        database: "pgdog".into(),
+        password: Some("pgdog".into()),
+        client_idle_timeout: Some(0),
+        ..Default::default()
+    });
+    set(config).unwrap();
+
+    assert!(
+        timeout(Duration::from_millis(50), client.buffer(State::Idle))
+            .await
+            .is_err(),
+        "user override should exempt this client from the idle timeout"
     );
 }
 
