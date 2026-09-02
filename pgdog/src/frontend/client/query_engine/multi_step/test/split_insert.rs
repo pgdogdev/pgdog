@@ -2,6 +2,7 @@
 
 use pg_raw_parse::Node;
 
+use crate::frontend::client::query_engine::multi_step::types::StepRequest;
 use crate::{
     frontend::{
         ClientRequest,
@@ -76,8 +77,10 @@ async fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
     steps
         .into_iter()
         .map(|step| {
-            let request = step
-                .request
+            let StepRequest::Statement(statement) = step.request else {
+                unreachable!("split should not be raw")
+            };
+            let request = statement
                 .assemble(&ResponseHistory::default())
                 .unwrap()
                 .expect("split resolves statically");

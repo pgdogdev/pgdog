@@ -160,8 +160,10 @@ async fn run_test_with(
         return Ok(None);
     };
 
-    let delete = planner.steps[0]
-        .request
+    let StepRequest::Statement(ref statement) = planner.steps[0].request else {
+        unreachable!("delete should not be raw")
+    };
+    let delete = statement
         .assemble(&ResponseHistory::default())?
         .expect("delete step resolves statically");
     let delete = Statement {

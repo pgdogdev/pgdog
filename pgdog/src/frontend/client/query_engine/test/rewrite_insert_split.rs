@@ -1,4 +1,4 @@
-use crate::frontend::client::query_engine::multi_step::types::ResponseHistory;
+use crate::frontend::client::query_engine::multi_step::types::{ResponseHistory, StepRequest};
 
 use super::prelude::*;
 
@@ -25,7 +25,10 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
         .steps
         .into_iter()
         .map(|step| {
-            step.request
+            let StepRequest::Statement(statement) = step.request else {
+                unreachable!("split should not be raw")
+            };
+            statement
                 .assemble(&ResponseHistory::default())
                 .unwrap()
                 .expect("split resolves statically")

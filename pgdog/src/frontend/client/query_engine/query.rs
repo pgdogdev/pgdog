@@ -62,7 +62,7 @@ impl QueryEngine {
             }
         }
 
-        let planner = query_planner.unwrap_or_else(|| QueryPlanner::plan_normal());
+        let planner = query_planner.unwrap_or_else(QueryPlanner::plan_normal);
 
         let query_timeout = context.timeouts.query_timeout(&State::Active);
         let result = safe_timeout(query_timeout, self.run_steps(context, &planner)).await;
