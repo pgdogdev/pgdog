@@ -10,9 +10,10 @@ use std::time::{Duration, SystemTime};
 
 use dashmap::DashMap;
 use derive_more::Debug;
+use indexmap::IndexMap;
 use parking_lot::RwLock;
-pub(crate) use pgdog_stats::TaskId;
-use pgdog_stats::{TaskDefinition, TaskStatus};
+use pgdog_stats::{TaskDefinition, TaskStatus, TaskUpdate};
+pub(crate) use pgdog_stats::{TaskId, TaskProgress};
 use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
 use tokio_util::sync::CancellationToken;
@@ -54,35 +55,11 @@ pub(crate) trait Task: std::fmt::Debug + Send + Sync + Sized {
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
-/// How far a task got through its lifecycle — a fixed, enumerable set,
-/// independent of the domain-specific status the task reports for itself
-/// (which is tracked separately as [`TaskStatus`]).
-#[derive(Display, Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TaskProgress {
-    #[display("started")]
-    Started,
-    #[display("running")]
-    Running,
-    #[display("finished")]
-    Finished,
-    /// Cancellation has been requested; the task is winding down
-    /// cooperatively and has not yet reached a terminal state.
-    #[display("cancelling")]
-    Cancelling,
-    #[display("cancelled")]
-    Cancelled,
-    #[display("failed: {_0}")]
-    Error(String),
-    #[display("panicked: {_0}")]
-    Panic(String),
-}
-
 /// Snapshot of a task's current state, readable through the registry.
 #[derive(Debug, Clone)]
 pub(crate) struct TaskState {
-    /// What the task is, from [`Task::definition`]: its name and, where it has
-    /// any, the structured detail. Immutable for the life of the task, so every
-    /// snapshot shares it.
+    /// What the task is: its name and, where it has any, the structured
+    /// detail. Immutable for the life of the task, so every snapshot shares it.
     pub(crate) definition: Arc<TaskDefinition>,
     /// Where the task is in its lifecycle (carries the error/panic message
     /// for its terminal failure variants).
@@ -119,21 +96,6 @@ pub(crate) enum TaskError<E> {
     /// died without reporting (e.g. runtime shutdown).
     #[display("task result was never delivered")]
     Abandoned,
-}
-
-impl TaskProgress {
-    /// Whether the task reached a terminal state.
-    fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Finished | Self::Cancelled | Self::Error(_) | Self::Panic(_)
-        )
-    }
-
-    /// Whether the task failed.
-    fn is_error(&self) -> bool {
-        matches!(self, Self::Error(_) | Self::Panic(_))
-    }
 }
 
 /// Tasks of one nesting level
@@ -181,6 +143,10 @@ impl TaskEntryState {
             status: TaskStatus::Other,
         }
     }
+
+    fn mark_updated(&mut self) {
+        self.updated_at = SystemTime::now().max(self.updated_at);
+    }
 }
 
 /// Registry entry of a queued task. Holds no `T`: the reported status is a
@@ -227,7 +193,7 @@ impl TaskEntry {
             return;
         }
 
-        let panicked = matches!(progress, TaskProgress::Panic(_));
+        let panicked = matches!(progress, TaskProgress::Panic { .. });
         if progress.is_terminal() && !panicked && self.cancellation_token.is_cancelled() {
             info!(
                 "The task is cancelled, ignore the current progress: {progress} and set it Cancelled"
@@ -242,7 +208,7 @@ impl TaskEntry {
         }
 
         state.progress = progress;
-        state.updated_at = SystemTime::now();
+        state.mark_updated();
     }
 
     pub(crate) fn state(&self) -> TaskState {
@@ -264,6 +230,34 @@ impl TaskEntry {
                 .duration_since(state.updated_at)
                 .is_ok_and(|age| age >= ttl)
     }
+
+    /// Create the [`TaskUpdate`] from the current entry
+    #[allow(dead_code)] // used by ee
+    pub(crate) fn as_update(&self, since: SystemTime) -> Option<TaskUpdate> {
+        let state = self.state();
+        let subtasks: IndexMap<TaskId, TaskUpdate> = self
+            .subtasks
+            .map
+            .iter()
+            .filter_map(|child| child.value().as_update(since))
+            .map(|child| (child.id, child))
+            .collect();
+
+        let changed = state.updated_at >= since;
+        if !changed && subtasks.is_empty() {
+            return None;
+        }
+
+        Some(TaskUpdate {
+            id: self.id,
+            started_at: state.started_at,
+            updated_at: state.updated_at,
+            progress: changed.then_some(state.progress),
+            status: changed.then_some(state.status),
+            definition: (state.started_at >= since).then_some(state.definition),
+            subtasks,
+        })
+    }
 }
 
 struct TerminalOnDrop(Arc<TaskEntry>);
@@ -271,7 +265,7 @@ struct TerminalOnDrop(Arc<TaskEntry>);
 impl Drop for TerminalOnDrop {
     fn drop(&mut self) {
         let progress = if std::thread::panicking() {
-            TaskProgress::Panic("unwound by a panic".into())
+            TaskProgress::panic("unwound by a panic")
         } else {
             TaskProgress::Cancelled
         };
@@ -367,7 +361,7 @@ impl<T: Task> TaskContext<T> {
         }
 
         state.status = status.into();
-        state.updated_at = SystemTime::now();
+        state.mark_updated();
     }
 
     /// Get the task's cancellation token.
@@ -429,7 +423,7 @@ impl<T: Task> TaskContext<T> {
                     Ok(output)
                 }
                 Err(err) => {
-                    ctx.transition(TaskProgress::Error(err.to_string()));
+                    ctx.transition(TaskProgress::error(err.to_string()));
 
                     Err(err)
                 }
@@ -519,7 +513,7 @@ impl TaskStorage {
                     let _ = sender.send(Ok(res));
                 }
                 Ok(Err(err)) => {
-                    ctx.transition(TaskProgress::Error(err.to_string()));
+                    ctx.transition(TaskProgress::error(err.to_string()));
                     let _ = sender.send(Err(TaskError::Failed(err)));
                 }
                 Err(err) if err.is_cancelled() => {
@@ -529,7 +523,7 @@ impl TaskStorage {
                 Err(err) => {
                     let panic = err.to_string();
                     error!("task panicked: {panic}");
-                    ctx.transition(TaskProgress::Panic(panic.clone()));
+                    ctx.transition(TaskProgress::panic(panic.clone()));
                     let _ = sender.send(Err(TaskError::Panicked(panic)));
                 }
             }
@@ -624,6 +618,7 @@ mod tests {
     use std::convert::Infallible;
     use std::fmt::Debug;
     use std::sync::Arc;
+    use std::time::UNIX_EPOCH;
     use tokio::sync::Notify;
     use tokio::task::yield_now;
     use tokio::test;
@@ -1156,7 +1151,7 @@ mod tests {
         assert!(matches!(res, Err(TaskError::Panicked(_))));
 
         let entry = storage.task(task_id).unwrap();
-        assert!(matches!(entry.state().progress, TaskProgress::Panic(_)));
+        assert!(matches!(entry.state().progress, TaskProgress::Panic { .. }));
     }
 
     #[test(start_paused = true)]
@@ -1247,7 +1242,7 @@ mod tests {
         assert_eq!(*state_a.lock(), "failed");
 
         let info = storage.task(task_id).unwrap();
-        assert!(matches!(info.state().progress, TaskProgress::Error(_)));
+        assert!(matches!(info.state().progress, TaskProgress::Error { .. }));
     }
 
     #[test]
@@ -1303,7 +1298,7 @@ mod tests {
         assert_eq!(*state_a.lock(), "started");
 
         let info = storage.task(task_id).unwrap();
-        assert!(matches!(info.state().progress, TaskProgress::Panic(_)));
+        assert!(matches!(info.state().progress, TaskProgress::Panic { .. }));
     }
 
     #[test]
@@ -1328,7 +1323,7 @@ mod tests {
         assert!(matches!(task.await, Err(TaskError::Panicked(_))));
 
         let root = storage.task(id).unwrap();
-        assert!(matches!(root.state().progress, TaskProgress::Panic(_)));
+        assert!(matches!(root.state().progress, TaskProgress::Panic { .. }));
 
         let subtasks = root
             .subtasks()
@@ -1337,7 +1332,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(subtasks.len(), 1);
-        assert!(matches!(subtasks[0], TaskProgress::Panic(_)));
+        assert!(matches!(subtasks[0], TaskProgress::Panic { .. }));
     }
 
     #[test]
@@ -1661,7 +1656,7 @@ mod tests {
         assert!(
             progress
                 .iter()
-                .any(|progress| matches!(progress, TaskProgress::Error(_)))
+                .any(|progress| matches!(progress, TaskProgress::Error { .. }))
         );
     }
 
@@ -1721,5 +1716,69 @@ mod tests {
 
         assert_eq!(waiter.id(), TaskId::new(7));
         assert!(matches!(waiter.await, Err(TaskError::Abandoned)));
+    }
+
+    #[test]
+    async fn test_as_update_skips_sent() {
+        let notify = Arc::new(Notify::new());
+        let state_a = Arc::new(Mutex::new("initial"));
+        let a = mock_successful!(state_a, notify);
+
+        let storage = TaskStorage::default();
+        let task = storage.run(a);
+        let id = task.id();
+
+        settle().await;
+
+        let root = storage.task(id).unwrap();
+        assert!(
+            root.as_update(SystemTime::now() + Duration::from_secs(60))
+                .is_none()
+        );
+
+        notify.notify_one();
+        task.await.unwrap();
+
+        let finished_at = root.state().updated_at;
+        assert!(root.as_update(finished_at).is_some());
+        assert!(
+            root.as_update(finished_at + Duration::from_millis(1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    async fn test_as_update_sends_only_receiver_updates() {
+        let sub_gate = Arc::new(Notify::new());
+        let parent_gate = Arc::new(Notify::new());
+
+        let storage = TaskStorage::default();
+        let task = storage.run(TraverseRoot {
+            sub_gate: sub_gate.clone(),
+            parent_gate: parent_gate.clone(),
+        });
+
+        settle().await;
+
+        let root = storage.task(task.id()).unwrap();
+
+        let full = root.as_update(UNIX_EPOCH).unwrap();
+        assert_eq!(full.id, root.id);
+        assert!(full.definition.is_some());
+        assert!(full.progress.is_some());
+        assert!(full.status.is_some());
+
+        let child = &full.subtasks[0];
+        let grandchild = &child.subtasks[0];
+        assert!(child.id > full.id);
+        assert!(grandchild.id > child.id);
+
+        let thinned = root.as_update(child.started_at).unwrap();
+        assert_eq!(thinned.started_at, root.started_at);
+        assert!(thinned.definition.is_none());
+        assert!(thinned.subtasks[0].definition.is_some());
+
+        sub_gate.notify_one();
+        parent_gate.notify_one();
     }
 }
