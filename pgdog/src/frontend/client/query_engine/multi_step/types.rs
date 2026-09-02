@@ -8,12 +8,22 @@ use std::fmt::Debug;
 /// Responses saved from a completed `Step`
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StepResponses {
-    pub(crate) key: Option<&'static str>,
+    pub(crate) key: Option<SaveKey>,
     /// Need this for getting a fresh look at the table. Avoids cache problems.
     pub(crate) row_description: Option<RowDescription>,
     pub(crate) parameter_description: Option<Message>,
     pub(crate) rows: Vec<DataRow>,
     pub(crate) command_complete: Option<CommandComplete>,
+}
+
+/// What key we save under to reference later if we need to reference a certain `Step`'s
+/// `StepResponses`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SaveKey {
+    ShardingKeyUpdateDelete,
+    ShardingKeyUpdateInsert,
+
+    //TODO: Dynamic(String); when we have subqueries; we must dynamically generate names.
 }
 
 /// Previously completed `Step` responses
@@ -30,7 +40,7 @@ impl ResponseHistory {
         self.steps.push(responses);
     }
 
-    pub(crate) fn get(&self, key: &str) -> Option<&StepResponses> {
+    pub(crate) fn get(&self, key: SaveKey) -> Option<&StepResponses> {
         self.steps.iter().find(|step| step.key == Some(key))
     }
 
@@ -60,7 +70,7 @@ pub(crate) struct QueryPlanner {
 #[derive(Debug, Clone)]
 pub(crate) struct Step {
     /// The key that the `Step` responses are saved under in `ResponseHistory`
-    pub(crate) save_key: Option<&'static str>,
+    pub(crate) save_key: Option<SaveKey>,
     /// Statically contains or dynamically constructs the `ClientRequest`
     pub(crate) request: StepRequest,
 }

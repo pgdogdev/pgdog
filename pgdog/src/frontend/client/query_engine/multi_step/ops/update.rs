@@ -1,10 +1,7 @@
 use crate::backend::ShardingSchema;
 use crate::frontend::ClientRequest;
 use crate::frontend::client::query_engine::multi_step::error::{Error, UpdateError};
-use crate::frontend::client::query_engine::multi_step::types::{
-    ForwardToClient, QueryPlanner, ResponseHistory, StatementRequest, StatementSource, Step,
-    StepProtocol, StepRequest,
-};
+use crate::frontend::client::query_engine::multi_step::types::{ForwardToClient, QueryPlanner, ResponseHistory, SaveKey, StatementRequest, StatementSource, Step, StepProtocol, StepRequest};
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::{Column, Table, Value};
@@ -105,7 +102,7 @@ impl QueryPlanner {
             ) -> Vec<Message> {
                 // The INSERT step's responses (RETURNING rows and protocol acks)
                 // We don't worry about DELETE since it's an internal step.
-                let mut messages = match map.get("insert") {
+                let mut messages = match map.get(SaveKey::ShardingKeyUpdateInsert) {
                     Some(insert) => ResponseHistory::compose(&[insert], context.client_request),
                     None => Vec::new(),
                 };
@@ -113,7 +110,7 @@ impl QueryPlanner {
                 // Only allows update one row at a time
                 // We use 0 when the DELETE matched nothing.
                 let rows = map
-                    .get("delete")
+                    .get(SaveKey::ShardingKeyUpdateDelete)
                     .map(|delete| delete.rows.len())
                     .unwrap_or_default();
 
@@ -169,9 +166,9 @@ impl QueryPlanner {
                 map: &'a ResponseHistory,
             ) -> Result<Option<(&'a RowDescription, &'a DataRow)>, Error> {
                 // TODO: Can this be a broad assert?
-                debug_assert!(map.get("delete").is_some());
+                debug_assert!(map.get(SaveKey::ShardingKeyUpdateDelete).is_some());
                 let delete = map
-                    .get("delete")
+                    .get(SaveKey::ShardingKeyUpdateDelete)
                     .ok_or(UpdateError::MissingStepResponse("delete"))?;
 
                 let rows = delete.rows.len();
@@ -298,7 +295,7 @@ impl QueryPlanner {
         };
 
         Ok(Step {
-            save_key: Some("insert"),
+            save_key: Some(SaveKey::ShardingKeyUpdateInsert),
             request: StepRequest::Statement(Box::new(StatementRequest {
                 source: Box::new(insert),
                 protocol: StepProtocol::Extended,
@@ -347,7 +344,7 @@ impl QueryPlanner {
         let ast = Ast::from_raw_stmts(delete);
 
         Ok(Step {
-            save_key: Some("delete"),
+            save_key: Some(SaveKey::ShardingKeyUpdateDelete),
             request: Self::build_request(
                 engine,
                 context,

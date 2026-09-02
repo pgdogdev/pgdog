@@ -10,9 +10,7 @@ use crate::backend::{ShardedTables, replication::ShardedSchemas};
 use crate::frontend::ClientRequest;
 use crate::frontend::client::query_engine::QueryEngineContext;
 use crate::frontend::client::query_engine::multi_step::error::Error;
-use crate::frontend::client::query_engine::multi_step::types::{
-    QueryPlanner, ResponseHistory, StatementSource, StepRequest, StepResponses,
-};
+use crate::frontend::client::query_engine::multi_step::types::{QueryPlanner, ResponseHistory, SaveKey, StatementSource, StepRequest, StepResponses};
 use crate::frontend::client::test::TestClient;
 use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::{AstContext, Cache, Error as ParserError};
@@ -599,7 +597,7 @@ async fn test_insert_build_request_with_expr_column() {
     // The INSERT is built from the DELETE step's response.
     let mut map = ResponseHistory::default();
     map.push(StepResponses {
-        key: Some("delete"),
+        key: Some(SaveKey::ShardingKeyUpdateDelete),
         row_description: Some(row_description),
         rows: vec![data_row],
         ..Default::default()

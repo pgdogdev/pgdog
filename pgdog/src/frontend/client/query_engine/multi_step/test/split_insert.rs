@@ -11,7 +11,7 @@ use crate::{
                 QueryEngineContext,
                 multi_step::{
                     error::Error,
-                    insert::create_steps,
+                    ops::insert::create_steps,
                     types::{QueryPlanner, ResponseHistory},
                 },
             },
