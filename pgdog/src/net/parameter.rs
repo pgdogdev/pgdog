@@ -160,6 +160,26 @@ impl ParameterValue {
             _ => None,
         }
     }
+
+    /// Append ` - {host}` for `application_name_add_host`. Idempotent if the
+    /// suffix is already present.
+    pub fn with_client_host(self, host: &str) -> Self {
+        match self {
+            Self::String(name) => Self::String(application_name_with_host(&name, host)),
+            other => other,
+        }
+    }
+}
+
+/// Format `application_name` with the client host, matching
+/// `{name} - {host}` (empty `{name}` is allowed).
+pub fn application_name_with_host(name: &str, host: &str) -> String {
+    let suffix = format!(" - {host}");
+    if name.ends_with(&suffix) {
+        name.to_string()
+    } else {
+        format!("{name}{suffix}")
+    }
 }
 
 /// List of parameters.
@@ -521,7 +541,33 @@ mod test {
     use crate::net::ToBytes;
     use crate::net::parameter::ParameterValue;
 
-    use super::Parameters;
+    use super::{Parameters, application_name_with_host};
+
+    #[test]
+    fn test_application_name_with_host() {
+        assert_eq!(
+            application_name_with_host("myapp", "10.0.0.5:1234"),
+            "myapp - 10.0.0.5:1234"
+        );
+        assert_eq!(
+            application_name_with_host("", "10.0.0.5:1234"),
+            " - 10.0.0.5:1234"
+        );
+        assert_eq!(
+            application_name_with_host("myapp - 10.0.0.5:1234", "10.0.0.5:1234"),
+            "myapp - 10.0.0.5:1234"
+        );
+        assert_eq!(
+            application_name_with_host("psql", "[::1]:54321"),
+            "psql - [::1]:54321"
+        );
+    }
+
+    #[test]
+    fn test_with_client_host_non_string_is_unchanged() {
+        let value = ParameterValue::Tuple(vec!["public".into()]).with_client_host("127.0.0.1:1234");
+        assert_eq!(value, ParameterValue::Tuple(vec!["public".into()]));
+    }
 
     #[test]
     fn test_identical() {

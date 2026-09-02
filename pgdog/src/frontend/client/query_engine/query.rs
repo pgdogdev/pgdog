@@ -9,7 +9,6 @@ use crate::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
-    state::State,
     util::safe_timeout,
 };
 
@@ -65,7 +64,10 @@ impl QueryEngine {
             }
         }
 
-        let query_timeout = context.timeouts.query_timeout(&State::Active);
+        let query_timeout = context
+            .request_settings
+            .timeouts
+            .query_timeout(&self.stats.state);
         let result = safe_timeout(
             query_timeout,
             self.client_server_exchange(context, query_planner),
@@ -359,9 +361,17 @@ impl QueryEngine {
             // Update client params with values
             // sent from the server using ParameterStatus(B) messages.
             if !changed_params.is_empty() {
+                let add_host = context.request_settings.application_name_add_host;
                 for (name, value) in changed_params.iter() {
+                    let value = if add_host && name.eq_ignore_ascii_case("application_name") {
+                        value
+                            .clone()
+                            .with_client_host(&context.client_addr.to_string())
+                    } else {
+                        value.clone()
+                    };
                     debug!("setting client's \"{}\" to {}", name, value);
-                    context.params.insert(name.clone(), value.clone());
+                    context.params.insert(name.clone(), value);
                 }
                 self.comms.update_params(context.params);
             }

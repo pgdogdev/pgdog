@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pgdog_config::users::PasswordKind;
-use timeouts::Timeouts;
 use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
@@ -28,17 +27,22 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
+use crate::net::{
+    MessageBuffer, ProtocolMessage, Stream,
+    parameter::{Parameters, application_name_with_host},
+};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
 pub(crate) mod query_engine;
+pub(crate) mod request_settings;
 pub(crate) mod sticky;
 pub(crate) mod timeouts;
 pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
+pub(crate) use request_settings::ClientRequestSettings;
 pub(crate) use sticky::Sticky;
 pub(crate) use transaction_type::TransactionType;
 
@@ -73,10 +77,8 @@ pub(crate) struct Client {
     prepared_statements: PreparedStatements,
     // Client transaction state.
     transaction: Option<TransactionType>,
-    // Current timeouts to use for client/server communication.
-    // These change based on client state, e.g. if client is running query,
-    // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
-    timeouts: Timeouts,
+    // Per-request settings snapshot, refreshed in [`Self::buffer`].
+    request_settings: ClientRequestSettings,
     // Stateful buffer containing the current whole client request.
     // This can be a query or just a `Parse` and `Flush`, but in either case, the client
     // will expect a response immediately and we need to handle it.
@@ -89,10 +91,6 @@ pub(crate) struct Client {
     sticky: Sticky,
     /// Client database.
     database: String,
-    /// Log queries to stdout.
-    query_log_stdout: bool,
-    /// Maximum query message size before a warning is logged.
-    query_size_limit: Option<usize>,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -243,7 +241,7 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
-        params: Parameters,
+        mut params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
@@ -254,6 +252,11 @@ impl Client {
             return Ok(None);
         }
 
+        Self::maybe_add_application_name_host(
+            &mut params,
+            addr,
+            config.config.general.application_name_add_host,
+        );
         let (user, database) = user_database_from_params(&params);
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
@@ -421,7 +424,7 @@ impl Client {
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
-            timeouts: Timeouts::from_config(&config.config.general),
+            request_settings: ClientRequestSettings::from_general(&config.config.general),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 config.config.memory.message_buffer,
@@ -429,9 +432,19 @@ impl Client {
             ),
             sticky: Sticky::from_params(&params),
             database: database.to_string(),
-            query_log_stdout: false,
-            query_size_limit: None,
         }))
+    }
+
+    fn maybe_add_application_name_host(params: &mut Parameters, addr: SocketAddr, enabled: bool) {
+        if !enabled {
+            return;
+        }
+
+        let current = params.get_default("application_name", "");
+        params.insert(
+            "application_name",
+            application_name_with_host(current, &addr.to_string()),
+        );
     }
 
     #[cfg(test)]
@@ -445,6 +458,13 @@ impl Client {
             params.insert("database", "pgdog");
         }
 
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1234));
+        Self::maybe_add_application_name_host(
+            &mut params,
+            addr,
+            config().config.general.application_name_add_host,
+        );
+
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
         let mut prepared_statements = PreparedStatements::new();
@@ -452,14 +472,14 @@ impl Client {
 
         Self {
             stream,
-            addr: SocketAddr::from(([127, 0, 0, 1], 1234)),
+            addr,
             key,
             comms: ClientComms::new(id),
             streaming: false,
             prepared_statements,
             admin: false,
             transaction: None,
-            timeouts: Timeouts::from_config(&config().config.general),
+            request_settings: ClientRequestSettings::from_general(&config().config.general),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 4096,
@@ -468,8 +488,6 @@ impl Client {
             sticky: Sticky::from_params(&params),
             params,
             database: "pgdog".to_string(),
-            query_log_stdout: false,
-            query_size_limit: None,
         }
     }
 
@@ -643,14 +661,13 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
-        self.timeouts = Timeouts::from_config(&config.config.general);
-        self.query_log_stdout = config.config.general.query_log_stdout;
-        self.query_size_limit = config.config.general.query_size_limit;
+        self.request_settings = ClientRequestSettings::from_general(&config.config.general);
         self.stream_buffer
-            .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
+            .set_size_limit_block(self.request_settings.frontend_query_size_limit_block);
 
         while !self.client_request.is_complete() {
             let idle_timeout = self
+                .request_settings
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
@@ -746,7 +763,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
-            + std::mem::size_of::<Timeouts>()
+            + std::mem::size_of::<ClientRequestSettings>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
     }

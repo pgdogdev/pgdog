@@ -25,6 +25,7 @@
       "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "$ref": "#/$defs/General",
       "default": {
+        "application_name_add_host": false,
         "auth_type": "scram",
         "ban_replica_lag": 9223372036854775807,
         "ban_replica_lag_bytes": 9223372036854775807,
@@ -654,6 +655,11 @@
       "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "type": "object",
       "properties": {
+        "application_name_add_host": {
+          "description": "Add the client host address and port to `application_name` at connection start\nand whenever the client later changes it with `SET` / `set_config`.\n\nThe result is `{application_name} - {ip}:{port}`. If the client sent no name,\nthe prefix is empty (` - 10.0.0.5:1234`). A later `SET application_name` replaces\nthe name and the host is appended again.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#application_name_add_host>",
+          "type": "boolean",
+          "default": false
+        },
         "auth_type": {
           "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",

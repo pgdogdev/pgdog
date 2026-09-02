@@ -619,6 +619,19 @@ pub struct General {
     #[serde(default = "General::log_disconnections")]
     pub log_disconnections: bool,
 
+    /// Add the client host address and port to `application_name` at connection start
+    /// and whenever the client later changes it with `SET` / `set_config`.
+    ///
+    /// The result is `{application_name} - {ip}:{port}`. If the client sent no name,
+    /// the prefix is empty (` - 10.0.0.5:1234`). A later `SET application_name` replaces
+    /// the name and the host is appended again.
+    ///
+    /// _Default:_ `false`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#application_name_add_host>
+    #[serde(default = "General::application_name_add_host")]
+    pub application_name_add_host: bool,
+
     /// Window, in milliseconds, over which to deduplicate identical log messages. Set to `0` to disable throttling.
     ///
     /// **Note:** When enabled, identical messages (same level, target, and body) that exceed `log_dedup_threshold` within this window are suppressed and replaced with a single summary line at the end of the window.
@@ -969,6 +982,7 @@ impl Default for General {
             log_level: Self::log_level(),
             log_connections: Self::log_connections(),
             log_disconnections: Self::log_disconnections(),
+            application_name_add_host: Self::application_name_add_host(),
             log_dedup_window: 0,
             log_dedup_threshold: 0,
             two_phase_commit: bool::default(),
@@ -1504,6 +1518,10 @@ impl General {
 
     pub fn log_disconnections() -> bool {
         Self::env_bool_or_default("PGDOG_LOG_DISCONNECTIONS", true)
+    }
+
+    pub fn application_name_add_host() -> bool {
+        Self::env_bool_or_default("PGDOG_APPLICATION_NAME_ADD_HOST", false)
     }
 
     pub fn expanded_explain() -> bool {
@@ -2076,21 +2094,25 @@ mod tests {
         let _guard = set_env_var("PGDOG_CROSS_SHARD_DISABLED", "yes");
         let _guard = set_env_var("PGDOG_LOG_CONNECTIONS", "false");
         let _guard = set_env_var("PGDOG_LOG_DISCONNECTIONS", "0");
+        let _guard = set_env_var("PGDOG_APPLICATION_NAME_ADD_HOST", "true");
 
         assert!(General::dry_run());
         assert!(General::cross_shard_disabled());
         assert!(!General::log_connections());
         assert!(!General::log_disconnections());
+        assert!(General::application_name_add_host());
 
         let _guard = remove_env_var("PGDOG_DRY_RUN");
         let _guard = remove_env_var("PGDOG_CROSS_SHARD_DISABLED");
         let _guard = remove_env_var("PGDOG_LOG_CONNECTIONS");
         let _guard = remove_env_var("PGDOG_LOG_DISCONNECTIONS");
+        let _guard = remove_env_var("PGDOG_APPLICATION_NAME_ADD_HOST");
 
         assert!(!General::dry_run());
         assert!(!General::cross_shard_disabled());
         assert!(General::log_connections());
         assert!(General::log_disconnections());
+        assert!(!General::application_name_add_host());
     }
 
     #[test]
