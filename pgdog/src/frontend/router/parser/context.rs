@@ -65,7 +65,7 @@ impl<'a> QueryParserContext<'a> {
         let mut shards_calculator = ShardsWithPriority::default();
         let mut bare_key_lookups = Vec::new();
 
-        let sharded_tables = !router_context.cluster.sharded_tables().is_empty();
+        let sharded_tables = !router_context.cluster.sharded_tables().tables().is_empty();
         let sharding_schema = router_context.cluster.sharding_schema();
 
         router_context.parameter_hints.compute_shard(
