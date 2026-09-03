@@ -10,7 +10,6 @@ use std::{sync::Arc, time::Duration};
 
 use crate::backend::schema::SchemaCache;
 use crate::backend::server::ServerRequest;
-use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
         Schema, ShardedTables, databases::User as DatabaseUser, replication::ShardedSchemas,
@@ -509,8 +508,8 @@ impl Cluster {
     }
 
     // Get sharded tables if any.
-    pub(crate) fn sharded_tables(&self) -> &[ShardedTable] {
-        self.sharded_tables.tables()
+    pub(crate) fn sharded_tables(&self) -> &ShardedTables {
+        &self.sharded_tables
     }
 
     /// Get query rewrite config.

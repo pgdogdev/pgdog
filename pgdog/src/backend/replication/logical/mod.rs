@@ -6,6 +6,7 @@ pub(crate) mod publisher;
 pub(crate) mod schema_sync;
 pub(crate) mod status;
 pub(crate) mod subscriber;
+pub(crate) mod tables_sync;
 
 pub(crate) use copy_statement::CopyStatement;
 pub(crate) use error::*;

@@ -175,7 +175,7 @@ impl Schema {
     /// Install PgDog-specific functions and triggers.
     pub(crate) async fn install(cluster: &Cluster) -> Result<(), Error> {
         let shards = cluster.shards();
-        let sharded_tables = cluster.sharded_tables();
+        let sharded_tables = cluster.sharded_tables().tables();
 
         if sharded_tables.is_empty() {
             return Ok(());
