@@ -692,6 +692,10 @@ share any source code, including proprietary work product or any PgDog modificat
 AGPL was written specifically for organizations that offer PgDog _as a public service_ (e.g. database cloud providers) and require
 those organizations to share any modifications they make to PgDog, including new features and bug fixes.
 
+### Enterprise edition
+
+If your organization doesn't allow AGPL software, PgDog is also available under an [enterprise](https://docs.pgdog.dev/enterprise_edition/) license.
+
 ## Contributions
 
 Please read our [Contribution Guidelines](CONTRIBUTING.md).
