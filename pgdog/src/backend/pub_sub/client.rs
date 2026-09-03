@@ -73,6 +73,13 @@ impl PubSubClient {
             notify.notify_one();
         }
     }
+
+    /// Stop listening on all channels.
+    pub(crate) fn unlisten_all(&mut self) {
+        for (_, notify) in self.unlisten.drain() {
+            notify.notify_one();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +172,26 @@ mod test {
                 .is_err()
         );
         assert_snapshot(channel.stats(), 0, 0, 0);
+    }
+
+    #[tokio::test]
+    async fn unlisten_all_stops_forwarding_notifications() {
+        let events = TestChannel::new();
+        let updates = TestChannel::new();
+        let mut client = PubSubClient::new();
+
+        client.listen("events", events.listener());
+        client.listen("updates", updates.listener());
+        assert_eq!(client.unlisten.len(), 2);
+
+        client.unlisten_all();
+        assert!(client.unlisten.is_empty());
+        wait_for_listener_count(&events, 0).await;
+        wait_for_listener_count(&updates, 0).await;
+
+        assert!(events.send(notification("events", "payload")).is_err());
+        assert!(updates.send(notification("updates", "payload")).is_err());
+        assert_snapshot(events.stats(), 0, 0, 0);
+        assert_snapshot(updates.stats(), 0, 0, 0);
     }
 }

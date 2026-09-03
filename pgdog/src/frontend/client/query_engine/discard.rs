@@ -15,6 +15,7 @@ impl QueryEngine {
         let _extended = extended;
         if target == DiscardTarget::All {
             context.prepared_statements.close_all();
+            self.backend.unlisten_all();
         }
         let bytes_sent = context
             .stream

@@ -256,6 +256,11 @@ impl Connection {
         self.pub_sub.unlisten(channel);
     }
 
+    /// Stop listening on all channels.
+    pub(crate) fn unlisten_all(&mut self) {
+        self.pub_sub.unlisten_all();
+    }
+
     /// Notify a channel.
     pub(crate) async fn notify(
         &mut self,
