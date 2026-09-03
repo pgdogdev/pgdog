@@ -14,7 +14,7 @@ PgDog is an open source proxy for scaling PostgreSQL. It supports connection poo
 
 &#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Chat with us on **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
 
-## Enterprise edition
+### Enterprise edition
 
 &#127970; Enterprise edition (EE) documentation is availble **[here](https://docs.pgdog.dev/enterprise_edition/)**. Changelog is available **[here](CHANGELOG-ENTERPRISE.md)**.
 
