@@ -2,7 +2,7 @@
 
 PgDog is released weekly, on Thursdays. Each release includes tagged Docker images, pre-built binaries and a documented list of changes.
 
-For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE](CHANGELOG-ENTERPRISE.md).
+For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
 ### v0.1.57
 
@@ -184,4 +184,8 @@ By @sgrif
 
 ## Remaining releases
 
-Please see [Github releases](https://github.com/pgdogdev/pgdog/releases) for changelogs for previous releases.
+Please see [GitHub releases](https://github.com/pgdogdev/pgdog/releases) for changelogs for previous releases.
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.54` |
