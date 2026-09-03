@@ -84,3 +84,66 @@ async fn test_temp_tables_drop_on_rollback() {
     client.read_until('Z').await.unwrap();
     assert!(!client.backend_locked());
 }
+
+#[tokio::test]
+async fn test_discard_temp_unpins_client() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("CREATE TEMP TABLE foo (id int)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("DISCARD TEMP")).await;
+    client.read_until('Z').await.unwrap();
+
+    assert!(!client.backend_locked());
+    assert!(!client.backend_connected());
+}
+
+#[tokio::test]
+async fn test_discard_temp_rollback_restores_pin() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("CREATE TEMP TABLE foo (id int)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+    client.send_simple(Query::new("DISCARD TEMP")).await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+    assert!(client.backend_connected());
+
+    client.send_simple(Query::new("ROLLBACK")).await;
+    client.read_until('Z').await.unwrap();
+
+    assert!(client.backend_locked());
+    assert!(client.backend_connected());
+}
+
+#[tokio::test]
+async fn test_discard_temp_commit_releases_pin() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("CREATE TEMP TABLE foo (id int)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+    client.send_simple(Query::new("DISCARD TEMP")).await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+    assert!(client.backend_connected());
+
+    client.send_simple(Query::new("COMMIT")).await;
+    client.read_until('Z').await.unwrap();
+
+    assert!(!client.backend_locked());
+    assert!(!client.backend_connected());
+}

@@ -3,9 +3,7 @@ use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 use super::*;
 
 impl QueryEngine {
-    /// Handle DISCARD. Postgres `DISCARD ALL` deallocates prepared statements;
-    /// PgDog intercepts DISCARD, so the client's cache and global use counts
-    /// must be updated here instead of waiting for disconnect.
+    /// Handle DISCARD commands whose session state PgDog tracks.
     pub(super) async fn discard(
         &mut self,
         context: &mut QueryEngineContext<'_>,
@@ -13,6 +11,18 @@ impl QueryEngine {
         extended: bool,
     ) -> Result<(), Error> {
         let _extended = extended;
+
+        if target == DiscardTarget::Temp && self.backend.connected() {
+            self.execute(context, None).await?;
+
+            if !context.in_error() {
+                self.discard_temp_tables(context.in_transaction());
+                self.cleanup_backend(context)?;
+            }
+
+            return Ok(());
+        }
+
         if target == DiscardTarget::All {
             context.prepared_statements.close_all();
         }
