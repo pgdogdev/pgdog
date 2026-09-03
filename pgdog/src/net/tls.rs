@@ -1,6 +1,7 @@
 //! TLS configuration.
 
 use std::{
+    collections::{HashMap, hash_map::Entry},
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
@@ -9,8 +10,10 @@ use std::{
     },
 };
 
-use crate::config::TlsVerifyMode;
+use crate::config::{General, ServerTls, TlsVerifyMode};
 use arc_swap::ArcSwapOption;
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{
     self, ClientConfig,
@@ -53,9 +56,13 @@ impl Deref for TlsListener {
 static ACCEPTOR: ArcSwapOption<TlsListener> = ArcSwapOption::const_empty();
 static ACCEPTOR_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-static CONNECTOR: ArcSwapOption<ConnectorCacheEntry> = ArcSwapOption::const_empty();
+/// Upstream TLS client configs, keyed by the settings that produced them.
+/// Databases can override the global TLS settings, so several configs can be
+/// live at once (e.g., a different client certificate per server).
+static CONNECTORS: Lazy<RwLock<HashMap<ConnectorConfigKey, Arc<ClientConfig>>>> =
+    Lazy::new(Default::default);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ConnectorConfigKey {
     mode: TlsVerifyMode,
     ca_path: Option<PathBuf>,
@@ -79,18 +86,68 @@ impl ConnectorConfigKey {
     }
 }
 
-struct ConnectorCacheEntry {
-    key: ConnectorConfigKey,
-    config: Arc<ClientConfig>,
+fn cached_client_config(key: &ConnectorConfigKey) -> Option<Arc<ClientConfig>> {
+    CONNECTORS.read().get(key).cloned()
 }
 
-impl ConnectorCacheEntry {
-    fn new(key: ConnectorConfigKey, config: Arc<ClientConfig>) -> Arc<Self> {
-        Arc::new(Self { key, config })
+/// Upstream TLS settings for one server: per-database overrides applied over
+/// the global `[general]` values.
+pub(crate) struct UpstreamTlsSettings<'a> {
+    pub(crate) verify: TlsVerifyMode,
+    ca_certificate: Option<&'a PathBuf>,
+    certificate: Option<&'a PathBuf>,
+    private_key: Option<&'a PathBuf>,
+}
+
+impl<'a> UpstreamTlsSettings<'a> {
+    /// Each override falls back to its `[general]` counterpart, except the
+    /// client certificate and key: they are a keypair, so setting either one
+    /// per-database replaces the global pair (config validation guarantees
+    /// both are set together).
+    pub(crate) fn resolve(general: &'a General, overrides: &'a ServerTls) -> Self {
+        let (certificate, private_key) = if overrides.tls_server_certificate.is_some()
+            || overrides.tls_server_private_key.is_some()
+        {
+            (
+                overrides.tls_server_certificate.as_ref(),
+                overrides.tls_server_private_key.as_ref(),
+            )
+        } else {
+            (
+                general.tls_server_certificate.as_ref(),
+                general.tls_server_private_key.as_ref(),
+            )
+        };
+
+        Self {
+            verify: overrides.tls_verify.unwrap_or(general.tls_verify),
+            ca_certificate: overrides
+                .tls_server_ca_certificate
+                .as_ref()
+                .or(general.tls_server_ca_certificate.as_ref()),
+            certificate,
+            private_key,
+        }
     }
 
-    fn connector(&self) -> TlsConnector {
-        TlsConnector::from(self.config.clone())
+    /// Create a TLS connector for these settings, reusing a cached one
+    /// when available.
+    pub(crate) fn connector(&self) -> Result<TlsConnector, Error> {
+        connector_with_verify_mode(
+            self.verify,
+            self.ca_certificate,
+            self.certificate,
+            self.private_key,
+        )
+    }
+
+    fn cache_key(&self) -> ConnectorConfigKey {
+        ConnectorConfigKey::new(
+            self.verify,
+            self.ca_certificate,
+            self.certificate,
+            self.private_key,
+        )
     }
 }
 
@@ -217,20 +274,34 @@ pub(crate) fn reload() -> Result<(), Error> {
     let config = config();
     let general = &config.config.general;
 
-    // Always validate upstream TLS settings so we surface CA and client
-    // certificate issues early.
-    let _ = connector_with_verify_mode(
-        general.tls_verify,
-        general.tls_server_ca_certificate.as_ref(),
-        general.tls_server_certificate.as_ref(),
-        general.tls_server_private_key.as_ref(),
-    )?;
+    // Rebuild the connector for every TLS configuration the current config
+    // references, reading certificates fresh from disk so in-place rotations
+    // (e.g. re-mounted Kubernetes secrets) are picked up. Building into a new
+    // map also drops entries from previous configs. Nothing is swapped in
+    // until the whole config validates.
+    let mut connectors = HashMap::new();
+    let no_overrides = ServerTls::default();
+    let general_settings = UpstreamTlsSettings::resolve(general, &no_overrides);
+    let database_settings = config
+        .config
+        .databases
+        .iter()
+        .map(|database| UpstreamTlsSettings::resolve(general, &database.tls));
+
+    for settings in std::iter::once(general_settings).chain(database_settings) {
+        if let Entry::Vacant(entry) = connectors.entry(settings.cache_key()) {
+            let client_config = build_connector(entry.key())?;
+            entry.insert(client_config);
+        }
+    }
 
     let tls_paths = general.tls();
     let client_ca = general.tls_client_ca_certificate.as_deref();
     let new_acceptor = tls_paths
         .map(|(cert, key)| build_acceptor(cert, key, client_ca))
         .transpose()?;
+
+    *CONNECTORS.write() = connectors;
 
     match (new_acceptor, tls_paths) {
         (Some(acceptor), Some((cert, _))) => {
@@ -470,7 +541,7 @@ pub(crate) fn test_connector_build_count() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_reset_connector() {
-    CONNECTOR.store(None);
+    CONNECTORS.write().clear();
     CONNECTOR_BUILD_COUNT.store(0, Ordering::SeqCst);
 }
 
@@ -528,7 +599,7 @@ impl ServerCertVerifier for AllowAllVerifier {
 }
 
 /// Create a TLS connector with the specified verification mode.
-pub(crate) fn connector_with_verify_mode(
+fn connector_with_verify_mode(
     mode: TlsVerifyMode,
     ca_cert_path: Option<&PathBuf>,
     client_cert_path: Option<&PathBuf>,
@@ -536,15 +607,13 @@ pub(crate) fn connector_with_verify_mode(
 ) -> Result<TlsConnector, Error> {
     let config_key = ConnectorConfigKey::new(mode, ca_cert_path, client_cert_path, client_key_path);
 
-    if let Some(entry) = CONNECTOR.load_full()
-        && entry.key == config_key
-    {
-        return Ok(entry.connector());
+    if let Some(config) = cached_client_config(&config_key) {
+        return Ok(TlsConnector::from(config));
     }
 
     let client_config = build_connector(&config_key)?;
     let connector = TlsConnector::from(client_config.clone());
-    CONNECTOR.store(Some(ConnectorCacheEntry::new(config_key, client_config)));
+    CONNECTORS.write().insert(config_key, client_config);
 
     Ok(connector)
 }
@@ -760,6 +829,9 @@ mod tests {
 
         crate::config::set(cfg).unwrap();
 
+        let key =
+            super::ConnectorConfigKey::new(TlsVerifyMode::VerifyFull, Some(&ca_path), None, None);
+
         let _first = super::connector_with_verify_mode(
             TlsVerifyMode::VerifyFull,
             Some(&ca_path),
@@ -767,9 +839,8 @@ mod tests {
             None,
         )
         .expect("first connector builds");
-        let first_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after first build");
+        let first_cache =
+            super::cached_client_config(&key).expect("connector cached after first build");
 
         let _second = super::connector_with_verify_mode(
             TlsVerifyMode::VerifyFull,
@@ -778,9 +849,8 @@ mod tests {
             None,
         )
         .expect("second connector reuses cache");
-        let second_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after second build");
+        let second_cache =
+            super::cached_client_config(&key).expect("connector cached after second build");
 
         assert_eq!(
             super::test_connector_build_count(),
@@ -789,31 +859,24 @@ mod tests {
         );
         assert!(
             Arc::ptr_eq(&first_cache, &second_cache),
-            "cache entry reused"
-        );
-        assert!(
-            Arc::ptr_eq(&first_cache.config, &second_cache.config),
             "client config reused"
         );
 
+        // Reload rebuilds every in-use connector from disk so certificate
+        // rotations at unchanged paths are picked up.
         super::reload().expect("reload succeeds");
 
-        let post_reload_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after reload");
+        let post_reload_cache =
+            super::cached_client_config(&key).expect("connector cached after reload");
 
         assert_eq!(
             super::test_connector_build_count(),
-            1,
-            "reload does not rebuild connector"
+            2,
+            "reload rebuilds the connector from disk"
         );
         assert!(
-            Arc::ptr_eq(&second_cache, &post_reload_cache),
-            "reload retains cache entry"
-        );
-        assert!(
-            Arc::ptr_eq(&second_cache.config, &post_reload_cache.config),
-            "reload retains client config"
+            !Arc::ptr_eq(&second_cache, &post_reload_cache),
+            "reload replaces the cached client config"
         );
 
         let _third = super::connector_with_verify_mode(
@@ -822,24 +885,59 @@ mod tests {
             None,
             None,
         )
-        .expect("third connector still reuses cache");
-        let third_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after third build");
+        .expect("third connector reuses the reloaded cache");
+        let third_cache =
+            super::cached_client_config(&key).expect("connector cached after third build");
 
         assert_eq!(
             super::test_connector_build_count(),
-            1,
-            "additional calls reuse existing connector"
+            2,
+            "connect-time calls reuse the reloaded connector"
         );
         assert!(
             Arc::ptr_eq(&post_reload_cache, &third_cache),
-            "cache entry unchanged"
+            "client config unchanged"
         );
 
         super::test_reset_connector();
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reload_evicts_connectors_absent_from_config() {
+        crate::logger();
+        super::test_reset_connector();
+        super::test_reset_acceptor();
+
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        // A connector for settings no config references, e.g. from a
+        // database that was removed before this reload.
+        let stale_ca = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let stale_key =
+            super::ConnectorConfigKey::new(TlsVerifyMode::VerifyCa, Some(&stale_ca), None, None);
+        connector_with_verify_mode(TlsVerifyMode::VerifyCa, Some(&stale_ca), None, None)
+            .expect("stale connector builds");
+        assert!(super::cached_client_config(&stale_key).is_some());
+
+        super::reload().expect("reload succeeds");
+
+        assert!(
+            super::cached_client_config(&stale_key).is_none(),
+            "reload drops connectors the config no longer references"
+        );
+
+        let config = crate::config::config();
+        let no_overrides = ServerTls::default();
+        let general_key =
+            super::UpstreamTlsSettings::resolve(&config.config.general, &no_overrides).cache_key();
+        assert!(
+            super::cached_client_config(&general_key).is_some(),
+            "reload keeps the connector for the current config"
+        );
+
+        super::test_reset_connector();
     }
 
     #[tokio::test]
@@ -926,7 +1024,105 @@ mod tests {
             "identical client cert reuses the cached connector"
         );
 
+        // Both configs stay cached: alternating between them (e.g. servers
+        // with different client certificates) does not rebuild either one.
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, None, None).unwrap();
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, Some(&cert), Some(&key)).unwrap();
+        assert_eq!(
+            super::test_connector_build_count(),
+            2,
+            "distinct TLS configs are cached side by side"
+        );
+
         super::test_reset_connector();
+    }
+
+    #[test]
+    fn upstream_tls_settings_fall_back_to_general() {
+        let cert = PathBuf::from("/general/client.pem");
+        let key = PathBuf::from("/general/client.key");
+        let ca = PathBuf::from("/general/ca.pem");
+
+        let general = crate::config::General {
+            tls_verify: TlsVerifyMode::VerifyFull,
+            tls_server_ca_certificate: Some(ca.clone()),
+            tls_server_certificate: Some(cert.clone()),
+            tls_server_private_key: Some(key.clone()),
+            ..Default::default()
+        };
+
+        // No overrides: everything comes from [general].
+        let no_overrides = ServerTls::default();
+        let settings = UpstreamTlsSettings::resolve(&general, &no_overrides);
+        assert_eq!(settings.verify, TlsVerifyMode::VerifyFull);
+        assert_eq!(settings.ca_certificate, Some(&ca));
+        assert_eq!(settings.certificate, Some(&cert));
+        assert_eq!(settings.private_key, Some(&key));
+
+        // Verify mode and CA override independently.
+        let db_ca = PathBuf::from("/db/ca.pem");
+        let overrides = ServerTls {
+            tls_verify: Some(TlsVerifyMode::VerifyCa),
+            tls_server_ca_certificate: Some(db_ca.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.verify, TlsVerifyMode::VerifyCa);
+        assert_eq!(settings.ca_certificate, Some(&db_ca));
+        assert_eq!(settings.certificate, Some(&cert));
+        assert_eq!(settings.private_key, Some(&key));
+
+        // The client certificate and key override as a pair: the general
+        // key must not leak in next to a per-database certificate.
+        let db_cert = PathBuf::from("/db/client.pem");
+        let db_key = PathBuf::from("/db/client.key");
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            tls_server_private_key: Some(db_key.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.certificate, Some(&db_cert));
+        assert_eq!(settings.private_key, Some(&db_key));
+        assert_eq!(settings.ca_certificate, Some(&ca));
+
+        // Half a pair (rejected by config validation, but resolution must
+        // still not mix the pairs).
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.certificate, Some(&db_cert));
+        assert_eq!(settings.private_key, None);
+    }
+
+    #[test]
+    fn reload_validates_per_database_tls_overrides() {
+        crate::logger();
+        super::test_reset_connector();
+        super::test_reset_acceptor();
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.databases.push(crate::config::Database {
+            name: "bad_tls".into(),
+            host: "127.0.0.1".into(),
+            tls: ServerTls {
+                tls_verify: Some(TlsVerifyMode::VerifyFull),
+                tls_server_ca_certificate: Some(PathBuf::from("/nonexistent/ca.pem")),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        crate::config::set(cfg).unwrap();
+
+        assert!(
+            super::reload().is_err(),
+            "reload must fail when a database override points at a missing CA"
+        );
+
+        super::test_reset_connector();
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
     }
 
     #[test]

@@ -190,6 +190,7 @@ mod tests {
             vault_refresh_percent: None,
             database_number: 0,
             configured_role: Role::Primary,
+            ..Default::default()
         }
     }
 

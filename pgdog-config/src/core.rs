@@ -120,6 +120,24 @@ impl ConfigAndUsers {
         self.config.check();
         self.users.check(&self.config);
         self.validate_server_auth()?;
+        self.validate_database_tls()?;
+        Ok(())
+    }
+
+    /// A per-database client certificate replaces the `[general]` pair, so a
+    /// certificate without its key (or the reverse) would silently pair it with
+    /// the global key. Reject the config instead of failing at connect time.
+    fn validate_database_tls(&self) -> Result<(), Error> {
+        for database in &self.config.databases {
+            if database.tls.tls_server_certificate.is_some()
+                != database.tls.tls_server_private_key.is_some()
+            {
+                return Err(Error::ParseError(format!(
+                    "database \"{}\": \"tls_server_certificate\" and \"tls_server_private_key\" must both be set to present a client certificate to this server",
+                    database.name,
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -891,6 +909,82 @@ database_name = "postgres"
         let config: Config = toml::from_str(without).unwrap();
         assert!(config.general.tls_server_certificate.is_none());
         assert!(config.general.tls_server_private_key.is_none());
+    }
+
+    #[test]
+    fn test_per_database_tls_config_parses() {
+        let source = r#"
+[general]
+tls_verify = "verify_full"
+tls_server_ca_certificate = "/certs/primary-ca.pem"
+tls_server_certificate = "/certs/primary-client.pem"
+tls_server_private_key = "/certs/primary-client.key"
+
+[[databases]]
+name = "production"
+host = "primary.internal"
+
+[[databases]]
+name = "production"
+host = "replica.internal"
+role = "replica"
+tls_verify = "verify_ca"
+tls_server_ca_certificate = "/certs/replica-ca.pem"
+tls_server_certificate = "/certs/replica-client.pem"
+tls_server_private_key = "/certs/replica-client.key"
+"#;
+
+        let config: Config = toml::from_str(source).unwrap();
+
+        let primary = &config.databases[0].tls;
+        assert!(primary.tls_verify.is_none());
+        assert!(primary.tls_server_ca_certificate.is_none());
+        assert!(primary.tls_server_certificate.is_none());
+        assert!(primary.tls_server_private_key.is_none());
+
+        let replica = &config.databases[1].tls;
+        assert_eq!(replica.tls_verify, Some(TlsVerifyMode::VerifyCa));
+        assert_eq!(
+            replica.tls_server_ca_certificate.as_deref(),
+            Some(std::path::Path::new("/certs/replica-ca.pem"))
+        );
+        assert_eq!(
+            replica.tls_server_certificate.as_deref(),
+            Some(std::path::Path::new("/certs/replica-client.pem"))
+        );
+        assert_eq!(
+            replica.tls_server_private_key.as_deref(),
+            Some(std::path::Path::new("/certs/replica-client.key"))
+        );
+    }
+
+    #[test]
+    fn test_per_database_client_cert_requires_key() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases.push(Database {
+            name: "production".into(),
+            host: "replica.internal".into(),
+            tls: crate::ServerTls {
+                tls_server_certificate: Some("/certs/replica-client.pem".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let err = config.check().unwrap_err().to_string();
+        assert!(err.contains("production"));
+        assert!(err.contains("tls_server_private_key"));
+
+        // Key without a certificate is rejected the same way.
+        config.config.databases[0].tls.tls_server_certificate = None;
+        config.config.databases[0].tls.tls_server_private_key =
+            Some("/certs/replica-client.key".into());
+        assert!(config.check().is_err());
+
+        // The complete pair passes.
+        config.config.databases[0].tls.tls_server_certificate =
+            Some("/certs/replica-client.pem".into());
+        config.check().unwrap();
     }
 
     #[test]

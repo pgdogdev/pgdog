@@ -39,7 +39,7 @@ use crate::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
-        tls::connector_with_verify_mode,
+        tls::UpstreamTlsSettings,
     },
 };
 use crate::{net::tweak, state::State};
@@ -251,13 +251,13 @@ impl Server {
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls_mode = config.config.general.tls_verify;
+        let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 
         // Only attempt TLS if not in Disabled mode
-        if tls_mode != TlsVerifyMode::Disabled {
+        if tls.verify != TlsVerifyMode::Disabled {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
-                tls_mode, addr,
+                tls.verify, addr,
             );
 
             // Request TLS.
@@ -271,12 +271,7 @@ impl Server {
             if ssl == SslReply::Yes {
                 debug!("server supports TLS, initiating TLS handshake [{}]", addr);
 
-                let connector = connector_with_verify_mode(
-                    tls_mode,
-                    config.config.general.tls_server_ca_certificate.as_ref(),
-                    config.config.general.tls_server_certificate.as_ref(),
-                    config.config.general.tls_server_private_key.as_ref(),
-                )?;
+                let connector = tls.connector()?;
                 let plain = stream.take()?;
 
                 let server_name = ServerName::try_from(addr.host.clone())?;
@@ -297,7 +292,9 @@ impl Server {
                         )));
                     }
                 }
-            } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
+            } else if tls.verify == TlsVerifyMode::VerifyFull
+                || tls.verify == TlsVerifyMode::VerifyCa
+            {
                 // If we require TLS but server doesn't support it, fail
                 error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
