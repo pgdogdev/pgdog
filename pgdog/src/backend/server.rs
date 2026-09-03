@@ -502,6 +502,10 @@ impl Server {
                 self.send_prepare(prepare).await?;
                 self.send_stream(message).await?;
             }
+            HandleResult::PrependProtocolMessage(protocol_message) => {
+                self.send_stream(protocol_message).await?;
+                self.send_stream(message).await?;
+            }
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 self.send_prepare(prepend).await?;
                 self.send_stream(rewrite).await?;
