@@ -451,7 +451,7 @@ impl TaskStorage {
         let id = tasks.next_id();
         let definition = Arc::new(task.definition().into());
 
-        info!("starting new task \"{definition}\", id={id}");
+        info!("starting new task \"{definition}\" id={id}");
         let span = info_span!(parent: None, "task", %id);
 
         let subtasks = Arc::new(tasks.child());
