@@ -84,7 +84,7 @@ impl StatementRewrite<'_> {
 
         if rewrite {
             for column in missing_columns {
-                self.inject_column_with_unique_id(&mut node, mem, column);
+                self.inject_column_with_unique_id(&mut node, mem, column, is_sharded);
                 plan.auto_id_injected += 1;
             }
             self.rewritten = true;
@@ -151,6 +151,7 @@ impl StatementRewrite<'_> {
         insert: &mut nodes::InsertStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
         column_name: &str,
+        is_sharded: bool,
     ) {
         insert.cols_mut().push(
             mem,
@@ -163,8 +164,14 @@ impl StatementRewrite<'_> {
         };
 
         for list in select_stmt.values_lists_mut().into_iter() {
-            list.expect_node_list()
-                .push(mem, Self::unique_id_func_call(mem).uncast())
+            list.expect_node_list().push(
+                mem,
+                if is_sharded {
+                    Self::unique_id_func_call(mem).uncast()
+                } else {
+                    Self::omnisharded_id_func_call(mem).uncast()
+                },
+            )
         }
     }
 
@@ -174,6 +181,17 @@ impl StatementRewrite<'_> {
             mem.make_list(&[
                 mem.make_string(Some("pgdog")).uncast(),
                 mem.make_string(Some("unique_id")).uncast(),
+            ]),
+            mem.empty(),
+            Default::default(),
+        )
+    }
+
+    fn omnisharded_id_func_call(mem: make::MemoryToken<'_>) -> make::Unique<'_, &nodes::FuncCall> {
+        mem.make_func_call(
+            mem.make_list(&[
+                mem.make_string(Some("pgdog")).uncast(),
+                mem.make_string(Some("omnisharded_id")).uncast(),
             ]),
             mem.empty(),
             Default::default(),
