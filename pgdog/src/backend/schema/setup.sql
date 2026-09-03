@@ -298,6 +298,41 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+-- Create a sequence for an omnisharded table and remove the column default.
+CREATE OR REPLACE FUNCTION pgdog.install_omnisharded_sequence(
+    schema_name TEXT,
+    table_name TEXT,
+    column_name TEXT,
+    lock_timeout TEXT DEFAULT '1s'
+) RETURNS text AS $body$
+DECLARE shadow_seq_name TEXT;
+BEGIN
+    SELECT schema_name || '_' || table_name || '_' || column_name || '_seq' INTO shadow_seq_name;
+
+    EXECUTE format('SET LOCAL lock_timeout TO %L', lock_timeout);
+
+    -- Create sequence.
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS pgdog_shadow.%I CACHE 100', shadow_seq_name);
+
+    -- Drop identity constraint if one exists, since identity columns cannot drop their default directly.
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns c
+        WHERE c.table_schema = install_omnisharded_sequence.schema_name
+        AND c.table_name = install_omnisharded_sequence.table_name
+        AND c.column_name = install_omnisharded_sequence.column_name
+        AND c.is_identity = 'YES'
+    ) THEN
+        EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I DROP IDENTITY', schema_name, table_name, column_name);
+    END IF;
+
+    -- PgDog will generate the value once and send it to every shard.
+    EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I DROP DEFAULT', schema_name, table_name, column_name);
+
+    RETURN format('"pgdog_shadow"."%s"', shadow_seq_name);
+END;
+$body$ LANGUAGE plpgsql;
+
 -- Install the sharded sequence on a table and column,
 -- automatically determining the sequence from the column's default value.
 CREATE OR REPLACE FUNCTION pgdog.install_next_id_seq(

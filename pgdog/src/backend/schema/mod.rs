@@ -16,7 +16,8 @@ pub(crate) use cache::SchemaCache;
 pub(crate) use relation::Relation;
 
 use super::{Cluster, Error, Server, pool::Request};
-use crate::frontend::router::parser::Table;
+use crate::backend::ShardingSchema;
+use crate::frontend::router::parser::{Column, Table};
 use crate::net::parameter::ParameterValue;
 use sync::ShardConfig;
 
@@ -122,7 +123,10 @@ impl Schema {
         Ok(())
     }
 
-    async fn install_server(server: &mut Server) -> Result<(), Error> {
+    async fn install_server(
+        server: &mut Server,
+        sharding_schema: &ShardingSchema,
+    ) -> Result<(), Error> {
         Self::setup(server).await?;
         let schema = Self::load(server).await?;
 
@@ -150,16 +154,25 @@ impl Schema {
         for table in tables {
             for column in table.columns().iter().filter(|column| {
                 column.1.is_primary_key // Only primary keys.
-                    && matches!(column.1.data_type.as_str(), "bigint" | "int8") // Only BIGINT.
-                // Only the ones that rely on a sequence.
+                    && matches!(column.1.data_type.as_str(), "bigint" | "int8" | "int4" | "integer")
             }) {
+                let col = Column {
+                    name: &column.1.column_name,
+                    table: Some(&column.1.table_name),
+                    schema: Some(&column.1.table_schema),
+                };
+
+                let is_sharded = sharding_schema.tables().get_table(col).is_some();
+
+                let name = if is_sharded { "sharded" } else { "omnisharded" };
+
                 info!(
-                    "[schema] creating sharded sequence for \"{}\".\"{}\".\"{}\"",
+                    "[schema] creating {name} sequence for \"{}\".\"{}\".\"{}\"",
                     column.1.table_schema, column.1.table_name, column.1.column_name,
                 );
 
                 let query = format!(
-                    "SELECT pgdog.install_sharded_sequence('{}', '{}', '{}')",
+                    "SELECT pgdog.install_{name}_sequence('{}', '{}', '{}')",
                     column.1.table_schema, column.1.table_name, column.1.column_name,
                 );
 
@@ -186,7 +199,7 @@ impl Schema {
 
         for shard in shards {
             let mut server = shard.primary(&Request::default()).await?;
-            Self::install_server(&mut server).await?;
+            Self::install_server(&mut server, &cluster.sharding_schema()).await?;
         }
 
         Ok(())
@@ -255,8 +268,10 @@ mod test {
     use crate::backend::pool::Request;
     use crate::backend::schema::relation::Relation;
     use crate::backend::server::test::test_server;
+    use crate::backend::{ShardedTables, ShardingSchema};
     use crate::frontend::router::parser::Table;
-    use crate::net::parameter::ParameterValue;
+    use crate::frontend::router::sharding::ShardedTable;
+    use crate::net::{DataRow, parameter::ParameterValue};
 
     use super::super::pool::test::pool;
     use super::Schema;
@@ -517,6 +532,27 @@ mod test {
 
     #[tokio::test]
     async fn test_identity_column() {
+        let parents = ["partitioned_identity", "partitioned_identity_compound"];
+        let omnisharded = [
+            "bigserial_pk",
+            "always_identity_pk",
+            "by_default_identity_pk",
+        ];
+        let sharded_tables = parents
+            .iter()
+            .map(|table| ShardedTable {
+                database: "pgdog".into(),
+                name: Some((*table).into()),
+                schema: Some("pgdog_schema_test".into()),
+                column: "id".into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let sharding_schema = ShardingSchema {
+            tables: ShardedTables::from(sharded_tables.as_slice()),
+            ..Default::default()
+        };
+
         let mut server = test_server().await;
         // Drop and recreate the schema so the test is repeatable.
         server
@@ -531,13 +567,14 @@ mod test {
             .execute_checked(include_str!("test_schema.sql"))
             .await
             .unwrap();
-        Schema::install_server(&mut server).await.unwrap();
+        Schema::install_server(&mut server, &sharding_schema)
+            .await
+            .unwrap();
 
         // Verify the partitioned parents had identity dropped and a sharded
         // sequence default installed. Children inherit the default from the
         // parent so they should NOT have been touched directly (which would
         // raise error 42P16).
-        let parents = ["partitioned_identity", "partitioned_identity_compound"];
         for parent in parents {
             let identity: Vec<String> = server
                 .fetch_all::<String>(&format!(
@@ -565,6 +602,37 @@ mod test {
                 default.first().is_some_and(|d| d.contains("next_id_seq")),
                 "{parent}.id should have a next_id_seq default, got {:?}",
                 default.first(),
+            );
+        }
+
+        // Unconfigured tables are omnisharded. Their local defaults and identity
+        // properties are removed so PgDog can generate one value for every shard.
+        for table in omnisharded {
+            let state = server
+                .fetch_all::<DataRow>(&format!(
+                    "SELECT is_identity, column_default, \
+                     to_regclass('pgdog_shadow.pgdog_schema_test_{table}_id_seq') IS NOT NULL \
+                     FROM information_schema.columns \
+                     WHERE table_schema = 'pgdog_schema_test' \
+                     AND table_name = '{table}' AND column_name = 'id'"
+                ))
+                .await
+                .unwrap();
+            let state = state.first().unwrap();
+
+            assert_eq!(
+                state.get_text(0),
+                Some("NO".into()),
+                "{table}.id should no longer be identity after install_server",
+            );
+            assert!(
+                state.get_raw(1).is_some_and(|default| default.is_null),
+                "{table}.id should not have a default after install_server",
+            );
+            assert_eq!(
+                state.get_text(2),
+                Some("t".into()),
+                "{table}.id should have a sequence in pgdog_shadow",
             );
         }
     }
