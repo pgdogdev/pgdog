@@ -5,7 +5,7 @@ the most optimal way to share those changes.
 
 ### v2026-09-03
 
-**OS version**: v0.1.57
+**OS version**: [v0.1.57](CHANGELOG.md#v0.1.57)
 
 | Application   | Docker image                                            |
 | ------------- | ------------------------------------------------------- |
