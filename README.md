@@ -8,11 +8,15 @@
 
 [![CI](https://github.com/levkk/pgdog/actions/workflows/ci.yml/badge.svg)](https://github.com/levkk/pgdog/actions/workflows/ci.yml)
 
-PgDog is a proxy for scaling PostgreSQL. It supports connection pooling, load balancing queries and sharding entire databases. Written in Rust, PgDog is fast, secure and can manage thousands of connections on commodity hardware.
+PgDog is an open source proxy for scaling PostgreSQL. It supports connection pooling, load balancing queries and sharding entire databases. Written in Rust, PgDog is fast, secure and can manage thousands of connections on commodity hardware.
 
 ## Documentation
 
 &#128216; PgDog documentation can be **[found here](https://docs.pgdog.dev/)**. Any questions? Chat with us on **[Discord](https://discord.com/invite/CcBZkjSJdd)**.
+
+##### Enterprise edition
+
+&#127970; Enterprise edition (EE) documentation is availble **[here](https://docs.pgdog.dev/enterprise_edition/)**. Changelog is available **[here](CHANGELOG-ENTERPRISE.md)**.
 
 ## Quick start
 
@@ -117,7 +121,6 @@ PgDog also has more advanced connection recovery options, like automatic abandon
 
 PgDog is an application layer (OSI Level 7) load balancer for PostgreSQL. It understands the Postgres protocol, can proxy multiple replicas (and primary) and distributes transactions evenly between databases. The load balancer supports 3 strategies: round robin, random and least active connections.
 
-
 **Example**
 
 The load balancer is enabled automatically when a database has more than one host:
@@ -138,24 +141,19 @@ role = "replica"
 
 &#128216; **[Healthchecks](https://docs.pgdog.dev/features/load-balancer/healthchecks/)**
 
-
 PgDog maintains a real-time list of healthy hosts. When a database fails a health check, it's removed from the active rotation and queries are re-routed to other replicas. This works like an HTTP load balancer, except it's for your database.
 
 Health checks maximize database availability and protect against bad network connections, temporary hardware failures or misconfiguration.
-
 
 #### Single endpoint
 
 &#128216; **[Single endpoint](https://docs.pgdog.dev/features/load-balancer/#single-endpoint)**
 
-
 PgDog uses [`pg_raw_parse`](https://github.com/pgdogdev/pg_raw_parse), which includes the PostgreSQL native parser. By parsing queries, PgDog can detect writes (e.g. `INSERT`, `UPDATE`, `CREATE TABLE`, etc.) and send them to the primary, leaving the replicas to serve reads (`SELECT`). This allows applications to connect to the same PgDog deployment for both reads and writes.
-
 
 ##### Transactions
 
 &#128216; **[Load balancer & transactions](https://docs.pgdog.dev/features/load-balancer/transactions/)**
-
 
 Transactions can execute multiple statements, so in a primary & replica configuration, PgDog routes them to the primary. Clients can indicate a transaction is read-only, in which case PgDog will send it to a replica:
 
@@ -166,14 +164,11 @@ SELECT * FROM users LIMIT 1;
 COMMIT;
 ```
 
-
 #### Failover
 
 &#128216; **[Failover](https://docs.pgdog.dev/features/load-balancer/replication-failover/)**
 
-
 PgDog monitors Postgres replication state and can automatically redirect writes to a different database if a replica is promoted. This doesn't replace tools like Patroni that actually orchestrate failovers. You can use PgDog alongside Patroni (or AWS RDS or other managed Postgres host), to gracefully failover live traffic.
-
 
 **Example**
 
@@ -443,7 +438,6 @@ COMMIT;
 
 &#128216; **[Direct-to-shard queries](https://docs.pgdog.dev/features/sharding/query-routing/)**
 
-
 Queries that contain a sharding key are sent to one database only. This is the best case scenario for sharded databases, since the load is uniformly distributed across the cluster.
 
 **Example**:
@@ -465,16 +459,15 @@ Queries with multiple sharding keys or without one are sent to all databases and
 
 Currently, support for certain SQL features in cross-shard queries is limited. However, the list of supported ones keeps growing:
 
-| Feature | Supported | Notes |
-|-|-|-|
-| Aggregates | Partial | `count`, `min`, `max`, `stddev`, `variance`, `sum`, `avg` are supported. |
-| `ORDER BY` | Partial | Column in `ORDER BY` clause must be present in the result set. |
-| `GROUP BY` | Partial | Same as `ORDER BY`, referenced columns must be present in result set. |
-| Multi-tuple `INSERT` | Supported | PgDog generates one statement per tuple and executes them automatically. |
+| Feature               | Supported | Notes                                                                                        |
+| --------------------- | --------- | -------------------------------------------------------------------------------------------- |
+| Aggregates            | Partial   | `count`, `min`, `max`, `stddev`, `variance`, `sum`, `avg` are supported.                     |
+| `ORDER BY`            | Partial   | Column in `ORDER BY` clause must be present in the result set.                               |
+| `GROUP BY`            | Partial   | Same as `ORDER BY`, referenced columns must be present in result set.                        |
+| Multi-tuple `INSERT`  | Supported | PgDog generates one statement per tuple and executes them automatically.                     |
 | Sharding key `UPDATE` | Supported | PgDog generates a `SELECT`, `INSERT` and `DELETE` statements and execute them automatically. |
-| Subqueries | No | The same subquery is executed on all shards. |
-| CTEs | No | The same CTE is executed on all shards. |
-
+| Subqueries            | No        | The same subquery is executed on all shards.                                                 |
+| CTEs                  | No        | The same CTE is executed on all shards.                                                      |
 
 #### Using `COPY`
 
@@ -489,7 +482,6 @@ COPY orders (id, user_id, amount) FROM STDIN CSV HEADER;
 ```
 
 Columns must be specified in the `COPY` statement, so PgDog can infer the sharding key automatically, but are optional in the data file.
-
 
 #### Consistency (two-phase commit)
 
@@ -577,7 +569,7 @@ The re-sharding process is done in 5 steps:
 4. While keeping previous command running (it streams row updates in real-time), run `schema-sync --data-sync-complete` to create secondary indexes on the new databases (much faster to do this after data is copied)
 5. Cutover traffic to new cluster with `MAINTENANCE ON`, `RELOAD`, `MAINTENANCE OFF` command sequence
 
-Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or  Zookeeper is required.
+Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or Zookeeper is required.
 
 ### Monitoring
 
@@ -590,7 +582,6 @@ We include two examples:
 
 - [Datadog configuration and dashboard](examples/datadog)
 - [Graphana + Prometheus configuration and dashboard](examples/grafana_prometheus)
-
 
 ## Running PgDog locally
 
@@ -692,14 +683,18 @@ PgDog is heavily optimized for performance. We use Rust, [Tokio](https://tokio.r
 PgDog is free and open source software, licensed under the AGPL v3. While often misunderstood, this license is very permissive
 and allows the following without any additional requirements from you or your organization:
 
-* Internal use
-* Private modifications for internal use without sharing any source code
+- Internal use
+- Private modifications for internal use without sharing any source code
 
 You can freely use PgDog to power your PostgreSQL databases without having to
 share any source code, including proprietary work product or any PgDog modifications you make.
 
 AGPL was written specifically for organizations that offer PgDog _as a public service_ (e.g. database cloud providers) and require
 those organizations to share any modifications they make to PgDog, including new features and bug fixes.
+
+### Enterprise edition
+
+If your organization doesn't allow AGPL software, PgDog is also available under an [enterprise](https://docs.pgdog.dev/enterprise_edition/) license.
 
 ## Contributions
 
