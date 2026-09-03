@@ -22,6 +22,7 @@ async fn test_simple_prepared_ttl() {
     integration_tests_rust::utils::assert_setting_str("prepared_statements_ttl", "300").await;
     integration_tests_rust::utils::assert_setting_str("prepared_statements_ttl_jitter", "100")
         .await;
+    integration_tests_rust::utils::assert_setting_str("prepared_statements", "full").await;
     sleep(Duration::from_millis(500)).await;
 
     let test_return = sqlx::raw_sql("EXECUTE __pgdog_test (1)")
