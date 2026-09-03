@@ -14,7 +14,16 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let _extended = extended;
         if target == DiscardTarget::All {
+            if self.backend.connected() {
+                self.backend
+                    .execute("SELECT pg_advisory_unlock_all()")
+                    .await?;
+            }
+
+            self.advisory_locks.clear();
             context.prepared_statements.close_all();
+            self.backend.unlisten_all();
+            self.check_lock();
         }
         let bytes_sent = context
             .stream

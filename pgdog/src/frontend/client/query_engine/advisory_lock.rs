@@ -30,6 +30,10 @@ impl AdvisoryLocks {
         !self.locks.is_empty()
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.locks.clear();
+    }
+
     #[cfg(test)]
     pub(crate) fn contains(&self, id: i64) -> bool {
         self.locks.contains(&id)
