@@ -3,26 +3,76 @@
 # Backend (PgDog -> Postgres) mTLS tests: per-database client certificate
 # overrides and in-place certificate rotation picked up by RELOAD.
 #
-# Requires the Postgres setup done by ../run.sh (CI only): ssl on with the
-# suite's server certificate, and a pg_hba rule requiring TLS connections
-# to the pgdog_mtls database to present a client certificate signed by
-# ../ca.crt.
+# Runs locally and in CI. Like the other docker-based suites, it brings its
+# own Postgres (docker compose) instead of reconfiguring the host's: the
+# container gets the suite's server certificate and a pg_hba rule requiring
+# TLS connections to the pgdog_mtls database to present a client certificate
+# signed by ../ca.crt.
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source ${SCRIPT_DIR}/../../common.sh
 
-HOST=127.0.0.1
-PORT=6432
+PGDOG_HOST=127.0.0.1
+PGDOG_PORT=16432
+PG_PORT=15436
+
+if ! docker compose version > /dev/null 2>&1; then
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        echo "docker compose not available in CI"
+        exit 1
+    fi
+    echo "docker compose not available; skipping backend mTLS tests"
+    exit 0
+fi
 
 export PGPASSWORD=pgdog
 
 db_psql() {
-    psql "host=$HOST port=$PORT dbname=$1 user=pgdog" -c "SELECT 1" > /dev/null 2>&1
+    psql "host=$PGDOG_HOST port=$PGDOG_PORT dbname=$1 user=pgdog" -c "SELECT 1" > /dev/null 2>&1
 }
 
 admin_psql() {
-    psql -h $HOST -p $PORT -U admin -d admin "$@"
+    psql -h $PGDOG_HOST -p $PGDOG_PORT -U admin -d admin "$@"
 }
+
+pg_psql() {
+    psql "host=$PGDOG_HOST port=$PG_PORT dbname=postgres user=pgdog" -c "SELECT 1" > /dev/null 2>&1
+}
+
+cleanup() {
+    stop_pgdog
+    docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down > /dev/null 2>&1 || true
+}
+trap cleanup EXIT
+# cleanup already stops PgDog; keep run_pgdog from replacing this trap
+# with its own stop_pgdog-only one.
+export PGDOG_STOP_TRAP=1
+
+# Stage certificates for the container. The suite chmods its keys to 0600
+# for psql, which the container's postgres user may not be able to read
+# through the mount, so use relaxed copies (test-only certificates).
+CERTS_DIR="${SCRIPT_DIR}/docker/certs"
+rm -rf "${CERTS_DIR}"
+mkdir -p "${CERTS_DIR}"
+cp ${SCRIPT_DIR}/../server.crt ${SCRIPT_DIR}/../server.key ${SCRIPT_DIR}/../ca.crt "${CERTS_DIR}/"
+chmod 644 "${CERTS_DIR}"/*
+
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down > /dev/null 2>&1 || true
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d
+
+echo "Waiting for Postgres"
+for _ in $(seq 1 300); do
+    if pg_psql; then
+        break
+    fi
+    sleep 0.5
+done
+if ! pg_psql; then
+    echo "Postgres did not become ready"
+    docker compose -f "${SCRIPT_DIR}/docker-compose.yml" logs
+    exit 1
+fi
+echo "Postgres is ready"
 
 # Seed the rotation path with a certificate Postgres does not trust
 # (self-signed, not issued by ca.crt). The files must exist before PgDog
@@ -122,8 +172,6 @@ fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
-
-stop_pgdog
 
 if [ "$FAIL" -gt 0 ]; then
     exit 1

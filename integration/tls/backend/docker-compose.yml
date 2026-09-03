@@ -1,0 +1,11 @@
+name: tls_backend
+services:
+  mtls:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./docker/setup.sh:/docker-entrypoint-initdb.d/setup.sh
+      - ./docker/certs:/certs
+    ports:
+      - 15436:5432

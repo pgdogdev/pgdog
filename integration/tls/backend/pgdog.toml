@@ -1,10 +1,12 @@
 # Backend (PgDog -> Postgres) TLS: per-database client certificate overrides.
 #
-# run.sh (CI only) configures Postgres with the suite's server certificate
-# and a pg_hba rule that requires TLS connections to the pgdog_mtls database
-# to present a client certificate signed by ../ca.crt.
+# run.sh brings its own Postgres (docker compose) with the suite's server
+# certificate and a pg_hba rule that requires TLS connections to the
+# pgdog_mtls database to present a client certificate signed by ../ca.crt.
 
 [general]
+# Dedicated port: 6432 is often taken locally by a running pooler or tunnel.
+port = 16_432
 tls_verify = "verify_ca"
 tls_server_ca_certificate = "integration/tls/ca.crt"
 # No client certificate here: databases must override to authenticate.
@@ -19,12 +21,14 @@ password = "pgdog"
 [[databases]]
 name = "no_client_cert"
 host = "127.0.0.1"
+port = 15_436
 database_name = "pgdog_mtls"
 
 # Per-database override presents the trusted client certificate.
 [[databases]]
 name = "with_client_cert"
 host = "127.0.0.1"
+port = 15_436
 database_name = "pgdog_mtls"
 tls_server_certificate = "integration/tls/client.crt"
 tls_server_private_key = "integration/tls/client.key"
@@ -35,6 +39,7 @@ tls_server_private_key = "integration/tls/client.key"
 [[databases]]
 name = "rotated_client_cert"
 host = "127.0.0.1"
+port = 15_436
 database_name = "pgdog_mtls"
 tls_server_certificate = "integration/tls/backend/rotate/client.crt"
 tls_server_private_key = "integration/tls/backend/rotate/client.key"
