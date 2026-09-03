@@ -17,7 +17,7 @@ pub(crate) use pgdog_stats::{TaskId, TaskProgress};
 use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, error, info, info_span, warn};
+use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 
 use crate::tasks;
 use crate::util::safe_timeout;
@@ -195,13 +195,11 @@ impl TaskEntry {
 
         let panicked = matches!(progress, TaskProgress::Panic { .. });
         if progress.is_terminal() && !panicked && self.cancellation_token.is_cancelled() {
-            info!(
-                "The task is cancelled, ignore the current progress: {progress} and set it Cancelled"
-            );
+            info!("task is cancelled, ignoring current progress ({progress})");
             progress = TaskProgress::Cancelled;
         }
 
-        info!("state transition to: {progress}");
+        debug!("task state transition to {progress}");
 
         if progress.is_error() {
             error!("task failed: {progress}");
@@ -352,7 +350,7 @@ impl<T: Task> TaskContext<T> {
             return;
         }
 
-        info!("status transition to: {status}");
+        debug!("task status transition to {status}");
 
         // Don't regress a cancellation-in-progress back to Running; the task
         // may still report status while it winds down.
@@ -386,7 +384,7 @@ impl<T: Task> TaskContext<T> {
         let parent_name = &parent.definition;
         let parent_id = parent.id;
         info!(
-            "Starting new subtask '{definition}' (id: {id}) for parent task '{parent_name}' (id: {parent_id})"
+            "starting new subtask \"{definition}\" id={id} for parent task \"{parent_name}\" id={parent_id}"
         );
         let span = info_span!(parent: &parent.tracing_span, "task", %id);
 
@@ -453,7 +451,7 @@ impl TaskStorage {
         let id = tasks.next_id();
         let definition = Arc::new(task.definition().into());
 
-        info!("Starting new task '{definition}' (id: {id})");
+        info!("starting new task \"{definition}\", id={id}");
         let span = info_span!(parent: None, "task", %id);
 
         let subtasks = Arc::new(tasks.child());
