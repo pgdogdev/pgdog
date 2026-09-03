@@ -1,0 +1,40 @@
+# Backend (PgDog -> Postgres) TLS: per-database client certificate overrides.
+#
+# run.sh (CI only) configures Postgres with the suite's server certificate
+# and a pg_hba rule that requires TLS connections to the pgdog_mtls database
+# to present a client certificate signed by ../ca.crt.
+
+[general]
+tls_verify = "verify_ca"
+tls_server_ca_certificate = "integration/tls/ca.crt"
+# No client certificate here: databases must override to authenticate.
+min_pool_size = 0
+checkout_timeout = 3_000
+
+[admin]
+password = "pgdog"
+
+# Uses [general] only; presents no client certificate, so Postgres
+# rejects its connections.
+[[databases]]
+name = "no_client_cert"
+host = "127.0.0.1"
+database_name = "pgdog_mtls"
+
+# Per-database override presents the trusted client certificate.
+[[databases]]
+name = "with_client_cert"
+host = "127.0.0.1"
+database_name = "pgdog_mtls"
+tls_server_certificate = "integration/tls/client.crt"
+tls_server_private_key = "integration/tls/client.key"
+
+# Certificate rotation: run.sh seeds this path with an untrusted,
+# self-signed certificate, then swaps in the trusted one and issues
+# RELOAD without changing the path.
+[[databases]]
+name = "rotated_client_cert"
+host = "127.0.0.1"
+database_name = "pgdog_mtls"
+tls_server_certificate = "integration/tls/backend/rotate/client.crt"
+tls_server_private_key = "integration/tls/backend/rotate/client.key"
