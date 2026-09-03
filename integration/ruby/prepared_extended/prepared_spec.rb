@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative 'rspec_helper'
+require_relative '../rspec_helper'
 
 # Uses the main integration pgdog.toml which sets prepared_statements = "extended".
 # "extended" rewrites and replays named extended-protocol statements (Parse/Bind)
