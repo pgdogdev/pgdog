@@ -187,6 +187,10 @@ impl StreamSubscriber {
 
         for (shard_number, shard) in self.dest.shards().iter().enumerate() {
             if overlap_check.overlaps(shard)? {
+                warn!(
+                    "skipping replication to shard {} because it overlaps with source cluster",
+                    shard.primary_address()?
+                );
                 continue;
             }
 
