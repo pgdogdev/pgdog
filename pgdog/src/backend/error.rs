@@ -30,6 +30,12 @@ pub(crate) enum Error {
     #[error("server connection is not synchronized")]
     NotInSync,
 
+    #[error("automatic primary check timed out")]
+    AutomaticPrimaryCheckTimeout,
+
+    #[error("automatic primary check returned an invalid response")]
+    AutomaticPrimaryCheckInvalidResponse,
+
     #[error("server not connected")]
     NotConnected,
 

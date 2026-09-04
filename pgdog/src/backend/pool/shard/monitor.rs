@@ -113,20 +113,19 @@ fn update_replica_lag(pools: &[Pool]) {
     let primary = pools
         .iter()
         .map(|pool| (pool, pool.lsn_stats()))
-        .find(|(_, stats)| !stats.replica);
+        .find(|(_, stats)| stats.valid() && !stats.replica);
 
-    // There is a primary. If not, replica lag cannot be calculated.
-    if let Some((primary_pool, primary_stats)) = primary {
-        for replica_pool in pools {
-            let replica_stats = replica_pool.lsn_stats();
-            if !replica_stats.replica {
-                continue;
+    for pool in pools {
+        let stats = pool.lsn_stats();
+        let lag = match &primary {
+            Some((primary_pool, primary_stats))
+                if pool.id() != primary_pool.id() && stats.valid() && stats.replica =>
+            {
+                calculate_replica_lag(primary_stats, &stats)
             }
-
-            let lag = calculate_replica_lag(&primary_stats, &replica_stats);
-            replica_pool.lock().replica_lag = lag;
-        }
-        primary_pool.lock().replica_lag = ReplicaLag::default();
+            _ => ReplicaLag::default(),
+        };
+        pool.lock().replica_lag = lag;
     }
 }
 
@@ -248,7 +247,7 @@ mod test {
     }
 
     #[test]
-    fn test_update_replica_lag_assigns_primary_minus_replica_to_replica_pool() {
+    fn test_update_replica_lag_clears_lag_from_invalid_evidence() {
         let primary = Pool::new(&PoolConfig {
             address: Address::new_test(),
             config: Config::default(),
@@ -264,15 +263,23 @@ mod test {
         set_pool_lsn_stats(&primary, false, 200, "2026-07-01 13:33:10.000000+00");
         set_pool_lsn_stats(&replica, true, 100, "2026-07-01 13:33:00.000000+00");
 
-        update_replica_lag(&[replica.clone(), primary.clone()]);
+        update_replica_lag(&[primary.clone(), replica.clone()]);
+        assert_eq!(replica.replica_lag().bytes, 100);
+        assert_eq!(replica.replica_lag().duration.as_secs(), 10);
 
-        let replica_lag = replica.replica_lag();
-        assert_eq!(replica_lag.bytes, 100);
-        assert_eq!(replica_lag.duration.as_secs(), 10);
+        *primary.inner().lsn_stats.write() = LsnStats::default();
+        update_replica_lag(&[primary.clone(), replica.clone()]);
+        assert_eq!(replica.replica_lag().bytes, 0);
+        assert_eq!(replica.replica_lag().duration, Duration::default());
 
-        let primary_lag = primary.replica_lag();
-        assert_eq!(primary_lag.bytes, 0);
-        assert_eq!(primary_lag.duration, Duration::default());
+        set_pool_lsn_stats(&primary, false, 200, "2026-07-01 13:33:10.000000+00");
+        update_replica_lag(&[primary.clone(), replica.clone()]);
+        assert_eq!(replica.replica_lag().bytes, 100);
+
+        *replica.inner().lsn_stats.write() = LsnStats::default();
+        update_replica_lag(&[primary, replica.clone()]);
+        assert_eq!(replica.replica_lag().bytes, 0);
+        assert_eq!(replica.replica_lag().duration, Duration::default());
     }
 
     // The shard monitor reacts to an `lsn_role_change` notification by
@@ -282,7 +289,10 @@ mod test {
     async fn test_monitor_updates_roles_on_failover() {
         crate::logger();
 
-        let primary = Some(&pool_config(Address::new_test()));
+        let primary = Some(&pool_config(Address {
+            configured_role: Role::Auto,
+            ..Address::new_test()
+        }));
         let replicas = [pool_config(Address {
             configured_role: Role::Auto,
             ..Address::new_test()

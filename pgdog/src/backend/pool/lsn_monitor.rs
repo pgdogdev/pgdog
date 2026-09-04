@@ -97,16 +97,18 @@ impl LsnStats {
 }
 
 impl LsnStats {
-    fn from_row(value: DataRow, aurora: bool) -> Self {
-        StatsLsnStats {
-            replica: value.get(0, Format::Text).unwrap_or_default(),
-            lsn: value.get(1, Format::Text).unwrap_or_default(),
-            offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
-            timestamp: value.get(3, Format::Text).unwrap_or_default(),
-            fetched: SystemTime::now(),
-            aurora,
-        }
-        .into()
+    fn from_row(value: DataRow, aurora: bool) -> Option<Self> {
+        Some(
+            StatsLsnStats {
+                replica: value.get(0, Format::Text)?,
+                lsn: value.get(1, Format::Text)?,
+                offset_bytes: value.get(2, Format::Text)?,
+                timestamp: value.get(3, Format::Text)?,
+                fetched: SystemTime::now(),
+                aurora,
+            }
+            .into(),
+        )
     }
 }
 
@@ -126,12 +128,24 @@ impl LsnMonitor {
 
     async fn run_query(&self, conn: &mut Server, query: &str) -> Option<DataRow> {
         match safe_timeout(self.pool.config().lsn_check_timeout, conn.fetch_all(query)).await {
-            Ok(Ok(rows)) => rows.into_iter().next(),
+            Ok(Ok(rows)) => match rows.into_iter().next() {
+                Some(row) => Some(row),
+                None => {
+                    self.revoke_automatic_primary_evidence();
+                    error!(
+                        "lsn monitor query returned zero rows [{}]",
+                        self.pool.addr()
+                    );
+                    None
+                }
+            },
             Ok(Err(err)) => {
+                self.revoke_automatic_primary_evidence();
                 error!("lsn monitor query error: {} [{}]", err, self.pool.addr());
                 None
             }
             Err(_) => {
+                self.revoke_automatic_primary_evidence();
                 error!("lsn monitor query timeout [{}]", self.pool.addr());
                 None
             }
@@ -145,12 +159,21 @@ impl LsnMonitor {
         )
         .await
         {
-            Ok(Ok(_)) => {
+            Ok(Ok(rows)) if !rows.is_empty() => {
                 debug!("aurora detected [{}]", self.pool.addr());
                 Some(true)
             }
+            Ok(Ok(_)) => {
+                self.revoke_automatic_primary_evidence();
+                error!(
+                    "lsn monitor aurora detection returned zero rows [{}]",
+                    self.pool.addr()
+                );
+                None
+            }
             Ok(Err(crate::backend::Error::ExecutionError(_))) => Some(false),
             Ok(Err(err)) => {
+                self.revoke_automatic_primary_evidence();
                 error!(
                     "lsn monitor aurora detection error: {} [{}]",
                     err,
@@ -159,6 +182,7 @@ impl LsnMonitor {
                 None
             }
             Err(_) => {
+                self.revoke_automatic_primary_evidence();
                 error!(
                     "lsn monitor aurora detection timeout [{}]",
                     self.pool.addr()
@@ -198,8 +222,12 @@ impl LsnMonitor {
     async fn run_check(&self, mut aurora_detected: Option<bool>) -> Result<Option<bool>, Error> {
         let mut conn = match self.get_connection().await {
             Ok(conn) => conn,
-            Err(Error::Offline) => return Err(Error::Offline),
+            Err(Error::Offline) => {
+                self.revoke_automatic_primary_evidence();
+                return Err(Error::Offline);
+            }
             Err(err) => {
+                self.revoke_automatic_primary_evidence();
                 error!("lsn monitor checkout error: {} [{}]", err, self.pool.addr());
                 return Err(err);
             }
@@ -218,20 +246,27 @@ impl LsnMonitor {
 
         if let Some(row) = self.run_query(&mut conn, query).await {
             drop(conn);
-            let stats = LsnStats::from_row(row, aurora);
-            {
-                let mut guard = self.pool.inner().lsn_stats.write();
-                // Notify that the role changed and the shard monitor
-                // should immediately resynchronize.
-                if stats.replica != guard.replica {
-                    self.pool.inner().lsn_role_change.notify_one();
-                }
-                (*guard) = stats;
-            }
-            trace!("lsn monitor stats updated [{}]", self.pool.addr());
+            self.update_stats(row, aurora);
         }
 
         Ok(aurora_detected)
+    }
+
+    fn update_stats(&self, row: DataRow, aurora: bool) {
+        if let Some(stats) = LsnStats::from_row(row, aurora) {
+            self.pool.publish_lsn_stats(stats);
+            trace!("lsn monitor stats updated [{}]", self.pool.addr());
+        } else {
+            self.revoke_automatic_primary_evidence();
+            error!(
+                "lsn monitor returned malformed stats row [{}]",
+                self.pool.addr()
+            );
+        }
+    }
+
+    fn revoke_automatic_primary_evidence(&self) {
+        self.pool.revoke_automatic_primary_evidence();
     }
 
     async fn get_connection(&self) -> Result<LsnConnection, Error> {
@@ -273,10 +308,16 @@ impl DerefMut for LsnConnection {
 
 #[cfg(test)]
 mod test {
+    use std::time::{Duration, SystemTime};
+
     use super::*;
+    use crate::{
+        backend::pool::{Address, Config, PoolConfig, lb::LoadBalancer},
+        config::{LoadBalancingStrategy, ReadWriteSplit, Role},
+    };
 
     use pgdog_postgres_types::TimestampTz;
-    use pgdog_stats::Lsn;
+    use pgdog_stats::{Lsn, LsnStats as StatsLsnStats};
     use tokio::time::timeout;
 
     // A launched pool against the local Postgres. The default `lsn_check_delay`
@@ -287,6 +328,151 @@ mod test {
         let pool = Pool::new_test();
         pool.launch();
         LsnMonitor { pool }
+    }
+
+    fn lsn_row(role: &str) -> DataRow {
+        let mut row = DataRow::new();
+        row.add(role)
+            .add("0/64")
+            .add(100_i64)
+            .add("2026-07-01 13:33:10.000000+00");
+        row
+    }
+
+    fn automatic_primary_monitor() -> (LoadBalancer, LsnMonitor) {
+        let mut config = PoolConfig {
+            address: Address::new_test(),
+            config: Config::default(),
+        };
+        config.address.configured_role = Role::Auto;
+        config.config.role_detection = true;
+        config.config.lsn_check_timeout = Duration::from_millis(10);
+        let lb = LoadBalancer::new(
+            &None,
+            &[config],
+            LoadBalancingStrategy::Random,
+            ReadWriteSplit::IncludePrimary,
+            Default::default(),
+        );
+        let monitor = LsnMonitor {
+            pool: lb.targets[0].pool.clone(),
+        };
+        publish_writer_and_elect(&lb, &monitor);
+        (lb, monitor)
+    }
+
+    fn publish_writer_and_elect(lb: &LoadBalancer, monitor: &LsnMonitor) {
+        monitor.pool.publish_lsn_stats(
+            StatsLsnStats {
+                replica: false,
+                lsn: Lsn::from_i64(100),
+                offset_bytes: 100,
+                fetched: SystemTime::now(),
+                ..Default::default()
+            }
+            .into(),
+        );
+        assert!(lb.redetect_roles());
+        assert_eq!(lb.targets[0].role(), Role::Primary);
+    }
+
+    fn assert_writer_evidence_revoked(lb: &LoadBalancer, monitor: &LsnMonitor) {
+        assert!(!monitor.pool.lsn_stats().valid());
+        assert!(lb.redetect_roles());
+        assert_eq!(lb.targets[0].role(), Role::Replica);
+    }
+
+    #[tokio::test]
+    async fn test_malformed_row_revokes_writer_evidence() {
+        let (lb, monitor) = automatic_primary_monitor();
+        let notified = monitor.pool.inner().lsn_role_change.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        monitor.update_stats(lsn_row("invalid"), false);
+
+        assert!(timeout(Duration::from_millis(10), notified).await.is_ok());
+        assert_writer_evidence_revoked(&lb, &monitor);
+    }
+
+    #[tokio::test]
+    async fn test_lsn_query_failures_revoke_writer_evidence() {
+        let (lb, monitor) = automatic_primary_monitor();
+        let servers = [
+            crate::backend::server::test::automatic_role_error_server().await,
+            crate::backend::server::test::automatic_role_empty_server().await,
+            crate::backend::server::test::automatic_role_server(None).await,
+        ];
+
+        for mut server in servers {
+            assert!(monitor.run_query(&mut server, LSN_QUERY).await.is_none());
+            assert_writer_evidence_revoked(&lb, &monitor);
+            publish_writer_and_elect(&lb, &monitor);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aurora_detection_failures_revoke_writer_evidence() {
+        let (lb, monitor) = automatic_primary_monitor();
+        let servers = [
+            crate::backend::server::test::automatic_role_disconnect_server().await,
+            crate::backend::server::test::automatic_role_empty_server().await,
+            crate::backend::server::test::automatic_role_server(None).await,
+        ];
+
+        for mut server in servers {
+            assert_eq!(monitor.detect_aurora(&mut server).await, None);
+            assert_writer_evidence_revoked(&lb, &monitor);
+            publish_writer_and_elect(&lb, &monitor);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_offline_monitor_checkout_revokes_writer_evidence() {
+        let (lb, monitor) = automatic_primary_monitor();
+
+        assert_eq!(monitor.run_check(None).await, Err(Error::Offline));
+        assert_writer_evidence_revoked(&lb, &monitor);
+    }
+
+    #[tokio::test]
+    async fn test_evidence_revocation_notifies_only_on_valid_to_invalid_transition() {
+        let (_lb, monitor) = automatic_primary_monitor();
+        assert!(
+            timeout(
+                Duration::from_millis(10),
+                monitor.pool.inner().lsn_role_change.notified()
+            )
+            .await
+            .is_ok()
+        );
+        let first = monitor.pool.inner().lsn_role_change.notified();
+        tokio::pin!(first);
+        first.as_mut().enable();
+
+        monitor.pool.revoke_automatic_primary_evidence();
+        assert!(timeout(Duration::from_millis(10), first).await.is_ok());
+
+        let second = monitor.pool.inner().lsn_role_change.notified();
+        tokio::pin!(second);
+        second.as_mut().enable();
+        monitor.pool.revoke_automatic_primary_evidence();
+        assert!(timeout(Duration::from_millis(10), second).await.is_err());
+    }
+
+    #[test]
+    fn test_lsn_stats_from_row_requires_all_fields() {
+        let stats = LsnStats::from_row(lsn_row("f"), false).unwrap();
+        assert!(!stats.replica);
+        assert_eq!(stats.lsn, Lsn::from_i64(100));
+        assert_eq!(stats.offset_bytes, 100);
+
+        assert!(LsnStats::from_row(lsn_row("invalid"), false).is_none());
+        assert!(LsnStats::from_row(DataRow::new(), false).is_none());
+
+        let mut null_role = lsn_row("f");
+        null_role.insert(0, "", true);
+        assert!(LsnStats::from_row(null_role, false).is_none());
     }
 
     #[tokio::test]
