@@ -51,6 +51,18 @@ database = "destination"
 column = "tenant_id"
 data_type = "bigint"
 
+[[sharded_tables]]
+database = "source"
+name = "sharded_to_omni"
+column = "org_id"
+data_type = "bigint"
+
+[[sharded_tables]]
+database = "destination"
+name = "omni_to_sharded"
+column = "org_id"
+data_type = "bigint"
+
 [admin]
 password = "pgdog"
 user = "pgdog"
