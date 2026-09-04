@@ -62,6 +62,22 @@ CREATE TABLE settings (
     created_at timestamptz NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE sharded_to_omni (
+    id BIGINT PRIMARY KEY,
+    org_id BIGINT NOT NULL,
+    name VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE omni_to_sharded (
+    id BIGINT PRIMARY KEY,
+    org_id BIGINT NOT NULL,
+    name VARCHAR NOT NULL,
+    value VARCHAR NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX idx_accounts_tenant_id ON accounts (tenant_id);
 CREATE INDEX idx_projects_tenant_id ON projects (tenant_id);
 CREATE INDEX idx_projects_owner ON projects (tenant_id, owner_account_id);
