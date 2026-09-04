@@ -1399,23 +1399,6 @@ pub(crate) mod test {
         .unwrap()
     }
 
-    /// Connect to the `pgdog1` database on the test server.
-    /// Used by tests that need a second, distinct database so that
-    /// row locks on the two databases do not share a lock namespace.
-    pub(crate) async fn test_server_pgdog1_db() -> Server {
-        Server::connect(
-            &Address {
-                database_name: "pgdog1".into(),
-                ..Address::new_test()
-            },
-            ServerOptions::default(),
-            ConnectReason::Other,
-            Default::default(),
-        )
-        .await
-        .unwrap()
-    }
-
     pub(crate) async fn test_replication_server() -> Server {
         Server::connect(
             &Address::new_test(),
