@@ -23,15 +23,15 @@ async fn test_same_shard_insert_uses_direct_route() {
     ]);
 
     let mut context = QueryEngineContext::new(&mut client.client);
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).unwrap();
+    let (query_planner, offset_plan) = client.engine.parse_and_rewrite(&mut context).await.unwrap();
     client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .route_query(&mut context, offset_plan.as_ref())
         .await
         .unwrap();
     client
         .engine
-        .execute(&mut context, rewrite_result)
+        .execute(&mut context, query_planner)
         .await
         .unwrap();
 
@@ -58,15 +58,15 @@ async fn test_cross_shard_insert_uses_all_shards() {
     ]);
 
     let mut context = QueryEngineContext::new(&mut client.client);
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).unwrap();
+    let (query_planner, offset_plan) = client.engine.parse_and_rewrite(&mut context).await.unwrap();
     client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .route_query(&mut context, offset_plan.as_ref())
         .await
         .unwrap();
     client
         .engine
-        .execute(&mut context, rewrite_result)
+        .execute(&mut context, query_planner)
         .await
         .unwrap();
 

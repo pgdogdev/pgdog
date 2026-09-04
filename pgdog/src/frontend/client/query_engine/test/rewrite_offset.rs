@@ -1,7 +1,5 @@
 use crate::frontend::router::parser::Limit;
-use crate::frontend::router::parser::rewrite::statement::{
-    offset::OffsetPlan, plan::RewriteResult,
-};
+use crate::frontend::router::parser::rewrite::statement::offset::OffsetPlan;
 use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
 
 use super::prelude::*;
@@ -15,12 +13,9 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let (_planner, offset) = engine.parse_and_rewrite(&mut context).await.unwrap();
 
-    match rewrite_result {
-        Some(RewriteResult::InPlace { offset }) => offset,
-        other => panic!("expected InPlace, got {:?}", other),
-    }
+    offset
 }
 
 fn cross_shard_route() -> Route {
@@ -102,9 +97,10 @@ async fn test_offset_limit_not_sharded() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let (planner, offset) = engine.parse_and_rewrite(&mut context).await.unwrap();
 
-    assert!(rewrite_result.is_none());
+    assert!(planner.is_none());
+    assert!(offset.is_none());
 }
 
 #[tokio::test]
@@ -127,7 +123,7 @@ async fn test_offset_with_unique_id_simple() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
 
     // After parse_and_rewrite, the Query message should have unique_id replaced.
     let rewritten_sql = match &context.client_request.messages[0] {
@@ -146,6 +142,7 @@ async fn test_offset_with_unique_id_simple() {
     // apply_after_parser with a cross-shard route.
     context.client_request.route = Some(cross_shard_route());
     rewrite_result
+        .1
         .as_ref()
         .unwrap()
         .apply_after_parser(context.client_request)
@@ -198,7 +195,7 @@ async fn test_offset_with_unique_id_extended() {
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
 
     // After parse_and_rewrite, Parse should have unique_id rewritten to $4::bigint.
     let rewritten_sql = match &context.client_request.messages[0] {
@@ -213,6 +210,7 @@ async fn test_offset_with_unique_id_extended() {
     // apply_after_parser with cross-shard route should only rewrite Bind params.
     context.client_request.route = Some(cross_shard_route());
     rewrite_result
+        .1
         .as_ref()
         .unwrap()
         .apply_after_parser(context.client_request)

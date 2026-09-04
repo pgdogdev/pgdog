@@ -198,6 +198,31 @@ impl TestClient {
         Self::new(params).await
     }
 
+    pub(crate) fn with_shard_key_error(self) -> Self {
+        let mut config = config().deref().clone();
+        config.config.rewrite.shard_key = RewriteMode::Error;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+        self
+    }
+
+    pub(crate) fn with_two_pc(self) -> Self {
+        let mut config = config().deref().clone();
+        config.config.general.two_phase_commit = true;
+        config.config.general.two_phase_commit_auto = Some(true);
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+        self
+    }
+
+    pub(crate) fn without_schema_reload(self) -> Self {
+        let mut config = config().deref().clone();
+        config.config.general.reload_schema_on_ddl = false;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+        self
+    }
+
     pub(crate) fn with_full_prepared_statements(self) -> Self {
         let mut config = config().deref().clone();
         config.config.general.prepared_statements = pgdog_config::PreparedStatementsLevel::Full;

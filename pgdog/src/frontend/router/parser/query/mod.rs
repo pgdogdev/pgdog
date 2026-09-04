@@ -462,7 +462,8 @@ impl QueryParser {
         if !context.router_context.executable
             && let Command::Query(ref query) = command
             && query.is_cross_shard()
-            && statement.rewrite_plan.insert_split.is_empty()
+            // TODO: Why are we checking insert_split here after checking if it's not executable?
+            && !statement.rewrite_plan.insert_split
         {
             context
                 .shards_calculator
