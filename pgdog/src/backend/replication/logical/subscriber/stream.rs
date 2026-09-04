@@ -178,7 +178,7 @@ impl StreamSubscriber {
                 .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone(ConnectReason::Replication)
+                .standalone(ConnectReason::Resharding)
                 .await?;
             conns.push(primary);
         }

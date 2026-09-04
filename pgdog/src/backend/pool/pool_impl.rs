@@ -431,7 +431,7 @@ impl Pool {
     }
 
     /// Get startup parameters for new server connections.
-    pub(super) fn server_options(&self) -> ServerOptions {
+    pub(super) fn server_options(&self, reason: ConnectReason) -> ServerOptions {
         let mut params = vec![
             Parameter {
                 name: "application_name".into(),
@@ -445,6 +445,14 @@ impl Pool {
 
         let config = self.inner.config;
 
+        let lock_timeout = config
+            .lock_timeout
+            // Enforce some lock_timeout during resharding to prevent possible deadlocks.
+            // This should be mostly avoided by pgdog, but in case some invariants are not met,
+            // the resharding could deadlock and with timeout we'll probably retry the update
+            // and either succeed or fail explicitly.
+            .or(matches!(reason, ConnectReason::Resharding).then_some(Duration::from_secs(5)));
+
         if let Some(statement_timeout) = config.statement_timeout {
             params.push(Parameter {
                 name: "statement_timeout".into(),
@@ -452,7 +460,7 @@ impl Pool {
             });
         }
 
-        if let Some(lock_timeout) = config.lock_timeout {
+        if let Some(lock_timeout) = lock_timeout {
             params.push(Parameter {
                 name: "lock_timeout".into(),
                 value: lock_timeout.as_millis().to_string().into(),
