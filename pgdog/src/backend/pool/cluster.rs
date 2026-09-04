@@ -419,7 +419,7 @@ impl Cluster {
     }
 
     /// Change config to work with logical replication streaming.
-    pub(crate) fn logical_stream(&self) -> Self {
+    pub(crate) fn with_replication_settings_override(&self) -> Self {
         let mut cluster = self.clone();
         // Disable rewrites, we are only sending valid statements.
         cluster.rewrite.enabled = false;

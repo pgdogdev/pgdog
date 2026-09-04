@@ -10,17 +10,14 @@ use tokio::sync::SetOnce;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use crate::backend::PubSubListener;
-use crate::backend::Schema;
-use crate::backend::databases::User;
-use crate::backend::pool::lb::ban::Ban;
-use crate::backend::pub_sub::listener::Listener;
-use crate::backend::schema::SchemaCache;
-use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
-use crate::net::Parameters;
-use crate::net::messages::FrontendPid;
-
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
+use crate::backend::pool::Address;
+use crate::backend::{
+    ConnectReason, PubSubListener, Schema, Server, databases::User, pool::lb::ban::Ban,
+    pub_sub::listener::Listener, schema::SchemaCache,
+};
+use crate::config::{LoadBalancingStrategy, ReadWriteSplit, Role};
+use crate::net::{Parameters, messages::FrontendPid};
 
 pub(crate) mod failover_signal;
 pub(crate) mod monitor;
@@ -81,6 +78,27 @@ impl Shard {
     /// Get connection to the primary database.
     pub(crate) async fn primary(&self, request: &Request) -> Result<Guard, Error> {
         self.lb.get_primary(request).await
+    }
+
+    /// Get a standalone (throw-away) connection to the primary database
+    /// of this shard.
+    pub(crate) async fn primary_standalone(&self, reason: ConnectReason) -> Result<Server, Error> {
+        self.lb
+            .primary_target()
+            .ok_or(Error::NoPrimary)?
+            .pool
+            .standalone(reason)
+            .await
+    }
+
+    /// Get the address of the primary database of this shard.
+    pub(crate) fn primary_address(&self) -> Result<&Address, Error> {
+        Ok(self
+            .lb
+            .primary_target()
+            .ok_or(Error::NoPrimary)?
+            .pool
+            .addr())
     }
 
     /// Get connection to one of the replica databases, using the configured

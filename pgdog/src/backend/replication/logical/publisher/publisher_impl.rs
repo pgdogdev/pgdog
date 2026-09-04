@@ -214,7 +214,7 @@ impl Publisher {
             // Each subscriber owns a partition of destination shards for omni-table DML
             // (dest_shard % n_sources == source_shard), preventing cross-subscriber deadlocks.
             let mut stream =
-                StreamSubscriber::new(dest, tables, OmniOwnership::new(number, n_sources));
+                StreamSubscriber::new(source, dest, tables, OmniOwnership::new(number, n_sources));
 
             // Take ownership of the slot for replication.
             let mut slot = self
@@ -813,7 +813,8 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream =
+            StreamSubscriber::new(&Cluster::default(), &cluster, &[], OmniOwnership::test());
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -833,7 +834,8 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream =
+            StreamSubscriber::new(&Cluster::default(), &cluster, &[], OmniOwnership::test());
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;

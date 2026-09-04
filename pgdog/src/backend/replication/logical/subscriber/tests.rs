@@ -247,12 +247,22 @@ fn x_update(u: XLogUpdate) -> CopyData {
 fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
+    StreamSubscriber::new(
+        &Cluster::default(),
+        &cluster,
+        &tables,
+        OmniOwnership::test(),
+    )
 }
 
 fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
+    StreamSubscriber::new(
+        &Cluster::default(),
+        &cluster,
+        &tables,
+        OmniOwnership::test(),
+    )
 }
 
 fn make_subscriber_with_tables_two_databases(
@@ -260,13 +270,18 @@ fn make_subscriber_with_tables_two_databases(
     partition: OmniOwnership,
 ) -> StreamSubscriber {
     let cluster = Cluster::new_test_two_databases(&config());
-    StreamSubscriber::new(&cluster, &tables, partition)
+    StreamSubscriber::new(&Cluster::default(), &cluster, &tables, partition)
 }
 
 fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, &tables, OmniOwnership::test())
+    StreamSubscriber::new(
+        &Cluster::default(),
+        &cluster,
+        &tables,
+        OmniOwnership::test(),
+    )
 }
 
 /// Count rows matching the given `WHERE` predicate using a separate connection.
@@ -576,7 +591,12 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, &[leaf_a, leaf_b], OmniOwnership::test());
+    let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
+        &cluster,
+        &[leaf_a, leaf_b],
+        OmniOwnership::test(),
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1508,6 +1528,7 @@ fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
 async fn full_identity_nothing_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_replica_identity_nothing_table()],
         OmniOwnership::test(),
@@ -1546,6 +1567,7 @@ async fn full_identity_nothing_rejected() {
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_omni_table()],
         OmniOwnership::test(),
@@ -1589,6 +1611,7 @@ async fn full_identity_omni_no_unique_index_rejected() {
 async fn full_identity_insert_sharded() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1619,6 +1642,7 @@ async fn full_identity_insert_sharded() {
 async fn full_identity_update_fast_path() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1678,6 +1702,7 @@ async fn full_identity_update_fast_path() {
 async fn full_identity_update_slow_path() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1742,6 +1767,7 @@ async fn full_identity_update_slow_path() {
 async fn full_identity_update_slow_path_realistic_old_tuple() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1803,6 +1829,7 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
 async fn full_identity_update_all_toasted_is_noop() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1849,6 +1876,7 @@ async fn full_identity_update_all_toasted_is_noop() {
 async fn full_identity_delete() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_sharded_table()],
         OmniOwnership::test(),
@@ -1891,6 +1919,7 @@ async fn full_identity_delete() {
 async fn full_identity_insert_omni_dedup() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_omni_dedup_table()],
         OmniOwnership::test(),
@@ -1954,6 +1983,7 @@ async fn full_identity_insert_omni_dedup() {
 async fn full_identity_update_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_dup_rows_table()],
         OmniOwnership::test(),
@@ -2024,6 +2054,7 @@ async fn full_identity_update_duplicate_rows() {
 async fn full_identity_delete_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_dup_rows_table()],
         OmniOwnership::test(),
@@ -2095,6 +2126,7 @@ async fn full_identity_delete_duplicate_rows() {
 async fn full_identity_update_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_dup_rows_table()],
         OmniOwnership::test(),
@@ -2160,6 +2192,7 @@ async fn full_identity_update_matches_null_column() {
 async fn full_identity_delete_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
     let mut sub = StreamSubscriber::new(
+        &Cluster::default(),
         &cluster,
         &[make_full_identity_dup_rows_table()],
         OmniOwnership::test(),

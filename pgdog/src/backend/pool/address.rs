@@ -202,6 +202,14 @@ impl Address {
         }
     }
 
+    /// Return true if both addresses are pointing to the same physical Postgres
+    /// database.
+    pub(crate) fn same_database(&self, other: &Self) -> bool {
+        self.host == other.host
+            && self.port == other.port
+            && self.database_name == other.database_name
+    }
+
     /// Test convention: `new_test()` represents a primary. Tests that need
     /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
     #[cfg(test)]
