@@ -14,7 +14,6 @@ use tracing::{debug, info, warn};
 use super::super::{Error, ensure_validation, publisher::Table};
 use super::ReplicationSlot;
 
-use crate::backend::replication::logical::subscriber::omni_ownership::OmniOwnership;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::publisher::progress::Progress;
@@ -143,7 +142,6 @@ impl Publisher {
             Box::pin(self.create_slots(source, &stop)).await?;
         }
 
-        let n_sources = source.shards().len();
         for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
@@ -152,11 +150,8 @@ impl Publisher {
                 .get(&number)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            // Handles the logical replication stream messages.
-            // Each subscriber owns a partition of destination shards for omni-table DML
-            // (dest_shard % n_sources == source_shard), preventing cross-subscriber deadlocks.
-            let mut stream =
-                StreamSubscriber::new(dest, tables, OmniOwnership::new(number, n_sources));
+
+            let mut stream = StreamSubscriber::new(dest, tables);
 
             // Take ownership of the slot for replication.
             let mut slot = self
@@ -675,7 +670,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream = StreamSubscriber::new(&cluster, &[]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -695,7 +690,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream = StreamSubscriber::new(&cluster, &[]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;
