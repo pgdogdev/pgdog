@@ -434,7 +434,7 @@ impl Monitor {
         let connect_timeout = pool.config().connect_timeout;
         let connect_attempts = pool.config().connect_attempts;
         let connect_attempt_delay = pool.config().connect_attempt_delay;
-        let options = pool.server_options();
+        let options = pool.server_options(reason);
 
         let mut error = Error::ServerError;
         let now = Instant::now();

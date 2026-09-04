@@ -1421,7 +1421,7 @@ pub(crate) mod test {
         Server::connect(
             &Address::new_test(),
             ServerOptions::new_replication(),
-            ConnectReason::Replication,
+            ConnectReason::Resharding,
             Default::default(),
         )
         .await
