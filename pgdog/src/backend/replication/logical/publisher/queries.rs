@@ -13,10 +13,7 @@ use crate::{
 };
 
 use super::super::Error;
-
-fn quote_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
+use crate::util::sql::quote_literal;
 
 /// Get list of tables in publication.
 static TABLES: &str = "SELECT DISTINCT

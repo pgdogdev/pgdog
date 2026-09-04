@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::setup::{admin_sqlx, connection_sqlx_direct};
+use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
 
@@ -73,7 +74,7 @@ async fn test_stop_task() {
         .unwrap();
     assert_eq!(row.get::<String, _>("stop_task"), "OK");
 
-    wait_for_task_status(&admin, task_id, "cancelled").await;
+    wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
     cleanup(&admin, &direct).await;
 }
 
@@ -112,6 +113,6 @@ async fn test_cutover() {
         task_status_line(&admin, task_id).await
     );
 
-    wait_for_task_status(&admin, task_id, "finished").await;
+    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
     cleanup(&admin, &direct).await;
 }

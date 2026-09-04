@@ -25,3 +25,4 @@ libc = "0.2"
 rand = "0.9"
 bytes.workspace = true
 rust_decimal = { version = "1.42.0", features = ["macros"] }
+pgdog-stats = { path = "../../pgdog-stats" }

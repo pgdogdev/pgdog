@@ -1702,6 +1702,44 @@ mod tests {
         assert_eq!(progress[0], TaskProgress::Cancelled);
     }
 
+    #[derive(Debug)]
+    struct CancelsItself;
+
+    impl Task for CancelsItself {
+        type Status = TaskStatus;
+        type Output = ();
+        type Error = std::io::Error;
+
+        fn definition(&self) -> impl Into<TaskDefinition> {
+            "cancels_itself"
+        }
+
+        async fn run(self, ctx: TaskContext<Self>) -> Result<(), std::io::Error> {
+            let cancel = ctx.cancellation_token();
+            let child = ctx.run(FailsOnCancel);
+            cancel.cancel();
+            child.await
+        }
+    }
+
+    #[test]
+    async fn test_own_token_cancel_reaches_the_subtask() {
+        let storage = TaskStorage::default();
+
+        let task = storage.run(CancelsItself);
+        let id = task.id();
+
+        let res = task.await;
+        assert!(matches!(res, Err(TaskError::Failed(_))));
+
+        let root = storage.task(id).unwrap();
+        assert_eq!(root.state().progress, TaskProgress::Cancelled);
+
+        let subtasks = root.subtasks();
+        assert_eq!(subtasks.len(), 1);
+        assert_eq!(subtasks[0].state().progress, TaskProgress::Cancelled);
+    }
+
     #[test]
     async fn test_dropped_sender_abandons_the_waiter() {
         let (sender, receiver) = oneshot::channel::<Result<(), TaskError<Infallible>>>();

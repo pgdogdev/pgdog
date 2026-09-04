@@ -165,7 +165,7 @@ impl ReplicationSlot {
             self.connect().await?;
         }
 
-        info!(
+        debug!(
             "creating replication slot \"{}\" [{}]",
             self.name, self.address
         );

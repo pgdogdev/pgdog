@@ -1,12 +1,9 @@
 //! EE hooks.
 #![allow(dead_code, unused)]
 
-use pgdog_stats::{Lsn, ReplicationSlot, SchemaStatementTask, TableCopyState};
+use pgdog_stats::{Lsn, ReplicationSlot, SchemaStatementTask};
 
-use crate::{
-    backend::replication::{logical::Error as LogicalError, status::TableCopy},
-    net::ErrorResponse,
-};
+use crate::net::ErrorResponse;
 
 use super::*;
 use std::time::Duration;
@@ -37,12 +34,6 @@ pub(crate) fn cutover_state(state: CutoverState) {
 pub(crate) fn orchestrator_state(state: OrchestratorState) {}
 
 pub(crate) fn schema_sync_task(task: &SchemaStatementTask) {}
-
-pub(crate) fn data_sync_progress(table: &TableCopy, state: &TableCopyState) {}
-
-pub(crate) fn data_sync_done(table: &TableCopy) {}
-
-pub(crate) fn data_sync_error(table: &TableCopy, err: &LogicalError) {}
 
 pub(crate) fn replication_slot_create(slot: &ReplicationSlot) {}
 

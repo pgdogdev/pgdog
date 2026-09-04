@@ -3,6 +3,7 @@ pub mod replication;
 #[allow(clippy::module_inception)]
 pub mod resharding;
 pub mod schema_sync;
+pub mod table_copies;
 
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
 
 use super::{Task, Tasks, assert_layout};
+use pgdog_stats::TaskProgress;
 
 const TEST_TABLE: &str = "_pgdog_test_task";
 
@@ -29,28 +31,43 @@ async fn drop_table(pool: &Pool<Postgres>, table: &str) {
         .await;
 }
 
-async fn drop_table_everywhere(table: &str, direct: &Pool<Postgres>) {
-    drop_table(direct, table).await;
-    for db in &["shard_0", "shard_1"] {
-        drop_table(&connection_sqlx_direct_db(db).await, table).await;
+async fn drop_test_tables_on(pool: &Pool<Postgres>) {
+    drop_table(pool, TEST_TABLE).await;
+    let tables: Vec<String> = pool
+        .fetch_all(
+            format!(
+                "SELECT tablename FROM pg_tables \
+                 WHERE schemaname = ANY (current_schemas(false)) \
+                 AND starts_with(tablename, '{TEST_TABLE}')"
+            )
+            .as_str(),
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get("tablename"))
+        .collect();
+    for table in tables {
+        drop_table(pool, &table).await;
     }
 }
 
-fn is_terminal(status: &str) -> bool {
-    matches!(status, "finished" | "cancelled")
-        || status.starts_with("failed")
-        || status.starts_with("panicked")
+async fn drop_test_tables(direct: &Pool<Postgres>) {
+    drop_test_tables_on(direct).await;
+    for db in &["shard_0", "shard_1"] {
+        drop_test_tables_on(&connection_sqlx_direct_db(db).await).await;
+    }
 }
 
 async fn drain_tasks(admin: &Pool<Postgres>) {
     timeout(Duration::from_secs(60), async {
         loop {
             let tasks = Tasks::fetch(admin).await;
-            if tasks.rows.iter().all(|t| is_terminal(t.status.as_str())) {
+            if tasks.rows.iter().all(|t| t.status.is_terminal()) {
                 break;
             }
             for task in &tasks.rows {
-                if is_terminal(task.status.as_str()) {
+                if task.status.is_terminal() {
                     continue;
                 }
 
@@ -121,19 +138,19 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
         .await;
 
-    drop_table_everywhere(TEST_TABLE, direct).await;
+    drop_test_tables(direct).await;
 }
 
-async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: &str) {
+async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: TaskProgress) {
     let result = timeout(Duration::from_secs(30), async {
         loop {
             if let Some(task) = Tasks::fetch(admin).await.find(task_id) {
                 if task.status == status {
                     return;
                 }
-                if task.status.starts_with("failed") || task.status.starts_with("panicked") {
+                if task.status.is_error() {
                     panic!(
-                        "task {task_id} errored while waiting for {status:?}: {} (inner_status {:?})",
+                        "task {task_id} errored while waiting for {status}: {} (inner_status {:?})",
                         task.status, task.inner_status
                     );
                 }
@@ -143,20 +160,20 @@ async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: &str
     })
     .await;
     if result.is_err() {
-        panic!("task {task_id} did not reach status {status:?} in SHOW TASKS in time");
+        panic!("task {task_id} did not reach status {status} in SHOW TASKS in time");
     }
 }
 
 async fn task_status_line(admin: &Pool<Postgres>, task_id: i64) -> String {
     match Tasks::fetch(admin).await.find(task_id) {
-        Some(t) => format!("status {:?}, inner_status {:?}", t.status, t.inner_status),
+        Some(t) => format!("status {}, inner_status {:?}", t.status, t.inner_status),
         None => "task absent from SHOW TASKS".to_string(),
     }
 }
 
 async fn fail_if_task_errored(admin: &Pool<Postgres>, task_id: i64) {
     if let Some(t) = Tasks::fetch(admin).await.find(task_id)
-        && (t.status.starts_with("failed") || t.status.starts_with("panicked"))
+        && t.status.is_error()
     {
         panic!(
             "task {task_id} errored: {} (inner_status {:?})",

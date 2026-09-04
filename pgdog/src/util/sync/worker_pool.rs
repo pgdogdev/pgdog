@@ -22,6 +22,7 @@ use tokio::sync::{AcquireError, Semaphore, SemaphorePermit};
 /// # Warnings
 ///
 /// Don't use for a high number of tasks or workers.
+#[derive(Debug)]
 pub(crate) struct WorkerPool<T> {
     pool: Vec<T>,
     permits: Mutex<Vec<usize>>,
@@ -55,11 +56,16 @@ impl<T> Drop for Guard<'_, T> {
 #[derive(Debug, Display, Error, From)]
 pub(crate) enum Error {
     Semaphore(AcquireError),
+    #[display("worker pool has no workers")]
+    #[from(ignore)]
+    EmptyPool,
 }
 
 impl<T> WorkerPool<T> {
-    pub(crate) fn new(pool: Vec<T>, max_permits: NonZeroUsize) -> Self {
-        assert!(!pool.is_empty(), "worker pool must not be empty");
+    pub(crate) fn new(pool: Vec<T>, max_permits: NonZeroUsize) -> Result<Self, Error> {
+        if pool.is_empty() {
+            return Err(Error::EmptyPool);
+        }
 
         let total_permits = pool
             .len()
@@ -68,12 +74,12 @@ impl<T> WorkerPool<T> {
             .expect("total worker capacity exceeds the semaphore limit");
         let permits = vec![max_permits.get(); pool.len()];
 
-        Self {
+        Ok(Self {
             pool,
             permits: Mutex::new(permits),
             max_permits,
             semaphore: Semaphore::new(total_permits),
-        }
+        })
     }
 
     fn select_worker(&self) -> usize {
@@ -148,7 +154,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prefers_least_busy_worker() {
-        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(3).expect("nonzero limit"));
+        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(3).expect("nonzero limit"))
+            .expect("pool is not empty");
 
         let first = acquire_ready(pool.acquire());
         let second = acquire_ready(pool.acquire());
@@ -161,7 +168,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_waits_at_capacity_and_reuses_released_worker() {
-        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(2).expect("nonzero limit"));
+        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(2).expect("nonzero limit"))
+            .expect("pool is not empty");
         let mut guards: Vec<_> = (0..4).map(|_| acquire_ready(pool.acquire())).collect();
 
         for worker in 0..2 {
@@ -184,7 +192,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancelled_waiter_does_not_block_next_waiter() {
-        let pool = WorkerPool::new(vec![0], NonZeroUsize::new(1).expect("nonzero limit"));
+        let pool = WorkerPool::new(vec![0], NonZeroUsize::new(1).expect("nonzero limit"))
+            .expect("pool is not empty");
         let held = acquire_ready(pool.acquire());
         let mut cancelled = Box::pin(pool.acquire());
         let mut waiting = Box::pin(pool.acquire());
@@ -204,7 +213,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_waiting_acquisition_leaves_other_capacity_available() {
-        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(1).expect("nonzero limit"));
+        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(1).expect("nonzero limit"))
+            .expect("pool is not empty");
         let first = acquire_ready(pool.acquire());
         let second = acquire_ready(pool.acquire());
         let mut waiting = Box::pin(pool.acquire());
@@ -224,10 +234,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_shares_pool_across_tasks() {
         timeout(Duration::from_secs(5), async {
-            let pool = Arc::new(WorkerPool::new(
-                vec![0, 1],
-                NonZeroUsize::new(2).expect("nonzero limit"),
-            ));
+            let pool = Arc::new(
+                WorkerPool::new(vec![0, 1], NonZeroUsize::new(2).expect("nonzero limit"))
+                    .expect("pool is not empty"),
+            );
             let barrier = Arc::new(Barrier::new(4));
             let mut tasks = JoinSet::new();
 
@@ -259,10 +269,10 @@ mod tests {
             state.len() + worker
         }
 
-        let pool = Arc::new(WorkerPool::new(
-            vec![0],
-            NonZeroUsize::new(1).expect("nonzero limit"),
-        ));
+        let pool = Arc::new(
+            WorkerPool::new(vec![0], NonZeroUsize::new(1).expect("nonzero limit"))
+                .expect("pool is not empty"),
+        );
         let barrier = Arc::new(Barrier::new(2));
         let state = String::from("table");
 
@@ -287,7 +297,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_released_permits_are_reserved_for_waiters() {
-        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(1).expect("nonzero limit"));
+        let pool = WorkerPool::new(vec![0, 1], NonZeroUsize::new(1).expect("nonzero limit"))
+            .expect("pool is not empty");
         let first = acquire_ready(pool.acquire());
         let second = acquire_ready(pool.acquire());
         let mut first_waiter = Box::pin(pool.acquire());
@@ -319,26 +330,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_rejects_empty_pool() {
-        WorkerPool::<usize>::new(Vec::new(), NonZeroUsize::new(1).expect("nonzero limit"));
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_rejects_total_capacity_above_semaphore_limit() {
-        WorkerPool::new(
-            vec![0, 1],
-            NonZeroUsize::new(Semaphore::MAX_PERMITS).expect("nonzero limit"),
-        );
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_rejects_total_capacity_overflow() {
-        WorkerPool::new(
-            vec![0, 1],
-            NonZeroUsize::new(usize::MAX).expect("nonzero limit"),
-        );
+        let result =
+            WorkerPool::<usize>::new(Vec::new(), NonZeroUsize::new(1).expect("nonzero limit"));
+        assert!(matches!(result, Err(Error::EmptyPool)));
     }
 }
