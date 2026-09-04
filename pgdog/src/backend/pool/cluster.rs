@@ -10,7 +10,6 @@ use std::{sync::Arc, time::Duration};
 
 use crate::backend::schema::SchemaCache;
 use crate::backend::server::ServerRequest;
-use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
         Schema, ShardedTables, databases::User as DatabaseUser, replication::ShardedSchemas,
@@ -509,8 +508,8 @@ impl Cluster {
     }
 
     // Get sharded tables if any.
-    pub(crate) fn sharded_tables(&self) -> &[ShardedTable] {
-        self.sharded_tables.tables()
+    pub(crate) fn sharded_tables(&self) -> &ShardedTables {
+        &self.sharded_tables
     }
 
     /// Get query rewrite config.
@@ -913,35 +912,6 @@ mod test {
         pub(crate) fn new_test_session_mode(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             cluster.pooler_mode = PoolerMode::Session;
-            cluster
-        }
-
-        /// Two shards targeting different databases on the same server.
-        /// Gives separate lock namespaces without needing two Postgres instances.
-        pub(crate) fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
-            let mut cluster = Self::new_test(config);
-            let shard1 = cluster.shards.last_mut().unwrap();
-            *shard1 = Shard::new(ShardConfig {
-                number: 1,
-                primary: Some(&PoolConfig {
-                    address: Address {
-                        database_name: "pgdog1".into(),
-                        ..Address::new_test()
-                    },
-                    config: Config::default(),
-                }),
-                replicas: &[PoolConfig {
-                    address: Address {
-                        database_name: "pgdog1".into(),
-                        configured_role: Role::Replica,
-                        ..Address::new_test()
-                    },
-                    config: Config::default(),
-                }],
-                identifier: cluster.identifier.clone(),
-                lsn_check_interval: Duration::MAX,
-                ..Default::default()
-            });
             cluster
         }
 

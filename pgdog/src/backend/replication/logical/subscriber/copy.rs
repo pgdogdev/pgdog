@@ -81,7 +81,7 @@ impl CopySubscriber {
                 .find(|(role, _)| role == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone(ConnectReason::Replication)
+                .standalone(ConnectReason::Resharding)
                 .await?;
             servers.push(ParallelConnection::new(primary)?);
         }

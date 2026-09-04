@@ -97,6 +97,8 @@ replace_copy_with_replicate projects name
 replace_copy_with_replicate tasks title
 replace_copy_with_replicate task_comments body
 replace_copy_with_replicate settings name
+replace_copy_with_replicate sharded_to_omni name
+replace_copy_with_replicate omni_to_sharded name
 
 # REPLICATION SENTINEL — must be the last DML issued against the source.
 # pgbench uses random(1, 1_000_000_000), so id=0 is reserved for this purpose.
@@ -150,6 +152,8 @@ wait_for_no_copy_rows projects name
 wait_for_no_copy_rows tasks title
 wait_for_no_copy_rows task_comments body
 wait_for_no_copy_rows settings name
+wait_for_no_copy_rows sharded_to_omni name
+wait_for_no_copy_rows omni_to_sharded name
 
 
 # pg_count PORT TABLE — row count via a direct postgres connection (bypasses pgdog).
@@ -193,11 +197,53 @@ check_omni_each_shard() {
     echo "OK omni ${table}: ${source_count} rows on each shard"
 }
 
+check_sharded_source_to_omni_destination() {
+    local table="$1"
+    local source_count dest0_count dest1_count
+
+    source_count=$(psql -d source -tAc "SELECT COUNT(*) FROM ${table}")
+    dest0_count=$(pg_count 15434 "${table}")
+    dest1_count=$(pg_count 15435 "${table}")
+
+    if [ "${source_count}" -ne "${dest0_count}" ] || [ "${source_count}" -ne "${dest1_count}" ]; then
+        echo "MISMATCH sharded->omni ${table}: source=${source_count} dest-0(15434)=${dest0_count} dest-1(15435)=${dest1_count} (expected ${source_count} on each)"
+        exit 1
+    fi
+
+    echo "OK sharded->omni ${table}: ${source_count} rows on each destination shard"
+}
+
+check_omni_source_to_sharded_destination() {
+    local table="$1"
+    local source0_count source1_count dest0_count dest1_count dest_total
+
+    source0_count=$(pg_count 15432 "${table}")
+    source1_count=$(pg_count 15433 "${table}")
+    if [ "${source0_count}" -ne "${source1_count}" ]; then
+        echo "MISMATCH omni->sharded ${table}: source shards disagree source-0(15432)=${source0_count} source-1(15433)=${source1_count}"
+        exit 1
+    fi
+
+    dest0_count=$(pg_count 15434 "${table}")
+    dest1_count=$(pg_count 15435 "${table}")
+    dest_total=$((dest0_count + dest1_count))
+
+    if [ "${source0_count}" -ne "${dest_total}" ]; then
+        echo "MISMATCH omni->sharded ${table}: source=${source0_count} dest total=${dest_total} (dest-0=${dest0_count} dest-1=${dest1_count})"
+        exit 1
+    fi
+
+    echo "OK omni->sharded ${table}: ${source0_count} rows split ${dest0_count}/${dest1_count}"
+}
+
+
 check_row_count_matches tenants
 check_row_count_matches accounts
 check_row_count_matches projects
 check_row_count_matches tasks
 check_row_count_matches task_comments
 check_omni_each_shard settings
+check_sharded_source_to_omni_destination sharded_to_omni
+check_omni_source_to_sharded_destination omni_to_sharded
 
 cleanup

@@ -275,7 +275,7 @@ impl TestClient {
     pub(crate) fn shard_for_id(&mut self, id: i64) -> Shard {
         let cluster = self.engine.backend().cluster().unwrap();
 
-        ContextBuilder::new(cluster.sharded_tables().first().unwrap())
+        ContextBuilder::new(cluster.sharded_tables().tables().first().unwrap())
             .data(id)
             .shards(cluster.shards().len())
             .build()

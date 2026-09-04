@@ -1,6 +1,5 @@
 pub(crate) mod context;
 pub(crate) mod copy;
-pub(crate) mod omni_ownership;
 pub(crate) mod parallel_connection;
 pub(crate) mod pipeline;
 pub(crate) mod stream;

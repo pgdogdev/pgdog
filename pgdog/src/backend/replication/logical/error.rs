@@ -118,8 +118,8 @@ pub(crate) enum Error {
     #[error("replication timeout")]
     ReplicationTimeout,
 
-    #[error("shard {0} has no replication tables")]
-    NoReplicationTables(usize),
+    #[error("publication \"{0}\" has no tables")]
+    EmptyPublication(String),
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
