@@ -59,7 +59,7 @@ impl Command for Pause {
                     if self.resume {
                         pool.resume();
                     } else {
-                        pool.pause();
+                        pool.pause(false);
                     }
                 }
             }

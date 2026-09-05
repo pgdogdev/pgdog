@@ -17,7 +17,7 @@ use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendPid, FrontendPid};
-use crate::net::{Liveness, Parameter, Parameters};
+use crate::net::{BackendKeyData, Liveness, Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
@@ -314,7 +314,13 @@ impl Pool {
 
             // Propagate pause state so a paused database stays paused after reload.
             if from_guard.paused {
-                to_guard.paused = true;
+                // Only set if `remove_on_transfer_if_not_paused` is not set, which happens
+                // during admin FORCE_RELOAD command, and means that the `Pool` previously wasn't paused.
+                if !from_guard.remove_pause_on_transfer {
+                    to_guard.paused = true;
+                } else {
+                    // TODO: Do we need to notify waiters?
+                }
             }
 
             from_guard.online = false;
@@ -322,6 +328,7 @@ impl Pool {
             for server in idle {
                 to_guard.put(server, now)?;
             }
+
             to_guard.set_taken(taken);
         }
 
@@ -336,9 +343,12 @@ impl Pool {
     }
 
     /// Pause pool, closing all open connections.
-    pub(crate) fn pause(&self) {
+    /// If `remove_on_transfer` is true, then the pause will be removed on `move_conns_to`
+    pub(crate) fn pause(&self, remove_on_transfer: bool) {
         let mut guard = self.lock();
-
+        if !guard.paused && remove_on_transfer {
+            guard.remove_pause_on_transfer = true;
+        }
         guard.paused = true;
         guard.dump_idle();
     }
@@ -352,10 +362,17 @@ impl Pool {
             .cancel_keys()
             .map(|key| Server::cancel(&addr, key.clone()))
             .collect();
+
         try_join_all(futures)
             .await
             .map_err(|_| Error::FastShutdown)?;
         Ok(())
+    }
+
+    /// Fetch cancel keys for all active connections belonging to the `Pool`
+    pub(crate) fn active_connections(&self) -> Vec<BackendKeyData> {
+        // Collect into a Vec to drop the pool lock
+        self.lock().cancel_keys().cloned().collect()
     }
 
     /// Resume the pool.

@@ -1,6 +1,6 @@
 //! Admin command parser.
 
-use crate::admin::show_guc::get_show_variable;
+use crate::admin::{admin_reload::ForceReload, show_guc::get_show_variable};
 
 use super::*;
 
@@ -12,6 +12,7 @@ pub(crate) enum ParseResult {
     Reconnect(Reconnect),
     ShowClients(ShowClients),
     Reload(Reload),
+    ForceReload(ForceReload),
     ShowPools(ShowPools),
     ShowBans(ShowBans),
     ShowConfig(ShowConfig),
@@ -61,6 +62,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.execute().await,
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
+            ForceReload(force_reload) => force_reload.execute().await,
             ShowPools(show_pools) => show_pools.execute().await,
             ShowBans(show_bans) => show_bans.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
@@ -110,6 +112,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.name(),
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
+            ForceReload(force_reload) => force_reload.name(),
             ShowPools(show_pools) => show_pools.name(),
             ShowBans(show_bans) => show_bans.name(),
             ShowConfig(show_config) => show_config.name(),
@@ -206,6 +209,7 @@ impl Parser {
             "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
+            "force_reload" => ParseResult::ForceReload(ForceReload::parse(&sql)?),
             "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
             "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
             // These are not covered by the show handler above
@@ -286,6 +290,7 @@ mod tests {
         assert_parses!("RESUME", ParseResult::Pause(_));
         assert_parses!("RECONNECT", ParseResult::Reconnect(_));
         assert_parses!("RELOAD", ParseResult::Reload(_));
+        assert_parses!("FORCE_RELOAD", ParseResult::ForceReload(_));
         assert_parses!("SHUTDOWN", ParseResult::Shutdown(_));
         assert_parses!("BAN", ParseResult::Ban(_));
         assert_parses!("UNBAN", ParseResult::Ban(_));

@@ -133,12 +133,27 @@ pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Terminates all active connections on all `Cluster`s.
+pub(crate) async fn terminate_active_connections() -> Result<(), Error> {
+    let clusters: Vec<_> = databases().all().values().cloned().collect();
+
+    try_join_all(
+        clusters
+            .iter()
+            .map(|cluster| cluster.terminate_active_connections()),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// Re-create pools from config.
 pub(crate) fn reload() -> Result<(), Error> {
     info!("reloading configuration");
 
     // Load config from disk.
     let old_config = config();
+
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
 
