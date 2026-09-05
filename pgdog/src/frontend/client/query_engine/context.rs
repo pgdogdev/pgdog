@@ -17,6 +17,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
+    /// Parameters from the client's startup message.
+    pub(super) startup_params: &'a Parameters,
     /// Request.
     pub(super) client_request: &'a mut ClientRequest,
     /// How many requests are left to execute in an extended pipeline.
@@ -51,6 +53,7 @@ impl<'a> QueryEngineContext<'a> {
             id: FrontendPid::from(&client.key),
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
+            startup_params: &client.startup_params,
             client_request: &mut client.client_request,
             stream: &mut client.stream,
             transaction: client.transaction,
@@ -80,6 +83,7 @@ impl<'a> QueryEngineContext<'a> {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
+            startup_params: &mirror.startup_params,
             client_request: buffer,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,

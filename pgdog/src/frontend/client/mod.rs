@@ -58,6 +58,8 @@ pub(crate) struct Client {
     // Client startup parameters. Keeps track of any parameters
     // the client changes at runtime with `SET` as well.
     params: Parameters,
+    // Parameters exactly as they came in the startup message.
+    startup_params: Parameters,
     // Process-global communication primitives used for clients
     // to talk to each other, e.g. to track their own state.
     comms: ClientComms,
@@ -418,6 +420,7 @@ impl Client {
             comms,
             admin,
             streaming: false,
+            startup_params: params.clone(),
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
@@ -466,6 +469,7 @@ impl Client {
                 config().config.general.frontend_query_size_limit_block(),
             ),
             sticky: Sticky::from_params(&params),
+            startup_params: params.clone(),
             params,
             database: "pgdog".to_string(),
             query_log_stdout: false,
@@ -743,6 +747,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Stream>()
             + std::mem::size_of::<BackendKeyData>()
             + self.params.memory_usage()
+            + self.startup_params.memory_usage()
             + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()

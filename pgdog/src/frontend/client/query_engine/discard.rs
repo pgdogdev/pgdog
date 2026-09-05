@@ -1,3 +1,4 @@
+use crate::frontend::router::parameter_hints::PGDOG_PIN;
 use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 
 use super::*;
@@ -23,6 +24,7 @@ impl QueryEngine {
             self.advisory_locks.clear();
             context.prepared_statements.close_all();
             self.backend.unlisten_all();
+            self.reset_session_params(context).await?;
             self.check_lock();
         }
         let bytes_sent = context
@@ -33,6 +35,32 @@ impl QueryEngine {
             ])
             .await?;
         self.stats.sent(bytes_sent);
+        Ok(())
+    }
+
+    async fn reset_session_params(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<(), Error> {
+        context.params.restore_startup(context.startup_params);
+        self.manual_lock = context
+            .params
+            .get(PGDOG_PIN)
+            .and_then(|value| value.as_str())
+            .map(|value| matches!(value, "true" | "t"))
+            .unwrap_or_default();
+        self.comms.update_params(context.params);
+
+        // Parameters the client SET while holding this server were sent straight
+        // through, and `link_client` only replays what it knows diverged. Reset the
+        // server so the startup values are re-applied onto a clean session.
+        if self.backend.connected() {
+            self.backend.execute("RESET ALL").await?;
+            self.backend
+                .link_client(context.id, context.params, None)
+                .await?;
+        }
+
         Ok(())
     }
 }
