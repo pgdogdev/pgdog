@@ -31,6 +31,8 @@ pub(super) struct Inner {
     pub(super) online: bool,
     /// Pool is paused.
     pub(super) paused: bool,
+    // Pool's `paused` will not be propagated on transfer in `move_conns_to`
+    pub(super) remove_pause_on_transfer: bool,
     /// Track out of sync terminations.
     pub(super) out_of_sync: usize,
     /// How many times servers had to be re-synced
@@ -78,6 +80,7 @@ impl Inner {
             waiting: VecDeque::new(),
             online: false,
             paused: false,
+            remove_pause_on_transfer: false,
             force_close: 0,
             out_of_sync: 0,
             re_synced: 0,

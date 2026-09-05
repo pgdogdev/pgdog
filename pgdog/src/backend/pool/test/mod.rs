@@ -226,7 +226,7 @@ async fn test_pause() {
     // Make sure we're not blocked still.
     drop(pool.get(&Request::default()).await.unwrap());
 
-    pool.pause();
+    pool.pause(false);
 
     // We'll hit the timeout now because we're waiting forever.
     let pause = Duration::from_millis(2_000);
@@ -250,7 +250,7 @@ async fn test_pause() {
     // Shutdown the pool while clients wait.
     // Makes sure they get woken up and kicked out of
     // the pool.
-    pool.pause();
+    pool.pause(false);
     let tracker = TaskTracker::new();
     let didnt_work = Arc::new(AtomicBool::new(false));
     for _ in 0..1000 {
@@ -1224,7 +1224,7 @@ async fn test_move_conns_to_propagates_pause_state() {
     destination.launch();
 
     // Pause the source pool.
-    source.pause();
+    source.pause(false);
     assert!(source.lock().paused);
     assert!(!destination.lock().paused);
 

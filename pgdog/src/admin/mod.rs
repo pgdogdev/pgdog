@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use crate::net::messages::Message;
 
+pub(crate) mod admin_reload;
 pub(crate) mod ban;
 pub(crate) mod copy_data;
 pub(crate) mod cutover;
