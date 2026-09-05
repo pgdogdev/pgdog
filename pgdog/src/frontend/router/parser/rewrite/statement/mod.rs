@@ -5,7 +5,6 @@ use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 use crate::backend::ShardingSchema;
 use crate::backend::schema::Schema;
 use crate::frontend::PreparedStatements;
-use crate::frontend::router::parser::AstContext;
 use crate::net::parameter::ParameterValue;
 
 pub(crate) mod aggregate;
@@ -19,19 +18,14 @@ pub(crate) mod unique_id;
 pub(crate) mod update;
 
 pub(crate) use error::Error;
-pub(crate) use insert::InsertSplit;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
-pub(crate) use update::*;
 
 /// Statement rewrite engine context.
 #[derive(Debug)]
 pub(crate) struct StatementRewriteContext<'a> {
     /// The statement is using the extended protocol with placeholders.
     pub(crate) extended: bool,
-    /// The statement is named, so we need to save any derivatives into the global
-    /// statement cache.
-    pub(crate) prepared: bool,
     /// Reference to global prepared stmt cache.
     pub(crate) prepared_statements: &'a mut PreparedStatements,
     /// Sharding schema.
@@ -52,9 +46,6 @@ pub(crate) struct StatementRewrite<'a> {
     /// we need to rewrite function calls with parameters
     /// and not actual values.
     extended: bool,
-    /// The statement is named (prepared), so we need to save
-    /// any derivatives into the global statement cache.
-    prepared: bool,
     /// Prepared statements cache for name mapping.
     prepared_statements: &'a mut PreparedStatements,
     /// Sharding schema for cache lookups.
@@ -76,22 +67,11 @@ impl<'a> StatementRewrite<'a> {
         Self {
             rewritten: false,
             extended: ctx.extended,
-            prepared: ctx.prepared,
             prepared_statements: ctx.prepared_statements,
             schema: ctx.schema,
             db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
-        }
-    }
-
-    /// Create an AstContext from this rewriter's fields.
-    fn ast_context(&self) -> AstContext<'a> {
-        AstContext {
-            sharding_schema: self.schema.clone(),
-            db_schema: self.db_schema.clone(),
-            user: self.user,
-            search_path: self.search_path,
         }
     }
 

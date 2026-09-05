@@ -282,7 +282,6 @@ mod tests {
         let db_schema = default_db_schema();
         let mut rewrite = StatementRewrite::new(StatementRewriteContext {
             extended,
-            prepared: false,
             prepared_statements: &mut ps,
             schema: &schema,
             db_schema: &db_schema,

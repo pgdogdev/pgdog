@@ -8,9 +8,6 @@ pub(crate) enum Error {
     #[error("parser: {0}")]
     Parser(#[from] pg_raw_parse::Error),
 
-    #[error("cache: {0}")]
-    Cache(String),
-
     #[error("sharding key assignment unsupported: {0}")]
     UnsupportedShardingKeyUpdate(String),
 

@@ -18,7 +18,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
     /// Request.
-    pub(super) client_request: &'a mut ClientRequest,
+    pub(crate) client_request: &'a mut ClientRequest,
     /// How many requests are left to execute in an extended pipeline.
     pub(super) pipeline: Pipeline,
     /// Client's socket to send responses to.
@@ -105,5 +105,16 @@ impl<'a> QueryEngineContext<'a> {
 
     pub(crate) fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
+    }
+
+    /// Mark the transaction failed
+    pub(crate) fn set_transaction_error(&mut self) {
+        self.transaction = match self.transaction {
+            Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
+            Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
+                Some(TransactionType::ErrorReadWrite)
+            }
+            _ => None,
+        };
     }
 }

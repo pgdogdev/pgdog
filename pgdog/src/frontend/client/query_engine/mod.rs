@@ -152,8 +152,8 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context) {
-            Ok(rewrite_result) => rewrite_result,
+        let (query_planner, offset_plan) = match self.parse_and_rewrite(context).await {
+            Ok(result) => result,
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))
                     .await?;
@@ -168,7 +168,7 @@ impl QueryEngine {
         }
 
         // Route transaction to the right servers.
-        if !self.route_query(context, rewrite_result.as_ref()).await? {
+        if !self.route_query(context, offset_plan.as_ref()).await? {
             self.update_stats(context);
             debug!("query has nowhere to go");
             return Ok(QueryEngineResult::Done(context.transaction()));
@@ -246,11 +246,11 @@ impl QueryEngine {
 
                 context.params.rollback();
             }
-            Command::Query(_) => self.execute(context, rewrite_result).await?,
+            Command::Query(_) => self.execute(context, query_planner).await?,
             Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
                 if self.backend.session_mode() =>
             {
-                self.execute(context, rewrite_result).await?
+                self.execute(context, query_planner).await?
             }
             Command::Listen { channel, shard } => {
                 self.listen(context, &channel.clone(), shard.clone())
@@ -274,7 +274,7 @@ impl QueryEngine {
             Command::ResetAll => {
                 self.reset_all(context).await?;
             }
-            Command::Copy(_) => self.execute(context, rewrite_result).await?,
+            Command::Copy(_) => self.execute(context, query_planner).await?,
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { target, extended } => {
                 self.discard(context, *target, *extended).await?

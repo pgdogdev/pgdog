@@ -1,5 +1,6 @@
 use super::*;
-use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
+use crate::frontend::client::query_engine::multi_step::types::QueryPlanner;
+use crate::frontend::router::parser::rewrite::statement::offset::OffsetPlan;
 use crate::frontend::router::parser::{AstContext, Cache};
 
 impl QueryEngine {
@@ -20,10 +21,10 @@ impl QueryEngine {
     }
 
     /// Parse client request and rewrite it, if necessary.
-    pub(super) fn parse_and_rewrite(
+    pub(super) async fn parse_and_rewrite(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-    ) -> Result<Option<RewriteResult>, Error> {
+    ) -> Result<(Option<QueryPlanner>, Option<OffsetPlan>), Error> {
         let use_parser = self
             .backend
             .cluster()
@@ -31,7 +32,7 @@ impl QueryEngine {
             .unwrap_or(false);
 
         if !use_parser {
-            return Ok(None);
+            return Ok((None, None));
         }
 
         let query = context.client_request.query()?;
@@ -40,11 +41,12 @@ impl QueryEngine {
             let ast_ctx = AstContext::from_cluster(cluster, context.params);
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
 
-            let rewrite_result = ast.rewrite_plan.apply(context.client_request)?;
+            let rewrite_plan = ast.rewrite_plan.clone();
             context.client_request.ast = Some(ast);
-            Ok(Some(rewrite_result))
+            let rewrite_result = rewrite_plan.apply(self, context).await?;
+            Ok((rewrite_result, rewrite_plan.offset))
         } else {
-            Ok(None)
+            Ok((None, None))
         }
     }
 }

@@ -504,7 +504,6 @@ mod tests {
         let ast = pg_raw_parse::parse(sql).unwrap();
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             extended: false,
-            prepared: false,
             prepared_statements: prepared,
             schema,
             db_schema,

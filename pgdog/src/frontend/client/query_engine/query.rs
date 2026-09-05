@@ -1,10 +1,7 @@
 use tracing::{info, trace};
 
 use crate::{
-    frontend::{
-        client::TransactionType,
-        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
-    },
+    frontend::{client::TransactionType, router::parser::explain_trace::ExplainTrace},
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
@@ -13,17 +10,17 @@ use crate::{
     util::safe_timeout,
 };
 
-use tracing::{debug, error};
-
 use super::hooks::schema::schema_changed;
 use super::*;
+use crate::frontend::client::query_engine::multi_step::types::QueryPlanner;
+use tracing::{debug, error};
 
 impl QueryEngine {
     /// Handle query from client.
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        query_planner: Option<RewriteResult>,
+        query_planner: Option<QueryPlanner>,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
         if !self.transaction_error_check(context).await? {
@@ -65,54 +62,22 @@ impl QueryEngine {
             }
         }
 
+        let planner = query_planner.unwrap_or_else(QueryPlanner::plan_normal);
+
         let query_timeout = context.timeouts.query_timeout(&State::Active);
-        let result = safe_timeout(
-            query_timeout,
-            self.client_server_exchange(context, query_planner),
-        )
-        .await;
+        let result = safe_timeout(query_timeout, self.run_steps(context, &planner)).await;
 
         match result {
+            Ok(Err(Error::Planner(err))) => match err.into_client_error() {
+                Ok(response) => self.error_response(context, response).await?,
+                Err(err) => return Err(err.into()),
+            },
             Ok(response) => response?,
             Err(err) => {
                 // Close the conn, it could be stuck executing a query
                 // or dead.
                 self.backend.force_close();
                 return Err(err.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn client_server_exchange(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-        rewrite_result: Option<RewriteResult>,
-    ) -> Result<(), Error> {
-        match rewrite_result {
-            Some(RewriteResult::InsertSplit(requests)) => {
-                Box::pin(multi_step::InsertMulti::from_engine(self, requests).execute(context))
-                    .await?;
-            }
-
-            Some(RewriteResult::InPlace { .. }) | None => {
-                self.backend
-                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
-                    .await?;
-
-                while self.backend.has_more_messages()
-                    && !self.backend.in_copy_mode()
-                    && !self.streaming
-                {
-                    let message = self.read_server_message().await?;
-                    self.process_server_message(context, message).await?;
-                }
-            }
-
-            Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
-                Box::pin(multi_step::UpdateMulti::new(self, &sharding_key_update).execute(context))
-                    .await?;
             }
         }
 
@@ -178,14 +143,7 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    let error_state = match context.transaction {
-                        Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
-                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(TransactionType::ErrorReadWrite)
-                        }
-                        _ => None,
-                    };
-                    context.transaction = error_state;
+                    context.set_transaction_error();
                     if self.two_pc.auto() {
                         self.end_two_pc(true).await?;
                         // TODO: this records a 2pc transaction in client

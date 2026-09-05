@@ -84,7 +84,6 @@ impl Ast {
         // `Cache::query` can decide whether this entry is safe to cache.
         let mut rewriter = StatementRewrite::new(StatementRewriteContext {
             extended: query.original_query.extended(),
-            prepared: query.original_query.prepared(),
             prepared_statements,
             schema,
             db_schema,

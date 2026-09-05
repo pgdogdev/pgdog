@@ -7,7 +7,9 @@ use crate::{
 
 pub(crate) mod insert;
 pub(crate) mod prepared;
+pub(crate) mod sharding_key_update;
 pub(crate) mod simple;
+pub(crate) mod split_insert;
 pub(crate) mod update;
 
 async fn truncate_table(table: &str, stream: &mut TcpStream) {

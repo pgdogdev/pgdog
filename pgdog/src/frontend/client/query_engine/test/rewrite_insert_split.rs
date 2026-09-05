@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
+use crate::frontend::client::query_engine::multi_step::types::{ResponseHistory, StepRequest};
 
 use super::prelude::*;
 
@@ -13,17 +13,27 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     let mut context = QueryEngineContext::new(&mut client);
 
     engine.rewrite_extended(&mut context).unwrap();
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let (planner, _offset) = engine.parse_and_rewrite(&mut context).await.unwrap();
 
+    let planner = planner.expect("expected rewrite insert split");
     assert!(
-        matches!(rewrite_result, Some(RewriteResult::InsertSplit(_))),
+        planner.forward_to_client.is_some(),
         "expected rewrite insert split"
     );
 
-    match rewrite_result.unwrap() {
-        RewriteResult::InsertSplit(requests) => requests,
-        _ => unreachable!(),
-    }
+    planner
+        .steps
+        .into_iter()
+        .map(|step| {
+            let StepRequest::Statement(statement) = step.request else {
+                unreachable!("split should not be raw")
+            };
+            statement
+                .assemble(&ResponseHistory::default())
+                .unwrap()
+                .expect("split resolves statically")
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -60,7 +70,7 @@ async fn test_insert_split() {
             matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.anonymous()),
             "expected single tuple insert with no name"
         );
-        match request[1].clone() {
+        match request[2].clone() {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -99,7 +109,7 @@ async fn test_insert_split_prepared() {
             matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.name() == "__pgdog_2"),
             "expected single tuple insert"
         );
-        match request[1].clone() {
+        match request[2].clone() {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -147,7 +157,7 @@ async fn test_insert_split_not_sharded() {
     ]);
     let mut engine = QueryEngine::from_client(&client).unwrap();
     let mut context = QueryEngineContext::new(&mut client);
-    let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
+    let (planner, _offset) = engine.parse_and_rewrite(&mut context).await.unwrap();
 
-    assert!(rewrite_result.is_none());
+    assert!(planner.is_none());
 }

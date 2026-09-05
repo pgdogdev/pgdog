@@ -1,13 +1,15 @@
-use crate::frontend::{ClientRequest, PreparedStatements};
+use super::offset::OffsetPlan;
+use super::{Error, PrepareExecute, aggregate::AggregateRewritePlan};
+use crate::frontend::PreparedStatements;
+use crate::frontend::client::query_engine;
+pub(crate) use crate::frontend::client::query_engine::multi_step::types::{
+    QueryPlanner, QueryPlannerType,
+};
+use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
-
-use super::insert::build_split_requests;
-use super::offset::OffsetPlan;
-use super::{
-    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
-};
+use std::fmt::Debug;
 
 /// Statement rewrite plan.
 ///
@@ -34,38 +36,20 @@ pub(crate) struct RewritePlan {
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
     pub(crate) prepare_rewrites: Vec<PrepareExecute>,
 
-    /// Splitting of multi-tuple INSERT statements into
-    /// multiple queries.
-    pub(crate) insert_split: Vec<InsertSplit>,
-
     /// Position in the result where the count(*) or count(name)
     /// functions are added.
     pub(crate) aggregates: AggregateRewritePlan,
 
+    /// Splitting of multi-tuple INSERT statements into
+    /// multiple queries.
+    pub(crate) insert_split: bool,
+
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
-    pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
+    pub(crate) sharding_key_update: bool,
 
     /// Limit/offset pagination.
     pub(crate) offset: Option<OffsetPlan>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum RewriteResult {
-    InPlace { offset: Option<OffsetPlan> },
-    InsertSplit(Vec<ClientRequest>),
-    ShardingKeyUpdate(ShardingKeyUpdate),
-}
-
-impl RewriteResult {
-    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
-        match self {
-            Self::InPlace {
-                offset: Some(offset),
-            } => offset.apply_after_parser(request),
-            _ => Ok(()),
-        }
-    }
 }
 
 impl RewritePlan {
@@ -77,9 +61,9 @@ impl RewritePlan {
             && self.auto_id_injected == 0
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
-            && self.insert_split.is_empty()
+            && !self.insert_split
             && self.aggregates.is_noop()
-            && self.sharding_key_update.is_none()
+            && !self.sharding_key_update
             && self.offset.is_none()
     }
 
@@ -117,8 +101,13 @@ impl RewritePlan {
         }
     }
 
-    /// Apply the rewrite plan to a ClientRequest.
-    pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
+    /// Apply the `RewritePlan` to the [`context.client_request`] to get a `QueryPlanner` back
+    pub(crate) async fn apply(
+        &self,
+        engine: &mut QueryEngine,
+        context: &mut QueryEngineContext<'_>,
+    ) -> Result<Option<QueryPlanner>, query_engine::multi_step::error::Error> {
+        let request = &mut *context.client_request;
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepare_rewrites.is_empty() {
             self.prepare_rewrites
@@ -145,25 +134,20 @@ impl RewritePlan {
             }
         }
 
-        // Only rewrite executable requests. Some clients prepare the statement
-        // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
-        // those since insert split will return the same row(s) as multi-tuple insert.
-        if !self.insert_split.is_empty() && request.is_executable() {
-            let requests = build_split_requests(&self.insert_split, request)?;
-            return Ok(RewriteResult::InsertSplit(requests));
-        }
+        // If the parser thinks we meet a special case, we should try planning for it.
+        // Else, ask the `QueryPlanner` to plan as a normal request.
+        let query_planner_type = {
+            if self.insert_split {
+                QueryPlannerType::InsertSplit
+            } else if self.sharding_key_update {
+                QueryPlannerType::ShardingKeyUpdate
+            } else {
+                QueryPlannerType::Normal
+            }
+        };
 
-        if let Some(sharding_key_update) = &self.sharding_key_update
-            && request.is_executable()
-        {
-            return Ok(RewriteResult::ShardingKeyUpdate(
-                sharding_key_update.clone(),
-            ));
-        }
-
-        Ok(RewriteResult::InPlace {
-            offset: self.offset.clone(),
-        })
+        let request = context.client_request.clone();
+        QueryPlanner::plan_query(&request, engine, context, query_planner_type).await
     }
 }
 

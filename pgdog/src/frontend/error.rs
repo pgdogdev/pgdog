@@ -51,21 +51,15 @@ pub(crate) enum Error {
     #[error("rewrite: {0}")]
     Rewrite(#[from] crate::frontend::router::parser::rewrite::statement::Error),
 
-    #[error("query has no route")]
-    NoRoute,
-
-    #[error("multi-tuple insert requires multi-shard binding")]
-    MultiShardRequired,
-
     // FIXME: layer errors better so we don't have
     // to reach so deep into a module.
     #[error("{0}")]
-    Multi(#[from] Box<crate::frontend::client::query_engine::multi_step::error::Error>),
+    Planner(#[from] Box<crate::frontend::client::query_engine::multi_step::error::Error>),
 }
 
 impl From<crate::frontend::client::query_engine::multi_step::error::Error> for Error {
     fn from(value: crate::frontend::client::query_engine::multi_step::error::Error) -> Self {
-        Self::Multi(Box::new(value))
+        Self::Planner(Box::new(value))
     }
 }
 
