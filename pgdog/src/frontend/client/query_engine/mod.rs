@@ -75,6 +75,9 @@ pub(crate) struct QueryEngine {
     // or disconnect.
     manual_lock: bool,
     temp_tables: FnvHashMap<String, TempTableState>,
+    // Tables removed by DISCARD TEMP in the current transaction.
+    // Keep them until COMMIT so ROLLBACK can restore the client-side tracker.
+    discarded_temp_tables: Option<FnvHashMap<String, TempTableState>>,
 }
 
 impl QueryEngine {
@@ -103,6 +106,7 @@ impl QueryEngine {
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
             temp_tables: Default::default(),
+            discarded_temp_tables: None,
         })
     }
 

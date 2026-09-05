@@ -246,7 +246,7 @@ impl QueryEngine {
                     self.temp_tables.insert(
                         name.clone(),
                         TempTableState {
-                            committed: false,
+                            committed: !context.in_transaction(),
                             drop_on_commit: *drop_on_commit,
                         },
                     );
