@@ -32,6 +32,7 @@ mod rewrite_extended;
 mod rewrite_insert_split;
 mod rewrite_offset;
 mod rewrite_simple_prepared;
+mod role;
 mod schema_changed;
 mod set;
 mod set_schema_sharding;
