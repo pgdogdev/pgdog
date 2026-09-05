@@ -348,9 +348,10 @@ impl Pool {
         let mut guard = self.lock();
         if !guard.paused && remove_on_transfer {
             guard.remove_pause_on_transfer = true;
+        } else {
+            guard.dump_idle();
         }
         guard.paused = true;
-        guard.dump_idle();
     }
 
     /// Send a cancellation request for all running queries.
