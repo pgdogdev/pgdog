@@ -487,6 +487,7 @@ async fn test_client_login_timeout() {
             addr,
             crate::config::config(),
             ProtocolVersion::V3_0,
+            crate::stats::logins::LoginTimer::new(),
         )
         .await
     });

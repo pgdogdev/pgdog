@@ -341,9 +341,16 @@ impl SpawnedClient {
         let handle = tokio::spawn(async move {
             let (stream, addr) = listener.accept().await.unwrap();
             let stream = Stream::plain(stream, 4096);
-            Client::spawn(stream, params, addr, config(), ProtocolVersion::V3_0)
-                .await
-                .unwrap();
+            Client::spawn(
+                stream,
+                params,
+                addr,
+                config(),
+                ProtocolVersion::V3_0,
+                crate::stats::logins::LoginTimer::new(),
+            )
+            .await
+            .unwrap();
         });
 
         let conn = TcpStream::connect(format!("127.0.0.1:{}", port))

@@ -30,6 +30,7 @@ use crate::net::messages::{
 };
 use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
 use crate::state::State;
+use crate::stats::logins::LoginTimer;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
@@ -138,6 +139,7 @@ impl Client {
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
+        mut login_timer: LoginTimer,
     ) -> Result<(), Error> {
         let login_timeout = Duration::from_millis(config.config.general.client_login_timeout);
 
@@ -148,6 +150,7 @@ impl Client {
         .await
         {
             Ok(Ok(Some(mut client))) => {
+                login_timer.success();
                 if client.admin {
                     // Admin clients are not waited on during shutdown.
                     spawn(async move {
@@ -160,10 +163,16 @@ impl Client {
                 Ok(())
             }
             Err(_) => {
+                // Login timeouts are logged; the drop still counts the
+                // connection as an abandoned login.
                 error!("client login timeout [{}]", addr);
                 Ok(())
             }
-            Ok(Ok(None)) => Ok(()),
+            Ok(Ok(None)) => {
+                // Login was rejected with an explicit response.
+                login_timer.disarm();
+                Ok(())
+            }
             Ok(Err(err)) => Err(err),
         }
     }
