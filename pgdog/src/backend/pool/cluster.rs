@@ -725,18 +725,21 @@ impl Cluster {
         for shard in self.shards() {
             let pools = shard.pools();
             for pool in pools {
-                // TODO: What happens if the pool is no longer working? (test this)
-                //       Obtain a transaction -> poison pool somehow -> call FORCE_RELOAD
-
                 let keys = pool.active_connections();
                 if !keys.is_empty() {
                     // Prevent chance of more connections slipping through before we terminate backends.
                     // When passing true, if the pool previously was NOT paused, it'll be resumed
                     // again on the new `Pool` when the transfer happens later.
+                    //
+                    // TODO: If we error below on standalone or execute,
+                    // it'll leave the `Pool` in a pause state incorrectly.
                     pool.pause(true);
 
                     // Connect outside of `Pool` idle connections to prevent waiting for an available connection.
                     // This also bypasses [`Pool.pause`]
+                    //
+                    // TODO: Say that this fails for some reason; it already internally re-tries multiple times.
+                    //       should we Error because not all transactions are terminated? Ignore it?
                     let mut server = pool.standalone(backend::ConnectReason::Other).await?;
 
                     for key in keys {
@@ -745,8 +748,6 @@ impl Cluster {
                         let request: ServerRequest =
                             format!("SELECT pg_terminate_backend({});", key.pid).into();
                         server.execute(request).await?;
-
-                        // TODO: Should we be removing the in-memory PIDs from `Taken`?
                     }
                 }
             }
