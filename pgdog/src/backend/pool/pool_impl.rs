@@ -313,17 +313,11 @@ impl Pool {
             let mut to_guard = destination.lock();
 
             // Propagate pause state so a paused database stays paused after reload.
-            if from_guard.paused {
-                // Only set if `remove_on_transfer_if_not_paused` is not set, which happens
-                // during admin FORCE_RELOAD command, and means that the `Pool` previously wasn't paused.
-                if !from_guard.remove_pause_on_transfer {
-                    to_guard.paused = true;
-                } else {
-                    // TODO: Do we need to notify waiters?
-                }
-            }
-
+            // Only set if `remove_on_transfer_if_not_paused` is not set, which happens
+            // during admin FORCE_RELOAD command, and means that the `Pool` previously wasn't paused.
+            to_guard.paused = from_guard.paused && !from_guard.remove_pause_on_transfer;
             from_guard.online = false;
+
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
                 to_guard.put(server, now)?;
