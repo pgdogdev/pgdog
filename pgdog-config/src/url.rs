@@ -68,6 +68,11 @@ impl From<&Url> for Database {
                         database.idle_timeout = Some(timeout);
                     }
                 }
+                "client_idle_timeout" => {
+                    if let Ok(timeout) = val.parse::<u64>() {
+                        database.client_idle_timeout = Some(timeout);
+                    }
+                }
                 "read_only" => {
                     if let Ok(read_only) = val.parse::<bool>() {
                         database.read_only = Some(read_only);
@@ -188,13 +193,14 @@ mod test {
 
     #[test]
     fn test_numeric_fields_from_query_params() {
-        let url = Url::parse("postgres://user:password@host:5432/name?pool_size=10&min_pool_size=2&statement_timeout=5000&idle_timeout=300&server_lifetime=3600&server_lifetime_jitter=600").unwrap();
+        let url = Url::parse("postgres://user:password@host:5432/name?pool_size=10&min_pool_size=2&statement_timeout=5000&idle_timeout=300&client_idle_timeout=600&server_lifetime=3600&server_lifetime_jitter=600").unwrap();
         let database = Database::from(&url);
 
         assert_eq!(database.pool_size, Some(10));
         assert_eq!(database.min_pool_size, Some(2));
         assert_eq!(database.statement_timeout, Some(5000));
         assert_eq!(database.idle_timeout, Some(300));
+        assert_eq!(database.client_idle_timeout, Some(600));
         assert_eq!(database.server_lifetime, Some(3600));
         assert_eq!(database.server_lifetime_jitter, Some(600));
     }

@@ -4,7 +4,7 @@
 //!
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use pgdog_config::users::PasswordKind;
@@ -77,6 +77,10 @@ pub(crate) struct Client {
     // These change based on client state, e.g. if client is running query,
     // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
     timeouts: Timeouts,
+    // Configuration snapshot used to resolve `timeouts`. Keeping a weak handle
+    // lets us avoid scanning all users and databases on every request while
+    // still refreshing timeouts after a configuration reload.
+    timeouts_config: Weak<ConfigAndUsers>,
     // Stateful buffer containing the current whole client request.
     // This can be a query or just a `Parse` and `Flush`, but in either case, the client
     // will expect a response immediately and we need to handle it.
@@ -421,7 +425,8 @@ impl Client {
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
-            timeouts: Timeouts::from_config(&config.config.general),
+            timeouts: Timeouts::from_config(&config, user, database, admin),
+            timeouts_config: Arc::downgrade(&config),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 config.config.memory.message_buffer,
@@ -445,10 +450,12 @@ impl Client {
             params.insert("database", "pgdog");
         }
 
+        let config = config();
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
         let mut prepared_statements = PreparedStatements::new();
-        prepared_statements.level = config().config.general.prepared_statements;
+        prepared_statements.level = config.config.general.prepared_statements;
+        let (user, database) = user_database_from_params(&params);
 
         Self {
             stream,
@@ -459,11 +466,12 @@ impl Client {
             prepared_statements,
             admin: false,
             transaction: None,
-            timeouts: Timeouts::from_config(&config().config.general),
+            timeouts: Timeouts::from_config(&config, user, database, false),
+            timeouts_config: Arc::downgrade(&config),
             client_request: ClientRequest::default(),
             stream_buffer: MessageBuffer::new(
                 4096,
-                config().config.general.frontend_query_size_limit_block(),
+                config.config.general.frontend_query_size_limit_block(),
             ),
             sticky: Sticky::from_params(&params),
             params,
@@ -643,11 +651,23 @@ impl Client {
         let config = config::config();
         // Configure prepared statements cache.
         self.prepared_statements.level = config.prepared_statements();
-        self.timeouts = Timeouts::from_config(&config.config.general);
+        // Our own weak handle keeps the old allocation from being freed and
+        // reused, so pointer equality can't suffer ABA and no refcount
+        // traffic (`Weak::upgrade`) is needed on this hot path.
+        let timeouts_current = std::ptr::eq(self.timeouts_config.as_ptr(), Arc::as_ptr(&config));
+        if !timeouts_current {
+            let (user, database) = user_database_from_params(&self.params);
+            self.timeouts = Timeouts::from_config(&config, user, database, self.admin);
+            self.timeouts_config = Arc::downgrade(&config);
+        }
         self.query_log_stdout = config.config.general.query_log_stdout;
         self.query_size_limit = config.config.general.query_size_limit;
         self.stream_buffer
             .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
+        // Do not retain a full configuration snapshot while waiting on an idle
+        // client. `timeouts_config` keeps only the weak identity handle needed
+        // to detect a reload on the next invocation.
+        drop(config);
 
         while !self.client_request.is_complete() {
             let idle_timeout = self
@@ -747,6 +767,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()
             + std::mem::size_of::<Timeouts>()
+            + std::mem::size_of::<Weak<ConfigAndUsers>>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
     }

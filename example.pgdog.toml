@@ -277,6 +277,9 @@ idle_timeout = 60_000
 # Client idle timeout. How long to wait for clients to send another transaction
 # before disconnecting them.
 #
+# Set to 0 to disable. This can also be overridden for one logical database
+# or user in the corresponding configuration entry.
+#
 # Default: unlimited
 client_idle_timeout = 60_000
 # Size of the mirror queue. Queries that don't fit are dropped.
@@ -340,6 +343,10 @@ port = 5432
 # - replica
 #
 role = "primary"
+# Optional client idle timeout for this logical database. All entries with the
+# same name (shards and replicas) share the first configured value. Set to 0 to
+# disable the timeout, for example for intentionally quiet LISTEN clients.
+# client_idle_timeout = 0
 
 #
 # Add a replica and automatically load balance queries.

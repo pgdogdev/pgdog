@@ -637,6 +637,9 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
     // The schema cache is shared between all databases.
     let schema_cache = SchemaCache::default();
 
+    // Later overlapping user entries overwrite earlier clusters. Timeout
+    // resolution also prefers the last matching entry that configures its
+    // override; see `ConfigAndUsers::client_idle_timeout`.
     for user in &config.users.users {
         for database in config.config.user_databases(user) {
             let mut user = user.clone();
@@ -1649,6 +1652,51 @@ mod tests {
         );
 
         assert_eq!(databases.all().len(), 3);
+    }
+
+    #[test]
+    fn test_overlapping_user_and_timeout_resolution_choose_same_explicit_entry() {
+        let config = ConfigAndUsers {
+            config: Config {
+                databases: vec![Database {
+                    name: "production".into(),
+                    host: "localhost".into(),
+                    role: Role::Primary,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            users: crate::config::Users {
+                users: vec![
+                    crate::config::User {
+                        name: "alice".into(),
+                        all_databases: true,
+                        pool_size: Some(10),
+                        client_idle_timeout: Some(10_000),
+                        ..Default::default()
+                    },
+                    crate::config::User {
+                        name: "alice".into(),
+                        database: "production".into(),
+                        pool_size: Some(20),
+                        client_idle_timeout: Some(20_000),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let databases = from_config(&config);
+        let cluster = databases.cluster(("alice", "production")).unwrap();
+        let pools = cluster.shards()[0].pools();
+
+        assert_eq!(pools[0].config().max, 20);
+        assert_eq!(
+            config.client_idle_timeout("alice", "production"),
+            std::time::Duration::from_millis(20_000)
+        );
     }
 
     #[test]

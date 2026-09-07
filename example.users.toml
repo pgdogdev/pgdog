@@ -6,6 +6,9 @@
 name = "pgdog"
 database = "pgdog"
 password = "pgdog"
+# Optional client idle timeout for this user. Set to 0 to exempt intentionally
+# quiet sessions such as LISTEN/NOTIFY subscribers.
+# client_idle_timeout = 0
 
 [[users]]
 name = "pgdog"
