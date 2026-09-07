@@ -1,5 +1,6 @@
 //! What's a project without a util module.
 
+pub(crate) mod sync;
 pub(crate) mod time;
 
 use chrono::{DateTime, Local, Utc};
