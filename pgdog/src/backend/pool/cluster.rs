@@ -452,11 +452,37 @@ impl Cluster {
 
     /// Move connections from cluster to another, saving them.
     pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
+        // Ensure no deadlock: locking the same mutex twice on this thread
+        // (if self and other were the same cluster) would hang forever.
+        assert!(!Arc::ptr_eq(&self.stats, &other.stats));
+
+        // Carry cluster-level statistics over so a reload doesn't reset
+        // mirror and lookup counters. The lookup counters are accumulated
+        // into the new cluster's own stats Arc (unless it's the same one),
+        // so lookups served by the new cluster keep counting.
+        {
+            let from = self.stats.lock();
+            let mut to = other.stats.lock();
+            to.mirror = from.mirror;
+            if !Arc::ptr_eq(&to.lookup, &from.lookup) {
+                to.lookup.accumulate(&from.lookup);
+            }
+        }
+
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
             from.move_conns_to(to)?;
         }
 
         Ok(())
+    }
+
+    /// Reset statistics collected by this cluster and its pools,
+    /// used by the RESET STATS command.
+    pub fn reset_stats(&self) {
+        self.stats.lock().reset();
+        for shard in &self.shards {
+            shard.reset_stats();
+        }
     }
 
     /// Cancel a query executed by one of the shards.
@@ -1223,5 +1249,79 @@ mod test {
 
         cluster.query_parser = QueryParserLevel::Off;
         assert!(!cluster.use_query_parser(&req));
+    }
+
+    #[test]
+    fn test_move_conns_to_carries_cluster_metrics() {
+        let config = ConfigAndUsers::default();
+        let old = Cluster::new_test(&config);
+        let new = Cluster::new_test(&config);
+
+        // Populate the old cluster's metrics.
+        {
+            let mut stats = old.stats.lock();
+            stats.mirror.total_count = 11;
+            stats.mirror.mirrored_count = 7;
+            stats.mirror.dropped_count = 2;
+            stats.mirror.error_count = 1;
+            stats
+                .lookup
+                .hits
+                .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+            stats
+                .lookup
+                .misses
+                .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        assert!(old.can_move_conns_to(&new));
+        old.move_conns_to(&new).unwrap();
+
+        let stats = new.stats.lock();
+        assert_eq!(stats.mirror.total_count, 11);
+        assert_eq!(stats.mirror.mirrored_count, 7);
+        assert_eq!(stats.mirror.dropped_count, 2);
+        assert_eq!(stats.mirror.error_count, 1);
+        assert_eq!(
+            stats.lookup.hits.load(std::sync::atomic::Ordering::Relaxed),
+            5
+        );
+        assert_eq!(
+            stats
+                .lookup
+                .misses
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[test]
+    fn test_reset_stats_clears_cluster_and_pool_counters() {
+        let config = ConfigAndUsers::default();
+        let cluster = Cluster::new_test(&config);
+
+        // Populate cluster metrics and pool statistics.
+        {
+            let mut stats = cluster.stats.lock();
+            stats.mirror.total_count = 11;
+            stats
+                .lookup
+                .hits
+                .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        }
+        let pool = cluster.shards()[0].pools()[0].clone();
+        pool.lock().stats.counts.query_count = 42;
+
+        cluster.reset_stats();
+
+        {
+            let stats = cluster.stats.lock();
+            assert_eq!(stats.mirror.total_count, 0);
+            assert_eq!(
+                stats.lookup.hits.load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
+        assert_eq!(pool.lock().stats.counts.query_count, 0);
     }
 }

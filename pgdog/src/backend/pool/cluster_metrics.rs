@@ -80,6 +80,14 @@ pub(crate) struct ClusterMetrics {
     pub(crate) lookup: Arc<LookupStats>,
 }
 
+impl ClusterMetrics {
+    /// Reset all counters to zero, used by the RESET STATS command.
+    pub(super) fn reset(&mut self) {
+        self.mirror = Counts::default();
+        self.lookup.reset();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

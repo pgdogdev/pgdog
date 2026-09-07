@@ -317,6 +317,13 @@ impl Pool {
                 to_guard.paused = true;
             }
 
+            // Carry pool statistics over to the new pool instance. The two
+            // pools represent the same backend (they were matched by address),
+            // so counters and averages should survive config reloads; only
+            // pools that are actually added or removed between configs start
+            // with fresh statistics.
+            to_guard.stats = from_guard.stats;
+
             from_guard.online = false;
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
