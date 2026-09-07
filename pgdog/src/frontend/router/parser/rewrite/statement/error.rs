@@ -40,4 +40,7 @@ pub(crate) enum Error {
 
     #[error("prepared statement '{0}' does not exist")]
     ExecuteMissingPrepare(String),
+
+    #[error("missing or invalid parameters in Execute")]
+    IncorrectExecuteParameters,
 }

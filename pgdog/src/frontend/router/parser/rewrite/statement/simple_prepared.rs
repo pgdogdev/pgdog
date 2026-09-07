@@ -1,8 +1,15 @@
 use bytes::Bytes;
-use pg_raw_parse::{ConstValue, NodeMut, make::MemoryToken, nodes::ExecuteStmtMut};
+use pg_raw_parse::{
+    ConstValue, NodeMut,
+    make::MemoryToken,
+    nodes::{ExecuteStmtMut, ParamRef, PrepareStmtMut},
+};
 
 use crate::{
-    frontend::PreparedStatements,
+    frontend::{
+        PreparedStatements,
+        router::parser::{Limit, rewrite::statement::offset::OffsetPlan},
+    },
     net::{PREPARE_TEMPLATE_NAME, Prepare},
     unique_id::UniqueId,
 };
@@ -84,7 +91,7 @@ fn rewrite_single_prepared<'a>(
     node: NodeMut<'a, '_>,
     mem: MemoryToken<'a>,
     prepared_statements: &mut PreparedStatements,
-    plan: &RewritePlan,
+    plan: &mut RewritePlan,
 ) -> Result<SimplePreparedRewrite, Error> {
     match node {
         NodeMut::PrepareStmt(mut stmt) => {
@@ -93,9 +100,14 @@ fn rewrite_single_prepared<'a>(
             // Create a globally unique key using the query text
             // with a hardcoded name.
             stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
+
+            // Is the query a SELECT? Do we have both LIMIT and OFFSET in the SELECT?
+            let offset_plan: Option<OffsetPlan> = create_offset_plan(mem, &mut stmt);
+
             let query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
 
-            let prepare = prepared_statements.insert_prepare(&client_name, query, plan);
+            let prepare =
+                prepared_statements.insert_prepare(&client_name, query, plan, offset_plan);
 
             stmt.set_name(Some(mem.copy_string(prepare.name())));
 
@@ -104,9 +116,18 @@ fn rewrite_single_prepared<'a>(
 
         NodeMut::ExecuteStmt(mut stmt) => {
             let stmt_name = stmt.name().expect("EXECUTE always has name");
-            if let Some((prepare, unique_ids)) =
+
+            if let Some((prepare, unique_ids, offset_plan)) =
                 prepared_statements.prepare_and_unique_ids(stmt_name)
             {
+                if let Some(mut offset_plan) = offset_plan {
+                    // Note: This needs to be ordered before the offset_val/limit_val adjustment.
+                    insert_offset_params(&mut stmt, mem, &offset_plan);
+                    update_offset_plan_fields(&mut offset_plan, &mut stmt)?;
+
+                    plan.offset = Some(offset_plan);
+                }
+
                 // Rewrite EXECUTE statement to match the rewrite
                 // we did on the PREPARE statement.
                 insert_unique_ids(&mut stmt, mem, unique_ids)?;
@@ -119,6 +140,205 @@ fn rewrite_single_prepared<'a>(
         }
 
         _ => Ok(SimplePreparedRewrite::None),
+    }
+}
+
+/// Helper method for `rewrite_single_prepared` for `ExecuteStatement`
+/// Replace the cached OffsetPlan's un-resolved values
+/// (originally `ParamRef` nodes; weren't `A_Const` nodes in `PrepareStmt`)
+/// with the ones now provided within the `ExecuteStmt`
+fn update_offset_plan_fields<'a>(
+    offset_plan: &mut OffsetPlan,
+    stmt: &mut ExecuteStmtMut<'a, '_>,
+) -> Result<(), Error> {
+    if offset_plan.limit.offset.is_none() {
+        let pg_raw_parse::Node::A_Const(constant) = stmt
+            .params()
+            .get(offset_plan.offset_param - 1)
+            .ok_or(Error::IncorrectExecuteParameters)?
+        else {
+            return Err(Error::IncorrectExecuteParameters);
+        };
+
+        offset_plan.limit.offset = Some(
+            constant
+                .val()
+                .ok_or(Error::IncorrectExecuteParameters)?
+                .numeric_value::<i32>()
+                .ok_or(Error::IncorrectExecuteParameters)? as usize,
+        );
+    }
+
+    if offset_plan.limit.limit.is_none() {
+        let pg_raw_parse::Node::A_Const(constant) = stmt
+            .params()
+            .get(offset_plan.limit_param - 1)
+            .ok_or(Error::IncorrectExecuteParameters)?
+        else {
+            return Err(Error::IncorrectExecuteParameters);
+        };
+
+        offset_plan.limit.limit = Some(
+            constant
+                .val()
+                .ok_or(Error::IncorrectExecuteParameters)?
+                .numeric_value::<i32>()
+                .ok_or(Error::IncorrectExecuteParameters)? as usize,
+        );
+    }
+
+    Ok(())
+}
+
+/// Helper method for `rewrite_single_prepared` for `PreparedStatement`
+/// to create an `OffsetPlan` based on the SELECT query inside
+/// of the `PreparedStatement`, which allows us to store
+/// this `OffsetPlan` in the Prepared Statement cache
+/// and reference later for re-writes.
+fn create_offset_plan<'a>(
+    mem: MemoryToken<'a>,
+    stmt: &mut PrepareStmtMut<'a, '_>,
+) -> Option<OffsetPlan> {
+    // Inner query must be SELECT
+    let pg_raw_parse::Node::SelectStmt(stmt_query) = stmt.query() else {
+        return None;
+    };
+
+    // Must have both LIMIT and OFFSET
+    if matches!(stmt_query.limit_count(), pg_raw_parse::Node::None)
+        || matches!(stmt_query.limit_offset(), pg_raw_parse::Node::None)
+    {
+        return None;
+    }
+
+    // Count the `ParamRef` nodes in the query, so that we know what number to start at
+    // if we need to add some more.
+    let mut param_refs_count: usize = 0;
+    pg_raw_parse::walk::walk(stmt_query.into(), |node| {
+        if let pg_raw_parse::Node::ParamRef(_) = node {
+            param_refs_count += 1;
+        }
+    });
+
+    // Make a unique copy of the Client's statement to mutate
+    let mut unique_stmt = mem.make_unique(stmt_query);
+    let mut unique_stmt_mut = unique_stmt.as_mut();
+
+    // Replace `A_Const` nodes with `ParamRef` nodes.
+    // This allows us to dynamically change the LIMIT/OFFSET at execution time,
+    // if we have a multi-shard query.
+    let (offset_param, offset_val) =
+        if let pg_raw_parse::Node::A_Const(limit_offset) = stmt_query.limit_offset() {
+            param_refs_count += 1;
+
+            let mut param_ref_offset = mem.make_node::<ParamRef>();
+            param_ref_offset
+                .as_mut()
+                .set_number(param_refs_count as i32);
+            unique_stmt_mut.set_limit_offset(param_ref_offset.uncast());
+
+            let limit_offset_val = limit_offset
+                .val()
+                .and_then(|limit_offset_val| limit_offset_val.numeric_value::<i32>())?;
+
+            (param_refs_count, Some(limit_offset_val as usize))
+        } else if let pg_raw_parse::Node::ParamRef(param_ref) = stmt_query.limit_offset() {
+            (param_ref.number as usize, None)
+        } else {
+            return None;
+        };
+
+    let (limit_param, limit_val) =
+        if let pg_raw_parse::Node::A_Const(limit_count) = stmt_query.limit_count() {
+            param_refs_count += 1;
+
+            let mut param_ref_count = mem.make_node::<ParamRef>();
+            param_ref_count.as_mut().set_number(param_refs_count as i32);
+            unique_stmt_mut.set_limit_count(param_ref_count.uncast());
+
+            let limit_val = limit_count
+                .val()
+                .and_then(|limit_val| limit_val.numeric_value::<i32>())?;
+
+            (param_refs_count, Some(limit_val as usize))
+        } else if let pg_raw_parse::Node::ParamRef(param_ref) = stmt_query.limit_count() {
+            (param_ref.number as usize, None)
+        } else {
+            return None;
+        };
+
+    // Re-writes the Client's original statement with our version.
+    stmt.set_query(unique_stmt.uncast());
+
+    Some(OffsetPlan {
+        limit: Limit {
+            limit: limit_val,
+            offset: offset_val,
+        },
+        limit_param,
+        offset_param,
+        prepare_execute: true,
+    })
+}
+
+/// Helper method for `rewrite_single_prepared` to handle injecting
+/// cached constants to an `ExecuteStmt`  which we previously stripped
+/// from the `PrepareStmt`, so that we could dynamically re-write later
+/// if `Route` resolves to multi-shard
+fn insert_offset_params<'a>(
+    stmt: &mut ExecuteStmtMut<'a, '_>,
+    mem: MemoryToken<'a>,
+    offset_plan: &OffsetPlan,
+) {
+    let offset_val = offset_plan.limit.offset;
+    let limit_val = offset_plan.limit.limit;
+    let offset_pos = offset_plan.offset_param;
+    let limit_pos = offset_plan.limit_param;
+
+    let mut params = stmt.params_mut();
+
+    if let Some(offset_val) = offset_val
+        && let Some(limit_val) = limit_val
+    {
+        // In this case, both nodes from the `PrepareStmt` were `A_Const`
+        // Therefore, we need to use the cached values, and inject them
+        // into the `ExecuteStmt`'s `params`.
+        //
+        // The if statements are to determine which one goes first in params,
+        // which is based on the refs ($1, $2) we chose
+        //
+        // These are deterministically ordered (since we do them), but it's just one
+        // extra check to do this, and doesn't try to enforce an invariant.
+
+        let limit_val_node = mem
+            .make_a_const(ConstValue::Integer(limit_val as i32))
+            .uncast();
+        let offset_val_node = mem
+            .make_a_const(ConstValue::Integer(offset_val as i32))
+            .uncast();
+
+        let (first_node, second_node) = if offset_pos > limit_pos {
+            (limit_val_node, offset_val_node)
+        } else {
+            (offset_val_node, limit_val_node)
+        };
+
+        params.push(mem, first_node);
+        params.push(mem, second_node);
+    } else if let Some(offset_val) = offset_val {
+        // Only OFFSET was `A_Const`
+        stmt.params_mut().push(
+            mem,
+            mem.make_a_const(ConstValue::Integer(offset_val as i32))
+                .uncast(),
+        );
+    } else if let Some(limit_val) = limit_val {
+        // Only LIMIT was `A_Const`
+        stmt.params_mut().push(
+            mem,
+            mem.make_a_const(ConstValue::Integer(limit_val as i32))
+                .uncast(),
+        );
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::{net::Prepare, stats::memory::MemoryUsage};
+use crate::{
+    frontend::router::parser::rewrite::statement::offset::OffsetPlan, net::Prepare,
+    stats::memory::MemoryUsage,
+};
 
 use super::prelude::*;
 
@@ -24,6 +27,11 @@ pub(crate) enum StatementType {
         /// [`Self::prepare`] was previously rewritten to replace those calls
         /// with bind parameter placeholder numbered after all others
         unique_ids: u16,
+
+        /// Used to keep track of LIMIT + OFFSET queries (stemming from Prepare),
+        /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
+        /// modify limit/offset values before execution if it ends up being cross-shard.
+        offset_plan: Option<OffsetPlan>,
     },
 }
 
@@ -63,12 +71,13 @@ impl Statement {
         }
     }
 
-    pub(super) fn prepare_and_unique_ids(&self) -> Option<(Prepare, u16)> {
+    pub(super) fn prepare_and_unique_ids(&self) -> Option<(Prepare, u16, Option<OffsetPlan>)> {
         match &self.stmt {
             StatementType::Prepare {
                 prepare,
                 unique_ids,
-            } => Some((prepare.clone(), *unique_ids)),
+                offset_plan,
+            } => Some((prepare.clone(), *unique_ids, offset_plan.clone())),
             _ => None,
         }
     }

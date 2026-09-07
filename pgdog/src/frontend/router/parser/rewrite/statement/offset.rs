@@ -1,4 +1,6 @@
-use pg_raw_parse::{ConstValue, Node, Owned, StmtList, nodes};
+use std::ops::Deref;
+
+use pg_raw_parse::{ConstValue, Node, Owned, StmtList, deparse, nodes};
 
 use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Limit;
@@ -7,11 +9,12 @@ use crate::net::messages::bind::{Format, Parameter};
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct OffsetPlan {
     pub(crate) limit: Limit,
     pub(crate) limit_param: usize,
     pub(crate) offset_param: usize,
+    pub(crate) prepare_execute: bool,
 }
 
 impl OffsetPlan {
@@ -25,6 +28,9 @@ impl OffsetPlan {
             return Ok(());
         }
 
+        if self.prepare_execute {
+            return self.handle_prepare_execute(request);
+        }
         // Resolve actual values: use literal if known, otherwise read from Bind.
         let mut limit_val = self.limit.limit;
         let mut offset_val = self.limit.offset;
@@ -106,8 +112,80 @@ impl OffsetPlan {
 
         Ok(())
     }
+
+    /// `apply_after_parser` helper method for handling Prepare + Execute cases, where
+    /// we need to re-write limit / offset for multi-shard queries upon execution.
+    fn handle_prepare_execute(&self, request: &mut ClientRequest) -> Result<(), Error> {
+        // Assert expectations of what should've happened before this method was called
+        // in case something beforehand is changed in the future.
+        assert!(
+            self.prepare_execute,
+            "self.prepare_execute was checked before method call"
+        );
+
+        let route = request
+            .route
+            .as_mut()
+            .expect("route.is_some() was checked before method call");
+
+        assert!(
+            route.is_cross_shard(),
+            "route.is_cross_shard() was checked before method call"
+        );
+
+        let node = &mut request.ast;
+        let node = node.as_mut().ok_or(Error::MissingAst)?;
+        let node = node.ast.first().ok_or(Error::MissingAst)?;
+
+        let pg_raw_parse::Node::ExecuteStmt(execute) = node.stmt() else {
+            unreachable!("The query must be ExecuteStmt to have reached here.");
+        };
+
+        let new_execute = pg_raw_parse::make::owned(|mem| {
+            let mut execute_unique = mem.make_unique(execute);
+
+            let mut mutable_execute_unique = execute_unique.as_mut();
+            let mut params = mutable_execute_unique.params_mut();
+
+            let new_limit = self.limit.limit.unwrap_or(0) + self.limit.offset.unwrap_or(0);
+
+            // These are guarenteed to be `ParamRefs` because of our
+            // re-write for all `A_Const` nodes for the original `PreparedStmt` that we cached.
+            params.set(
+                self.limit_param - 1,
+                mem.make_a_const(ConstValue::Integer(new_limit as i32))
+                    .uncast(),
+            );
+            params.set(
+                self.offset_param - 1,
+                mem.make_a_const(ConstValue::Integer(0i32)).uncast(),
+            );
+
+            execute_unique
+        });
+
+        let new_execute = new_execute.deref();
+        let new_execute_sql = deparse(new_execute)?;
+
+        // `ExecuteStmt` will be a Query, because this is simple-protocol.
+        // Replace with our re-written `ExecuteStmt`
+        // (replacing limit/offset with proper multi-shard vlaues)
+        for message in request.messages.iter_mut() {
+            if let ProtocolMessage::Query(query) = message {
+                query.set_query(new_execute_sql.as_str());
+            }
+        }
+
+        route.set_limit(Limit {
+            limit: self.limit.limit,
+            offset: self.limit.offset,
+        });
+
+        Ok(())
+    }
 }
 
+#[derive(Debug)]
 enum LimitValueInfo {
     Literal(usize),
     Param(usize),
@@ -176,6 +254,7 @@ impl StatementRewrite<'_> {
             },
             limit_param: limit_info.param_index(),
             offset_param: offset_info.param_index(),
+            prepare_execute: false,
         });
     }
 }
@@ -324,6 +403,7 @@ mod tests {
             },
             limit_param: 0,
             offset_param: 0,
+            prepare_execute: false,
         };
         let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(
             "SELECT * FROM t LIMIT 10 OFFSET 5",
@@ -353,6 +433,7 @@ mod tests {
             },
             limit_param: 1,
             offset_param: 2,
+            prepare_execute: false,
         };
         let mut request = ClientRequest::from(vec![ProtocolMessage::Bind(Bind::new_params(
             "",
@@ -383,6 +464,7 @@ mod tests {
             },
             limit_param: 0,
             offset_param: 0,
+            prepare_execute: false,
         };
         let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(
             "SELECT * FROM t LIMIT 10 OFFSET 5",
@@ -407,6 +489,7 @@ mod tests {
             },
             limit_param: 0,
             offset_param: 1,
+            prepare_execute: false,
         };
         let mut request = ClientRequest::from(vec![
             ProtocolMessage::Parse(Parse::named("s", "SELECT * FROM t LIMIT 10 OFFSET $1")),

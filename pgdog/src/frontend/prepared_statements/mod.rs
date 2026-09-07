@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::RewritePlan,
+    frontend::{RewritePlan, router::parser::rewrite::statement::offset::OffsetPlan},
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -124,9 +124,18 @@ impl PreparedStatements {
         &mut self,
         name: &str,
         query: Bytes,
+        // TODO: I think we should just pass `unique_ids` in here by itself.
+        //       Otherwise, it could be easily confused to want
+        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
         rewrite_plan: &RewritePlan,
+        // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
+        offset_plan: Option<OffsetPlan>,
     ) -> Prepare {
-        let (_new, prepare) = { self.global.write().insert_prepare(query, rewrite_plan) };
+        let (_new, prepare) = {
+            self.global
+                .write()
+                .insert_prepare(query, rewrite_plan, offset_plan)
+        };
 
         self.insert_internal(name, prepare.name());
 
@@ -140,7 +149,10 @@ impl PreparedStatements {
     }
 
     /// Get a globally unique [`Prepare`] message using the client name as key.
-    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<(Prepare, u16)> {
+    pub(crate) fn prepare_and_unique_ids(
+        &self,
+        name: &str,
+    ) -> Option<(Prepare, u16, Option<OffsetPlan>)> {
         self.local
             .get(name)
             .and_then(|name| self.global.read().prepare_and_unique_ids(name))
