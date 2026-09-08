@@ -104,6 +104,7 @@ mod tests {
             vault_path: Default::default(),
             vault_refresh_percent: None,
             configured_role: Role::Auto,
+            ..Default::default()
         }
     }
 

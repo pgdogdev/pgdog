@@ -12,7 +12,7 @@ use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::config::{Database, ServerAuth, User, config};
+use crate::config::{Database, ServerAuth, ServerTls, User, config};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
@@ -43,6 +43,10 @@ pub(crate) struct Address {
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
     pub(crate) configured_role: Role,
+    /// TLS overrides for connections to this server. Unset fields fall
+    /// back to the `[general]` settings.
+    #[serde(default)]
+    pub(crate) tls: ServerTls,
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -99,6 +103,7 @@ impl Address {
             vault_refresh_percent: user.vault_refresh_percent,
             database_number,
             configured_role: database.role,
+            tls: database.tls.clone(),
         }
     }
 
@@ -213,6 +218,7 @@ impl Address {
             vault_refresh_percent: None,
             database_number: 0,
             configured_role: Role::Primary,
+            tls: ServerTls::default(),
         }
     }
 }
@@ -257,6 +263,7 @@ mod test {
     use std::time::{Duration, Instant, SystemTime};
 
     use crate::config;
+    use crate::config::TlsVerifyMode;
 
     use super::*;
 
@@ -295,6 +302,36 @@ mod test {
         assert_eq!(address.database_name, "not_pgdog");
         assert_eq!(address.user, "alice");
         assert_eq!(address.passwords.first().unwrap(), "hunter3");
+    }
+
+    #[test]
+    fn test_tls_overrides_from_config() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "replica.internal".into(),
+            tls: ServerTls {
+                tls_verify: Some(TlsVerifyMode::VerifyCa),
+                tls_server_ca_certificate: Some("/certs/replica-ca.pem".into()),
+                tls_server_certificate: Some("/certs/replica-client.pem".into()),
+                tls_server_private_key: Some("/certs/replica-client.key".into()),
+            },
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert_eq!(address.tls, database.tls);
+
+        // TLS overrides are part of pool identity: changing them must
+        // recreate server connections on config reload.
+        let mut rotated = address.clone();
+        rotated.tls.tls_server_certificate = Some("/certs/other-client.pem".into());
+        assert!(!address.compatible(&rotated));
     }
 
     #[test]

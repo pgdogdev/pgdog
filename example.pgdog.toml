@@ -354,6 +354,16 @@ port = 5432
 # Role set to replica.
 role = "replica"
 
+# Servers can override the [general] TLS settings, e.g. for managed databases
+# where each instance has its own CA and client certificate.
+#
+# tls_verify = "verify_ca"
+# tls_server_ca_certificate = "relative/or/absolute/path/to/replica-ca.pem"
+# The client certificate and key are a pair: setting either one here
+# replaces the [general] pair for this server, and both must be set together.
+# tls_server_certificate = "relative/or/absolute/path/to/replica-client.pem"
+# tls_server_private_key = "relative/or/absolute/path/to/replica-client.key"
+
 #
 # Sharded cluster with two primaries.
 #

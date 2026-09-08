@@ -17,7 +17,7 @@ use crate::{
         ClientRequest, Router,
         router::{CopyRow, Route, parser::Shard},
     },
-    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage},
+    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
     state::State,
 };
 
@@ -256,6 +256,11 @@ impl Connection {
         self.pub_sub.unlisten(channel);
     }
 
+    /// Stop listening on all channels.
+    pub(crate) fn unlisten_all(&mut self) {
+        self.pub_sub.unlisten_all();
+    }
+
     /// Notify a channel.
     pub(crate) async fn notify(
         &mut self,
@@ -420,6 +425,14 @@ impl Connection {
 
             _ => Ok(()),
         }
+    }
+
+    /// Execute an internal query on all connected servers.
+    pub(crate) async fn execute(
+        &mut self,
+        query: impl Into<Query> + Clone,
+    ) -> Result<Vec<Message>, Error> {
+        self.binding.execute(query).await
     }
 
     /// We are done and can disconnect from this server.

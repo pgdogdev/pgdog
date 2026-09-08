@@ -8,3 +8,4 @@ install_deps
 run_suite
 run_suite "${SCRIPT_DIR}/prepared_disabled"
 run_suite "${SCRIPT_DIR}/prepared_full"
+run_suite "${SCRIPT_DIR}/prepared_extended"

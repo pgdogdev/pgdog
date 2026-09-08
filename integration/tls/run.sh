@@ -37,4 +37,8 @@ echo "PgDog is ready"
 
 bash ${SCRIPT_DIR}/dev.sh
 
+# Backend mTLS tests run against their own throwaway Postgres cluster,
+# so they work locally too.
+bash ${SCRIPT_DIR}/backend/run.sh
+
 stop_pgdog

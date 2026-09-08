@@ -15,18 +15,26 @@ impl QueryEngine {
         match target {
             DiscardTarget::Temp if self.backend.connected() => {
                 self.execute(context, None).await?;
-
                 if !context.in_error() {
                     self.temp_tables.discard(context.in_transaction());
                     self.check_lock();
-                    // execute() attempted cleanup while the temporary tables were
-                    // still tracked. Try again now that the backend is unpinned.
+                    // execute() cleaned up before temp tracking was cleared.
+                    // Try again now that the backend is unpinned.
                     self.cleanup_backend(context)?;
                 }
-
                 return Ok(());
             }
-            DiscardTarget::All => context.prepared_statements.close_all(),
+            DiscardTarget::All => {
+                if self.backend.connected() {
+                    self.backend
+                        .execute("SELECT pg_advisory_unlock_all()")
+                        .await?;
+                }
+                self.advisory_locks.clear();
+                context.prepared_statements.close_all();
+                self.backend.unlisten_all();
+                self.check_lock();
+            }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
 

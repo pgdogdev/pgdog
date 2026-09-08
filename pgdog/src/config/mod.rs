@@ -25,7 +25,9 @@ pub(crate) use networking::{MultiTenant, TlsVerifyMode};
 pub(crate) use overrides::Overrides;
 use pgdog_config::LookupResult;
 pub(crate) use pgdog_config::auth::AuthType;
-pub(crate) use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
+pub(crate) use pgdog_config::{
+    LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, ServerTls,
+};
 pub(crate) use pooling::{ConnectionRecovery, PoolerMode, PreparedStatementsLevel};
 pub(crate) use rewrite::RewriteMode;
 use std::path::Path;

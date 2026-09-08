@@ -6,7 +6,7 @@ use std::{
     str::FromStr,
 };
 
-use crate::RoleConfig;
+use crate::{RoleConfig, ServerTls};
 
 use super::pooling::PoolerMode;
 
@@ -209,6 +209,11 @@ pub struct Database {
     /// Used for weighted load balancing.
     #[serde(default = "Database::lb_weight")]
     pub lb_weight: u8,
+
+    /// TLS settings for connections to this server, overriding the
+    /// `[general]` settings of the same name.
+    #[serde(flatten, default)]
+    pub tls: ServerTls,
 
     /// Role-specific settings.
     #[serde(flatten, default)]

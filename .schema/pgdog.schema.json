@@ -594,6 +594,38 @@
           "format": "uint64",
           "minimum": 0
         },
+        "tls_server_ca_certificate": {
+          "description": "Overrides the `tls_server_ca_certificate` setting: the CA bundle used to\nverify this server's certificate.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_certificate": {
+          "description": "Overrides the `tls_server_certificate` setting: the client certificate PgDog\npresents to this server (mTLS). Must be set together with `tls_server_private_key`;\nwhen set, the pair replaces the `[general]` pair for this database.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_private_key": {
+          "description": "Overrides the `tls_server_private_key` setting: the private key for\n`tls_server_certificate`. Must be set together with `tls_server_certificate`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_verify": {
+          "description": "Overrides the `tls_verify` setting for connections to this database.\nUseful when servers in the same cluster require different TLS settings,\ne.g., managed databases where each instance has its own CA.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TlsVerifyMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user": {
           "description": "Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#user>",
           "type": [
