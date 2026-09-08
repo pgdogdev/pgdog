@@ -95,9 +95,8 @@ pub(crate) struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    /// Rewrites performed by the aggregate rewriter; adds
-    /// helper columns to this query so we can compute things
-    /// like avg() or variance().
+    /// Rewrites that add temporary result columns for cross-shard aggregation
+    /// and ordering.
     rewrite_plan: AggregateRewritePlan,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.

@@ -27,6 +27,21 @@ async fn limit_across_shards() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    // ORDER BY a non-projected column still merges shards in the right order,
+    // without exposing PgDog's temporary helper column.
+    let rows = sharded
+        .fetch_all("SELECT id FROM limit_test ORDER BY value")
+        .await?;
+    assert_eq!(
+        rows.iter()
+            .map(|row| {
+                assert_eq!(row.len(), 1);
+                row.get::<i32, _>("id")
+            })
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
+    );
+
     // LIMIT 5
     let rows = sharded
         .fetch_all("SELECT value FROM limit_test ORDER BY value LIMIT 5")

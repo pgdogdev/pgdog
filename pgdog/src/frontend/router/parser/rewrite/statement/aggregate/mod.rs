@@ -7,7 +7,9 @@ use crate::frontend::router::parser::aggregate::Aggregate;
 use pg_raw_parse::{make::MemoryToken, nodes::SelectStmtMut};
 
 pub(crate) use engine::AggregatesRewrite;
-pub(crate) use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
+pub(crate) use plan::{
+    AggregateRewritePlan, HelperKind, HelperMapping, OrderByHelperMapping, RewriteOutput,
+};
 
 impl StatementRewrite<'_> {
     /// Add missing COUNT(*) and other helps when using aggregates.

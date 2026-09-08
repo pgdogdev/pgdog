@@ -1,9 +1,36 @@
 use crate::{
-    frontend::router::parser::{DistinctBy, Shard, ShardWithPriority},
+    frontend::router::parser::{
+        DistinctBy, Shard, ShardWithPriority,
+        rewrite::statement::aggregate::{AggregateRewritePlan, OrderByHelperMapping},
+    },
     net::{BindComplete, DataRow, Field, Format},
 };
 
 use super::*;
+
+#[test]
+fn test_hidden_columns_are_removed_without_buffering() {
+    let mut plan = AggregateRewritePlan::default();
+    plan.add_order_by_helper(OrderByHelperMapping {
+        order_by: 0,
+        helper_column: 1,
+    });
+    let mut route = Route::read(ShardWithPriority::new_default_unset(Shard::Direct(0)));
+    route.set_rewrite_plan(plan);
+    let mut state = MultiShard::new(vec![0], &route);
+
+    let rd = RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
+    let message = state.handle_server_message(rd.message()).unwrap().unwrap();
+    let client_rd = RowDescription::from_bytes(message.to_bytes()).unwrap();
+    assert_eq!(client_rd.fields.len(), 1);
+
+    let mut row = DataRow::new();
+    row.add(42_i64).add("alice");
+    let message = state.handle_server_message(row.message()).unwrap().unwrap();
+    let client_row = DataRow::from_bytes(message.to_bytes()).unwrap();
+    assert_eq!(client_row.len(), 1);
+    assert_eq!(client_row.get::<i64>(0, Format::Text), Some(42));
+}
 
 #[test]
 fn test_inconsistent_row_descriptions() {

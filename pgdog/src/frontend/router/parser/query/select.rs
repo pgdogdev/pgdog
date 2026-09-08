@@ -61,12 +61,12 @@ impl QueryParser {
 
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
-            return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone())
-                    .with_read(!writes)
-                    .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
-            ));
+            let mut route = Route::read(context.shards_calculator.shard().clone())
+                .with_read(!writes)
+                .with_omnisharded(omnisharded)
+                .with_advisory_locks(advisory_locks);
+            route.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+            return Ok(Command::Query(route));
         }
 
         let mut shards = HashSet::new();
@@ -117,15 +117,32 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_rr_no_table(shard));
 
-            return Ok(Command::Query(
-                Route::read(context.shards_calculator.shard().clone())
-                    .with_read(!writes)
-                    .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
-            ));
+            let mut route = Route::read(context.shards_calculator.shard().clone())
+                .with_read(!writes)
+                .with_omnisharded(omnisharded)
+                .with_advisory_locks(advisory_locks);
+            route.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+            return Ok(Command::Query(route));
         }
 
-        let order_by = Self::select_sort(stmt, context.router_context.bind);
+        let mut order_by = Self::select_sort(stmt, context.router_context.bind);
+        for helper in cached_ast.rewrite_plan.aggregates.order_by_helpers() {
+            let Some((_, column)) = order_by
+                .iter_mut()
+                .find(|(position, _)| *position == helper.order_by)
+            else {
+                continue;
+            };
+            *column = if column.asc() {
+                OrderBy::Asc(helper.helper_column + 1)
+            } else {
+                OrderBy::Desc(helper.helper_column + 1)
+            };
+        }
+        let order_by = order_by
+            .into_iter()
+            .map(|(_, order_by)| order_by)
+            .collect::<Vec<_>>();
         let from_clause_table_name = stmt.from_clause().first().and_then(|node| match node {
             Node::RangeVar(r) => Some(r.relname().expect("RangeVar always has relname")),
             _ => None,
@@ -243,10 +260,7 @@ impl QueryParser {
             distinct,
         );
 
-        // Only rewrite if query is cross-shard.
-        if query.is_cross_shard() && context.shards > 1 {
-            query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
-        }
+        query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
 
         Ok(Command::Query(
             query
@@ -266,17 +280,18 @@ impl QueryParser {
     fn select_sort(
         stmt: &nodes::SelectStmt,
         params: Option<StatementParameters<'_>>,
-    ) -> Vec<OrderBy> {
+    ) -> Vec<(usize, OrderBy)> {
         stmt.sort_clause()
             .into_iter()
-            .filter_map(|sort_by| {
+            .enumerate()
+            .filter_map(|(position, sort_by)| {
                 use pg_raw_parse::{
                     ConstValue,
                     raw::{A_Expr_Kind::*, SortByDir::*},
                 };
 
                 let asc = matches!(sort_by.sortby_dir, SORTBY_DEFAULT | SORTBY_ASC);
-                match sort_by.node() {
+                let order_by = match sort_by.node() {
                     Node::A_Const(c) if let Some(ConstValue::Integer(i)) = c.val() => {
                         if asc {
                             Some(OrderBy::Asc(i as _))
@@ -328,7 +343,8 @@ impl QueryParser {
                     }
 
                     _ => None,
-                }
+                };
+                order_by.map(|order_by| (position, order_by))
             })
             .collect()
     }

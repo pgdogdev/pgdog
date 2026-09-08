@@ -30,10 +30,20 @@ pub(crate) struct HelperMapping {
     pub(crate) alias: String,
 }
 
+/// Column temporarily projected so PgDog can globally order shard results.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct OrderByHelperMapping {
+    /// Position of the expression in the ORDER BY clause.
+    pub(crate) order_by: usize,
+    /// Position of the temporary expression in the backend result.
+    pub(crate) helper_column: usize,
+}
+
 /// Plan describing how the proxy rewrites a query and its results.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct AggregateRewritePlan {
     helpers: Vec<HelperMapping>,
+    order_by_helpers: Vec<OrderByHelperMapping>,
 }
 
 impl AggregateRewritePlan {
@@ -41,24 +51,40 @@ impl AggregateRewritePlan {
     pub(crate) fn new() -> Self {
         Self {
             helpers: Vec::new(),
+            order_by_helpers: Vec::new(),
         }
     }
 
     /// Is this plan a no-op? Doesn't do anything.
     pub(crate) fn is_noop(&self) -> bool {
-        self.helpers.is_empty()
+        self.helpers.is_empty() && self.order_by_helpers.is_empty()
     }
 
     pub(crate) fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
-        self.helpers.iter().map(|h| h.helper_column)
+        self.helpers
+            .iter()
+            .map(|helper| helper.helper_column)
+            .chain(
+                self.order_by_helpers
+                    .iter()
+                    .map(|helper| helper.helper_column),
+            )
     }
 
     pub(crate) fn helpers(&self) -> &[HelperMapping] {
         &self.helpers
     }
 
+    pub(crate) fn order_by_helpers(&self) -> &[OrderByHelperMapping] {
+        &self.order_by_helpers
+    }
+
     pub(crate) fn add_helper(&mut self, mapping: HelperMapping) {
         self.helpers.push(mapping);
+    }
+
+    pub(crate) fn add_order_by_helper(&mut self, mapping: OrderByHelperMapping) {
+        self.order_by_helpers.push(mapping);
     }
 }
 

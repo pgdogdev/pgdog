@@ -271,6 +271,8 @@ impl MultiShard {
                 self.buffer.sort(self.route.order_by(), &self.decoder);
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
                 self.buffer.limit(self.route.limit());
+                self.buffer
+                    .drop_columns(self.route.aggregate_rewrite_plan());
             }
 
             if has_rows {
@@ -342,7 +344,7 @@ impl MultiShard {
         )
     }
 
-    fn handle_data_row(&mut self, message: Message) -> Result<Option<Message>, Error> {
+    fn handle_data_row(&mut self, mut message: Message) -> Result<Option<Message>, Error> {
         let mut forward = None;
 
         if self.shards > 1 {
@@ -366,9 +368,11 @@ impl MultiShard {
         {
             if self.route.is_omnisharded() {
                 if self.request_state.first_backend_data == message.source().backend_id() {
+                    self.drop_columns(&mut message)?;
                     forward = Some(message);
                 }
             } else {
+                self.drop_columns(&mut message)?;
                 forward = Some(message);
             }
         } else {
@@ -376,6 +380,18 @@ impl MultiShard {
         }
 
         Ok(forward)
+    }
+
+    fn drop_columns(&self, message: &mut Message) -> Result<(), Error> {
+        let plan = self.route.aggregate_rewrite_plan();
+        if plan.is_noop() {
+            return Ok(());
+        }
+
+        let mut row = DataRow::from_bytes(message.to_bytes())?;
+        row.drop_columns(&plan.drop_columns().collect());
+        message.replace_payload(row.to_bytes());
+        Ok(())
     }
 
     fn handle_passthrough(message: Message, counter: &mut usize, shards: usize) -> Option<Message> {

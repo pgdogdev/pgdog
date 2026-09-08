@@ -13,6 +13,7 @@ pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
 pub(crate) mod offset;
+mod order_by;
 pub(crate) mod plan;
 pub(crate) mod simple_prepared;
 pub(crate) mod unique_id;
@@ -168,6 +169,7 @@ impl<'a> StatementRewrite<'a> {
 
         if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+            self.rewrite_order_by(&mut select, mem, &mut plan);
             self.limit_offset(&select, &mut plan);
         }
 

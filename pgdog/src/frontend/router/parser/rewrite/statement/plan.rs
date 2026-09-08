@@ -38,8 +38,7 @@ pub(crate) struct RewritePlan {
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
 
-    /// Position in the result where the count(*) or count(name)
-    /// functions are added.
+    /// Temporary result columns added for cross-shard aggregation and ordering.
     pub(crate) aggregates: AggregateRewritePlan,
 
     /// Sharding key is being updated, we need to execute
@@ -95,6 +94,10 @@ impl RewritePlan {
                 Format::Text => Parameter::new(itoa::Buffer::new().format(id).as_bytes()),
             };
             bind.push_param(param, format);
+        }
+
+        for _ in self.aggregates.drop_columns() {
+            bind.push_result_format(Format::Text);
         }
 
         Ok(())
@@ -170,6 +173,7 @@ impl RewritePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::router::parser::rewrite::statement::aggregate::OrderByHelperMapping;
     use crate::test_utils::set_env_var;
     use std::collections::HashSet;
 
@@ -180,6 +184,27 @@ mod tests {
         let mut bind = Bind::default();
         plan.apply_bind(&mut bind).unwrap();
         assert_eq!(bind.params_raw().len(), 0);
+    }
+
+    #[test]
+    fn test_apply_bind_extends_per_column_result_formats() {
+        let mut aggregates = AggregateRewritePlan::default();
+        aggregates.add_order_by_helper(OrderByHelperMapping {
+            order_by: 0,
+            helper_column: 2,
+        });
+        let plan = RewritePlan {
+            aggregates,
+            ..Default::default()
+        };
+        let mut bind = Bind::new_params_codes_results("test", &[], &[], &[1, 0]);
+
+        plan.apply_bind(&mut bind).unwrap();
+
+        assert_eq!(
+            bind.result_formats().collect::<Vec<_>>(),
+            [Format::Binary, Format::Text, Format::Text]
+        );
     }
 
     #[test]
