@@ -1,4 +1,4 @@
-use crate::frontend::router::parameter_hints::PGDOG_PIN;
+use crate::frontend::{client::TransactionType, router::parameter_hints::PGDOG_PIN};
 use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 
 use super::*;
@@ -14,6 +14,18 @@ impl QueryEngine {
         extended: bool,
     ) -> Result<(), Error> {
         let _extended = extended;
+        if target == DiscardTarget::All && context.in_transaction() {
+            context.transaction = Some(match context.transaction {
+                Some(TransactionType::ReadOnly | TransactionType::ErrorReadOnly) => {
+                    TransactionType::ErrorReadOnly
+                }
+                _ => TransactionType::ErrorReadWrite,
+            });
+            self.error_response(context, ErrorResponse::discard_all_in_transaction())
+                .await?;
+            return Ok(());
+        }
+
         if target == DiscardTarget::All {
             if self.backend.connected() {
                 self.backend

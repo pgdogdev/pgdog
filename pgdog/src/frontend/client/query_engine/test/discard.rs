@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test, set},
     expect_message,
     net::{
-        CommandComplete, DataRow, Parameters, ParseComplete, ReadyForQuery, RowDescription,
-        parameter::ParameterValue,
+        CommandComplete, DataRow, ErrorResponse, Parameters, ParseComplete, ReadyForQuery,
+        RowDescription, parameter::ParameterValue,
     },
 };
 
@@ -166,6 +166,32 @@ async fn test_non_all_discard_keeps_parameters() {
             "{query} should not reset parameters",
         );
     }
+}
+
+#[tokio::test]
+async fn test_discard_all_fails_inside_transaction() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    run_simple(&mut client, "BEGIN").await;
+    client.send_simple(Query::new("DISCARD ALL")).await;
+
+    let error = expect_message!(client.read().await, ErrorResponse);
+    assert_eq!(error.code, "25001");
+    assert_eq!(
+        error.message,
+        "DISCARD ALL cannot run inside a transaction block"
+    );
+    assert_eq!(
+        expect_message!(client.read().await, ReadyForQuery).status,
+        'E'
+    );
+    assert!(
+        client
+            .client()
+            .transaction
+            .is_some_and(|state| state.error()),
+        "the transaction should be aborted"
+    );
 }
 
 #[tokio::test]

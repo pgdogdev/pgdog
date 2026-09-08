@@ -267,8 +267,6 @@ impl Parameters {
     /// dropping everything changed since with `SET`.
     pub(crate) fn restore_startup(&mut self, startup: &Parameters) {
         self.params.clone_from(&startup.params);
-        self.transaction_params.clear();
-        self.transaction_local_params.clear();
         self.reset_params.clear();
         self.hash = Self::compute_hash(&self.params);
     }
