@@ -12,20 +12,24 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let _extended = extended;
 
-        if target == DiscardTarget::Temp && self.backend.connected() {
-            self.execute(context, None).await?;
+        match target {
+            DiscardTarget::Temp if self.backend.connected() => {
+                self.execute(context, None).await?;
 
-            if !context.in_error() {
-                self.discard_temp_tables(context.in_transaction());
-                self.cleanup_backend(context)?;
+                if !context.in_error() {
+                    self.temp_tables.discard(context.in_transaction());
+                    self.check_lock();
+                    // execute() attempted cleanup while the temporary tables were
+                    // still tracked. Try again now that the backend is unpinned.
+                    self.cleanup_backend(context)?;
+                }
+
+                return Ok(());
             }
-
-            return Ok(());
+            DiscardTarget::All => context.prepared_statements.close_all(),
+            DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
 
-        if target == DiscardTarget::All {
-            context.prepared_statements.close_all();
-        }
         let bytes_sent = context
             .stream
             .send_many(&[

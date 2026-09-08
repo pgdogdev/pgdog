@@ -56,7 +56,7 @@ impl QueryEngine {
         // tries to commit transaction anyway,
         // we rollback to prevent cross-shard inconsistencies.
         if context.in_error() && !rollback {
-            self.finish_temp_table_transaction(true);
+            self.temp_tables.finish_transaction(true);
             self.backend.execute("ROLLBACK").await?;
 
             // Update stats.
@@ -78,7 +78,7 @@ impl QueryEngine {
             && !rollback
             && context.transaction().map(|t| t.write()).unwrap_or(false);
 
-        self.finish_temp_table_transaction(rollback);
+        self.temp_tables.finish_transaction(rollback);
 
         if two_pc {
             self.end_two_pc(false).await?;
