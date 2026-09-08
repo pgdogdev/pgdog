@@ -1,7 +1,7 @@
 //! FORCE RELOAD command.
 
 use super::prelude::*;
-use crate::backend::databases::{reload, terminate_active_connections};
+use crate::backend::databases::reload;
 
 pub(crate) struct ForceReload;
 
@@ -16,8 +16,8 @@ impl Command for ForceReload {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        terminate_active_connections().await?;
-        reload()?;
+        // true = force reload
+        reload(true)?;
 
         Ok(vec![])
     }

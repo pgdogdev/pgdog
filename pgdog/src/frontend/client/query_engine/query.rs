@@ -1,3 +1,5 @@
+use futures::future::select_all;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
 use crate::{
@@ -65,12 +67,29 @@ impl QueryEngine {
             }
         }
 
+        let pool_cancellation_tokens: Vec<CancellationToken> = self.backend.cancellation_tokens();
         let query_timeout = context.timeouts.query_timeout(&State::Active);
-        let result = safe_timeout(
-            query_timeout,
-            self.client_server_exchange(context, query_planner),
-        )
-        .await;
+
+        let result = tokio::select! {
+            result = safe_timeout(
+                query_timeout,
+                self.client_server_exchange(context, query_planner),
+            ) => {
+                result
+            }
+            // If any of the cancellation tokens trigger, exit early. Currently used for admin FORCE_RELOAD.
+            // If this returns an Error, it'll be propagated up to Client's Box::pin(self.run())
+            // which will disconnect the client (and QueryEngine transactions)
+            _ = async { select_all(
+                            pool_cancellation_tokens.iter()
+                                                    .map(|cancellation_token| Box::pin(cancellation_token.cancelled())))
+            .await },
+            if !pool_cancellation_tokens.is_empty() => {
+                // I don't think we need to force-close here. After Databases::terminate_active_connections,
+                // we shutdown() the pools, and it should be handled there.
+                return Err(Error::AdminTermination);
+            }
+        };
 
         match result {
             Ok(response) => response?,

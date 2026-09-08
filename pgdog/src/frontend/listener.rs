@@ -118,7 +118,7 @@ impl Listener {
                 }
 
                 _ = sighup.listen() => {
-                    if let Err(err) = reload() {
+                    if let Err(err) = reload(false) {
                         error!("configuration reload error: {}", err);
                     }
                 }

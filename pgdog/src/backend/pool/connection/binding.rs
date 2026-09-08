@@ -13,6 +13,7 @@ use crate::{
 };
 
 use futures::future::join_all;
+use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::util::safe_sleep;
@@ -82,6 +83,18 @@ impl Binding {
             Binding::MultiShard(servers, _) => servers.len(),
             Binding::Admin(_) => 1,
             _ => 0,
+        }
+    }
+
+    /// Returns all `CancellationTokens` belonging to the `Binding`'s connected `Pool`s.
+    pub(crate) fn cancellation_tokens(&mut self) -> Vec<CancellationToken> {
+        match self {
+            Binding::Direct(guard, _) => vec![guard.pool.inner().cancellation_token.clone()],
+            Binding::MultiShard(guards, _) => guards
+                .iter()
+                .map(|guard| guard.pool.inner().cancellation_token.clone())
+                .collect(),
+            _ => vec![],
         }
     }
 

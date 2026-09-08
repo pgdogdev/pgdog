@@ -8,7 +8,6 @@ use pgdog_config::{
 };
 use std::{sync::Arc, time::Duration};
 
-use crate::backend;
 use crate::backend::schema::SchemaCache;
 use crate::backend::server::ServerRequest;
 use crate::frontend::router::sharding::ShardedTable;
@@ -716,42 +715,6 @@ impl Cluster {
         try_join_all(pools.iter().map(|pool| pool.cancel_all()))
             .await
             .map_err(|_| Error::FastShutdown)?;
-
-        Ok(())
-    }
-
-    /// Terminates all active connections; more specifically, aimed towards terminating active, in-flight transactions.
-    pub(crate) async fn terminate_active_connections(&self) -> Result<(), backend::error::Error> {
-        for shard in self.shards() {
-            let pools = shard.pools();
-            for pool in pools {
-                let keys = pool.active_connections();
-                if !keys.is_empty() {
-                    // Prevent chance of more connections slipping through before we terminate backends.
-                    // When passing true, if the pool previously was NOT paused, it'll be resumed
-                    // again on the new `Pool` when the transfer happens later.
-                    //
-                    // TODO: If we error below on standalone or execute,
-                    // it'll leave the `Pool` in a pause state incorrectly.
-                    pool.pause(true);
-
-                    // Connect outside of `Pool` idle connections to prevent waiting for an available connection.
-                    // This also bypasses [`Pool.pause`]
-                    //
-                    // TODO: Say that this fails for some reason; it already internally re-tries multiple times.
-                    //       should we Error because not all transactions are terminated? Ignore it?
-                    let mut server = pool.standalone(backend::ConnectReason::Other).await?;
-
-                    for key in keys {
-                        // `pg_terminate_backend` will send a SIGTERM signal to the backend process corresponding with
-                        // the active connection belonging to the transaction.
-                        let request: ServerRequest =
-                            format!("SELECT pg_terminate_backend({});", key.pid).into();
-                        server.execute(request).await?;
-                    }
-                }
-            }
-        }
 
         Ok(())
     }

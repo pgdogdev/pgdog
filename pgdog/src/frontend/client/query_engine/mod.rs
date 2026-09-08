@@ -12,6 +12,7 @@ use crate::{
 };
 use fnv::FnvHashMap;
 use temp_table::TempTableState;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -123,6 +124,11 @@ impl QueryEngine {
     /// Current state.
     pub(crate) fn client_state(&self) -> State {
         self.stats.state
+    }
+
+    /// Fetch all `CancellationToken`s for the backend.
+    pub(crate) fn cancellation_tokens(&mut self) -> Vec<CancellationToken> {
+        self.backend.cancellation_tokens()
     }
 
     /// Handle client request.

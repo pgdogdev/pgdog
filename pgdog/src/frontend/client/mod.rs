@@ -7,9 +7,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::future::select_all;
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn};
+use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
@@ -523,6 +525,8 @@ impl Client {
 
             let client_state = query_engine.client_state();
 
+            let cluster_cancellation: Vec<CancellationToken> = query_engine.cancellation_tokens();
+
             select! {
                 _ = shutdown.cancelled(), if !offline => {
                     continue; // Wake up task.
@@ -534,7 +538,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state) => {
+                buffer = self.buffer(client_state, cluster_cancellation) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -633,7 +637,11 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
+    async fn buffer(
+        &mut self,
+        state: State,
+        pool_cancellation_tokens: Vec<CancellationToken>,
+    ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
         // Only start timer once we receive the first message.
@@ -654,23 +662,39 @@ impl Client {
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
-            let message =
-                match safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
-                    Err(_) => {
-                        self.stream
-                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
-                            .await?;
-                        return Ok(BufferEvent::DisconnectAbrupt);
-                    }
+            let message = select! {
+                message = safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)) => {
+                    message
+                }
+                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
+                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
+                // which will disconnect the `Client` (and `QueryEngine` transactions)
+                _ = async { select_all(
+                                pool_cancellation_tokens.iter()
+                                                        .map(|cancellation_token| Box::pin(cancellation_token.cancelled())))
+                .await },
+                if !pool_cancellation_tokens.is_empty() => {
+                    return Err(Error::AdminTermination)
+                }
+            };
 
-                    Ok(Ok(message)) => message.stream(self.streaming).frontend(),
-                    Ok(Err(err)) => {
-                        if let Some(response) = err.as_fatal_error_response() {
-                            self.stream.fatal(response).await?;
-                        }
-                        return Ok(BufferEvent::DisconnectAbrupt);
+            let message = match message {
+                Err(_) => {
+                    self.stream
+                        .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
+                        .await?;
+                    return Ok(BufferEvent::DisconnectAbrupt);
+                }
+
+                Ok(Ok(message)) => message.stream(self.streaming).frontend(),
+
+                Ok(Err(err)) => {
+                    if let Some(response) = err.as_fatal_error_response() {
+                        self.stream.fatal(response).await?;
                     }
-                };
+                    return Ok(BufferEvent::DisconnectAbrupt);
+                }
+            };
 
             if timer.is_none() {
                 timer = Some(Instant::now());

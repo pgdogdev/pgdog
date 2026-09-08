@@ -11,13 +11,14 @@ use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 use pgdog_config::Role;
 use tokio::sync::Notify;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
 use crate::net::messages::{BackendPid, FrontendPid};
-use crate::net::{BackendKeyData, Liveness, Parameter, Parameters};
+use crate::net::{Liveness, Parameter, Parameters};
 
 use super::inner::CheckInResult;
 use super::{
@@ -50,6 +51,7 @@ pub(crate) struct InnerSync {
     pub(super) lsn_stats: RwLock<LsnStats>,
     pub(super) lsn_role_change: Notify,
     pub(super) oids: Arc<Oids>,
+    pub(super) cancellation_token: CancellationToken,
 }
 
 impl std::fmt::Debug for Pool {
@@ -81,6 +83,7 @@ impl Pool {
                 lsn_stats: RwLock::new(LsnStats::default()),
                 lsn_role_change: Notify::new(),
                 oids,
+                cancellation_token: Default::default(),
             }),
         }
     }
@@ -313,16 +316,13 @@ impl Pool {
             let mut to_guard = destination.lock();
 
             // Propagate pause state so a paused database stays paused after reload.
-            // Only set if `remove_on_transfer_if_not_paused` is not set, which happens
-            // during admin FORCE_RELOAD command, and means that the `Pool` previously wasn't paused.
-            to_guard.paused = from_guard.paused && !from_guard.remove_pause_on_transfer;
+            to_guard.paused = from_guard.paused;
             from_guard.online = false;
 
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
                 to_guard.put(server, now)?;
             }
-
             to_guard.set_taken(taken);
         }
 
@@ -337,14 +337,9 @@ impl Pool {
     }
 
     /// Pause pool, closing all open connections.
-    /// If `remove_on_transfer` is true, then the pause will be removed on `move_conns_to`
-    pub(crate) fn pause(&self, remove_on_transfer: bool) {
+    pub(crate) fn pause(&self) {
         let mut guard = self.lock();
-        if !guard.paused && remove_on_transfer {
-            guard.remove_pause_on_transfer = true;
-        } else {
-            guard.dump_idle();
-        }
+        guard.dump_idle();
         guard.paused = true;
     }
 
@@ -362,12 +357,6 @@ impl Pool {
             .await
             .map_err(|_| Error::FastShutdown)?;
         Ok(())
-    }
-
-    /// Fetch cancel keys for all active connections belonging to the `Pool`
-    pub(crate) fn active_connections(&self) -> Vec<BackendKeyData> {
-        // Collect into a Vec to drop the pool lock
-        self.lock().cancel_keys().cloned().collect()
     }
 
     /// Resume the pool.
@@ -405,6 +394,15 @@ impl Pool {
         guard.close_waiters(Error::Offline);
         self.comms().shutdown.cancel();
         self.comms().ready.notify_waiters();
+    }
+
+    /// Sets the `Pool` offline (to refuse more connections), and runs `cancel()`
+    /// on the Pool's `CancellationToken`, which causes active connections to terminate,
+    /// for and Clients to receive an `AdminTerminated` error.
+    pub(crate) fn cancel_active_connections(self) {
+        let mut guard = self.lock();
+        guard.online = false;
+        self.inner.cancellation_token.cancel();
     }
 
     /// Pool exclusive lock.

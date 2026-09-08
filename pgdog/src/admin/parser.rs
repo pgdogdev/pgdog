@@ -1,8 +1,7 @@
 //! Admin command parser.
 
-use crate::admin::{admin_reload::ForceReload, show_guc::get_show_variable};
-
 use super::*;
+use crate::admin::show_guc::get_show_variable;
 
 use tracing::debug;
 

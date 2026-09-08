@@ -4,11 +4,11 @@ use async_trait::async_trait;
 
 use crate::net::messages::Message;
 
-pub(crate) mod admin_reload;
 pub(crate) mod ban;
 pub(crate) mod copy_data;
 pub(crate) mod cutover;
 pub(crate) mod error;
+pub(crate) mod force_reload;
 pub(crate) mod healthcheck;
 pub(crate) mod maintenance_mode;
 pub(crate) mod named_row;
@@ -56,6 +56,7 @@ pub(crate) use ban::*;
 pub(crate) use copy_data::*;
 pub(crate) use cutover::*;
 pub(crate) use error::Error;
+pub(crate) use force_reload::*;
 pub(crate) use healthcheck::*;
 pub(crate) use maintenance_mode::*;
 pub(crate) use pause::*;
