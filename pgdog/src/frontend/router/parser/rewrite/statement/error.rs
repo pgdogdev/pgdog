@@ -2,6 +2,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
+    #[error(transparent)]
+    Enterprise(#[from] super::super::ee::Error),
+
     #[error("unique_id generation failed: {0}")]
     UniqueId(#[from] crate::unique_id::Error),
 

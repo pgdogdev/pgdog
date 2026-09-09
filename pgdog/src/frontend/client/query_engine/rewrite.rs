@@ -20,7 +20,7 @@ impl QueryEngine {
     }
 
     /// Parse client request and rewrite it, if necessary.
-    pub(super) fn parse_and_rewrite(
+    pub(super) async fn parse_and_rewrite(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<Option<RewriteResult>, Error> {
@@ -40,7 +40,7 @@ impl QueryEngine {
             let ast_ctx = AstContext::from_cluster(cluster, context.params);
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
 
-            let rewrite_result = ast.rewrite_plan.apply(context.client_request)?;
+            let rewrite_result = ast.rewrite_plan.apply(context.client_request).await?;
             context.client_request.ast = Some(ast);
             Ok(Some(rewrite_result))
         } else {
