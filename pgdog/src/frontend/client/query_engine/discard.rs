@@ -12,6 +12,7 @@ impl QueryEngine {
         extended: bool,
     ) -> Result<(), Error> {
         let _extended = extended;
+
         match target {
             DiscardTarget::All if context.in_transaction() => {
                 context.transaction = Some(match context.transaction {
@@ -44,8 +45,9 @@ impl QueryEngine {
                 self.advisory_locks.clear();
                 context.prepared_statements.close_all();
                 self.backend.unlisten_all();
-                self.reset_session_params(context).await?;
+                self.reset_session_params(context);
                 self.check_lock();
+                self.cleanup_backend(context)?;
             }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
@@ -61,10 +63,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    async fn reset_session_params(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-    ) -> Result<(), Error> {
+    fn reset_session_params(&mut self, context: &mut QueryEngineContext<'_>) {
         context.params.restore_startup(context.startup_params);
         self.manual_lock = context
             .params
@@ -73,17 +72,5 @@ impl QueryEngine {
             .map(|value| matches!(value, "true" | "t"))
             .unwrap_or_default();
         self.comms.update_params(context.params);
-
-        // Parameters the client SET while holding this server were sent straight
-        // through, and `link_client` only replays what it knows diverged. Reset the
-        // server so the startup values are re-applied onto a clean session.
-        if self.backend.connected() {
-            self.backend.execute("RESET ALL").await?;
-            self.backend
-                .link_client(context.id, context.params, None)
-                .await?;
-        }
-
-        Ok(())
     }
 }
