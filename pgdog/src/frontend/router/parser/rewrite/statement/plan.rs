@@ -10,6 +10,12 @@ use super::{
     Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GeneratedId {
+    UniqueId,
+    Sequence(String),
+}
+
 /// Statement rewrite plan.
 ///
 /// Executed in order of fields in this struct.
@@ -22,15 +28,15 @@ pub(crate) struct RewritePlan {
     /// substitute values we are rewriting.
     pub(crate) params: u16,
 
-    /// Number of unique IDs to append to the Bind message.
+    /// Number of unique IDs, also used by SQL PREPARE/EXECUTE rewriting.
     pub(crate) unique_ids: u16,
 
     /// Number of auto-injected primary key columns with pgdog.unique_id().
     pub(crate) auto_id_injected: u16,
 
-    /// One-based Bind parameter indexes and sequence names in allocation order.
-    /// Simple protocol uses the list to detect calls; it does not use the indexes.
-    pub(crate) global_sequences: Vec<(u16, String)>,
+    /// One-based parameter indexes and ID sources in allocation order.
+    /// Simple protocol records sequence calls here without using the indexes.
+    pub(crate) generated_ids: Vec<(u16, GeneratedId)>,
 
     /// Rewritten SQL statement.
     pub(crate) stmt: Option<String>,
@@ -80,7 +86,7 @@ impl RewritePlan {
     pub(crate) fn is_empty(&self) -> bool {
         self.unique_ids == 0
             && self.auto_id_injected == 0
-            && self.global_sequences.is_empty()
+            && self.generated_ids.is_empty()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
@@ -91,11 +97,21 @@ impl RewritePlan {
 
     /// Append generated unique IDs and sequence values to a Bind message.
     async fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
-        let format = bind.default_param_format();
+        self.apply_generated_ids(bind, ee::nextval).await
+    }
 
-        for _ in 0..self.unique_ids {
-            let generator = UniqueId::generator()?;
-            let id = generator.next_id();
+    /// Append values in the same order their placeholders were allocated.
+    pub(super) async fn apply_generated_ids(
+        &self,
+        bind: &mut Bind,
+        mut nextval: impl AsyncFnMut(&str) -> Result<i64, ee::Error>,
+    ) -> Result<(), Error> {
+        let format = bind.default_param_format();
+        for (_, source) in &self.generated_ids {
+            let id = match source {
+                GeneratedId::UniqueId => UniqueId::generator()?.next_id(),
+                GeneratedId::Sequence(name) => nextval(name).await?,
+            };
             let param = match format {
                 Format::Binary => Parameter::new(&id.to_be_bytes()),
                 Format::Text => Parameter::new(itoa::Buffer::new().format(id).as_bytes()),
@@ -103,7 +119,7 @@ impl RewritePlan {
             bind.push_param(param, format);
         }
 
-        self.apply_nextval(bind, ee::nextval).await
+        Ok(())
     }
 
     /// Apply the rewrite plan to a Parse message by updating the SQL.
@@ -118,7 +134,11 @@ impl RewritePlan {
 
     /// Apply the rewrite plan to a Query message by updating the SQL.
     async fn apply_query(&self, query: &mut Query) -> Result<(), Error> {
-        if !self.global_sequences.is_empty() {
+        if self
+            .generated_ids
+            .iter()
+            .any(|(_, source)| matches!(source, GeneratedId::Sequence(_)))
+        {
             if let Some(stmt) = self.rewrite_nextval_simple().await? {
                 query.set_query(&stmt);
             }
@@ -213,6 +233,7 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 1,
+            generated_ids: vec![(1, GeneratedId::UniqueId)],
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -234,6 +255,7 @@ mod tests {
         let plan = RewritePlan {
             params: 1,
             unique_ids: 1,
+            generated_ids: vec![(2, GeneratedId::UniqueId)],
             ..Default::default()
         };
         // Create bind with uniform binary format (1 code applies to all)
@@ -259,6 +281,7 @@ mod tests {
         let plan = RewritePlan {
             params: 2,
             unique_ids: 1,
+            generated_ids: vec![(3, GeneratedId::UniqueId)],
             ..Default::default()
         };
         // Create bind with one-to-one format codes
@@ -285,6 +308,11 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 3,
+            generated_ids: vec![
+                (1, GeneratedId::UniqueId),
+                (2, GeneratedId::UniqueId),
+                (3, GeneratedId::UniqueId),
+            ],
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -306,6 +334,7 @@ mod tests {
         let plan = RewritePlan {
             params: 2,
             unique_ids: 2,
+            generated_ids: vec![(3, GeneratedId::UniqueId), (4, GeneratedId::UniqueId)],
             ..Default::default()
         };
         let mut bind = Bind::new_params(

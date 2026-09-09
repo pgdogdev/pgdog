@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use pg_raw_parse::{ConstValue, Node, NodeMut, make, transform, walk};
+use pg_raw_parse::{ConstValue, Node, make, transform, walk};
 
 use crate::frontend::router::parser::rewrite::ee;
-use crate::net::Bind;
-use crate::net::messages::bind::{Format, Parameter};
 
+use super::plan::GeneratedId;
 use super::{Error, RewritePlan, StatementRewrite};
 
 impl RewritePlan {
@@ -78,65 +77,35 @@ impl RewritePlan {
         });
         Ok(Some(pg_raw_parse::deparse_stmts(&*rewritten)?))
     }
-
-    /// Fetch one value per call and append it after the client and unique-ID
-    /// parameters, following the order recorded in the plan.
-    pub(super) async fn apply_nextval(
-        &self,
-        bind: &mut Bind,
-        mut nextval: impl AsyncFnMut(&str) -> Result<i64, ee::Error>,
-    ) -> Result<(), Error> {
-        let format = bind.default_param_format();
-        for (_, name) in &self.global_sequences {
-            let value = nextval(name).await?;
-            let parameter = match format {
-                Format::Binary => Parameter::new(&value.to_be_bytes()),
-                Format::Text => Parameter::new(itoa::Buffer::new().format(value).as_bytes()),
-            };
-            bind.push_param(parameter, format);
-        }
-        Ok(())
-    }
 }
 
 impl StatementRewrite<'_> {
-    /// Record sequence calls in encounter order, allocating one-based parameter
-    /// indexes after client parameters and generated unique IDs. Simple protocol
-    /// retains the statement for asynchronous rewriting without placeholders.
+    /// Record a sequence call and return its replacement in extended protocol.
+    /// Simple protocol retains the call for asynchronous rewriting.
     pub(super) fn rewrite_nextval<'mem>(
         &mut self,
-        node: NodeMut<'mem, '_>,
+        node: Node<'_>,
         mem: make::MemoryToken<'mem>,
         next_param: &mut i32,
         plan: &mut RewritePlan,
-    ) {
-        transform::transform_node(
-            node,
-            &mut transform::TransformClosure::new(|node| {
-                let Some(sequence) = sequence_name(node.as_ref()) else {
-                    return Some(node);
-                };
-                let param = *next_param;
-                *next_param += 1;
-                plan.global_sequences.push((param as u16, sequence));
-                if self.extended {
-                    node.replace(
-                        mem.make_type_cast(
-                            mem.make_param_ref(param).uncast(),
-                            mem.make_list(&[
-                                mem.make_string(Some("pg_catalog")),
-                                mem.make_string(Some("int8")),
-                            ]),
-                        )
-                        .uncast(),
-                    );
-                }
-                // Retain the SQL even when a simple-protocol nextval call is
-                // the only rewrite, so it can be resolved asynchronously.
-                self.rewritten = true;
-                None
-            }),
-        );
+    ) -> Option<make::Unique<'mem, Node<'mem>>> {
+        let sequence = sequence_name(node)?;
+        let param = *next_param;
+        *next_param += 1;
+        plan.generated_ids
+            .push((param as u16, GeneratedId::Sequence(sequence)));
+        // Retain simple-protocol SQL even when nextval is the only rewrite.
+        self.rewritten = true;
+        self.extended.then(|| {
+            mem.make_type_cast(
+                mem.make_param_ref(param).uncast(),
+                mem.make_list(&[
+                    mem.make_string(Some("pg_catalog")),
+                    mem.make_string(Some("int8")),
+                ]),
+            )
+            .uncast()
+        })
     }
 }
 
@@ -186,7 +155,8 @@ mod tests {
     use crate::frontend::ClientRequest;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
-    use crate::net::{Parse, ProtocolMessage, Query};
+    use crate::net::messages::bind::{Format, Parameter};
+    use crate::net::{Bind, Parse, ProtocolMessage, Query};
     use pgdog_config::Rewrite;
 
     use super::*;
@@ -230,16 +200,17 @@ mod tests {
         );
         assert_eq!(
             sql,
-            "SELECT $3::bigint, $1, $2::bigint, $4::bigint, $5::bigint"
+            "SELECT $2::bigint, $1, $3::bigint, $4::bigint, $5::bigint"
         );
         assert_eq!(plan.params, 1);
         assert_eq!(plan.unique_ids, 1);
         assert_eq!(
-            plan.global_sequences,
+            plan.generated_ids,
             vec![
-                (3, "sequence.name".to_owned()),
-                (4, "other.seq".to_owned()),
-                (5, "sequence.name".to_owned()),
+                (2, GeneratedId::Sequence("sequence.name".to_owned())),
+                (3, GeneratedId::UniqueId),
+                (4, GeneratedId::Sequence("other.seq".to_owned())),
+                (5, GeneratedId::Sequence("sequence.name".to_owned())),
             ]
         );
         assert_eq!(plan.stmt.as_deref(), Some(sql.as_str()));
@@ -252,10 +223,10 @@ mod tests {
         let (sql, plan) = rewrite(original, false);
         assert_eq!(sql, original);
         assert_eq!(
-            plan.global_sequences,
+            plan.generated_ids,
             vec![
-                (1, "sequence.name".to_owned()),
-                (2, "sequence.name".to_owned()),
+                (1, GeneratedId::Sequence("sequence.name".to_owned())),
+                (2, GeneratedId::Sequence("sequence.name".to_owned())),
             ]
         );
         assert_eq!(plan.unique_ids, 0);
@@ -273,10 +244,13 @@ mod tests {
         );
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
         assert_eq!(
-            plan.global_sequences,
+            plan.generated_ids,
             vec![
-                (1, "\"My Schema\".\"My Sequence\"".to_owned()),
-                (2, "other.seq".to_owned()),
+                (
+                    1,
+                    GeneratedId::Sequence("\"My Schema\".\"My Sequence\"".to_owned())
+                ),
+                (2, GeneratedId::Sequence("other.seq".to_owned())),
             ]
         );
     }
@@ -394,8 +368,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_nextval_bind_values_and_formats() {
+        let _guard = crate::test_utils::set_env_var("NODE_ID", "pgdog-1");
         let (_, plan) = rewrite(
-            "SELECT $1, $2, pgdog.nextval('a'), pgdog.nextval('b'), pgdog.nextval('a')",
+            "SELECT $1, $2, pgdog.nextval('a'), pgdog.unique_id(), \
+             pgdog.nextval('b'), pgdog.unique_id(), pgdog.nextval('a')",
             true,
         );
         for codes in [
@@ -410,7 +386,7 @@ mod tests {
             let mut bind = Bind::new_params_codes("stmt", &original_params, &codes);
             let mut calls = Vec::new();
             let mut value = -2i64;
-            plan.apply_nextval(&mut bind, async |name: &str| {
+            plan.apply_generated_ids(&mut bind, async |name: &str| {
                 calls.push(name.to_owned());
                 value += 1;
                 Ok(value)
@@ -420,8 +396,8 @@ mod tests {
 
             assert_eq!(calls, ["a", "b", "a"]);
             assert_eq!(&bind.params_raw()[..2], &original_params);
-            assert_eq!(bind.params_raw().len(), 5);
-            for (index, value) in [(2, -1), (3, 0), (4, 1)] {
+            assert_eq!(bind.params_raw().len(), 7);
+            for (index, value) in [(2, -1), (4, 0), (6, 1)] {
                 let param = bind.parameter(index).expect("format").expect("parameter");
                 assert_eq!(param.bigint(), Some(value));
                 assert_eq!(
@@ -433,6 +409,20 @@ mod tests {
                     }
                 );
             }
+            let first_id = bind
+                .parameter(3)
+                .expect("format")
+                .expect("parameter")
+                .bigint()
+                .expect("bigint");
+            let second_id = bind
+                .parameter(5)
+                .expect("format")
+                .expect("parameter")
+                .bigint()
+                .expect("bigint");
+            assert!(first_id > 0);
+            assert!(second_id > first_id);
             if codes.len() <= 1 {
                 assert_eq!(bind.format_codes_raw(), codes);
             } else {
@@ -441,6 +431,8 @@ mod tests {
                     [
                         Format::Text,
                         Format::Binary,
+                        Format::Text,
+                        Format::Text,
                         Format::Text,
                         Format::Text,
                         Format::Text
@@ -460,7 +452,7 @@ mod tests {
         };
         for expected in [2, 4] {
             let mut bind = Bind::default();
-            plan.apply_nextval(&mut bind, &mut nextval)
+            plan.apply_generated_ids(&mut bind, &mut nextval)
                 .await
                 .expect("values");
             assert_eq!(
@@ -553,7 +545,7 @@ mod tests {
                 "{call}"
             );
             let (_, plan) = rewrite(&format!("SELECT {call}"), true);
-            assert!(plan.global_sequences.is_empty(), "{call}");
+            assert!(plan.generated_ids.is_empty(), "{call}");
             assert!(plan.is_empty(), "{call}");
         }
     }
