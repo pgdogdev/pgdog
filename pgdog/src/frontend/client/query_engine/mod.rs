@@ -10,8 +10,6 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
-use fnv::FnvHashMap;
-use temp_table::TempTableState;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -52,6 +50,7 @@ use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
 pub(crate) use split::Pipeline;
 pub(in crate::frontend) use temp_table::TempTableChange;
+use temp_table::TempTables;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
 
@@ -74,7 +73,7 @@ pub(crate) struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
-    temp_tables: FnvHashMap<String, TempTableState>,
+    temp_tables: TempTables,
 }
 
 impl QueryEngine {

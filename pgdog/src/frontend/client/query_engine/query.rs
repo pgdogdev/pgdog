@@ -238,23 +238,8 @@ impl QueryEngine {
             self.advisory_locks
                 .merge(self.router.command().route().advisory_locks());
 
-            match self.router.command().route().temp_table_change.as_ref() {
-                Some(TempTableChange::Create {
-                    name,
-                    drop_on_commit,
-                }) => {
-                    self.temp_tables.insert(
-                        name.clone(),
-                        TempTableState {
-                            committed: false,
-                            drop_on_commit: *drop_on_commit,
-                        },
-                    );
-                }
-                Some(TempTableChange::Drop(table)) => {
-                    self.temp_tables.remove(table);
-                }
-                None => {}
+            if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
+                self.temp_tables.update(change, context.in_transaction());
             }
 
             self.check_lock();
