@@ -300,6 +300,15 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn discard_all_in_transaction() -> Self {
+        Self {
+            severity: "ERROR".into(),
+            code: "25001".into(),
+            message: "DISCARD ALL cannot run inside a transaction block".into(),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn in_failed_transaction() -> Self {
         Self {
             severity: "ERROR".into(),

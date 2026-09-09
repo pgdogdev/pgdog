@@ -1,3 +1,4 @@
+use crate::frontend::{client::TransactionType, router::parameter_hints::PGDOG_PIN};
 use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 
 use super::*;
@@ -13,6 +14,17 @@ impl QueryEngine {
         let _extended = extended;
 
         match target {
+            DiscardTarget::All if context.in_transaction() => {
+                context.transaction = Some(match context.transaction {
+                    Some(TransactionType::ReadOnly | TransactionType::ErrorReadOnly) => {
+                        TransactionType::ErrorReadOnly
+                    }
+                    _ => TransactionType::ErrorReadWrite,
+                });
+                self.error_response(context, ErrorResponse::discard_all_in_transaction())
+                    .await?;
+                return Ok(());
+            }
             DiscardTarget::Temp if self.backend.connected() => {
                 self.execute(context, None).await?;
                 if !context.in_error() {
@@ -33,7 +45,9 @@ impl QueryEngine {
                 self.advisory_locks.clear();
                 context.prepared_statements.close_all();
                 self.backend.unlisten_all();
+                self.reset_session_params(context);
                 self.check_lock();
+                self.cleanup_backend(context)?;
             }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
@@ -47,5 +61,16 @@ impl QueryEngine {
             .await?;
         self.stats.sent(bytes_sent);
         Ok(())
+    }
+
+    fn reset_session_params(&mut self, context: &mut QueryEngineContext<'_>) {
+        context.params.restore_startup(context.startup_params);
+        self.manual_lock = context
+            .params
+            .get(PGDOG_PIN)
+            .and_then(|value| value.as_str())
+            .map(|value| matches!(value, "true" | "t"))
+            .unwrap_or_default();
+        self.comms.update_params(context.params);
     }
 }
