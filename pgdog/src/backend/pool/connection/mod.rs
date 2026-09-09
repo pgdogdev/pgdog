@@ -1,5 +1,6 @@
 //! Server connection requested by a frontend.
 
+use futures::future::try_join_all;
 use mirror::MirrorHandler;
 use pgdog_config::users::PasswordKind;
 use tokio::select;
@@ -22,7 +23,7 @@ use crate::{
 };
 
 use super::{
-    super::{Error, pool::Guard},
+    super::{Error, Server, pool::Guard},
     Address, Cluster, Request,
 };
 
@@ -464,6 +465,24 @@ impl Connection {
                 return Err(Error::NotConnected);
             }
         })
+    }
+
+    /// Cancel the query the server(s) are running for this client
+    pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
+        let servers: Vec<&Guard> = match self.binding {
+            Binding::Direct(ref server, ..) => vec![server],
+            Binding::MultiShard(ref servers, _) => servers.iter().collect(),
+            _ => return Ok(()),
+        };
+
+        try_join_all(
+            servers
+                .iter()
+                .map(|server| Server::cancel(server.addr(), server.key().clone())),
+        )
+        .await?;
+
+        Ok(())
     }
 
     /// Get cluster if any.

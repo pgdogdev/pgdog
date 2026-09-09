@@ -82,13 +82,17 @@ impl QueryEngine {
             ) => {
                 result
             }
-            // If any of the cancellation tokens trigger, exit early. Currently us≤≤ed for admin FORCE_RELOAD.
+            // If the cluster's cancellation token triggers, exit early. Currently used for admin FORCE_RELOAD.
             // If this returns an Error, it'll be propagated up to Client's Box::pin(self.run())
             // which will disconnect the client (and QueryEngine transactions)
-            _ = async {cluster_cancellation_token.unwrap().cancelled().await },
+            _ = async { cluster_cancellation_token.unwrap().cancelled().await },
             if cluster_cancellation_token.is_some() => {
-                // I don't think we need to force-close here. After Databases::terminate_active_connections,
-                // we shutdown() the pools, and it should be handled there.
+                // Postgres is still running the query. Send a cancellation request before we stop on our end.
+                if let Err(err) = self.backend.cancel_query().await {
+                    // Tell the administrator that we failed to cancel the query.
+                    error!("failed to cancel query on admin termination: {err}");
+                }
+                self.backend.force_close();
                 return Err(Error::AdminTermination);
             }
         };

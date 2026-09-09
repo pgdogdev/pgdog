@@ -1,3 +1,4 @@
+use sqlx::Row;
 use std::time::Duration;
 
 use tokio::time::{Instant, sleep};
@@ -92,5 +93,19 @@ async fn admin_force_reload_test() {
         // Runs both the query and reload concurrently
         // Returns after both have finished.
         tokio::join!(query, reload);
+
+        // The transaction was terminated (through PgDog), however, is Postgres still running it?
+        let rows = sqlx::raw_sql(
+            "SELECT * FROM pg_stat_activity WHERE state = 'active' AND query NOT LIKE '%pg_stat_activity%'",
+        )
+        .fetch_all(conn)
+        .await
+        .unwrap();
+
+        // I did it this way to prevent flaky tests if the health-check were to run in parallel
+        // Usually there's no rows.
+        for row in rows {
+            assert!(!row.get::<&str, &str>("query").eq("SELECT pg_sleep(5)"));
+        }
     }
 }
