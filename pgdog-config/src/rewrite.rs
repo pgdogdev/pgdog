@@ -21,6 +21,8 @@ pub enum RewriteMode {
     Rewrite,
     /// Rewrite only for omnisharded tables.
     RewriteOmni,
+    /// Rewrite only for omnisharded tables and use global sequence instead of unique ID.
+    RewriteOmniGlobal,
 }
 
 impl fmt::Display for RewriteMode {
@@ -30,6 +32,7 @@ impl fmt::Display for RewriteMode {
             RewriteMode::Rewrite => "rewrite",
             RewriteMode::Ignore => "ignore",
             RewriteMode::RewriteOmni => "rewrite_omni",
+            RewriteMode::RewriteOmniGlobal => "rewrite_omni_global",
         };
         f.write_str(value)
     }
@@ -44,6 +47,7 @@ impl FromStr for RewriteMode {
             "rewrite" => Ok(RewriteMode::Rewrite),
             "ignore" => Ok(RewriteMode::Ignore),
             "rewrite_omni" => Ok(RewriteMode::RewriteOmni),
+            "rewrite_omni_global" => Ok(RewriteMode::RewriteOmniGlobal),
             _ => Err(()),
         }
     }

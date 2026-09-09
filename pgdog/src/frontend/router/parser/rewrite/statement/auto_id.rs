@@ -1,8 +1,8 @@
-//! Auto-inject pgdog.unique_id() for missing BIGINT primary keys in INSERT statements.
+//! Auto-inject generated IDs for missing BIGINT primary keys in INSERT statements.
 
 use indexmap::IndexSet;
 use itertools::*;
-use pg_raw_parse::{Node, NodeMut, make, nodes};
+use pg_raw_parse::{ConstValue, Node, NodeMut, make, nodes};
 use pgdog_config::RewriteMode;
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -16,9 +16,12 @@ impl StatementRewrite<'_> {
     /// - `error`: Return an error if a BIGINT primary key is missing
     /// - `rewrite`: Auto-inject pgdog.unique_id() for missing columns,
     ///   or replace DEFAULT values with pgdog.unique_id()
+    /// - `rewrite_omni`: Rewrite only omnisharded tables using pgdog.unique_id()
+    /// - `rewrite_omni_global`: Rewrite only omnisharded tables using
+    ///   pgdog.nextval('[schema_]table_column_seq')
     ///
-    /// This runs before unique_id replacement so injected function calls
-    /// will be processed by the unique_id rewriter.
+    /// This runs before function replacement so injected calls will be
+    /// processed by the unique_id and nextval rewriters.
     pub(super) fn inject_auto_id<'a>(
         &mut self,
         mut node: nodes::InsertStmtMut<'a, '_>,
@@ -57,17 +60,30 @@ impl StatementRewrite<'_> {
             bigint_pk_columns.into_iter().partition_map(|pk_col| {
                 insert_columns
                     .get_index_of(&pk_col)
-                    .map(Either::Left)
+                    .map(|pos| Either::Left((pos, pk_col)))
                     .unwrap_or(Either::Right(pk_col))
             });
 
-        let rewrite =
-            mode == RewriteMode::Rewrite || mode == RewriteMode::RewriteOmni && !is_sharded;
+        let rewrite = mode == RewriteMode::Rewrite
+            || matches!(
+                mode,
+                RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
+            ) && !is_sharded;
 
-        // Replace DEFAULT values with unique_id() for present columns (only in rewrite mode)
+        let sequence_prefix =
+            (mode == RewriteMode::RewriteOmniGlobal && !is_sharded).then(|| match table.schema {
+                Some(schema) => format!("{schema}_{}", table.name),
+                None => table.name.to_owned(),
+            });
+
+        // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
-            let replaced =
-                self.replace_set_to_default_at_positions(&mut node, mem, &present_pk_positions);
+            let replaced = self.replace_set_to_default_at_positions(
+                &mut node,
+                mem,
+                &present_pk_positions,
+                sequence_prefix.as_deref(),
+            );
             if replaced > 0 {
                 plan.auto_id_injected += replaced as u16;
                 self.rewritten = true;
@@ -84,7 +100,7 @@ impl StatementRewrite<'_> {
 
         if rewrite {
             for column in missing_columns {
-                self.inject_column_with_unique_id(&mut node, mem, column);
+                self.inject_column_with_auto_id(&mut node, mem, column, sequence_prefix.as_deref());
                 plan.auto_id_injected += 1;
             }
             self.rewritten = true;
@@ -120,12 +136,13 @@ impl StatementRewrite<'_> {
             .collect()
     }
 
-    /// Replace SetToDefault nodes at the specified column positions with pgdog.unique_id().
+    /// Replace SetToDefault nodes at the specified column positions with generated IDs.
     fn replace_set_to_default_at_positions<'a, 'b>(
         &mut self,
         insert: &mut nodes::InsertStmtMut<'a, 'b>,
         mem: make::MemoryToken<'a>,
-        positions: &[usize],
+        positions: &[(usize, &str)],
+        sequence_prefix: Option<&str>,
     ) -> usize {
         let NodeMut::SelectStmt(mut select_stmt) = insert.select_stmt_mut() else {
             return 0; // DEFAULT VALUES
@@ -134,9 +151,12 @@ impl StatementRewrite<'_> {
         let mut replaced = 0;
         for list in select_stmt.values_lists_mut() {
             let mut list = list.expect_node_list();
-            for pos in positions {
+            for (pos, column) in positions {
                 if matches!(list.get(*pos), Some(Node::SetToDefault(..))) {
-                    list.set(*pos, Self::unique_id_func_call(mem).uncast());
+                    list.set(
+                        *pos,
+                        Self::auto_id_func_call(mem, column, sequence_prefix).uncast(),
+                    );
                     replaced += 1;
                 }
             }
@@ -145,12 +165,13 @@ impl StatementRewrite<'_> {
         replaced
     }
 
-    /// Inject a column with pgdog.unique_id() as the value.
-    fn inject_column_with_unique_id<'a>(
+    /// Inject a column with a generated ID as the value.
+    fn inject_column_with_auto_id<'a>(
         &mut self,
         insert: &mut nodes::InsertStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
         column_name: &str,
+        sequence_prefix: Option<&str>,
     ) {
         insert.cols_mut().push(
             mem,
@@ -159,23 +180,38 @@ impl StatementRewrite<'_> {
         );
 
         let NodeMut::SelectStmt(mut select_stmt) = insert.select_stmt_mut() else {
-            panic!("Attempted to add pgdog.unique_id() to DEFAULT VALUES")
+            panic!("Attempted to add an auto ID to DEFAULT VALUES")
         };
 
         for list in select_stmt.values_lists_mut().into_iter() {
-            list.expect_node_list()
-                .push(mem, Self::unique_id_func_call(mem).uncast())
+            list.expect_node_list().push(
+                mem,
+                Self::auto_id_func_call(mem, column_name, sequence_prefix).uncast(),
+            )
         }
     }
 
-    /// Create a function call node for pgdog.unique_id().
-    fn unique_id_func_call(mem: make::MemoryToken<'_>) -> make::Unique<'_, &nodes::FuncCall> {
+    /// Create a pgdog.nextval() or pgdog.unique_id() call for a primary key column.
+    fn auto_id_func_call<'a>(
+        mem: make::MemoryToken<'a>,
+        column: &str,
+        sequence_prefix: Option<&str>,
+    ) -> make::Unique<'a, &'a nodes::FuncCall> {
+        let (function, args) = match sequence_prefix {
+            Some(prefix) => (
+                "nextval",
+                mem.make_list(&[mem
+                    .make_a_const(ConstValue::String(&format!("{prefix}_{column}_seq")))
+                    .uncast()]),
+            ),
+            None => ("unique_id", mem.empty()),
+        };
         mem.make_func_call(
             mem.make_list(&[
                 mem.make_string(Some("pgdog")).uncast(),
-                mem.make_string(Some("unique_id")).uncast(),
+                mem.make_string(Some(function)).uncast(),
             ]),
-            mem.empty(),
+            args,
             Default::default(),
         )
     }
@@ -191,6 +227,7 @@ fn is_bigint_type(data_type: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::plan::GeneratedId;
     use crate::frontend::router::sharding::ShardedTable;
     use indexmap::IndexMap;
     use pgdog_config::{Rewrite, SystemCatalogsBehavior};
@@ -606,5 +643,76 @@ mod tests {
         // users is NOT sharded, so RewriteOmni should inject auto id
         assert_eq!(plan.auto_id_injected, 1);
         assert!(sql.contains("::bigint"));
+    }
+
+    #[test]
+    fn test_rewrite_omni_global_uses_column_sequence() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+
+        for (table, sequence) in [
+            ("users", "users_id_seq"),
+            ("public.users", "public_users_id_seq"),
+        ] {
+            for (columns, values, expected_values, injected) in [
+                (
+                    "name",
+                    "('a'), ('b')",
+                    format!(
+                        "('a', pgdog.nextval('{sequence}')), ('b', pgdog.nextval('{sequence}'))"
+                    ),
+                    1,
+                ),
+                (
+                    "name, id",
+                    "('a', DEFAULT), ('b', 42), ('c', DEFAULT)",
+                    format!(
+                        "('a', pgdog.nextval('{sequence}')), ('b', 42), ('c', pgdog.nextval('{sequence}'))"
+                    ),
+                    2,
+                ),
+            ] {
+                let (sql, plan) = rewrite_sql_with_sharding_schema(
+                    &format!("INSERT INTO {table} ({columns}) VALUES {values}"),
+                    &db_schema,
+                    &schema,
+                )
+                .expect("rewrite succeeds");
+
+                assert_eq!(
+                    sql,
+                    format!("INSERT INTO {table} (name, id) VALUES {expected_values}")
+                );
+                assert_eq!(plan.auto_id_injected, injected);
+                assert_eq!(plan.unique_ids, 0);
+                assert_eq!(
+                    plan.generated_ids,
+                    vec![
+                        (1, GeneratedId::Sequence(sequence.to_owned())),
+                        (2, GeneratedId::Sequence(sequence.to_owned())),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_rewrite_omni_global_skips_sharded_table() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = sharding_schema_with_sharded_users(RewriteMode::RewriteOmniGlobal);
+        for original in [
+            "INSERT INTO users (name) VALUES ('test')",
+            "INSERT INTO users (id, name) VALUES (DEFAULT, 'test')",
+        ] {
+            let (sql, plan) = rewrite_sql_with_sharding_schema(original, &db_schema, &schema)
+                .expect("rewrite succeeds");
+
+            assert_eq!(sql, original);
+            assert_eq!(plan.auto_id_injected, 0);
+            assert!(plan.generated_ids.is_empty());
+        }
     }
 }
