@@ -1,5 +1,8 @@
 use crate::{
-    backend::pool::{Connection, Request},
+    backend::{
+        Cluster,
+        pool::{Connection, Request},
+    },
     config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
@@ -10,6 +13,7 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -109,6 +113,14 @@ impl QueryEngine {
         Self::new(&client.params, &client.comms, client.admin)
     }
 
+    /// Fetch the `CancellationToken` for the backend (if any)
+    pub(crate) fn get_cancellation_token(&mut self) -> Option<CancellationToken> {
+        self.backend
+            .cluster()
+            .ok()
+            .map(Cluster::get_cancellation_token)
+    }
+
     /// Wait for an async message from the backend.
     pub(crate) async fn read_backend(&mut self) -> Result<Message, Error> {
         Ok(self.backend.read().await?)
@@ -122,11 +134,6 @@ impl QueryEngine {
     /// Current state.
     pub(crate) fn client_state(&self) -> State {
         self.stats.state
-    }
-
-    /// Fetch all `CancellationToken`s for the backend.
-    pub(crate) fn cancellation_tokens(&mut self) -> Vec<CancellationToken> {
-        self.backend.cancellation_tokens()
     }
 
     /// Handle client request.

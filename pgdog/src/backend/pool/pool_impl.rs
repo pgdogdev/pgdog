@@ -11,7 +11,6 @@ use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 use pgdog_config::Role;
 use tokio::sync::Notify;
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
 use crate::backend::pool::LsnStats;
@@ -51,7 +50,6 @@ pub(crate) struct InnerSync {
     pub(super) lsn_stats: RwLock<LsnStats>,
     pub(super) lsn_role_change: Notify,
     pub(super) oids: Arc<Oids>,
-    pub(super) cancellation_token: CancellationToken,
 }
 
 impl std::fmt::Debug for Pool {
@@ -83,7 +81,6 @@ impl Pool {
                 lsn_stats: RwLock::new(LsnStats::default()),
                 lsn_role_change: Notify::new(),
                 oids,
-                cancellation_token: Default::default(),
             }),
         }
     }
@@ -396,13 +393,11 @@ impl Pool {
         self.comms().ready.notify_waiters();
     }
 
-    /// Sets the `Pool` offline (to refuse more connections), and runs `cancel()`
-    /// on the Pool's `CancellationToken`, which causes active connections to terminate,
-    /// for and Clients to receive an `AdminTerminated` error.
-    pub(crate) fn cancel_active_connections(self) {
+    /// Sets the `Pool` offline (to refuse more connections)
+    /// Does not dump idle connections or shutdown.
+    pub(crate) fn set_offline(self) {
         let mut guard = self.lock();
         guard.online = false;
-        self.inner.cancellation_token.cancel();
     }
 
     /// Pool exclusive lock.

@@ -7,7 +7,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::future::select_all;
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn};
@@ -529,7 +528,8 @@ impl Client {
 
             let client_state = query_engine.client_state();
 
-            let cluster_cancellation: Vec<CancellationToken> = query_engine.cancellation_tokens();
+            let cluster_cancellation: Option<CancellationToken> =
+                query_engine.get_cancellation_token();
 
             select! {
                 _ = shutdown.cancelled(), if !offline => {
@@ -542,7 +542,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state, cluster_cancellation) => {
+                buffer = self.buffer(client_state, cluster_cancellation.as_ref()) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -644,7 +644,7 @@ impl Client {
     async fn buffer(
         &mut self,
         state: State,
-        pool_cancellation_tokens: Vec<CancellationToken>,
+        cluster_cancellation: Option<&CancellationToken>,
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
@@ -673,11 +673,8 @@ impl Client {
                 // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
                 // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
                 // which will disconnect the `Client` (and `QueryEngine` transactions)
-                _ = async { select_all(
-                                pool_cancellation_tokens.iter()
-                                                        .map(|cancellation_token| Box::pin(cancellation_token.cancelled())))
-                .await },
-                if !pool_cancellation_tokens.is_empty() => {
+                _ = async { cluster_cancellation.unwrap().cancelled().await },
+                if cluster_cancellation.is_some() => {
                     return Err(Error::AdminTermination)
                 }
             };

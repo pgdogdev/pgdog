@@ -1,10 +1,5 @@
 //! Databases behind pgDog.
 
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-
-use crate::backend::Shard;
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
@@ -18,10 +13,12 @@ use pgdog_config::{
     EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
-use crate::backend::Pool;
 use crate::backend::replication::ShardedSchemas;
 use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
@@ -140,9 +137,7 @@ pub(crate) fn terminate_active_connections() {
     databases()
         .all()
         .values()
-        .flat_map(Cluster::shards)
-        .flat_map(Shard::pools)
-        .for_each(Pool::cancel_active_connections);
+        .for_each(Cluster::terminate_active_connections);
 }
 
 /// Re-create pools from config.

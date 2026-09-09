@@ -237,9 +237,7 @@ impl TestClient {
 
     /// Process a request.
     pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.client
-            .buffer(self.engine.stats().state, vec![])
-            .await?;
+        self.client.buffer(self.engine.stats().state, None).await?;
         self.client.client_messages(&mut self.engine).await?;
 
         Ok(())
