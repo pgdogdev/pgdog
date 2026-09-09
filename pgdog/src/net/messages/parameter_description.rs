@@ -44,12 +44,22 @@ impl ParameterDescription {
         Self { params: Vec::new() }
     }
 
-    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
+    /// Parameter data type OIDs.
+    pub(crate) fn data_types(&self) -> impl Iterator<Item = u32> + '_ {
+        self.params.iter().map(|&param| param as u32)
+    }
+
+    /// Replaces the data types of each parameter using the given mapping.
+    /// Returns whether any changes actually occurred.
+    pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) -> bool {
+        let mut changed = false;
         for param in &mut self.params {
             if let Some(&canonical) = mapping.get(&(*param as u32)) {
+                changed = true;
                 *param = canonical as i32;
             }
         }
+        changed
     }
 }
 
