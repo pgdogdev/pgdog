@@ -28,6 +28,7 @@ mod pipeline_execution;
 pub(crate) mod prelude;
 mod prepared_syntax_error;
 mod replicas;
+mod rewrite_aggregate;
 mod rewrite_extended;
 mod rewrite_insert_split;
 mod rewrite_offset;

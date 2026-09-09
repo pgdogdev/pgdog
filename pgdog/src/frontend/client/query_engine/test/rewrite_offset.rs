@@ -18,7 +18,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     let rewrite_result = engine.parse_and_rewrite(&mut context).unwrap();
 
     match rewrite_result {
-        Some(RewriteResult::InPlace { offset }) => offset,
+        Some(RewriteResult::InPlace { offset, .. }) => offset,
         other => panic!("expected InPlace, got {:?}", other),
     }
 }

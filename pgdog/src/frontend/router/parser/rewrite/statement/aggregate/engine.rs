@@ -64,6 +64,27 @@ impl AggregatesRewrite {
         }
     }
 
+    /// Remove helper aggregate columns previously appended by [`Self::rewrite_select`].
+    pub(crate) fn rollback_select<'a>(
+        select: &mut nodes::SelectStmtMut<'a, '_>,
+        mem: make::MemoryToken<'a>,
+        plan: &AggregateRewritePlan,
+    ) {
+        let original_len = select
+            .target_list()
+            .len()
+            .checked_sub(plan.helpers().len())
+            .expect("aggregate helper plan cannot exceed the SELECT target list");
+        let targets = select
+            .target_list()
+            .iter()
+            .take(original_len)
+            .map(|target| mem.make_unique(target))
+            .collect::<Vec<_>>();
+
+        select.target_list_mut().replace(mem.make_list(&targets));
+    }
+
     fn build_sum_of_squares_func<'a>(
         original: &nodes::FuncCall,
         mem: make::MemoryToken<'a>,
@@ -287,5 +308,28 @@ mod tests {
 
         // Expect original STDDEV plus three helpers.
         assert_eq!(ast.target_list().len(), 4);
+    }
+
+    #[test]
+    fn rewrite_engine_rolls_back_helpers() {
+        let sql = "SELECT AVG(price), STDDEV(discount) FROM menu";
+        let ast = pg_raw_parse::parse(sql).unwrap();
+
+        let select = make::owned(|mem| {
+            let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
+                unreachable!("not a select");
+            };
+            let mut stmt = mem.make_unique(stmt);
+            let aggregate = Aggregate::parse(&stmt, &Default::default());
+            let output = AggregatesRewrite::rewrite_select(&mut stmt.as_mut(), mem, &aggregate);
+
+            assert_eq!(stmt.target_list().len(), 6);
+            AggregatesRewrite::rollback_select(&mut stmt.as_mut(), mem, &output.plan);
+            assert_eq!(stmt.target_list().len(), 2);
+            stmt
+        });
+
+        let statement = pg_raw_parse::deparse(&*select).unwrap();
+        assert!(!statement.as_str().contains("__pgdog_"));
     }
 }
