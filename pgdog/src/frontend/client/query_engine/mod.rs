@@ -151,7 +151,7 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context) {
+        let rewrite_result = match self.parse_and_rewrite(context).await {
             Ok(rewrite_result) => rewrite_result,
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))

@@ -3,6 +3,7 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
+use super::super::ee;
 use super::insert::build_split_requests;
 use super::offset::OffsetPlan;
 use super::{
@@ -26,6 +27,10 @@ pub(crate) struct RewritePlan {
 
     /// Number of auto-injected primary key columns with pgdog.unique_id().
     pub(crate) auto_id_injected: u16,
+
+    /// One-based Bind parameter indexes and sequence names in allocation order.
+    /// Simple protocol uses the list to detect calls; it does not use the indexes.
+    pub(crate) global_sequences: Vec<(u16, String)>,
 
     /// Rewritten SQL statement.
     pub(crate) stmt: Option<String>,
@@ -58,7 +63,10 @@ pub(crate) enum RewriteResult {
 }
 
 impl RewriteResult {
-    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+    pub(crate) async fn apply_after_parser(
+        &self,
+        request: &mut ClientRequest,
+    ) -> Result<(), Error> {
         match self {
             Self::InPlace {
                 offset: Some(offset),
@@ -75,6 +83,7 @@ impl RewritePlan {
     pub(crate) fn is_empty(&self) -> bool {
         self.unique_ids == 0
             && self.auto_id_injected == 0
+            && self.global_sequences.is_empty()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
@@ -83,8 +92,8 @@ impl RewritePlan {
             && self.offset.is_none()
     }
 
-    /// Apply the rewrite plan to a Bind message by appending generated unique IDs.
-    pub(crate) fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
+    /// Append generated unique IDs and sequence values to a Bind message.
+    async fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
         let format = bind.default_param_format();
 
         for _ in 0..self.unique_ids {
@@ -97,11 +106,11 @@ impl RewritePlan {
             bind.push_param(param, format);
         }
 
-        Ok(())
+        self.apply_nextval(bind, ee::nextval).await
     }
 
     /// Apply the rewrite plan to a Parse message by updating the SQL.
-    pub(crate) fn apply_parse(&self, parse: &mut Parse) {
+    fn apply_parse(&self, parse: &mut Parse) {
         if let Some(ref stmt) = self.stmt {
             parse.set_query(stmt);
             if !parse.anonymous() {
@@ -111,14 +120,20 @@ impl RewritePlan {
     }
 
     /// Apply the rewrite plan to a Query message by updating the SQL.
-    pub(crate) fn apply_query(&self, query: &mut Query) {
-        if let Some(ref stmt) = self.stmt {
+    async fn apply_query(&self, query: &mut Query) -> Result<(), Error> {
+        if !self.global_sequences.is_empty() {
+            if let Some(stmt) = self.rewrite_nextval_simple().await? {
+                query.set_query(&stmt);
+            }
+        } else if let Some(ref stmt) = self.stmt {
             query.set_query(stmt);
         }
+
+        Ok(())
     }
 
     /// Apply the rewrite plan to a ClientRequest.
-    pub(crate) fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
+    pub(crate) async fn apply(&self, request: &mut ClientRequest) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepare_rewrites.is_empty() {
             self.prepare_rewrites
@@ -139,8 +154,8 @@ impl RewritePlan {
         for message in request.messages.iter_mut() {
             match message {
                 ProtocolMessage::Parse(parse) => self.apply_parse(parse),
-                ProtocolMessage::Query(query) => self.apply_query(query),
-                ProtocolMessage::Bind(bind) => self.apply_bind(bind)?,
+                ProtocolMessage::Query(query) => self.apply_query(query).await?,
+                ProtocolMessage::Bind(bind) => self.apply_bind(bind).await?,
                 _ => {}
             }
         }
@@ -173,24 +188,38 @@ mod tests {
     use crate::test_utils::set_env_var;
     use std::collections::HashSet;
 
-    #[test]
-    fn test_apply_bind_no_unique_ids() {
+    #[tokio::test]
+    async fn test_apply_query_without_recorded_sequences_skips_nextval() {
+        let stmt = "SELECT pgdog.nextval('seq')";
+        let plan = RewritePlan {
+            stmt: Some(stmt.to_owned()),
+            ..Default::default()
+        };
+        let mut query = Query::new("SELECT 1");
+        plan.apply_query(&mut query)
+            .await
+            .expect("no recorded sequences");
+        assert_eq!(query.query(), stmt);
+    }
+
+    #[tokio::test]
+    async fn test_apply_bind_no_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan::default();
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 0);
     }
 
-    #[test]
-    fn test_apply_bind_text_format() {
+    #[tokio::test]
+    async fn test_apply_bind_text_format() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 1,
             ..Default::default()
         };
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 1);
 
         // Default format is Text, so data should be a string
@@ -202,8 +231,8 @@ mod tests {
         assert_eq!(bind.format_codes_raw().len(), 0);
     }
 
-    #[test]
-    fn test_apply_bind_binary_format_uniform() {
+    #[tokio::test]
+    async fn test_apply_bind_binary_format_uniform() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 1,
@@ -213,7 +242,7 @@ mod tests {
         // Create bind with uniform binary format (1 code applies to all)
         let mut bind =
             Bind::new_params_codes("test", &[Parameter::new(b"existing")], &[Format::Binary]);
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 2);
 
         // Should use binary format: 8 bytes big-endian
@@ -227,8 +256,8 @@ mod tests {
         assert_eq!(bind.format_codes_raw()[0], Format::Binary);
     }
 
-    #[test]
-    fn test_apply_bind_binary_format_one_to_one() {
+    #[tokio::test]
+    async fn test_apply_bind_binary_format_one_to_one() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
@@ -241,7 +270,7 @@ mod tests {
             &[Parameter::new(b"a"), Parameter::new(b"b")],
             &[Format::Binary, Format::Binary],
         );
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 3);
 
         // New param should be text (default for one-to-one)
@@ -254,15 +283,15 @@ mod tests {
         assert_eq!(bind.format_codes_raw()[2], Format::Text);
     }
 
-    #[test]
-    fn test_apply_bind_multiple_unique_ids() {
+    #[tokio::test]
+    async fn test_apply_bind_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             unique_ids: 3,
             ..Default::default()
         };
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 3);
 
         let mut ids = HashSet::new();
@@ -274,8 +303,8 @@ mod tests {
         assert_eq!(ids.len(), 3, "all IDs should be unique");
     }
 
-    #[test]
-    fn test_apply_bind_appends_to_existing_params() {
+    #[tokio::test]
+    async fn test_apply_bind_appends_to_existing_params() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
@@ -286,7 +315,7 @@ mod tests {
             "test",
             &[Parameter::new(b"existing1"), Parameter::new(b"existing2")],
         );
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
         assert_eq!(bind.params_raw().len(), 4);
 
         assert_eq!(bind.params_raw()[0].data.as_ref(), b"existing1");

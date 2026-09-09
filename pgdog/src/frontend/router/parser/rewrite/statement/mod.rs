@@ -12,6 +12,7 @@ pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
+pub(crate) mod nextval;
 pub(crate) mod offset;
 pub(crate) mod plan;
 pub(crate) mod simple_prepared;
@@ -165,6 +166,8 @@ impl<'a> StatementRewrite<'a> {
         if let Some(err) = err {
             return Err(err);
         }
+
+        self.rewrite_nextval(stmt.stmt_mut(), mem, &mut next_param, &mut plan);
 
         if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
             self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
