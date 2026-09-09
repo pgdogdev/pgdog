@@ -10,6 +10,7 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -107,6 +108,11 @@ impl QueryEngine {
 
     pub(crate) fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(&client.params, &client.comms, client.admin)
+    }
+
+    /// Token cancelled when an admin terminates this client's cluster (FORCE_RELOAD).
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.backend.cancellation_token()
     }
 
     /// Wait for an async message from the backend.

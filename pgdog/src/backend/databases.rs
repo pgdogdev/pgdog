@@ -1,9 +1,5 @@
 //! Databases behind pgDog.
 
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
@@ -17,6 +13,9 @@ use pgdog_config::{
     EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
@@ -133,14 +132,31 @@ pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Terminates all active connections on all `Pool`s.
+pub(crate) fn terminate_active_connections() {
+    databases()
+        .all()
+        .values()
+        .for_each(Cluster::terminate_active_connections);
+}
+
 /// Re-create pools from config.
-pub(crate) fn reload() -> Result<(), Error> {
-    info!("reloading configuration");
+pub(crate) fn reload(force: bool) -> Result<(), Error> {
+    if force {
+        info!("force reloading configuration");
+    } else {
+        info!("reloading configuration");
+    }
 
     // Load config from disk.
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
+
+    // Terminate after checking config for validity.
+    if force {
+        terminate_active_connections();
+    }
 
     // Replace databases.
     replace_databases(databases, true)?;

@@ -1,23 +1,24 @@
-//! RELOAD command.
+//! FORCE RELOAD command.
 
 use super::prelude::*;
 use crate::backend::databases::reload;
 
-pub(crate) struct Reload;
+pub(crate) struct ForceReload;
 
 #[async_trait]
-impl Command for Reload {
+impl Command for ForceReload {
     fn name(&self) -> String {
-        "RELOAD".into()
+        "FORCE_RELOAD".into()
     }
 
     fn parse(_sql: &str) -> Result<Self, Error> {
-        Ok(Reload)
+        Ok(ForceReload)
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        // false = NOT a force reload
-        reload(false)?;
+        // true = force reload
+        reload(true)?;
+
         Ok(vec![])
     }
 }
