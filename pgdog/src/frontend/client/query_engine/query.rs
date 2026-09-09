@@ -1,8 +1,6 @@
-use tokio_util::sync::CancellationToken;
 use tracing::{info, trace};
 
 use crate::{
-    backend::Cluster,
     frontend::{
         client::TransactionType,
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -67,11 +65,7 @@ impl QueryEngine {
             }
         }
 
-        let cluster_cancellation_token: Option<CancellationToken> = self
-            .backend
-            .cluster()
-            .ok()
-            .map(Cluster::get_cancellation_token);
+        let cancellation_token = self.backend.cancellation_token();
 
         let query_timeout = context.timeouts.query_timeout(&State::Active);
 
@@ -85,8 +79,7 @@ impl QueryEngine {
             // If the cluster's cancellation token triggers, exit early. Currently used for admin FORCE_RELOAD.
             // If this returns an Error, it'll be propagated up to Client's Box::pin(self.run())
             // which will disconnect the client (and QueryEngine transactions)
-            _ = async { cluster_cancellation_token.unwrap().cancelled().await },
-            if cluster_cancellation_token.is_some() => {
+            _ = cancellation_token.cancelled() => {
                 // Postgres is still running the query. Send a cancellation request before we stop on our end.
                 if let Err(err) = self.backend.cancel_query().await {
                     // Tell the administrator that we failed to cancel the query.

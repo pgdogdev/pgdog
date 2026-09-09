@@ -4,6 +4,7 @@ use futures::future::try_join_all;
 use mirror::MirrorHandler;
 use pgdog_config::users::PasswordKind;
 use tokio::select;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
@@ -52,6 +53,9 @@ pub(crate) struct Connection {
     database: String,
     binding: Binding,
     cluster: Option<Cluster>,
+    /// Each client polls own child node instead of contending on the shared `Cluster` node.
+    /// Cancelled when an admin terminates the cluster (`FORCE_RELOAD`)
+    cancellation_token: CancellationToken,
     mirrors: Vec<MirrorHandler>,
     pub_sub: PubSubClient,
 }
@@ -66,6 +70,7 @@ impl Connection {
                 Binding::NotConnected
             },
             cluster: None,
+            cancellation_token: CancellationToken::new(),
             user: user.to_owned(),
             database: database.to_owned(),
             mirrors: vec![],
@@ -397,6 +402,7 @@ impl Connection {
         let databases = databases();
         let cluster = databases.cluster(user)?;
 
+        self.cancellation_token = cluster.get_cancellation_token().child_token();
         self.cluster = Some(cluster.clone());
         let source_db = cluster.name();
         self.mirrors = databases
@@ -483,6 +489,11 @@ impl Connection {
         .await?;
 
         Ok(())
+    }
+
+    /// Token cancelled when an admin terminates this connection's `Cluster`.
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
     }
 
     /// Get cluster if any.

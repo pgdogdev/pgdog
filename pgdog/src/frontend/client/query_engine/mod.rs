@@ -1,8 +1,5 @@
 use crate::{
-    backend::{
-        Cluster,
-        pool::{Connection, Request},
-    },
+    backend::pool::{Connection, Request},
     config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
@@ -113,12 +110,9 @@ impl QueryEngine {
         Self::new(&client.params, &client.comms, client.admin)
     }
 
-    /// Fetch the `CancellationToken` for the backend (if any)
-    pub(crate) fn get_cancellation_token(&mut self) -> Option<CancellationToken> {
-        self.backend
-            .cluster()
-            .ok()
-            .map(Cluster::get_cancellation_token)
+    /// Token cancelled when an admin terminates this client's cluster (FORCE_RELOAD).
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.backend.cancellation_token()
     }
 
     /// Wait for an async message from the backend.

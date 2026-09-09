@@ -528,8 +528,7 @@ impl Client {
 
             let client_state = query_engine.client_state();
 
-            let cluster_cancellation: Option<CancellationToken> =
-                query_engine.get_cancellation_token();
+            let cancellation_token = query_engine.cancellation_token();
 
             select! {
                 _ = shutdown.cancelled(), if !offline => {
@@ -542,7 +541,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state, cluster_cancellation.as_ref()) => {
+                buffer = self.buffer(client_state, &cancellation_token) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -644,7 +643,7 @@ impl Client {
     async fn buffer(
         &mut self,
         state: State,
-        cluster_cancellation: Option<&CancellationToken>,
+        cancellation_token: &CancellationToken,
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
@@ -673,8 +672,7 @@ impl Client {
                 // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
                 // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
                 // which will disconnect the `Client` (and `QueryEngine` transactions)
-                _ = async { cluster_cancellation.unwrap().cancelled().await },
-                if cluster_cancellation.is_some() => {
+                _ = cancellation_token.cancelled() => {
                     return Err(Error::AdminTermination)
                 }
             };
