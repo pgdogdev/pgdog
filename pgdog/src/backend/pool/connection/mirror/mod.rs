@@ -40,6 +40,8 @@ pub(crate) struct Mirror {
     pub(crate) prepared_statements: PreparedStatements,
     /// Mirror connection parameters.
     pub(crate) params: Parameters,
+    /// Parameters the mirrored client started with.
+    pub(crate) startup_params: Parameters,
     /// Timeouts.
     pub(crate) timeouts: Timeouts,
     /// Stream that absorbs all data.
@@ -57,6 +59,7 @@ impl Mirror {
             id: FrontendPid::new(),
             prepared_statements,
             params: params.clone(),
+            startup_params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
             transaction: None,
