@@ -430,17 +430,42 @@ fn test_omnisharded_data_modifying_cte_broadcasts() {
         "WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT 1",
         "WITH del AS (DELETE FROM organizations WHERE id = 'org_new' RETURNING id) SELECT count(*) FROM del",
     ] {
-        let command = test
-            .try_execute(vec![Query::new(sql).into()])
-            .unwrap_or_else(|err| panic!("{sql}: {err:?}"));
-        match command {
-            Command::Query(route) => {
-                assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
-                assert!(route.is_omnisharded(), "{sql}");
-                assert!(route.is_write(), "{sql}");
-            }
-            other => panic!("{sql}: expected Command::Query, got {other:#?}"),
-        }
+        let result = test.try_execute(vec![Query::new(sql).into()]);
+        assert!(result.is_ok(), "{sql}: {result:?}");
+        let command = result.unwrap();
+        assert!(matches!(command, Command::Query(_)), "{sql}: {command:#?}");
+        let route = command.route();
+        assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
+        assert!(route.is_omnisharded(), "{sql}");
+        assert!(route.is_write(), "{sql}");
+    }
+}
+
+/// The explain trace records why the CTE write was broadcast, for both the
+/// `FROM` and the no-`FROM` shapes.
+#[test]
+fn test_omnisharded_data_modifying_cte_explain_broadcast() {
+    let tables = lookup_rule_tables();
+    // `with_expanded_explain` rebuilds the cluster, so it goes first.
+    let mut test = QueryParserTest::new()
+        .with_expanded_explain()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    for sql in [
+        "EXPLAIN WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT id FROM ins",
+        "EXPLAIN WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT 1",
+    ] {
+        let command = test.execute(vec![Query::new(sql).into()]);
+        let route = command.route();
+        assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
+        let lines = route.explain().unwrap().render_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("SELECT omnishard write broadcasted")),
+            "{sql}: {lines:#?}"
+        );
     }
 }
 
@@ -461,19 +486,16 @@ fn test_omnisharded_read_only_cte_stays_single_shard() {
         // A CTE shadowing the table name: the qualified reference is still the table.
         "WITH organizations AS (SELECT 1 AS id) SELECT o.id FROM public.organizations o",
     ] {
-        let command = test
-            .try_execute(vec![Query::new(sql).into()])
-            .unwrap_or_else(|err| panic!("{sql}: {err:?}"));
-        match command {
-            Command::Query(route) => {
-                assert!(
-                    matches!(route.shard(), Shard::Direct(_)),
-                    "{sql}: {route:?}"
-                );
-                assert!(route.is_omnisharded(), "{sql}: {route:?}");
-            }
-            other => panic!("{sql}: expected Command::Query, got {other:#?}"),
-        }
+        let result = test.try_execute(vec![Query::new(sql).into()]);
+        assert!(result.is_ok(), "{sql}: {result:?}");
+        let command = result.unwrap();
+        assert!(matches!(command, Command::Query(_)), "{sql}: {command:#?}");
+        let route = command.route();
+        assert!(
+            matches!(route.shard(), Shard::Direct(_)),
+            "{sql}: {route:?}"
+        );
+        assert!(route.is_omnisharded(), "{sql}: {route:?}");
     }
 }
 
