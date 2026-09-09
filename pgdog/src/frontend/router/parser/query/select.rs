@@ -69,6 +69,7 @@ impl QueryParser {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
                     .with_read(!writes)
+                    .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
@@ -137,6 +138,7 @@ impl QueryParser {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
                     .with_read(!writes)
+                    .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks),
             ));
@@ -283,6 +285,7 @@ impl QueryParser {
         Ok(Command::Query(
             query
                 .with_read(!writes)
+                .with_mutates(mutates)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))

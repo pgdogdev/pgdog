@@ -99,6 +99,13 @@ impl QueryParserTest {
         self
     }
 
+    /// Set the exact transaction state, e.g. `TransactionType::ReadOnly` for
+    /// a `BEGIN READ ONLY` transaction.
+    pub(crate) fn with_transaction(mut self, transaction: TransactionType) -> Self {
+        self.transaction = Some(transaction);
+        self
+    }
+
     /// Set the read/write strategy on the cluster.
     pub(crate) fn with_read_write_strategy(mut self, strategy: ReadWriteStrategy) -> Self {
         self.cluster.set_read_write_strategy(strategy);

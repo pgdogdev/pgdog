@@ -126,6 +126,10 @@ impl QueryParser {
                     !context.sharding_schema.schemas.is_empty() && !context.sharded_tables;
 
                 // Note: this is dependent on route.sharded_schema_only being set first.
+                // Only statements that mutate an omnisharded table need full
+                // coverage; a read pinned to one shard by a directive is fine
+                // (every shard holds the same rows), even inside a read/write
+                // transaction that routes it to the primary.
                 let full_shard_coverage = route.requires_full_shard_coverage();
 
                 let manual_routing = matches!(
