@@ -149,9 +149,7 @@ impl QueryEngine {
 
                 // Apply post-parser rewrites, e.g. offset/limit.
                 if let Some(rewrite_result) = rewrite_result {
-                    rewrite_result
-                        .apply_after_parser(context.client_request)
-                        .await?;
+                    rewrite_result.apply_after_parser(context.client_request)?;
                 }
 
                 // Only validate shard placement for requests that actually execute

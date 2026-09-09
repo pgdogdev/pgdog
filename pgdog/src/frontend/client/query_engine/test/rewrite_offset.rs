@@ -149,7 +149,6 @@ async fn test_offset_with_unique_id_simple() {
         .as_ref()
         .unwrap()
         .apply_after_parser(context.client_request)
-        .await
         .unwrap();
 
     let final_sql = match &context.client_request.messages[0] {
@@ -217,7 +216,6 @@ async fn test_offset_with_unique_id_extended() {
         .as_ref()
         .unwrap()
         .apply_after_parser(context.client_request)
-        .await
         .unwrap();
 
     // SQL unchanged (all limit/offset are params).
