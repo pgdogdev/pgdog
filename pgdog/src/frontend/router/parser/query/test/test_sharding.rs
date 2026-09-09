@@ -389,6 +389,94 @@ fn test_set_key_errors_on_omnisharded_write() {
     assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
 }
 
+/// A SELECT whose CTE modifies data is a mutation: pinned to one shard by a
+/// directive it would diverge that shard, so it is still rejected. The outer
+/// query reads the CTE by name; that name must not be mistaken for a table.
+#[test]
+fn test_omnisharded_data_modifying_cte_with_directive_rejected() {
+    use crate::frontend::router::parser::Error;
+
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    for sql in [
+        "/* pgdog_shard: 1 */ WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT id FROM ins",
+        "/* pgdog_shard: 1 */ WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT id FROM organizations WHERE id = 'org_child'",
+        "/* pgdog_shard: 1 */ WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT 1",
+    ] {
+        let result = test.try_execute(vec![Query::new(sql).into()]);
+        assert!(
+            matches!(result, Err(Error::OmniWriteWithDirective)),
+            "{sql}: expected OmniWriteWithDirective, got {result:#?}"
+        );
+    }
+}
+
+/// Without a directive, a write through an omnisharded table inside a CTE is
+/// broadcast to every shard, like a plain omnisharded INSERT. Sending it to
+/// one round-robin shard would silently diverge the table.
+#[test]
+fn test_omnisharded_data_modifying_cte_broadcasts() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    for sql in [
+        "WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT id FROM ins",
+        "WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT id FROM organizations",
+        "WITH ins AS (INSERT INTO organizations (id, name) VALUES ('org_new', 'x') RETURNING id) SELECT 1",
+        "WITH del AS (DELETE FROM organizations WHERE id = 'org_new' RETURNING id) SELECT count(*) FROM del",
+    ] {
+        let command = test
+            .try_execute(vec![Query::new(sql).into()])
+            .unwrap_or_else(|err| panic!("{sql}: {err:?}"));
+        match command {
+            Command::Query(route) => {
+                assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
+                assert!(route.is_omnisharded(), "{sql}");
+                assert!(route.is_write(), "{sql}");
+            }
+            other => panic!("{sql}: expected Command::Query, got {other:#?}"),
+        }
+    }
+}
+
+/// A read-only CTE over an omnisharded table is still a read: one shard can
+/// answer it, and the CTE name is not treated as an unknown table.
+#[test]
+fn test_omnisharded_read_only_cte_stays_single_shard() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    for sql in [
+        "WITH c AS (SELECT id FROM organizations) SELECT id FROM c",
+        "WITH RECURSIVE tree AS (SELECT id FROM organizations WHERE parent_organization_id IS NULL \
+         UNION ALL SELECT o.id FROM organizations o JOIN tree t ON o.parent_organization_id = t.id) \
+         SELECT id FROM tree",
+        // A CTE shadowing the table name: the qualified reference is still the table.
+        "WITH organizations AS (SELECT 1 AS id) SELECT o.id FROM public.organizations o",
+    ] {
+        let command = test
+            .try_execute(vec![Query::new(sql).into()])
+            .unwrap_or_else(|err| panic!("{sql}: {err:?}"));
+        match command {
+            Command::Query(route) => {
+                assert!(
+                    matches!(route.shard(), Shard::Direct(_)),
+                    "{sql}: {route:?}"
+                );
+                assert!(route.is_omnisharded(), "{sql}: {route:?}");
+            }
+            other => panic!("{sql}: expected Command::Query, got {other:#?}"),
+        }
+    }
+}
+
 /// Translations resolved for a statement route it without consulting
 /// the lookup cache: the second routing pass after resolving lookups
 /// can't miss, even if the cache already evicted the entry.
