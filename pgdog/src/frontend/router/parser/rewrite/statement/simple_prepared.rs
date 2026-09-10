@@ -101,13 +101,26 @@ fn rewrite_single_prepared<'a>(
             // with a hardcoded name.
             stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
 
+            let original_query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+
             // Is the query a SELECT? Do we have both LIMIT and OFFSET in the SELECT?
             let offset_plan: Option<OffsetPlan> = create_offset_plan(mem, &mut stmt);
 
-            let query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+            let new_query = offset_plan
+                .as_ref()
+                .map(|_| {
+                    pg_raw_parse::deparse(&*stmt)
+                        .map(|deparse_result| Bytes::from(deparse_result.as_str().to_owned()))
+                })
+                .transpose()?;
 
-            let prepare =
-                prepared_statements.insert_prepare(&client_name, query, plan, offset_plan);
+            let prepare = prepared_statements.insert_prepare(
+                &client_name,
+                original_query,
+                new_query,
+                plan,
+                offset_plan,
+            );
 
             stmt.set_name(Some(mem.copy_string(prepare.name())));
 

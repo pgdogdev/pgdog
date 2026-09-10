@@ -31,6 +31,7 @@ impl OffsetPlan {
         if self.prepare_execute {
             return self.handle_prepare_execute(request);
         }
+
         // Resolve actual values: use literal if known, otherwise read from Bind.
         let mut limit_val = self.limit.limit;
         let mut offset_val = self.limit.offset;

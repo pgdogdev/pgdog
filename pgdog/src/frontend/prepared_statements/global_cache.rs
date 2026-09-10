@@ -81,9 +81,14 @@ impl GlobalCache {
     }
 
     /// Insert a statement prepared using the simple protocol into the global cache.
+    /// `original_query` is used as the `CacheKey`
+    /// If `rewritten_query` is...
+    ///     - Some(..): `rewritten_query` is sent to Postgres as the PREPARE inner-query.
+    ///     - None: `original_query` is sent to Postgres as the PREPARE inner-query.
     pub(super) fn insert_prepare(
         &mut self,
-        query: Bytes,
+        original_query: Bytes,
+        rewritten_query: Option<Bytes>,
         // TODO: I think we should just pass `unique_ids` in here by itself.
         //       Otherwise, it could be easily confused to want
         //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
@@ -91,8 +96,7 @@ impl GlobalCache {
         offset_plan: Option<OffsetPlan>,
     ) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
-            query: query.clone(),
-            offset_plan: offset_plan.clone(),
+            query: original_query.clone(),
         };
 
         if let Some(name) = self.reuse(&cache_key) {
@@ -106,7 +110,7 @@ impl GlobalCache {
         let name = self.next_name();
         let prepare = Prepare {
             name: Bytes::from(name.clone()),
-            query,
+            query: rewritten_query.unwrap_or(original_query),
         };
 
         let statement = Statement {
@@ -388,8 +392,8 @@ mod test {
         let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) = cache.insert_prepare(query.clone(), &RewritePlan::default(), None);
-        let (_, second) = cache.insert_prepare(query, &RewritePlan::default(), None);
+        let (_, first) = cache.insert_prepare(query.clone(), None, &RewritePlan::default(), None);
+        let (_, second) = cache.insert_prepare(query, None, &RewritePlan::default(), None);
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);

@@ -111,19 +111,11 @@ impl PreparedStatements {
     }
 
     /// Insert PREPARE statement into the cache.
-    ///
-    /// # Arguments
-    ///
-    /// - `parse`: [`Parse`] message, with the prepared statement named by the client.
-    ///
-    /// # Return
-    ///
-    /// Nothing, but the message is renamed to a unique, global name.
-    ///
     pub(crate) fn insert_prepare(
         &mut self,
         name: &str,
-        query: Bytes,
+        original_query: Bytes,
+        rewritten_query: Option<Bytes>,
         // TODO: I think we should just pass `unique_ids` in here by itself.
         //       Otherwise, it could be easily confused to want
         //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
@@ -132,9 +124,12 @@ impl PreparedStatements {
         offset_plan: Option<OffsetPlan>,
     ) -> Prepare {
         let (_new, prepare) = {
-            self.global
-                .write()
-                .insert_prepare(query, rewrite_plan, offset_plan)
+            self.global.write().insert_prepare(
+                original_query,
+                rewritten_query,
+                rewrite_plan,
+                offset_plan,
+            )
         };
 
         self.insert_internal(name, prepare.name());
