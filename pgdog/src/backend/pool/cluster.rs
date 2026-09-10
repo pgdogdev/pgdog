@@ -470,7 +470,7 @@ impl Cluster {
         let mut moved = false;
 
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
-            moved = moved | from.move_conns_to(to)?;
+            moved |= from.move_conns_to(to)?;
         }
 
         Ok(moved)
