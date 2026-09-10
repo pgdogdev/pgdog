@@ -195,6 +195,9 @@ impl Address {
             // Requires an allocation, which isn't very efficient
             // but this is an "edge case": how often are you changing passwords anyway?
             let mut other = other.clone();
+
+            // The database number will change if we remove a replica.
+            other.database_number = self.database_number;
             other.passwords = self.passwords.clone();
             self == &other
         } else {

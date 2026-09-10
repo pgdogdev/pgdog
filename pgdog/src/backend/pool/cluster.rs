@@ -462,20 +462,18 @@ impl Cluster {
     /// The two clusters have the same databases.
     pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
         self.shards.len() == other.shards.len()
-            && self
-                .shards
-                .iter()
-                .zip(other.shards.iter())
-                .all(|(a, b)| a.can_move_conns_to(b))
     }
 
     /// Move connections from cluster to another, saving them.
-    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
+    /// Returns true if any `Pool`s were moved.
+    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<bool, Error> {
+        let mut moved = false;
+
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
-            from.move_conns_to(to)?;
+            moved |= from.move_conns_to(to)?;
         }
 
-        Ok(())
+        Ok(moved)
     }
 
     /// Cancel a query executed by one of the shards.

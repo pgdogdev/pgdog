@@ -101,16 +101,10 @@ impl Shard {
     ///
     /// This is done during configuration reloading, if no significant changes are made to
     /// the configuration.
-    pub(crate) fn move_conns_to(&self, destination: &Shard) -> Result<(), Error> {
-        self.lb.move_conns_to(&destination.lb)?;
-
-        Ok(())
-    }
-
-    /// Checks if the connection pools from this shard are compatible
-    /// with the other shard. If yes, they can be moved without closing them.
-    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        self.lb.can_move_conns_to(&other.lb)
+    ///
+    /// Returns true if at least one `Pool` moved.
+    pub(crate) fn move_conns_to(&self, destination: &Shard) -> Result<bool, Error> {
+        Ok(self.lb.move_conns_to(&destination.lb)? >= 1)
     }
 
     /// Listen for notifications on channel.

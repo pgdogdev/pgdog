@@ -13,13 +13,21 @@ use super::*;
 use monitor::Monitor;
 
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
+    create_test_pool_config_with_db_num(host, port, Default::default())
+}
+
+fn create_test_pool_config_with_db_num(
+    host: &str,
+    port: u16,
+    database_number: usize,
+) -> PoolConfig {
     PoolConfig {
-        address: test_addr(host, port),
+        address: test_addr(host, port, database_number),
         config: test_config(Default::default()),
     }
 }
 
-fn test_addr(host: &str, port: u16) -> Address {
+fn test_addr(host: &str, port: u16, database_number: usize) -> Address {
     Address {
         host: host.into(),
         port,
@@ -27,6 +35,7 @@ fn test_addr(host: &str, port: u16) -> Address {
         passwords: vec!["pgdog".into()],
         database_name: "pgdog".into(),
         configured_role: Role::Replica,
+        database_number,
         ..Default::default()
     }
 }
@@ -1236,79 +1245,51 @@ async fn test_set_role() {
 }
 
 #[tokio::test]
-async fn test_can_move_conns_to_same_config() {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
-    let lb1 = LoadBalancer::new(
-        &None,
-        &[pool_config1.clone(), pool_config2.clone()],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    let lb2 = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    assert!(lb1.can_move_conns_to(&lb2));
-}
-
-#[tokio::test]
-async fn test_can_move_conns_to_with_removed_replica() {
-    // Old LB has 2 replicas; new LB dropped one. The old replica with no
-    // matching address in the new LB makes this return false.
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
-    let lb1 = LoadBalancer::new(
-        &None,
-        &[pool_config1.clone(), pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    let lb2 = LoadBalancer::new(
-        &None,
-        &[pool_config1],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    assert!(!lb1.can_move_conns_to(&lb2));
-}
-
-#[tokio::test]
-async fn test_can_move_conns_to_with_added_replica() {
-    // Old LB has 1 replica; new LB gained an extra one. Every old address
-    // still exists in the new LB, so connections can be preserved.
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-
+async fn test_move_conns_to_with_removed_replica_matches_by_address() {
+    // Old LB: three replica [127.0.0.1, 8.8.8.8, 1.1.1.1]
+    // New LB: two replica [8.8.8.8, 1.1.1.1] (shifted backwards by 1; numbers changed)
+    // After they move, verify [8.8.8.8, 1.1.1.1] maintains its connections.
     let lb_old = LoadBalancer::new(
         &None,
-        std::slice::from_ref(&pool_config1),
+        &[
+            create_test_pool_config_with_db_num("127.0.0.1", 5432, 1),
+            create_test_pool_config_with_db_num("8.8.8.8", 5432, 2),
+            create_test_pool_config_with_db_num("1.1.1.1", 5432, 3),
+        ],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
+    lb_old.launch();
 
     let lb_new = LoadBalancer::new(
         &None,
-        &[pool_config1, pool_config2],
+        &[
+            create_test_pool_config_with_db_num("8.8.8.8", 5432, 1),
+            create_test_pool_config_with_db_num("1.1.1.1", 5432, 2),
+        ],
         LoadBalancingStrategy::Random,
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
+    lb_new.launch();
 
-    assert!(lb_old.can_move_conns_to(&lb_new));
+    // Record the role on the old target [8.8.8.8]; verify it was persisted.
+    lb_old.targets[1].set_role(Role::Primary);
+
+    // Verify [1.1.1.1, 8.8.8.8] moved connections
+    // (no actual connections here, but it passed the 'check')
+    assert_eq!(lb_old.move_conns_to(&lb_new).unwrap(), 2);
+
+    // The matching new target [8.8.8.8] should have inherited the role.
+    let new_target_for_existing = lb_new
+        .targets
+        .iter()
+        .find(|t| t.pool.addr().host == "8.8.8.8")
+        .expect("should have target for 8.8.8.8");
+    assert_eq!(new_target_for_existing.role(), Role::Primary);
+
+    lb_new.shutdown();
 }
 
 #[tokio::test]
@@ -1341,8 +1322,9 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     // Record the role on the old target so we can verify it was carried over.
     lb_old.targets[0].set_role(Role::Primary);
 
-    assert!(lb_old.can_move_conns_to(&lb_new));
-    lb_old.move_conns_to(&lb_new).unwrap();
+    // Verify [127.0.0.1] moved connections
+    // (no actual connections here, but it passed the 'check')
+    assert_eq!(lb_old.move_conns_to(&lb_new).unwrap(), 1);
 
     // The matching new target (same address) should have inherited the role.
     let new_target_for_existing = lb_new
@@ -1638,31 +1620,6 @@ async fn test_static_replica_only_does_not_wait_for_primary() {
         Err(Error::NoPrimary)
     ));
     assert!(started.elapsed() < Duration::from_millis(100));
-}
-
-#[tokio::test]
-async fn test_can_move_conns_to_different_addresses() {
-    let pool_config1 = create_test_pool_config("127.0.0.1", 5432);
-    let pool_config2 = create_test_pool_config("localhost", 5432);
-    let pool_config3 = create_test_pool_config("127.0.0.1", 5433);
-
-    let lb1 = LoadBalancer::new(
-        &None,
-        &[pool_config1, pool_config2],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    let lb2 = LoadBalancer::new(
-        &None,
-        &[pool_config3.clone(), pool_config3],
-        LoadBalancingStrategy::Random,
-        ReadWriteSplit::IncludePrimary,
-        Default::default(),
-    );
-
-    assert!(!lb1.can_move_conns_to(&lb2));
 }
 
 #[tokio::test]
@@ -2486,7 +2443,7 @@ async fn test_params_returns_all_replicas_down_when_empty() {
 async fn ban_new_targets_until_health_check() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
-        address: test_addr("localhost", 2345),
+        address: test_addr("localhost", 2345, Default::default()),
         config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()
@@ -2531,7 +2488,7 @@ async fn ban_new_targets_until_health_check() {
 async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {
-        address: test_addr("localhost", 2345),
+        address: test_addr("localhost", 2345, Default::default()),
         config: test_config(Config {
             require_healthcheck_on_discovery: true,
             ..Default::default()

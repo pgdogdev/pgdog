@@ -425,8 +425,8 @@ impl Databases {
 
             if let Some(dest) = dest
                 && cluster.can_move_conns_to(dest)
+                && cluster.move_conns_to(dest)?
             {
-                cluster.move_conns_to(dest)?;
                 moved += 1;
             }
         }

@@ -254,7 +254,11 @@ impl LoadBalancer {
     /// removals: each old target is paired with the new target that shares its
     /// address. New targets with no matching old target start empty; old targets
     /// with no match in the new config have their connections dropped.
-    pub(crate) fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
+    ///
+    /// Returns the amount of `Pools` that moved from one replica to the other.
+    pub(crate) fn move_conns_to(&self, destination: &LoadBalancer) -> Result<usize, Error> {
+        let mut moved: usize = 0;
+
         for from in &self.targets {
             if let Some(to) = destination
                 .targets
@@ -262,6 +266,7 @@ impl LoadBalancer {
                 .find(|to| from.pool.has_compatible_address_with(&to.pool))
             {
                 from.pool.move_conns_to(&to.pool)?;
+                moved += 1;
 
                 // Carry over detected roles and LSN stats so the new load balancer
                 // doesn't briefly appear read-only before the role detector runs.
@@ -271,21 +276,7 @@ impl LoadBalancer {
         }
         destination.require_healthcheck_for_new_targets(&self.targets);
 
-        Ok(())
-    }
-
-    /// The two replica sets are referring to the same databases.
-    ///
-    /// Returns `true` when every target in `self` has a matching address in
-    /// `destination`. This allows replica additions (new targets start empty)
-    /// while still preserving connections to unchanged replicas.
-    pub(crate) fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
-        self.targets.iter().all(|from| {
-            destination
-                .targets
-                .iter()
-                .any(|to| from.pool.has_compatible_address_with(&to.pool))
-        })
+        Ok(moved)
     }
 
     /// True if the LB has any target that can serve replica reads.
