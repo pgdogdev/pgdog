@@ -5,6 +5,7 @@ use crate::unique_id::UniqueId;
 
 use super::super::ee;
 use super::insert::build_split_requests;
+use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
 use super::{
     Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
@@ -13,7 +14,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GeneratedId {
     UniqueId,
-    Sequence(String),
+    Sequence(SequenceCall),
 }
 
 /// Statement rewrite plan.
@@ -97,20 +98,20 @@ impl RewritePlan {
 
     /// Append generated unique IDs and sequence values to a Bind message.
     async fn apply_bind(&self, bind: &mut Bind) -> Result<(), Error> {
-        self.apply_generated_ids(bind, ee::nextval).await
+        self.apply_generated_ids(bind, SequenceCall::execute).await
     }
 
     /// Append values in the same order their placeholders were allocated.
     pub(super) async fn apply_generated_ids(
         &self,
         bind: &mut Bind,
-        mut nextval: impl AsyncFnMut(&str) -> Result<i64, ee::Error>,
+        mut execute: impl AsyncFnMut(&SequenceCall) -> Result<i64, ee::Error>,
     ) -> Result<(), Error> {
         let format = bind.default_param_format();
         for (_, source) in &self.generated_ids {
             let id = match source {
                 GeneratedId::UniqueId => UniqueId::generator()?.next_id(),
-                GeneratedId::Sequence(name) => nextval(name).await?,
+                GeneratedId::Sequence(call) => execute(call).await?,
             };
             let param = match format {
                 Format::Binary => Parameter::new(&id.to_be_bytes()),
@@ -139,7 +140,7 @@ impl RewritePlan {
             .iter()
             .any(|(_, source)| matches!(source, GeneratedId::Sequence(_)))
         {
-            if let Some(stmt) = self.rewrite_nextval_simple().await? {
+            if let Some(stmt) = self.rewrite_sequence_simple().await? {
                 query.set_query(&stmt);
             }
         } else if let Some(ref stmt) = self.stmt {

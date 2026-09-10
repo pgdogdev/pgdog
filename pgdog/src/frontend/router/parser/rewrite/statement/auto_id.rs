@@ -227,6 +227,7 @@ fn is_bigint_type(data_type: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::nextval::SequenceCall;
     use super::super::plan::GeneratedId;
     use crate::frontend::router::sharding::ShardedTable;
     use indexmap::IndexMap;
@@ -691,8 +692,14 @@ mod tests {
                 assert_eq!(
                     plan.generated_ids,
                     vec![
-                        (1, GeneratedId::Sequence(sequence.to_owned())),
-                        (2, GeneratedId::Sequence(sequence.to_owned())),
+                        (
+                            1,
+                            GeneratedId::Sequence(SequenceCall::Nextval(sequence.to_owned()))
+                        ),
+                        (
+                            2,
+                            GeneratedId::Sequence(SequenceCall::Nextval(sequence.to_owned()))
+                        ),
                     ]
                 );
             }
