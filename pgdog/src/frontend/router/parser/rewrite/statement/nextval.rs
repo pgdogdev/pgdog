@@ -41,7 +41,7 @@ impl RewritePlan {
             .await
     }
 
-    async fn rewrite_sequence_simple_with(
+    pub(super) async fn rewrite_sequence_simple_with(
         &self,
         mut execute: impl AsyncFnMut(&SequenceCall) -> Result<i64, ee::Error>,
     ) -> Result<Option<String>, Error> {

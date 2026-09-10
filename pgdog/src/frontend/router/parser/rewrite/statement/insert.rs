@@ -110,6 +110,51 @@ pub(crate) fn build_split_requests(
         .collect()
 }
 
+/// Split a simple query after sequence calls have been resolved. Both the SQL
+/// and routing AST must use the values allocated for this execution.
+pub(super) fn build_resolved_split_requests(
+    query: &Query,
+    request: &ClientRequest,
+) -> Result<Vec<ClientRequest>, Error> {
+    let ast = pg_raw_parse::parse(query.query())?;
+    let Some(Node::InsertStmt(insert)) = ast.stmts().next() else {
+        return Err(Error::EmptyQuery);
+    };
+    split_insert_statements(insert)?
+        .into_iter()
+        .map(|(params, stmt)| {
+            let ast = Ast::new_record(&stmt).map_err(|e| Error::Cache(e.to_string()))?;
+            InsertSplit {
+                params,
+                stmt,
+                ast,
+                statement_name: None,
+            }
+            .build_request(request)
+        })
+        .collect()
+}
+
+fn split_insert_statements(
+    insert: &nodes::InsertStmt,
+) -> Result<Vec<(IndexSet<u16>, String)>, Error> {
+    let mut splits = Vec::new();
+    make::try_owned(|mem| {
+        let mut copy = mem.make_unique(insert);
+
+        if let Node::SelectStmt(select) = insert.select_stmt() {
+            for list in select.values_lists() {
+                let (params, select) = StatementRewrite::build_single_tuple_select(mem, list);
+                copy.as_mut().set_select_stmt(select.uncast());
+                splits.push((params, deparse(&*copy)?.as_str().to_string()));
+            }
+        }
+
+        Ok::<_, Error>(copy)
+    })?;
+    Ok(splits)
+}
+
 impl StatementRewrite<'_> {
     /// Split up multi-tuple INSERT statements into separate single-tuple statements
     /// for individual execution.
@@ -137,20 +182,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let mut splits = Vec::new();
-        make::try_owned(|mem| {
-            let mut copy = mem.make_unique(insert);
-
-            if let Node::SelectStmt(select) = insert.select_stmt() {
-                for list in select.values_lists() {
-                    let (params, select) = self.build_single_tuple_select(mem, list);
-                    copy.as_mut().set_select_stmt(select.uncast());
-                    splits.push((params, deparse(&*copy)?.as_str().to_string()));
-                }
-            }
-
-            Ok::<_, Error>(copy)
-        })?;
+        let splits = split_insert_statements(insert)?;
 
         if splits.len() <= 1 {
             return Ok(());
@@ -197,9 +229,8 @@ impl StatementRewrite<'_> {
     }
 
     /// Build a single-tuple INSERT from the original statement with just one values_list.
-    /// Returns the parameter positions (0-indexed) and the SQL string.
+    /// Returns the original parameter positions (1-indexed) and SELECT AST.
     fn build_single_tuple_select<'mem>(
-        &self,
         mem: make::MemoryToken<'mem>,
         values_list: Node<'_>,
     ) -> (IndexSet<u16>, make::Unique<'mem, &'mem nodes::SelectStmt>) {

@@ -1,5 +1,6 @@
 use crate::config::config;
 use crate::frontend::Command;
+use crate::frontend::client::TransactionType;
 use crate::frontend::router::parser::{Cache, Shard};
 use std::collections::HashSet;
 use std::ops::Deref;
@@ -389,6 +390,125 @@ fn test_set_key_errors_on_omnisharded_write() {
     assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
 }
 
+/// Inside a read/write transaction the conservative strategy routes every
+/// statement to the primary, but a read of an omnisharded table is still a
+/// read: pinning it to one shard with a directive is safe (every shard holds
+/// the same rows) and must be allowed.
+#[test]
+fn test_omnisharded_read_with_directive_allowed_inside_transaction() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .in_transaction(true);
+
+    let command = test
+        .try_execute(vec![
+            Query::new("/* pgdog_shard: 1 */ SELECT id FROM organizations WHERE id = 'org_child'")
+                .into(),
+        ])
+        .expect("omnisharded read with a shard directive inside a transaction");
+
+    match command {
+        Command::Query(route) => {
+            assert_eq!(route.shard(), &Shard::Direct(1), "{:?}", route);
+            assert!(route.is_omnisharded());
+            // Routed to the primary because of the transaction, but not a mutation.
+            assert!(route.is_write());
+            assert!(!route.mutates());
+        }
+        other => panic!("expected Command::Query, got {other:#?}"),
+    }
+}
+
+/// Same as above with the directive supplied via `SET pgdog.sharding_key`.
+#[test]
+fn test_omnisharded_read_with_set_key_allowed_inside_transaction() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .with_param("pgdog.sharding_key", "org_child")
+        .in_transaction(true);
+
+    let result = test.try_execute(vec![
+        Query::new("SELECT id FROM organizations WHERE id = 'org_child'").into(),
+    ]);
+    assert!(
+        matches!(result, Ok(Command::Query(_))),
+        "expected the read to route, got {result:#?}"
+    );
+}
+
+/// A `BEGIN READ ONLY` transaction cannot contain mutations at all, and the
+/// conservative strategy does not force its reads onto the primary, so an
+/// omnisharded read with a directive routes like any other read.
+#[test]
+fn test_omnisharded_read_with_directive_allowed_in_read_only_transaction() {
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .with_transaction(TransactionType::ReadOnly);
+
+    let command = test
+        .try_execute(vec![
+            Query::new("/* pgdog_shard: 1 */ SELECT id FROM organizations WHERE id = 'org_child'")
+                .into(),
+        ])
+        .expect("omnisharded read with a shard directive inside a read-only transaction");
+
+    match command {
+        Command::Query(route) => {
+            assert_eq!(route.shard(), &Shard::Direct(1), "{:?}", route);
+            assert!(route.is_read());
+            assert!(!route.mutates());
+        }
+        other => panic!("expected Command::Query, got {other:#?}"),
+    }
+}
+
+/// The guard still protects mutations: an omnisharded UPDATE pinned to one
+/// shard inside a transaction would diverge that shard.
+#[test]
+fn test_omnisharded_write_with_directive_rejected_inside_transaction() {
+    use crate::frontend::router::parser::Error;
+
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas()
+        .in_transaction(true);
+
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_shard: 1 */ UPDATE organizations SET name = 'x' WHERE id = 'org_child'",
+        )
+        .into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+}
+
+/// A SELECT that takes row locks changes lock state on the shard it runs on,
+/// so it counts as a mutation and is still rejected with a directive.
+#[test]
+fn test_omnisharded_locking_select_with_directive_rejected() {
+    use crate::frontend::router::parser::Error;
+
+    let tables = lookup_rule_tables();
+    let mut test = QueryParserTest::new()
+        .with_sharded_tables(tables)
+        .without_sharded_schemas();
+
+    let result = test.try_execute(vec![
+        Query::new(
+            "/* pgdog_shard: 1 */ SELECT id FROM organizations WHERE id = 'org_child' FOR UPDATE",
+        )
+        .into(),
+    ]);
+    assert!(matches!(result, Err(Error::OmniWriteWithDirective)));
+}
+
 /// A SELECT whose CTE modifies data is a mutation: pinned to one shard by a
 /// directive it would diverge that shard, so it is still rejected. The outer
 /// query reads the CTE by name; that name must not be mistaken for a table.
@@ -437,6 +557,7 @@ fn test_omnisharded_data_modifying_cte_broadcasts() {
         let route = command.route();
         assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
         assert!(route.is_omnisharded(), "{sql}");
+        assert!(route.mutates(), "{sql}");
         assert!(route.is_write(), "{sql}");
     }
 }
@@ -496,6 +617,7 @@ fn test_omnisharded_read_only_cte_stays_single_shard() {
             "{sql}: {route:?}"
         );
         assert!(route.is_omnisharded(), "{sql}: {route:?}");
+        assert!(!route.mutates(), "{sql}");
     }
 }
 

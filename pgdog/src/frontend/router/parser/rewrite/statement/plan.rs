@@ -4,7 +4,7 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use crate::unique_id::UniqueId;
 
 use super::super::ee;
-use super::insert::build_split_requests;
+use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
 use super::{
@@ -181,10 +181,31 @@ impl RewritePlan {
             }
         }
 
+        self.apply_after_messages(request)
+    }
+
+    /// Build the execution plan after SQL and Bind values have been rewritten.
+    pub(super) fn apply_after_messages(
+        &self,
+        request: &ClientRequest,
+    ) -> Result<RewriteResult, Error> {
         // Only rewrite executable requests. Some clients prepare the statement
         // separately (e.g. go/pq with Parse, Describe, Sync). We don't need to rewrite
         // those since insert split will return the same row(s) as multi-tuple insert.
         if !self.insert_split.is_empty() && request.is_executable() {
+            if self
+                .generated_ids
+                .iter()
+                .any(|(_, source)| matches!(source, GeneratedId::Sequence(_)))
+                && let Some(query) = request.messages.iter().find_map(|message| match message {
+                    ProtocolMessage::Query(query) => Some(query),
+                    _ => None,
+                })
+            {
+                return Ok(RewriteResult::InsertSplit(build_resolved_split_requests(
+                    query, request,
+                )?));
+            }
             let requests = build_split_requests(&self.insert_split, request)?;
             return Ok(RewriteResult::InsertSplit(requests));
         }

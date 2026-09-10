@@ -66,12 +66,22 @@ impl QueryParser {
 
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
+<<<<<<< HEAD
             let mut route = Route::read(context.shards_calculator.shard().clone())
                 .with_read(!writes)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks);
             route.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
             return Ok(Command::Query(route));
+=======
+            return Ok(Command::Query(
+                Route::read(context.shards_calculator.shard().clone())
+                    .with_read(!writes)
+                    .with_mutates(mutates)
+                    .with_omnisharded(omnisharded)
+                    .with_advisory_locks(advisory_locks),
+            ));
+>>>>>>> forkie/main
         }
 
         let mut shards = HashSet::new();
@@ -136,6 +146,7 @@ impl QueryParser {
 
             let mut route = Route::read(context.shards_calculator.shard().clone())
                 .with_read(!writes)
+                .with_mutates(mutates)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks);
             route.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
@@ -297,6 +308,7 @@ impl QueryParser {
         Ok(Command::Query(
             query
                 .with_read(!writes)
+                .with_mutates(mutates)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))
