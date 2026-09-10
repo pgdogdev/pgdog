@@ -9,7 +9,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::aggregate::AggregateRewritePlan,
+        rewrite::statement::projection::ProjectionRewritePlan,
     },
     net::{
         Decoder,
@@ -140,7 +140,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let rows = if aggregate.is_empty() {
@@ -156,7 +156,7 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_columns(&mut self, plan: &AggregateRewritePlan) {
+    pub(super) fn drop_columns(&mut self, plan: &ProjectionRewritePlan) {
         if plan.is_noop() {
             return;
         }
@@ -239,7 +239,7 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::aggregate::OrderByHelperMapping;
+    use crate::frontend::router::parser::rewrite::statement::projection::OrderByHelper;
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
 
@@ -278,10 +278,10 @@ mod test {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
         let decoder = Decoder::from(rd);
-        let mut plan = AggregateRewritePlan::default();
-        plan.add_order_by_helper(OrderByHelperMapping {
-            order_by: 0,
-            helper_column: 1,
+        let mut plan = ProjectionRewritePlan::default();
+        plan.add_order_by_helper(OrderByHelper {
+            sort_position: 0,
+            projected_column: 1,
         });
 
         for (id, name) in [(1_i64, "z"), (2, "a"), (3, "m")] {
@@ -316,7 +316,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 
@@ -343,7 +343,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 

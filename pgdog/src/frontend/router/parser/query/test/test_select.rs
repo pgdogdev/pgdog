@@ -35,7 +35,7 @@ fn test_order_by_non_projected_column_uses_rewrite_helper() {
     );
     assert_eq!(
         route
-            .aggregate_rewrite_plan()
+            .projection_rewrite_plan()
             .drop_columns()
             .collect::<Vec<_>>(),
         [1]

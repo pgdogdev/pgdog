@@ -1,6 +1,6 @@
 use pg_raw_parse::{Node, make, nodes};
 
-use super::{RewritePlan, StatementRewrite, aggregate::OrderByHelperMapping};
+use super::{RewritePlan, StatementRewrite, projection::OrderByHelper};
 use crate::frontend::router::parser::Column;
 
 impl StatementRewrite<'_> {
@@ -35,15 +35,15 @@ impl StatementRewrite<'_> {
             })
             .enumerate()
             .map(|(helper_offset, (order_by, node))| {
-                let helper_column = original_target_len + helper_offset;
+                let projected_column = original_target_len + helper_offset;
                 let alias = format!("__pgdog_order_by_{order_by}");
                 let target = mem.make_res_target(Some(&alias), mem.empty(), mem.make_unique(node));
 
                 (
                     target,
-                    OrderByHelperMapping {
-                        order_by,
-                        helper_column,
+                    OrderByHelper {
+                        sort_position: order_by,
+                        projected_column,
                     },
                 )
             })
@@ -59,7 +59,7 @@ impl StatementRewrite<'_> {
             .extend(mem, mem.make_list(&targets));
 
         for helper in mappings {
-            plan.aggregates.add_order_by_helper(helper);
+            plan.projection.add_order_by_helper(helper);
         }
         self.rewritten = true;
     }
@@ -151,10 +151,10 @@ mod tests {
             sql,
             "SELECT id, name AS __pgdog_order_by_0 FROM users ORDER BY name"
         );
-        assert_eq!(plan.aggregates.drop_columns().collect::<Vec<_>>(), [1]);
-        assert_eq!(plan.aggregates.order_by_helpers().len(), 1);
-        assert_eq!(plan.aggregates.order_by_helpers()[0].order_by, 0);
-        assert_eq!(plan.aggregates.order_by_helpers()[0].helper_column, 1);
+        assert_eq!(plan.projection.drop_columns().collect::<Vec<_>>(), [1]);
+        assert_eq!(plan.projection.order_by_helpers().len(), 1);
+        assert_eq!(plan.projection.order_by_helpers()[0].sort_position, 0);
+        assert_eq!(plan.projection.order_by_helpers()[0].projected_column, 1);
     }
 
     #[test]
@@ -166,25 +166,25 @@ mod tests {
             "SELECT users.* FROM users ORDER BY users.name",
         ] {
             let (_, plan) = rewrite(sql);
-            assert!(plan.aggregates.order_by_helpers().is_empty(), "{sql}");
+            assert!(plan.projection.order_by_helpers().is_empty(), "{sql}");
         }
     }
 
     #[test]
     fn tracks_multiple_helpers_by_order_position() {
         let (_, plan) = rewrite("SELECT id FROM users ORDER BY id, name DESC, email");
-        let helpers = plan.aggregates.order_by_helpers();
+        let helpers = plan.projection.order_by_helpers();
 
         assert_eq!(helpers.len(), 2);
-        assert_eq!(helpers[0].order_by, 1);
-        assert_eq!(helpers[0].helper_column, 1);
-        assert_eq!(helpers[1].order_by, 2);
-        assert_eq!(helpers[1].helper_column, 2);
+        assert_eq!(helpers[0].sort_position, 1);
+        assert_eq!(helpers[0].projected_column, 1);
+        assert_eq!(helpers[1].sort_position, 2);
+        assert_eq!(helpers[1].projected_column, 2);
     }
 
     #[test]
     fn plain_distinct_keeps_postgres_validation() {
         let (_, plan) = rewrite("SELECT DISTINCT id FROM users ORDER BY name");
-        assert!(plan.aggregates.order_by_helpers().is_empty());
+        assert!(plan.projection.order_by_helpers().is_empty());
     }
 }

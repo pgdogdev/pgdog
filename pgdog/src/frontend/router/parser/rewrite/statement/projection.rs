@@ -22,9 +22,9 @@ impl HelperKind {
 
 /// Context on the aggregate function column added to the result set.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HelperMapping {
+pub(crate) struct AggregateHelper {
     pub(crate) target_column: usize,
-    pub(crate) helper_column: usize,
+    pub(crate) projected_column: usize,
     pub(crate) distinct: bool,
     pub(crate) kind: HelperKind,
     pub(crate) alias: String,
@@ -32,69 +32,70 @@ pub(crate) struct HelperMapping {
 
 /// Column temporarily projected so PgDog can globally order shard results.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct OrderByHelperMapping {
+pub(crate) struct OrderByHelper {
     /// Position of the expression in the ORDER BY clause.
-    pub(crate) order_by: usize,
+    pub(crate) sort_position: usize,
     /// Position of the temporary expression in the backend result.
-    pub(crate) helper_column: usize,
+    pub(crate) projected_column: usize,
 }
 
-/// Plan describing how the proxy rewrites a query and its results.
+/// Plan for temporary columns added to a query's projection.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct AggregateRewritePlan {
-    helpers: Vec<HelperMapping>,
-    order_by_helpers: Vec<OrderByHelperMapping>,
+pub(crate) struct ProjectionRewritePlan {
+    aggregate_helpers: Vec<AggregateHelper>,
+    order_by_helpers: Vec<OrderByHelper>,
 }
 
-impl AggregateRewritePlan {
-    /// Create new no-op aggregate rewrite plan.
+impl ProjectionRewritePlan {
+    /// Create a no-op projection rewrite plan.
     pub(crate) fn new() -> Self {
         Self {
-            helpers: Vec::new(),
+            aggregate_helpers: Vec::new(),
             order_by_helpers: Vec::new(),
         }
     }
 
-    /// Is this plan a no-op? Doesn't do anything.
+    /// Whether the projection and its result require no changes.
     pub(crate) fn is_noop(&self) -> bool {
-        self.helpers.is_empty() && self.order_by_helpers.is_empty()
+        self.aggregate_helpers.is_empty() && self.order_by_helpers.is_empty()
     }
 
+    /// Temporary result columns to remove before forwarding to the client.
     pub(crate) fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
-        self.helpers
+        self.aggregate_helpers
             .iter()
-            .map(|helper| helper.helper_column)
+            .map(|helper| helper.projected_column)
             .chain(
                 self.order_by_helpers
                     .iter()
-                    .map(|helper| helper.helper_column),
+                    .map(|helper| helper.projected_column),
             )
     }
 
-    pub(crate) fn helpers(&self) -> &[HelperMapping] {
-        &self.helpers
+    pub(crate) fn aggregate_helpers(&self) -> &[AggregateHelper] {
+        &self.aggregate_helpers
     }
 
-    pub(crate) fn order_by_helpers(&self) -> &[OrderByHelperMapping] {
+    pub(crate) fn order_by_helpers(&self) -> &[OrderByHelper] {
         &self.order_by_helpers
     }
 
-    pub(crate) fn add_helper(&mut self, mapping: HelperMapping) {
-        self.helpers.push(mapping);
+    pub(crate) fn add_aggregate_helper(&mut self, helper: AggregateHelper) {
+        self.aggregate_helpers.push(helper);
     }
 
-    pub(crate) fn add_order_by_helper(&mut self, mapping: OrderByHelperMapping) {
-        self.order_by_helpers.push(mapping);
+    pub(crate) fn add_order_by_helper(&mut self, helper: OrderByHelper) {
+        self.order_by_helpers.push(helper);
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct RewriteOutput {
-    pub(crate) plan: AggregateRewritePlan,
+    pub(crate) plan: ProjectionRewritePlan,
 }
 
 impl RewriteOutput {
-    pub(crate) fn new(plan: AggregateRewritePlan) -> Self {
+    pub(crate) fn new(plan: ProjectionRewritePlan) -> Self {
         Self { plan }
     }
 }
@@ -105,26 +106,26 @@ mod tests {
 
     #[test]
     fn rewrite_plan_noop() {
-        let plan = AggregateRewritePlan::new();
+        let plan = ProjectionRewritePlan::new();
         assert!(plan.is_noop());
         assert!(plan.drop_columns().count() == 0);
-        assert!(plan.helpers().is_empty());
+        assert!(plan.aggregate_helpers().is_empty());
     }
 
     #[test]
     fn rewrite_plan_helpers() {
-        let mut plan = AggregateRewritePlan::new();
-        plan.add_helper(HelperMapping {
+        let mut plan = ProjectionRewritePlan::new();
+        plan.add_aggregate_helper(AggregateHelper {
             target_column: 0,
-            helper_column: 1,
+            projected_column: 1,
             distinct: false,
             kind: HelperKind::Count,
             alias: "__pgdog_count_expr7_col0".into(),
         });
-        assert_eq!(plan.helpers().len(), 1);
-        let helper = &plan.helpers()[0];
+        assert_eq!(plan.aggregate_helpers().len(), 1);
+        let helper = &plan.aggregate_helpers()[0];
         assert_eq!(helper.target_column, 0);
-        assert_eq!(helper.helper_column, 1);
+        assert_eq!(helper.projected_column, 1);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
         assert_eq!(helper.alias, "__pgdog_count_expr7_col0");

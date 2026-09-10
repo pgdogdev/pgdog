@@ -6,7 +6,7 @@ use std::mem;
 use crate::{
     frontend::router::parser::{
         Aggregate, AggregateFunction, AggregateTarget,
-        rewrite::statement::aggregate::{AggregateRewritePlan, HelperKind},
+        rewrite::statement::{aggregate::HelperKind, projection::ProjectionRewritePlan},
     },
     net::{
         Decoder,
@@ -237,7 +237,7 @@ pub(super) struct Aggregates<'a> {
     mappings: HashMap<Grouping, GroupState<'a>>,
     decoder: &'a Decoder,
     aggregate: &'a Aggregate,
-    helper_columns: HashMap<usize, HelperColumns>,
+    projected_columns: HashMap<usize, HelperColumns>,
 }
 
 impl<'a> Aggregates<'a> {
@@ -245,29 +245,29 @@ impl<'a> Aggregates<'a> {
         rows: &'a VecDeque<DataRow>,
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Option<Self> {
-        let mut helper_columns: HashMap<usize, HelperColumns> = HashMap::new();
+        let mut projected_columns: HashMap<usize, HelperColumns> = HashMap::new();
 
         for target in aggregate.targets() {
             let key = target.column();
             match target.function() {
                 AggregateFunction::Count => {
-                    helper_columns.entry(key).or_default().count = Some(target.column());
+                    projected_columns.entry(key).or_default().count = Some(target.column());
                 }
                 AggregateFunction::Sum => {
-                    helper_columns.entry(key).or_default().sum = Some(target.column());
+                    projected_columns.entry(key).or_default().sum = Some(target.column());
                 }
                 _ => {}
             }
         }
 
-        for helper in plan.helpers() {
+        for helper in plan.aggregate_helpers() {
             let Some(index) = decoder.row_description().field_index(&helper.alias) else {
                 continue;
             };
 
-            let entry = helper_columns.entry(helper.target_column).or_default();
+            let entry = projected_columns.entry(helper.target_column).or_default();
             match helper.kind {
                 HelperKind::Count => entry.count = Some(index),
                 HelperKind::Sum => entry.sum = Some(index),
@@ -278,14 +278,14 @@ impl<'a> Aggregates<'a> {
         let helpers_present = aggregate.targets().iter().all(|target| {
             let key = target.column();
             match target.function() {
-                AggregateFunction::Avg => helper_columns
+                AggregateFunction::Avg => projected_columns
                     .get(&key)
                     .and_then(|columns| columns.count)
                     .is_some(),
                 AggregateFunction::StddevPop
                 | AggregateFunction::StddevSamp
                 | AggregateFunction::VarPop
-                | AggregateFunction::VarSamp => helper_columns
+                | AggregateFunction::VarSamp => projected_columns
                     .get(&key)
                     .map(|columns| {
                         columns.count.is_some() && columns.sum.is_some() && columns.sumsq.is_some()
@@ -305,7 +305,7 @@ impl<'a> Aggregates<'a> {
                 decoder,
                 mappings: HashMap::new(),
                 aggregate,
-                helper_columns,
+                projected_columns,
             })
         } else {
             None
@@ -333,7 +333,7 @@ impl<'a> Aggregates<'a> {
                 Entry::Occupied(o) => o.into_mut(),
                 Entry::Vacant(v) => {
                     let accumulators =
-                        Accumulator::from_aggregate(self.aggregate, &self.helper_columns)?;
+                        Accumulator::from_aggregate(self.aggregate, &self.projected_columns)?;
 
                     // Gather all col vals corresponding to list of passthrough indices.
                     let mut passthrough = Vec::new();
@@ -523,7 +523,7 @@ mod test {
         shard1.add("3");
         rows.push_back(shard1);
 
-        let plan = AggregateRewritePlan::default();
+        let plan = ProjectionRewritePlan::default();
         let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
             .unwrap()
             .aggregate()
@@ -557,7 +557,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()
@@ -602,7 +602,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()
@@ -649,7 +649,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()

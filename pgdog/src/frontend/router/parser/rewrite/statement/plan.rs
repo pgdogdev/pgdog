@@ -8,7 +8,7 @@ use super::insert::build_split_requests;
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
 use super::{
-    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
+    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, projection::ProjectionRewritePlan,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub(crate) struct RewritePlan {
     pub(crate) insert_split: Vec<InsertSplit>,
 
     /// Temporary result columns added for cross-shard aggregation and ordering.
-    pub(crate) aggregates: AggregateRewritePlan,
+    pub(crate) projection: ProjectionRewritePlan,
 
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
@@ -90,7 +90,7 @@ impl RewritePlan {
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
-            && self.aggregates.is_noop()
+            && self.projection.is_noop()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
@@ -119,7 +119,7 @@ impl RewritePlan {
             bind.push_param(param, format);
         }
 
-        for _ in self.aggregates.drop_columns() {
+        for _ in self.projection.drop_columns() {
             bind.push_result_format(Format::Text);
         }
 
@@ -206,7 +206,7 @@ impl RewritePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::aggregate::OrderByHelperMapping;
+    use crate::frontend::router::parser::rewrite::statement::projection::OrderByHelper;
     use crate::test_utils::set_env_var;
     use std::collections::HashSet;
 
@@ -235,13 +235,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_bind_extends_per_column_result_formats() {
-        let mut aggregates = AggregateRewritePlan::default();
-        aggregates.add_order_by_helper(OrderByHelperMapping {
-            order_by: 0,
-            helper_column: 2,
+        let mut projection = ProjectionRewritePlan::default();
+        projection.add_order_by_helper(OrderByHelper {
+            sort_position: 0,
+            projected_column: 2,
         });
         let plan = RewritePlan {
-            aggregates,
+            projection,
             ..Default::default()
         };
         let mut bind = Bind::new_params_codes_results("test", &[], &[], &[1, 0]);

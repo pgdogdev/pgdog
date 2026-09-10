@@ -70,7 +70,7 @@ impl QueryParser {
                 .with_read(!writes)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks);
-            route.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+            route.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
             return Ok(Command::Query(route));
         }
 
@@ -138,22 +138,22 @@ impl QueryParser {
                 .with_read(!writes)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks);
-            route.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+            route.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
             return Ok(Command::Query(route));
         }
 
         let mut order_by = Self::select_sort(stmt, context.router_context.bind);
-        for helper in cached_ast.rewrite_plan.aggregates.order_by_helpers() {
+        for helper in cached_ast.rewrite_plan.projection.order_by_helpers() {
             let Some((_, column)) = order_by
                 .iter_mut()
-                .find(|(position, _)| *position == helper.order_by)
+                .find(|(position, _)| *position == helper.sort_position)
             else {
                 continue;
             };
             *column = if column.asc() {
-                OrderBy::Asc(helper.helper_column + 1)
+                OrderBy::Asc(helper.projected_column + 1)
             } else {
-                OrderBy::Desc(helper.helper_column + 1)
+                OrderBy::Desc(helper.projected_column + 1)
             };
         }
         let order_by = order_by
@@ -292,7 +292,7 @@ impl QueryParser {
             distinct,
         );
 
-        query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+        query.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
 
         Ok(Command::Query(
             query
