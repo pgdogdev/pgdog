@@ -134,10 +134,6 @@ impl QueryParser {
                     .push(ShardWithPriority::new_rr_no_table(shard));
             }
 
-            context
-                .shards_calculator
-                .push(ShardWithPriority::new_rr_no_table(shard));
-
             let mut route = Route::read(context.shards_calculator.shard().clone())
                 .with_read(!writes)
                 .with_omnisharded(omnisharded)

@@ -233,8 +233,8 @@ mod tests {
         assert_eq!(bind.params_raw().len(), 0);
     }
 
-    #[test]
-    fn test_apply_bind_extends_per_column_result_formats() {
+    #[tokio::test]
+    async fn test_apply_bind_extends_per_column_result_formats() {
         let mut aggregates = AggregateRewritePlan::default();
         aggregates.add_order_by_helper(OrderByHelperMapping {
             order_by: 0,
@@ -246,7 +246,7 @@ mod tests {
         };
         let mut bind = Bind::new_params_codes_results("test", &[], &[], &[1, 0]);
 
-        plan.apply_bind(&mut bind).unwrap();
+        plan.apply_bind(&mut bind).await.unwrap();
 
         assert_eq!(
             bind.result_formats().collect::<Vec<_>>(),
