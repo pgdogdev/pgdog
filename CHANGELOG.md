@@ -8,7 +8,7 @@ For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [C
 
 | Application | Docker image                     |
 | ----------- | -------------------------------- |
-| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.57` |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.58` |
 
 #### Features
 
