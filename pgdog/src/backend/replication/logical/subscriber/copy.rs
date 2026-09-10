@@ -3,7 +3,7 @@
 
 use futures::future::join_all;
 use pg_raw_parse::Node;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::{
@@ -13,7 +13,6 @@ use crate::frontend::client::query_engine::two_pc::{
 use crate::frontend::router::parser::Error as ParseError;
 use crate::{
     backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
-    config::Role,
     frontend::router::parser::{CopyParser, Shard},
     net::{
         CopyData, CopyDone, ErrorResponse, FromBytes, Message, Protocol, ProtocolMessage, Query,
@@ -21,7 +20,10 @@ use crate::{
     },
 };
 
-use super::super::{CopyStatement, Error};
+use super::{
+    super::{CopyStatement, Error},
+    OverlappingShardsCheck,
+};
 
 // Not really needed, but we're currently
 // sharding 3 CopyData messages at a time.
@@ -31,8 +33,8 @@ static BUFFER_SIZE: usize = 3;
 #[derive(Debug)]
 pub(crate) struct CopySubscriber {
     copy: CopyParser,
-    /// Destination cluster.
-    cluster: Cluster,
+    dest: Cluster,
+    source: Cluster,
     buffer: Vec<CopyData>,
     connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
@@ -48,12 +50,12 @@ impl CopySubscriber {
     pub(crate) fn new(
         copy_stmt: &CopyStatement,
         source: &Cluster,
-        cluster: &Cluster,
+        dest: &Cluster,
     ) -> Result<Self, Error> {
         let ast = pg_raw_parse::parse(&copy_stmt.copy_in()).map_err(ParseError::from)?;
         let stmt = ast.stmts().next().ok_or(ParseError::EmptyQuery)?;
         let mut copy = if let Node::CopyStmt(stmt) = stmt {
-            CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
+            CopyParser::new(stmt, dest).map_err(|_| Error::MissingData)?
         } else {
             return Err(Error::MissingData);
         };
@@ -63,7 +65,8 @@ impl CopySubscriber {
 
         Ok(Self {
             copy,
-            cluster: cluster.clone(),
+            dest: dest.clone(),
+            source: source.clone(),
             buffer: vec![],
             connections: vec![],
             stmt: copy_stmt.clone(),
@@ -73,20 +76,32 @@ impl CopySubscriber {
 
     /// Connect to all shards. One connection per primary.
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
-        let mut servers = vec![];
-        for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(role, _)| role == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Replication)
-                .await?;
-            servers.push(ParallelConnection::new(primary)?);
+        let mut connections = vec![];
+        let overlap_check = OverlappingShardsCheck::new(&self.source);
+        let destination_shards = self.dest.shards();
+
+        if destination_shards.is_empty() {
+            return Err(Error::DestinationNoShards);
         }
 
-        self.connections = servers;
+        for (shard_number, shard) in destination_shards.iter().enumerate() {
+            if overlap_check.overlaps(shard)? {
+                warn!(
+                    "skipping data sync to {} because it is part of the source cluster",
+                    shard.primary_address()?,
+                );
+                continue;
+            }
+
+            let primary = shard.primary_standalone(ConnectReason::Replication).await?;
+            connections.push(ParallelConnection::new(primary, shard_number)?);
+        }
+
+        if connections.is_empty() {
+            return Err(Error::SourceDestinationIdentical);
+        }
+
+        self.connections = connections;
 
         Ok(())
     }
@@ -227,13 +242,14 @@ impl CopySubscriber {
         // scope). Shards not yet committed roll back on connection close. The
         // destination_has_rows() guard in parallel_sync.rs prevents a doomed retry if this
         // window is ever hit.
-        if self.cluster.two_pc_enabled() {
+        if self.dest.two_pc_enabled() {
             self.commit_two_pc().await?;
         } else {
-            for (shard, server) in self.connections.iter_mut().enumerate() {
+            for server in &mut self.connections {
                 if let Err(error) =
                     Self::send_and_confirm(server, Query::new("COMMIT").into()).await
                 {
+                    let shard = server.shard_number();
                     tracing::error!(
                         "COMMIT failed on destination shard {shard} during copy_done: {error}; \
                          shards committed before it stay committed, the rest roll back on \
@@ -250,7 +266,7 @@ impl CopySubscriber {
     async fn commit_two_pc(&mut self) -> Result<(), Error> {
         let manager = Manager::get();
         let txn = TwoPcTransaction::new();
-        let identifier = self.cluster.identifier();
+        let identifier = self.dest.identifier();
 
         async {
             let _guard_phase_1 = manager
@@ -280,14 +296,14 @@ impl CopySubscriber {
     ) -> Result<(), Error> {
         let mut futures = Vec::new();
 
-        for (shard, server) in self.connections.iter_mut().enumerate() {
+        for server in &mut self.connections {
             // Rollback is not issued here. If this path fails, the TwoPcGuards in
             // commit_two_pc() are dropped without manager.done(), and the 2PC Manager
             // cleanup task issues ROLLBACK PREPARED (Phase1) or COMMIT PREPARED (Phase2)
             // via binding.rs using the same phase_control() helper.
             let query = match phase {
                 TwoPcPhase::Rollback => unreachable!(),
-                phase => phase_control(txn, shard, phase),
+                phase => phase_control(txn, server.shard_number(), phase),
             };
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }
@@ -317,16 +333,16 @@ impl CopySubscriber {
         let bytes = result.iter().map(|row| row.len()).sum::<usize>();
 
         for row in &result {
-            for (shard, server) in self.connections.iter_mut().enumerate() {
+            for server in &mut self.connections {
                 match row.shard() {
                     Shard::All => server.send_one(&row.message().into()).await?,
                     Shard::Direct(destination) => {
-                        if *destination == shard {
+                        if *destination == server.shard_number() {
                             server.send_one(&row.message().into()).await?;
                         }
                     }
                     Shard::Multi(multi) => {
-                        if multi.contains(&shard) {
+                        if multi.contains(&server.shard_number()) {
                             server.send_one(&row.message().into()).await?;
                         }
                     }
@@ -402,7 +418,7 @@ mod test {
             .await
             .unwrap();
 
-        let mut subscriber = CopySubscriber::new(&copy, &cluster, &cluster).unwrap();
+        let mut subscriber = CopySubscriber::new(&copy, &Cluster::default(), &cluster).unwrap();
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::default().to_bytes());
@@ -445,7 +461,7 @@ mod test {
         crate::logger();
 
         let server = test_server().await;
-        let mut conn = ParallelConnection::new(server).unwrap();
+        let mut conn = ParallelConnection::new(server, 0).unwrap();
 
         // RAISE WARNING emits a NoticeResponse ('N') before the statement's
         // CommandComplete. Without async-message skipping this was misread as
@@ -468,7 +484,7 @@ mod test {
         crate::logger();
 
         let server = test_server().await;
-        let mut conn = ParallelConnection::new(server).unwrap();
+        let mut conn = ParallelConnection::new(server, 0).unwrap();
 
         // A NoticeResponse precedes the ErrorResponse. The notice is skipped, the
         // error is surfaced, and drain_to_ready consumes the trailing ReadyForQuery

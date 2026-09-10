@@ -80,11 +80,12 @@ pub(crate) struct PipelinedConnection {
     tx: Sender<Command>,
     shared: Arc<Mutex<Shared>>,
     address: Address,
+    shard: usize,
 }
 
 impl PipelinedConnection {
     /// This moves `server` into a background task and returns a handle to it.
-    pub(crate) fn new(server: Server) -> Result<Self, Error> {
+    pub(crate) fn new(server: Server, shard: usize) -> Result<Self, Error> {
         let (tx, rx) = channel(4096);
         let shared = Arc::new(Mutex::new(Shared::default()));
         let address = server.addr().clone();
@@ -103,7 +104,12 @@ impl PipelinedConnection {
             tx,
             shared,
             address,
+            shard,
         })
+    }
+
+    pub(super) fn shard_number(&self) -> usize {
+        self.shard
     }
 
     /// Server address.
@@ -424,7 +430,7 @@ mod test {
     #[tokio::test]
     async fn prepare_execute_drain_commit() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // Prepare + create a temp table (out of transaction: uses Sync).
         conn.prepare(
@@ -466,7 +472,7 @@ mod test {
     #[tokio::test]
     async fn in_transaction_prepare_uses_flush() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // In-transaction prepare sends Flush and waits for ParseComplete acks
         // (ParseAcks path) rather than committing with Sync.
@@ -488,7 +494,7 @@ mod test {
     #[tokio::test]
     async fn prepare_invalid_sql_sync_returns_error() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // Out-of-transaction prepare of invalid SQL: Postgres replies with an
         // ErrorResponse, which is latched and surfaced through the Sync path.
@@ -507,7 +513,7 @@ mod test {
     #[tokio::test]
     async fn prepare_invalid_sql_flush_returns_error() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // In-transaction prepare uses Flush, so Postgres sends no ReadyForQuery
         // on error. The parked ParseAcks waiter can only be released by the
@@ -529,7 +535,7 @@ mod test {
         use tokio::time::timeout;
 
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // Valid prepare (succeeds), then a fire-and-forget execute that errors
         // only at execution time: division by zero. The ErrorResponse arrives
@@ -583,7 +589,7 @@ mod test {
         use tokio::time::sleep;
 
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // Fire-and-forget DML that fails at execution time (division by zero).
         conn.prepare(&[Parse::named("__drain_div", "SELECT 1 / $1::int")], false)
@@ -613,7 +619,7 @@ mod test {
     #[tokio::test]
     async fn direct_dml_zero_rows_counts_missed() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = PipelinedConnection::new(server, 0).unwrap();
 
         // Scratch table with one row (id = 1).
         conn.prepare(

@@ -76,6 +76,7 @@ pub(crate) enum Error {
 
     #[error("router: {0}")]
     Router(#[from] crate::frontend::router::Error),
+
     #[error("sharding key lookup failed: {0}")]
     Lookup(String),
 
@@ -105,9 +106,6 @@ pub(crate) enum Error {
 
     #[error("parse int")]
     ParseInt(#[from] ParseIntError),
-
-    #[error("shard has no primary")]
-    NoPrimary,
 
     #[error("parser: {0}")]
     Parser(#[from] crate::frontend::router::parser::Error),
@@ -195,6 +193,12 @@ pub(crate) enum Error {
         #[source]
         source: Box<Error>,
     },
+
+    #[error("source and destination clusters are identical")]
+    SourceDestinationIdentical,
+
+    #[error("destination cluster has no shards")]
+    DestinationNoShards,
 }
 
 impl From<ErrorResponse> for Error {
@@ -231,8 +235,7 @@ impl Error {
             Self::Net(inner) => inner.is_retryable(),
             Self::Pool(inner) => inner.is_retryable(),
             Self::Backend(inner) => inner.is_retryable(),
-            // No connection yet, or primary is down.
-            Self::NotConnected | Self::NoPrimary => true,
+            Self::NotConnected => true,
             // Replication stalled; temporary slot is gone, next attempt starts fresh.
             Self::ReplicationTimeout => true,
             // Postgres sent a transient error (e.g. admin_shutdown, cannot_connect_now).
@@ -266,7 +269,6 @@ mod tests {
         assert!(Error::Pool(PE::NoPrimary).is_retryable());
         assert!(Error::Pool(PE::CheckoutTimeout).is_retryable());
         assert!(Error::NotConnected.is_retryable());
-        assert!(Error::NoPrimary.is_retryable());
         assert!(Error::ReplicationTimeout.is_retryable());
     }
 
