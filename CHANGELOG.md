@@ -4,6 +4,29 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.58
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.57` |
+
+#### Features
+
+- Database-specific TLS configuration (incl. mTLS), allowing different TLS certificates per host in `pgdog.toml` @rlittlefield
+- Correct handling of `DISCARD`, incl. `DISCARD TEMP` and `DISCARD ALL` @murex971
+- Add `FORCE_RELOAD` admin command which guarantees all subsequent queries are sent to new connection pools (vs. `RELOAD` which is async) @jkaczman
+- Query engine hooks for `pgdog.nextval` function (only available in EE) to generate globally unique, monotonically increasing integers with no gaps (using Raft in the control plane) @levkk
+
+#### Bugs
+
+- Allow omnisharded reads with a shard comment routing inside cross-shard write transactions @rlittlefield
+- Connections were unncessarily dropped and re-created when a replica was added (or removed) to (from) `pgdog.toml` @jkaczman
+- Correctly handle omnisharded writes inside CTEs @rlittlefield
+
+#### Code quality
+
+- Added `CHANGELOG.md` (this file) and `CHANGELOG-ENTERPRISE.md` to track changes to open source and enterprise edition @levkk
+
 ### v0.1.57
 
 | Application | Docker image                     |

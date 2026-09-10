@@ -3,6 +3,19 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-09-10
+
+**OS version**: [v0.1.58](CHANGELOG.md#v0.1.58)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-09-10`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-09-10` |
+
+#### Features
+
+- [Experimental] Globally-distributed monotonic integer sequences, powered by Raft. You can use them by calling `pgdog.nextval('any_sequence_name')`. PgDog automatically injects ths into omnisharded `INSERT`s to make sure the primary key is the same on all shards (set `primary_key = "rewrite_omni_global"` in `pgdog.toml`)
+
 ### v2026-09-03
 
 **OS version**: [v0.1.57](CHANGELOG.md#v0.1.57)
