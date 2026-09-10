@@ -83,16 +83,19 @@ async fn test_simple_prepared_limit() {
     // Test limit 10 offset 5 (two ParamRefs);
     // order Limit ref before Offset (out-of-order left-to-right refs)
     {
-        // Write the PREPARE / EXECUTE
-        // This also resolves to the same cached entry $2, $1 as the last one.
-        // However, since the Simple cache key now also takes an Option<OffsetPlan>, they should resolve differently.
-        // If we didn't also have Option<OffsetPlan>, it would re-use the LIMIT 5 from last time
-        // (regardless of local stmt name differing)
+        // This also resolves to the same cached entry $2, $1 as the one ABOVE.
+        //
+        // However, since PgDog uses the pre-re-written `Query` (the one we send here) as the `CacheKey`,
+        // the two statements will resolve differently.
+        //
+        // If we didn't use the pre-re-written `Query`, it would re-use the LIMIT 5 from last time,
+        // and this would return an incorrect response.
         sqlx::raw_sql("PREPARE stmt2 AS SELECT * FROM sharded ORDER BY id DESC LIMIT $2 OFFSET $1")
             .execute(&mut conn)
             .await
             .unwrap();
 
+        // LIMIT 10 OFFSET 5
         let rows = sqlx::raw_sql("EXECUTE stmt2(5, 10)")
             .fetch_all(&mut conn)
             .await

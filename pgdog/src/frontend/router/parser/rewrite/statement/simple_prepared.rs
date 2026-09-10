@@ -240,6 +240,25 @@ fn create_offset_plan<'a>(
     // Replace `A_Const` nodes with `ParamRef` nodes.
     // This allows us to dynamically change the LIMIT/OFFSET at execution time,
     // if we have a multi-shard query.
+    let (limit_param, limit_val) =
+        if let pg_raw_parse::Node::A_Const(limit_count) = stmt_query.limit_count() {
+            param_refs_count += 1;
+
+            let mut param_ref_count = mem.make_node::<ParamRef>();
+            param_ref_count.as_mut().set_number(param_refs_count as i32);
+            unique_stmt_mut.set_limit_count(param_ref_count.uncast());
+
+            let limit_val = limit_count
+                .val()
+                .and_then(|limit_val| limit_val.numeric_value::<i32>())?;
+
+            (param_refs_count, Some(limit_val as usize))
+        } else if let pg_raw_parse::Node::ParamRef(param_ref) = stmt_query.limit_count() {
+            (param_ref.number as usize, None)
+        } else {
+            return None;
+        };
+
     let (offset_param, offset_val) =
         if let pg_raw_parse::Node::A_Const(limit_offset) = stmt_query.limit_offset() {
             param_refs_count += 1;
@@ -256,25 +275,6 @@ fn create_offset_plan<'a>(
 
             (param_refs_count, Some(limit_offset_val as usize))
         } else if let pg_raw_parse::Node::ParamRef(param_ref) = stmt_query.limit_offset() {
-            (param_ref.number as usize, None)
-        } else {
-            return None;
-        };
-
-    let (limit_param, limit_val) =
-        if let pg_raw_parse::Node::A_Const(limit_count) = stmt_query.limit_count() {
-            param_refs_count += 1;
-
-            let mut param_ref_count = mem.make_node::<ParamRef>();
-            param_ref_count.as_mut().set_number(param_refs_count as i32);
-            unique_stmt_mut.set_limit_count(param_ref_count.uncast());
-
-            let limit_val = limit_count
-                .val()
-                .and_then(|limit_val| limit_val.numeric_value::<i32>())?;
-
-            (param_refs_count, Some(limit_val as usize))
-        } else if let pg_raw_parse::Node::ParamRef(param_ref) = stmt_query.limit_count() {
             (param_ref.number as usize, None)
         } else {
             return None;
@@ -494,6 +494,127 @@ mod tests {
             .collect();
 
         assert_eq!(ids.len(), 3, "all appended IDs should be unique");
+    }
+
+    /// Prepares two statements, both using LIMIT/OFFSET. One is re-written, one isn't.
+    /// They should resolve to two different entries in the `GlobalCache` (two different `CacheKeys`)
+    /// and their respective `CachedStmt` entries should contain the correct `OffsetPlan` information.
+    /// Integration test `test_simple_prepared_limit` tests end-to-end functionality.
+    #[test]
+    fn test_rewrite_prepare_offset_limit_cache_differs() {
+        let saved_first_time_sql;
+
+        let mut ctx = TestContext::new();
+        {
+            let (sql, plan) = ctx
+                .rewrite("PREPARE test_stmt AS SELECT * FROM sharded LIMIT 5 OFFSET 10")
+                .unwrap();
+
+            saved_first_time_sql = sql.clone();
+
+            assert!(
+                sql.contains("__pgdog_"),
+                "PREPARE should be renamed to __pgdog_N, got: {sql}"
+            );
+            assert!(
+                !sql.contains("test_stmt"),
+                "original name should be replaced: {sql}"
+            );
+            assert_eq!(plan.prepare_rewrites.len(), 1);
+            assert!(plan.stmt.is_some());
+
+            let prepare = &plan.prepare_rewrites[0];
+            match prepare {
+                PrepareExecute::Prepare(prepare) => {
+                    assert!(prepare.name().starts_with("__pgdog_"));
+                    assert_eq!(
+                        prepare.query(),
+                        "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+                    );
+                }
+
+                _ => panic!("expected PrepareExecute::Prepare"),
+            }
+
+            // Verify 1 local, 1 global before we re-try with $1, $2 in the next block.
+            assert_eq!(ctx.ps.local.len(), 1);
+            assert_eq!(ctx.ps.global.read().len(), 1);
+
+            // Verify the OffsetPlan is correct from the PreparedStatement name used.
+            let (fetched_prepare, _, offset_plan) =
+                ctx.ps.prepare_and_unique_ids("test_stmt").unwrap();
+            let offset_plan = offset_plan.unwrap();
+            assert_eq!(
+                fetched_prepare.query,
+                "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+            );
+            assert!(offset_plan.prepare_execute);
+
+            // Verifies these numbers were actually saved in the cache.
+            // In the next block, verify these are NOT present (correctly creating a new global entry)
+            assert_eq!(offset_plan.limit.limit, Some(5));
+            assert_eq!(offset_plan.limit.offset, Some(10));
+        }
+
+        // LIMIT $1 OFFSET $2; assert OffsetPlan uses None instead of Some(5), Some(10)
+        //
+        {
+            // Notice that this is the resolved statement the last segment was re-written to (for the cache key)
+            // We're using a different name here to assert they resolve differently and to different global statements.
+            let (sql, plan) = ctx
+                .rewrite("PREPARE test_stmt2 AS SELECT * FROM sharded LIMIT $1 OFFSET $2")
+                .unwrap();
+
+            // Ensures that the global names differ. (diff global cache entries, diff OffsetPlans)
+            // "PREPARE __pgdog_1 AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+            // "PREPARE __pgdog_2 AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+            assert_ne!(sql, saved_first_time_sql);
+
+            assert!(
+                sql.contains("__pgdog_"),
+                "PREPARE should be renamed to __pgdog_N, got: {sql}"
+            );
+            assert!(
+                !sql.contains("test_stmt2"),
+                "original name should be replaced: {sql}"
+            );
+            assert_eq!(plan.prepare_rewrites.len(), 1);
+            assert!(plan.stmt.is_some());
+
+            let prepare = &plan.prepare_rewrites[0];
+            match prepare {
+                PrepareExecute::Prepare(prepare) => {
+                    assert!(prepare.name().starts_with("__pgdog_"));
+                    assert_eq!(
+                        prepare.query(),
+                        "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+                    );
+                }
+
+                _ => panic!("expected PrepareExecute::Prepare"),
+            }
+
+            // Now there are **TWO** local entries.
+            assert_eq!(ctx.ps.local.len(), 2);
+            // Now there are **TWO** global entries.
+            assert_eq!(ctx.ps.global.read().len(), 2);
+
+            // Verify the OffsetPlan is correct using the PreparedStatement name used.
+            let (fetched_prepare, _, offset_plan) =
+                ctx.ps.prepare_and_unique_ids("test_stmt2").unwrap();
+            let offset_plan = offset_plan.unwrap();
+            assert_eq!(
+                fetched_prepare.query,
+                "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
+            );
+            assert!(offset_plan.prepare_execute);
+
+            // If we saw Some(5) and Some(10) here, they would have resolved to the last block (in the same context).
+            // Since they don't, that means it's correctly using the pre-re-written `Query` as the `CacheKey`.
+            // They're correctly not resolving to the same `CachedStmt`.
+            assert_eq!(offset_plan.limit.limit, None);
+            assert_eq!(offset_plan.limit.offset, None);
+        }
     }
 
     #[test]
