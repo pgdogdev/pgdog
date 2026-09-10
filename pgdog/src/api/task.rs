@@ -483,7 +483,7 @@ impl TaskStorage {
 
         let cancellation_token = entry.cancellation_token.clone();
 
-        tasks::spawn("async task waiter", async move {
+        tasks::spawn("api::task", async move {
             let res = select! {
                 _ = cancellation_token.cancelled() => {
                     ctx.transition(TaskProgress::Cancelling);
@@ -554,6 +554,14 @@ impl TaskStorage {
         entry.cancel();
 
         Some(state)
+    }
+
+    pub(crate) fn cancel_all(&self) {
+        info!("cancelling all current api tasks");
+
+        for task in &self.tasks.map {
+            task.value().cancel();
+        }
     }
 
     /// Drop every root task that reached a terminal state more than
