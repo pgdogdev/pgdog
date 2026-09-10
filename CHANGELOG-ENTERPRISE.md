@@ -14,7 +14,7 @@ the most optimal way to share those changes.
 
 #### Features
 
-- [Experimental] Globally-distributed monotonic integer sequences, powered by Raft. You can use them by calling `pgdog.nextval('any_sequence_name')`. PgDog automatically injects ths into omnisharded `INSERT`s to make sure the primary key is the same on all shards (set `primary_key = "rewrite_omni_global"` in `pgdog.toml`)
+- **Experimental** Globally-distributed monotonic integer sequences, powered by Raft. You can use them by calling `pgdog.nextval('any_sequence_name')`. PgDog automatically injects this into omnisharded `INSERT`s to make sure the primary key is the same on all shards (set `primary_key = "rewrite_omni_global"` in `pgdog.toml`)
 
 #### Bug fixes
 
