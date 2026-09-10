@@ -166,7 +166,7 @@ impl<'a> StatementRewrite<'a> {
                     }
                     Ok(None) => {
                         if let Some(replacement) =
-                            self.rewrite_nextval(node.as_ref(), mem, &mut next_param, &mut plan)
+                            self.rewrite_sequence(node.as_ref(), mem, &mut next_param, &mut plan)
                         {
                             node.replace(replacement);
                             None
