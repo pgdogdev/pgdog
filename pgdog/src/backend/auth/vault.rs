@@ -186,6 +186,7 @@ mod tests {
             passwords: vec![],
             server_auth: Default::default(),
             server_iam_region: None,
+            server_iam_assume_role: None,
             vault_path: vault_path.map(Into::into),
             vault_refresh_percent: None,
             database_number: 0,
