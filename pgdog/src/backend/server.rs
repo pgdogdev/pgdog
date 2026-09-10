@@ -2260,7 +2260,7 @@ pub(crate) mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(name, query.clone(), &RewritePlan::default());
+        let prepare = prep.insert_prepare(name, query.clone(), None, &RewritePlan::default(), None);
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server

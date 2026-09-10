@@ -81,13 +81,22 @@ impl GlobalCache {
     }
 
     /// Insert a statement prepared using the simple protocol into the global cache.
+    /// `original_query` is used as the `CacheKey`
+    /// If `rewritten_query` is...
+    ///     - Some(..): `rewritten_query` is sent to Postgres as the PREPARE inner-query.
+    ///     - None: `original_query` is sent to Postgres as the PREPARE inner-query.
     pub(super) fn insert_prepare(
         &mut self,
-        query: Bytes,
+        original_query: Bytes,
+        rewritten_query: Option<Bytes>,
+        // TODO: I think we should just pass `unique_ids` in here by itself.
+        //       Otherwise, it could be easily confused to want
+        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
         rewrite_plan: &RewritePlan,
+        offset_plan: Option<OffsetPlan>,
     ) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
-            query: query.clone(),
+            query: original_query.clone(),
         };
 
         if let Some(name) = self.reuse(&cache_key) {
@@ -101,13 +110,17 @@ impl GlobalCache {
         let name = self.next_name();
         let prepare = Prepare {
             name: Bytes::from(name.clone()),
-            query,
+            query: rewritten_query.unwrap_or(original_query),
         };
 
         let statement = Statement {
             stmt: StatementType::Prepare {
                 prepare: prepare.clone(),
                 unique_ids: rewrite_plan.unique_ids,
+                // The reason this isn't using [`rewrite_plan.offset`] is that in `rewrite_single_prepared`,
+                // for `PrepareStmt`, we don't set `offset` on`RewritePlan` yet. We only attach `offset`
+                // to the plan for `ExecuteStmt`, and we need access to `OffsetPlan` for both here.
+                offset_plan,
             },
             row_description: None,
             cache_key: cache_key.clone(),
@@ -146,10 +159,13 @@ impl GlobalCache {
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
     pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
         self.prepare_and_unique_ids(name)
-            .map(|(prepare, _)| prepare)
+            .map(|(prepare, _, _)| prepare)
     }
 
-    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<(Prepare, u16)> {
+    pub(crate) fn prepare_and_unique_ids(
+        &self,
+        name: &str,
+    ) -> Option<(Prepare, u16, Option<OffsetPlan>)> {
         self.names
             .get(name)
             .and_then(|p| p.prepare_and_unique_ids())
@@ -376,8 +392,8 @@ mod test {
         let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) = cache.insert_prepare(query.clone(), &RewritePlan::default());
-        let (_, second) = cache.insert_prepare(query, &RewritePlan::default());
+        let (_, first) = cache.insert_prepare(query.clone(), None, &RewritePlan::default(), None);
+        let (_, second) = cache.insert_prepare(query, None, &RewritePlan::default(), None);
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);

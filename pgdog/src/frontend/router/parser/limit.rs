@@ -5,7 +5,7 @@ use pg_raw_parse::{
 
 use super::{Error, StatementParameters};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Limit {
     pub(crate) limit: Option<usize>,
     pub(crate) offset: Option<usize>,

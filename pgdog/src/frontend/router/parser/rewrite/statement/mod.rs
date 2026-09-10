@@ -1,12 +1,11 @@
 //! Statement rewriter.
 
-use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
-
 use crate::backend::ShardingSchema;
 use crate::backend::schema::Schema;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::AstContext;
 use crate::net::parameter::ParameterValue;
+use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 
 pub(crate) mod aggregate;
 pub(crate) mod auto_id;

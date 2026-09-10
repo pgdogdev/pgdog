@@ -12,7 +12,6 @@ use super::prelude::*;
 /// A `Simple` key comes from SQL `PREPARE` and matches nothing but itself.
 /// Its declared argument types are not captured, so two of those
 /// statements are never known to be the same.
-///
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub(crate) enum CacheKey {
     Extended { query: Bytes, data_types: Bytes },
@@ -33,7 +32,7 @@ impl CacheKey {
     pub(crate) fn query(&self) -> Result<&str, crate::net::Error> {
         match self {
             Self::Extended { query, .. } => Ok(from_utf8(&query[0..query.len() - 1])?),
-            Self::Simple { query } => Ok(from_utf8(query)?), // Simple queries are regular Rust strings.
+            Self::Simple { query, .. } => Ok(from_utf8(query)?), // Simple queries are regular Rust strings.
         }
     }
 }
