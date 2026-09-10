@@ -80,8 +80,23 @@ pub(crate) struct Route {
     /// Computed shard. This is where the query carrying
     /// this route will go no matter what.
     shard: ShardWithPriority,
-    /// Is this query a read, e.g. SELECT.
+    /// Is this query a read, e.g. SELECT. This is the primary/replica
+    /// routing decision: a `SELECT` inside a read/write transaction is
+    /// marked as a write under the conservative read/write strategy so it
+    /// runs on the primary, without becoming a mutation.
     read: bool,
+    /// Does this statement change data or schema. Unlike `read`, this is a
+    /// property of the statement itself and is what decides whether an
+    /// omnisharded statement must reach every shard.
+    ///
+    /// Conservatively `true` for every non-`SELECT` command built with
+    /// [`Route::write`] (DML, DDL, `SET`, `SHOW`, `BEGIN`, ...). For a
+    /// `SELECT` it is a best-effort classification of the statement text:
+    /// data-modifying CTEs, locking clauses (`FOR UPDATE`), the write
+    /// functions in `function.rs` (`nextval`, `setval`) and advisory locks.
+    /// A user-defined function with side effects is not detected and is
+    /// treated as a read.
+    mutates: bool,
     /// `ORDER BY` clause, transformed into something
     /// we can quickly use to sort the result.
     order_by: Vec<OrderBy>,
@@ -168,6 +183,7 @@ impl Route {
     pub(crate) fn write(shard: ShardWithPriority) -> Self {
         Self {
             shard,
+            mutates: true,
             ..Default::default()
         }
     }
@@ -182,6 +198,22 @@ impl Route {
     /// to a primary.
     pub(crate) fn is_write(&self) -> bool {
         !self.is_read()
+    }
+
+    /// Returns true if the statement changes data or schema, independently
+    /// of where it is routed. A read forced onto the primary by a
+    /// read/write transaction is not a mutation.
+    ///
+    /// For `SELECT` this is best-effort: see the `mutates` field docs for
+    /// what is and isn't detected.
+    pub(crate) fn mutates(&self) -> bool {
+        self.mutates
+    }
+
+    /// Set whether the statement changes data or schema.
+    pub(crate) fn with_mutates(mut self, mutates: bool) -> Self {
+        self.mutates = mutates;
+        self
     }
 
     /// Sharding key lookups that missed the cache while routing.
@@ -272,11 +304,16 @@ impl Route {
         self.search_path_driven
     }
 
-    /// Whether an omnisharded write must reach every shard to remain consistent.
+    /// Whether an omnisharded mutation must reach every shard to remain consistent.
+    ///
+    /// Only statements that change data or schema (`mutates`) need full
+    /// coverage. A read of an omnisharded table can be served by any single
+    /// shard, even when a read/write transaction routes it to the primary
+    /// (`is_write()`), because every shard holds the same rows.
     ///
     /// If the database is configured *only* with schema sharding, we don't run any checks.
     pub(crate) fn requires_full_shard_coverage(&self) -> bool {
-        self.is_omnisharded() && self.is_write() && !self.sharded_schema_only
+        self.is_omnisharded() && self.mutates() && !self.sharded_schema_only
     }
 
     /// Return true if this route requires result set manipulation to
@@ -765,5 +802,28 @@ mod test {
         route.set_search_path_driven(true);
         route.sharded_schema_only = true;
         assert!(!route.requires_full_shard_coverage());
+    }
+
+    /// A read routed to the primary (e.g. inside a read/write transaction) is
+    /// still a read: it never needs full shard coverage.
+    #[test]
+    fn test_omnisharded_read_on_primary_needs_no_coverage() {
+        let route = Route::read(ShardWithPriority::new_table_omni(Shard::All))
+            .with_read(false)
+            .with_omnisharded(true);
+        assert!(route.is_write());
+        assert!(!route.mutates());
+        assert!(!route.requires_full_shard_coverage());
+    }
+
+    /// A SELECT that mutates (locking clause, write function) needs coverage
+    /// even though it is built as a read route.
+    #[test]
+    fn test_omnisharded_mutating_select_needs_coverage() {
+        let route = Route::read(ShardWithPriority::new_table_omni(Shard::All))
+            .with_read(false)
+            .with_mutates(true)
+            .with_omnisharded(true);
+        assert!(route.requires_full_shard_coverage());
     }
 }
