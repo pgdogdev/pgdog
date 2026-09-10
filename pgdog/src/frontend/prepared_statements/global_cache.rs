@@ -2,7 +2,7 @@ use crate::{
     frontend::RewritePlan,
     net::{
         Prepare,
-        messages::{Parse, RowDescription},
+        messages::{ParameterDescription, Parse, RowDescription},
     },
     stats::memory::MemoryUsage,
 };
@@ -73,6 +73,7 @@ impl GlobalCache {
             },
             cache_key: cache_key.clone(),
             row_description: None,
+            parameter_description: None,
         };
 
         self.insert_internal(&name, cache_key, statement);
@@ -110,6 +111,7 @@ impl GlobalCache {
                 unique_ids: rewrite_plan.unique_ids,
             },
             row_description: None,
+            parameter_description: None,
             cache_key: cache_key.clone(),
         };
 
@@ -132,6 +134,27 @@ impl GlobalCache {
         {
             entry.row_description = Some(row_description);
         }
+    }
+
+    /// Client sent a Describe for a prepared statement and received a ParameterDescription.
+    /// We record it to know the types of parameters sent in Bind.
+    pub(crate) fn insert_parameter_description(
+        &mut self,
+        name: &str,
+        parameter_description: ParameterDescription,
+    ) {
+        if let Some(entry) = self.names.get_mut(name)
+            && entry.parameter_description.is_none()
+        {
+            entry.parameter_description = Some(parameter_description);
+        }
+    }
+
+    /// Get the ParameterDescription for the prepared statement, if it was described.
+    pub(crate) fn parameter_description(&self, name: &str) -> Option<ParameterDescription> {
+        self.names
+            .get(name)
+            .and_then(|p| p.parameter_description.clone())
     }
 
     /// Get the Parse message for a globally unique prepared statement

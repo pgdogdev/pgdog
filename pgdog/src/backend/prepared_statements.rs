@@ -8,8 +8,9 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
-        ToBytes,
+        Bind, Close, CloseComplete, DataRow, Format, FromBytes, Message, ParseComplete, Protocol,
+        ProtocolMessage, ToBytes,
+        bind::Parameter,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -17,8 +18,9 @@ use crate::{
 use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
 use pgdog_config::prepared_statements::PreparedStatementsConfig;
+use tracing::warn;
 
-use super::{Error, Oids};
+use super::{Error, Oids, pool::PayloadRewriter};
 use super::{
     protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
@@ -107,7 +109,43 @@ pub(crate) struct PreparedStatements {
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
+    /// Portals bound but not yet executed.
+    binds: VecDeque<BoundPortal>,
+    /// Portals being executed; DataRows belong to the front one.
+    executing: VecDeque<BoundPortal>,
+    /// Portal Describes sent and not yet answered.
+    portal_describes: usize,
     server_state: State,
+}
+
+/// Bound portals never accumulate past this, even if a client
+/// keeps binding named portals without executing them.
+const MAX_BOUND_PORTALS: usize = 64;
+
+/// A portal the client bound, tracked so binary values in its
+/// rows can have their embedded type OIDs canonicalized.
+#[derive(Debug, Default)]
+struct BoundPortal {
+    portal: String,
+    /// Global name of the statement; empty if unknown.
+    statement: String,
+    /// Result formats requested in Bind.
+    formats: Vec<Format>,
+    /// RowDescription the server sent for this portal, with the shard's OIDs.
+    row_description: Option<RowDescription>,
+    /// Columns whose binary values embed type OIDs: `(index, shard type OID)`.
+    /// Computed on the first DataRow.
+    plan: Option<Vec<(usize, u32)>>,
+}
+
+impl BoundPortal {
+    fn result_format(&self, index: usize) -> Format {
+        match self.formats.len() {
+            0 => Format::Text,
+            1 => self.formats[0],
+            _ => self.formats.get(index).copied().unwrap_or(Format::Text),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +167,9 @@ impl PreparedStatements {
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
+            binds: VecDeque::new(),
+            executing: VecDeque::new(),
+            portal_describes: 0,
             server_state: State::Idle,
         }
     }
@@ -168,41 +209,9 @@ impl PreparedStatements {
     pub(super) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
             ProtocolMessage::Bind(bind) => {
-                if !bind.anonymous() {
-                    let message = self.check_prepared(bind.statement())?;
-                    match message {
-                        Some(mut message) => {
-                            if message.close.is_some() {
-                                self.state.add_ignore('3');
-                            }
-                            self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
-                            self.state.add('2');
-                            if self.config.level.rewrite_anonymous() {
-                                message.anonymize();
-                                let mut bind = bind.clone();
-                                bind.anonymize();
-                                return Ok(HandleResult::PrependRewrite {
-                                    prepend: message,
-                                    rewrite: ProtocolMessage::Bind(bind),
-                                });
-                            } else {
-                                return Ok(HandleResult::Prepend(message));
-                            }
-                        }
-
-                        None => {
-                            self.state.add('2');
-                            if self.config.level.rewrite_anonymous() {
-                                let mut bind = bind.clone();
-                                bind.anonymize();
-                                return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
-                            }
-                        }
-                    }
-                } else {
-                    self.state.add('2');
-                }
+                self.bound(bind)?;
+                let result = self.handle_bind(bind)?;
+                return self.rewrite_bind_params(bind, result);
             }
             ProtocolMessage::Describe(describe) => {
                 if !describe.anonymous() {
@@ -252,14 +261,16 @@ impl PreparedStatements {
                     }
                 } else if describe.is_portal() {
                     self.state.add(ExecutionCode::DescriptionOrNothing);
+                    self.portal_describes += 1;
                 } else if describe.is_statement() {
                     self.state.add(ExecutionCode::DescriptionOrNothing); // t
                     self.state.add(ExecutionCode::DescriptionOrNothing); // T
                 }
             }
 
-            ProtocolMessage::Execute(_) => {
+            ProtocolMessage::Execute(execute) => {
                 self.state.add(ExecutionCode::ExecutionCompleted);
+                self.executed(execute.portal());
             }
 
             ProtocolMessage::Sync(_) => {
@@ -403,6 +414,9 @@ impl PreparedStatements {
                 // are syntactically valid.
                 self.describes.clear();
                 self.parses.clear();
+                self.binds.clear();
+                self.executing.clear();
+                self.portal_describes = 0;
             }
 
             'T' => {
@@ -412,17 +426,45 @@ impl PreparedStatements {
                         .map(Ok)
                         .unwrap_or_else(|| RowDescription::from_bytes(message.payload()))?;
                     self.add_row_description(&describe, row_description);
-                };
+                } else if self.portal_describes > 0 {
+                    // Answering a portal Describe: remember the columns for its rows.
+                    self.portal_describes -= 1;
+                    if let Some(portal) = self.described_portal() {
+                        portal.row_description = maybe_row_description;
+                    }
+                }
+            }
+
+            'D' => {
+                self.rewrite_data_row(message)?;
             }
 
             // No data for DELETEs
             'n' => {
-                self.describes.pop_front();
+                if self.describes.pop_front().is_none() {
+                    self.portal_describes = self.portal_describes.saturating_sub(1);
+                }
+            }
+
+            // Portal suspended by a row limit: it stays open and the client
+            // will execute it again, so keep what we learned about it.
+            's' => {
+                if let Some(portal) = self.executing.pop_front() {
+                    self.binds.push_back(portal);
+                }
+            }
+
+            // Empty query, nothing was executed.
+            'I' => {
+                self.executing.pop_front();
             }
 
             '1' | 'C' => {
                 if let Some(name) = self.parses.pop_front() {
                     self.prepared(&name);
+                }
+                if code == 'C' {
+                    self.executing.pop_front();
                 }
             }
 
@@ -655,19 +697,254 @@ impl PreparedStatements {
         }
     }
 
+    /// Rewrite the ParameterDescription to canonical OIDs and cache it for the
+    /// statement being described, so Bind parameters of array/composite types
+    /// can be rewritten later.
     fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
-        let Some(mappings) = self.oids.get() else {
+        let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
+
+        if let Some(mappings) = self.oids.get()
+            && !mappings.is_identity()
+        {
+            parameter_description.rewrite_data_types(&mappings.shard_to_canonical);
+            message.replace_payload(parameter_description.to_bytes());
+        }
+
+        if let Some(describe) = self.describes.front() {
+            self.global_cache
+                .write()
+                .insert_parameter_description(describe, parameter_description);
+        }
+
+        Ok(())
+    }
+
+    /// Upstream handling of Bind: prepare the statement first if needed,
+    /// and anonymize it in ExtendedAnonymous mode.
+    fn handle_bind(&mut self, bind: &Bind) -> Result<HandleResult, Error> {
+        if !bind.anonymous() {
+            let message = self.check_prepared(bind.statement())?;
+            match message {
+                Some(mut message) => {
+                    if message.close.is_some() {
+                        self.state.add_ignore('3');
+                    }
+                    self.state.add_ignore('1');
+                    self.parses.push_back(bind.statement().to_string());
+                    self.state.add('2');
+                    if self.config.level.rewrite_anonymous() {
+                        message.anonymize();
+                        let mut bind = bind.clone();
+                        bind.anonymize();
+                        return Ok(HandleResult::PrependRewrite {
+                            prepend: message,
+                            rewrite: ProtocolMessage::Bind(bind),
+                        });
+                    } else {
+                        return Ok(HandleResult::Prepend(message));
+                    }
+                }
+
+                None => {
+                    self.state.add('2');
+                    if self.config.level.rewrite_anonymous() {
+                        let mut bind = bind.clone();
+                        bind.anonymize();
+                        return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
+                    }
+                }
+            }
+        } else {
+            self.state.add('2');
+        }
+
+        Ok(HandleResult::Forward)
+    }
+
+    /// Remember a portal the client bound, if this shard's OIDs need translating.
+    fn bound(&mut self, bind: &Bind) -> Result<(), Error> {
+        if self
+            .oids
+            .get()
+            .is_none_or(|mappings| mappings.is_identity())
+        {
+            return Ok(());
+        }
+        if self.binds.len() >= MAX_BOUND_PORTALS {
+            self.binds.pop_front();
+        }
+        self.binds.push_back(BoundPortal {
+            portal: bind.portal()?.to_owned(),
+            statement: bind.statement().to_owned(),
+            formats: bind.result_formats().collect(),
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    /// The client is executing a portal; its rows come next.
+    fn executed(&mut self, portal: &str) {
+        if let Some(index) = self.binds.iter().position(|bound| bound.portal == portal)
+            && let Some(bound) = self.binds.remove(index)
+        {
+            self.executing.push_back(bound);
+        }
+    }
+
+    /// The portal a Describe(portal) response belongs to: the oldest one
+    /// we haven't seen a RowDescription for.
+    fn described_portal(&mut self) -> Option<&mut BoundPortal> {
+        self.executing
+            .iter_mut()
+            .chain(self.binds.iter_mut())
+            .find(|portal| portal.row_description.is_none())
+    }
+
+    /// Rewrite type OIDs embedded in binary array/composite parameters from
+    /// canonical to this shard's, replacing the Bind in `result` if any changed.
+    fn rewrite_bind_params(
+        &self,
+        bind: &Bind,
+        result: HandleResult,
+    ) -> Result<HandleResult, Error> {
+        let Some(mut rewritten) = self.rewrite_params(bind)? else {
+            return Ok(result);
+        };
+
+        Ok(match result {
+            HandleResult::Forward => HandleResult::Rewrite(ProtocolMessage::Bind(rewritten)),
+            HandleResult::Prepend(prepend) => HandleResult::PrependRewrite {
+                prepend,
+                rewrite: ProtocolMessage::Bind(rewritten),
+            },
+            HandleResult::Rewrite(ProtocolMessage::Bind(_)) => {
+                rewritten.anonymize();
+                HandleResult::Rewrite(ProtocolMessage::Bind(rewritten))
+            }
+            HandleResult::PrependRewrite {
+                prepend,
+                rewrite: ProtocolMessage::Bind(_),
+            } => {
+                rewritten.anonymize();
+                HandleResult::PrependRewrite {
+                    prepend,
+                    rewrite: ProtocolMessage::Bind(rewritten),
+                }
+            }
+            other => other,
+        })
+    }
+
+    /// Returns the Bind with its binary array/composite parameters rewritten, if any.
+    /// Parameter types come from the statement's Describe response.
+    fn rewrite_params(&self, bind: &Bind) -> Result<Option<Bind>, Error> {
+        if bind.anonymous() || bind.params_raw().is_empty() {
+            return Ok(None);
+        }
+        let Some(mappings) = self.oids.get().filter(|mappings| !mappings.is_identity()) else {
+            return Ok(None);
+        };
+        let Some(types) = self
+            .global_cache
+            .read()
+            .parameter_description(bind.statement())
+        else {
+            return Ok(None);
+        };
+
+        let rewriter = mappings.to_shard();
+        let mut rewritten: Option<Bind> = None;
+
+        for (index, oid) in types.data_types().enumerate() {
+            if !rewriter.needs_rewrite(oid) {
+                continue;
+            }
+            let Some(param) = bind.parameter(index)? else {
+                continue;
+            };
+            if param.is_null() || param.format() != Format::Binary {
+                continue;
+            }
+            if let Some(data) = Self::rewrite_value(&rewriter, oid, param.data(), "parameter") {
+                rewritten
+                    .get_or_insert_with(|| bind.clone())
+                    .set_param(index, Parameter::new(&data));
+            }
+        }
+
+        Ok(rewritten)
+    }
+
+    /// Rewrite type OIDs embedded in binary array/composite columns
+    /// from this shard's to canonical.
+    fn rewrite_data_row(&mut self, message: &mut Message) -> Result<(), Error> {
+        let Some(portal) = self.executing.front_mut() else {
             return Ok(());
         };
-        let mappings = &mappings.shard_to_canonical;
-        if mappings.is_empty() {
+        let Some(mappings) = self.oids.get().filter(|mappings| !mappings.is_identity()) else {
+            return Ok(());
+        };
+
+        let rewriter = mappings.to_canonical();
+        let plan = match &portal.plan {
+            Some(plan) => plan,
+            None => {
+                // From the portal's Describe, or the statement's; both canonical.
+                let row_description = portal
+                    .row_description
+                    .clone()
+                    .or_else(|| self.global_cache.read().row_description(&portal.statement));
+                let plan = row_description
+                    .iter()
+                    .flat_map(|row_description| row_description.iter().enumerate())
+                    .filter(|(index, _)| portal.result_format(*index) == Format::Binary)
+                    .map(|(index, field)| (index, mappings.shard_oid(field.type_oid as u32)))
+                    .filter(|(_, oid)| rewriter.needs_rewrite(*oid))
+                    .collect();
+                portal.plan.insert(plan)
+            }
+        };
+
+        if plan.is_empty() {
             return Ok(());
         }
 
-        let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
-        parameter_description.rewrite_data_types(mappings);
-        message.replace_payload(parameter_description.to_bytes());
+        let mut row = DataRow::from_bytes(message.payload())?;
+        let mut changed = false;
+        for &(index, oid) in plan {
+            let Some(column) = row.get_raw(index).filter(|column| !column.is_null) else {
+                continue;
+            };
+            if let Some(data) = Self::rewrite_value(&rewriter, oid, column, "column") {
+                row.insert(index, bytes::Bytes::from(data), false);
+                changed = true;
+            }
+        }
+
+        if changed {
+            message.replace_payload(row.to_bytes());
+        }
+
         Ok(())
+    }
+
+    /// Rewrite the OIDs embedded in one binary value. Returns the new
+    /// bytes if anything changed; malformed values are left alone.
+    fn rewrite_value(
+        rewriter: &PayloadRewriter<'_>,
+        oid: u32,
+        value: &[u8],
+        what: &str,
+    ) -> Option<Vec<u8>> {
+        let mut data = value.to_vec();
+        match rewriter.rewrite(oid, &mut data) {
+            Ok(true) => Some(data),
+            Ok(false) => None,
+            Err(_) => {
+                warn!("malformed binary {what} of type oid {oid}, not rewriting");
+                None
+            }
+        }
     }
 }
 
@@ -680,6 +957,7 @@ pub(crate) mod test {
         Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
         messages::ReadyForQuery,
     };
+    use bytes::BufMut;
     use pgdog_config::PreparedStatementsLevel;
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
@@ -1317,6 +1595,251 @@ pub(crate) mod test {
             result,
             HandleResult::Rewrite(ProtocolMessage::Parse(expected))
         );
+    }
+
+    // -------------------------------------------------------
+    // Embedded OIDs in binary arrays/composites
+    // -------------------------------------------------------
+
+    const MOOD: u32 = 16400;
+    const MOOD_ARRAY: u32 = 16401;
+    const SHARD_MOOD: u32 = 17000;
+    const SHARD_MOOD_ARRAY: u32 = 17001;
+
+    /// Mappings for a shard where `mood` and `mood[]` have different OIDs.
+    fn mood_oids() -> Arc<Oids> {
+        use crate::backend::pool::shard::TypeKind;
+
+        Oids::from_canonical_with_kinds(
+            [(MOOD, SHARD_MOOD), (MOOD_ARRAY, SHARD_MOOD_ARRAY)]
+                .into_iter()
+                .collect(),
+            [(
+                SHARD_MOOD_ARRAY,
+                TypeKind::Array {
+                    element: SHARD_MOOD,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            [(MOOD_ARRAY, TypeKind::Array { element: MOOD })]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    /// Binary array of one text-ish element with the given element OID.
+    fn mood_array(element: u32) -> Vec<u8> {
+        let mut buf = bytes::BytesMut::new();
+        buf.put_i32(1); // ndim
+        buf.put_i32(0); // no nulls
+        buf.put_u32(element);
+        buf.put_i32(1); // size
+        buf.put_i32(1); // lower bound
+        buf.put_i32(3);
+        buf.put_slice(b"sad");
+        buf.to_vec()
+    }
+
+    fn array_element_oid(data: &[u8]) -> u32 {
+        u32::from_be_bytes([data[8], data[9], data[10], data[11]])
+    }
+
+    fn mood_array_row_description(type_oid: u32) -> RowDescription {
+        RowDescription::new(&[crate::net::messages::Field {
+            name: "moods".into(),
+            table_oid: 0,
+            column: 0,
+            type_oid: type_oid as i32,
+            type_size: -1,
+            type_modifier: -1,
+            format: 1,
+        }])
+    }
+
+    fn bind_complete() -> Message {
+        Message::new(crate::net::messages::BindComplete.to_bytes())
+    }
+
+    fn mood_row(element: u32) -> Message {
+        let mut row = DataRow::new();
+        row.add(bytes::Bytes::from(mood_array(element)));
+        Message::new(row.to_bytes())
+    }
+
+    fn row_element_oid(message: &Message) -> u32 {
+        array_element_oid(
+            &DataRow::from_bytes(message.payload())
+                .unwrap()
+                .column(0)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn bind_rewrites_binary_array_param_to_shard_oids() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("array_param", "INSERT INTO t VALUES ($1)");
+        FrontendPreparedStatements::global()
+            .write()
+            .insert_parameter_description(
+                &name,
+                ParameterDescription::new(vec![MOOD_ARRAY as i32]),
+            );
+        ps.prepared(&name);
+
+        let bind = Bind::new_params_codes(
+            &name,
+            &[Parameter::new(&mood_array(MOOD))],
+            &[Format::Binary],
+        );
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        let HandleResult::Rewrite(ProtocolMessage::Bind(rewritten)) = result else {
+            panic!("expected rewritten bind, got {result:?}");
+        };
+        let param = rewritten.parameter(0).unwrap().unwrap();
+        assert_eq!(array_element_oid(param.data()), SHARD_MOOD);
+
+        // Text params are left alone.
+        let bind = Bind::new_params_codes(&name, &[Parameter::new(b"{sad}")], &[Format::Text]);
+        let result = ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        assert!(matches!(result, HandleResult::Forward), "{result:?}");
+    }
+
+    #[test]
+    fn parameter_description_is_cached_for_the_described_statement() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("cache_params", "INSERT INTO t VALUES ($1)");
+        ps.prepared(&name);
+        ps.handle(&ProtocolMessage::Describe(Describe::new_statement(&name)))
+            .unwrap();
+
+        // The shard describes the parameter with its own OID.
+        let mut params =
+            Message::new(ParameterDescription::new(vec![SHARD_MOOD_ARRAY as i32]).to_bytes());
+        assert!(ps.forward(&mut params).unwrap());
+
+        let cached = FrontendPreparedStatements::global()
+            .read()
+            .parameter_description(&name)
+            .unwrap();
+        assert_eq!(cached.data_types().collect::<Vec<_>>(), vec![MOOD_ARRAY]);
+    }
+
+    #[test]
+    fn data_row_rewrites_binary_array_using_cached_row_description() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("array_rows", "SELECT moods FROM t");
+        // Described earlier: cached with canonical OIDs.
+        FrontendPreparedStatements::global()
+            .write()
+            .insert_row_description(&name, mood_array_row_description(MOOD_ARRAY));
+        ps.prepared(&name);
+
+        let bind = Bind::new_params_codes_results(&name, &[], &[], &[1]);
+        ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        ps.handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(ps.forward(&mut bind_complete()).unwrap());
+
+        let mut message = mood_row(SHARD_MOOD);
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(row_element_oid(&message), MOOD);
+
+        let mut complete = Message::new(CommandComplete::from_str("SELECT 1").to_bytes());
+        assert!(ps.forward(&mut complete).unwrap());
+        assert!(ps.executing.is_empty());
+    }
+
+    #[test]
+    fn data_row_rewrites_binary_array_using_portal_row_description() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("array_rows_portal", "SELECT moods FROM t");
+        ps.prepared(&name);
+
+        let bind = Bind::new_params_codes_results(&name, &[], &[], &[1]);
+        ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        ps.handle(&ProtocolMessage::Describe(Describe::new_portal("")))
+            .unwrap();
+        ps.handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(ps.forward(&mut bind_complete()).unwrap());
+
+        // The portal's RowDescription carries the shard's OIDs, canonicalized on the way out.
+        let mut description = Message::new(mood_array_row_description(SHARD_MOOD_ARRAY).to_bytes());
+        assert!(ps.forward(&mut description).unwrap());
+        assert_eq!(
+            RowDescription::from_bytes(description.payload())
+                .unwrap()
+                .field(0)
+                .unwrap()
+                .type_oid,
+            MOOD_ARRAY as i32
+        );
+
+        let mut message = mood_row(SHARD_MOOD);
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(row_element_oid(&message), MOOD);
+    }
+
+    #[test]
+    fn suspended_portal_keeps_rewriting_when_executed_again() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("array_rows_suspended", "SELECT moods FROM t");
+        FrontendPreparedStatements::global()
+            .write()
+            .insert_row_description(&name, mood_array_row_description(MOOD_ARRAY));
+        ps.prepared(&name);
+
+        let bind = Bind::new_params_codes_results(&name, &[], &[], &[1]);
+        ps.handle(&ProtocolMessage::Bind(bind)).unwrap();
+        ps.handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(ps.forward(&mut bind_complete()).unwrap());
+
+        let mut message = mood_row(SHARD_MOOD);
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(row_element_oid(&message), MOOD);
+
+        // Row limit reached; the portal is still open. PortalSuspended: code 's', length only.
+        let mut suspended = Message::new(bytes::Bytes::from_static(&[b's', 0, 0, 0, 4]));
+        assert!(ps.forward(&mut suspended).unwrap());
+        assert!(ps.executing.is_empty());
+
+        ps.handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        let mut message = mood_row(SHARD_MOOD);
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(row_element_oid(&message), MOOD);
+    }
+
+    #[test]
+    fn data_row_in_text_format_is_left_alone() {
+        let mut ps = new_extended();
+        ps.oids = mood_oids();
+        let name = insert_global("array_rows_text", "SELECT moods FROM t");
+        FrontendPreparedStatements::global()
+            .write()
+            .insert_row_description(&name, mood_array_row_description(MOOD_ARRAY));
+        ps.prepared(&name);
+
+        ps.handle(&ProtocolMessage::Bind(Bind::new_statement(&name)))
+            .unwrap();
+        ps.handle(&ProtocolMessage::Execute(Execute::new()))
+            .unwrap();
+        assert!(ps.forward(&mut bind_complete()).unwrap());
+
+        let mut row = DataRow::new();
+        row.add(bytes::Bytes::from_static(b"{sad}"));
+        let original = Message::new(row.to_bytes());
+        let mut message = original.clone();
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(message.payload(), original.payload());
     }
 
     // -------------------------------------------------------

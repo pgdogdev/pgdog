@@ -203,6 +203,12 @@ impl Bind {
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
+    /// Portal name; empty for the unnamed portal.
+    #[inline]
+    pub(crate) fn portal(&self) -> Result<&str, Error> {
+        Ok(from_utf8(&self.portal[0..self.portal.len() - 1])?)
+    }
+
     /// Format the client asked each result column to be returned in.
     pub(crate) fn result_formats(&self) -> impl ExactSizeIterator<Item = Format> + '_ {
         self.results.chunks_exact(2).map(|code| {
