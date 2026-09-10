@@ -226,6 +226,9 @@ fn is_bigint_type(data_type: &str) -> bool {
 }
 
 #[cfg(test)]
+mod split_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::nextval::SequenceCall;
     use super::super::plan::GeneratedId;
@@ -243,7 +246,7 @@ mod tests {
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::test_utils::set_env_var;
 
-    fn make_schema_with_bigint_pk() -> Schema {
+    pub(super) fn make_schema_with_bigint_pk() -> Schema {
         let mut columns = IndexMap::new();
         columns.insert(
             "id".to_string(),
