@@ -16,6 +16,10 @@ the most optimal way to share those changes.
 
 - [Experimental] Globally-distributed monotonic integer sequences, powered by Raft. You can use them by calling `pgdog.nextval('any_sequence_name')`. PgDog automatically injects ths into omnisharded `INSERT`s to make sure the primary key is the same on all shards (set `primary_key = "rewrite_omni_global"` in `pgdog.toml`)
 
+#### Bug fixes
+
+- Autodiscovery would drop and re-create connections when a replica was added/removed. This was caused by a bad connection pool compatibility check and fixed in the open source edition ([v0.1.58](CHANGELOG.md#v0.1.58)).
+
 ### v2026-09-03
 
 **OS version**: [v0.1.57](CHANGELOG.md#v0.1.57)
