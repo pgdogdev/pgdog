@@ -1971,6 +1971,11 @@
           "description": "Rewrite only for omnisharded tables.",
           "type": "string",
           "const": "rewrite_omni"
+        },
+        {
+          "description": "Rewrite only for omnisharded tables and use global sequence instead of unique ID.",
+          "type": "string",
+          "const": "rewrite_omni_global"
         }
       ]
     },

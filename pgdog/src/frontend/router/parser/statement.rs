@@ -214,6 +214,9 @@ impl AdvisoryLocks {
 struct Walk<'a> {
     tables: Vec<Table<'a>>,
     advisory_locks: HashSet<AdvisoryLock>,
+    /// Names introduced by `WITH` clauses. An unqualified reference to one
+    /// of these is the CTE, not a table.
+    cte_names: HashSet<&'a str>,
 }
 use crate::{
     backend::{Schema, ShardingSchema},
@@ -556,6 +559,18 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     fn run_walk(&self) -> Walk<'a> {
         let mut walk = Walk::default();
         self.walk_stmt(self.stmt, &mut walk);
+
+        // A CTE name shadows an unqualified table of the same name for the
+        // rest of the statement, so `FROM cte` is not a table reference.
+        // Schema-qualified names always refer to the real table. CTE names
+        // are collected across the whole statement rather than per scope;
+        // a nested `WITH` reusing an outer table's name is not distinguished.
+        if !walk.cte_names.is_empty() {
+            let cte_names = &walk.cte_names;
+            walk.tables
+                .retain(|table| table.schema.is_some() || !cte_names.contains(table.name));
+        }
+
         walk
     }
 
@@ -585,6 +600,13 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
 
             Node::RangeVar(r) => {
                 walk.tables.push(Table::from(r));
+                Recurse::yes()
+            }
+
+            Node::CommonTableExpr(cte) => {
+                if let Some(name) = cte.ctename() {
+                    walk.cte_names.insert(name);
+                }
                 Recurse::yes()
             }
 

@@ -21,20 +21,23 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let mut cross_shard = false;
-        // Write overwrite because of conservative read/write split.
-        let mut writes = self.write_override;
+        // Does the statement itself change data: data-modifying CTEs,
+        // locking clauses, write functions. This decides omnisharded
+        // coverage; the primary/replica decision (`writes`) additionally
+        // honours the conservative read/write split's transaction override.
+        let mut mutates = false;
         walk::walk(stmt.into(), |node| match node {
             Node::CommonTableExpr(expr) => match expr.ctequery() {
                 Node::SelectStmt(_) => (),
-                _ => writes = true,
+                _ => mutates = true,
             },
-            Node::LockingClause(_) => writes = true,
+            Node::LockingClause(_) => mutates = true,
             Node::FuncCall(f) => {
                 if let Some(f) =
                     Function::from_strings(f.funcname().into_iter().filter_map(Node::as_str))
                 {
                     cross_shard = cross_shard || f.behavior().cross_shard;
-                    writes = writes || f.behavior().writes;
+                    mutates = mutates || f.behavior().writes;
                 }
             }
             _ => (),
@@ -57,7 +60,9 @@ impl QueryParser {
             (parser.extract_advisory_locks(), parser.is_all_omnisharded())
         };
 
-        let writes = writes || !advisory_locks.is_empty();
+        mutates |= !advisory_locks.is_empty();
+        // Write override because of conservative read/write split.
+        let writes = self.write_override || mutates;
 
         // Early return for any direct-to-shard queries.
         if context.shards_calculator.shard().is_direct() {
@@ -107,10 +112,26 @@ impl QueryParser {
 
         // SELECT NOW(), SELECT 1
         if shards.is_empty() && stmt.from_clause().is_empty() {
-            let shard = Shard::Direct(round_robin::next(context.shards));
+            if omnisharded && mutates {
+                // e.g. `WITH ins AS (INSERT INTO omni ... RETURNING id) SELECT 1`.
+                // The write must reach every shard to keep them identical.
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(None, "SELECT omnishard write broadcasted");
+                }
 
-            if let Some(recorder) = self.recorder_mut() {
-                recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table".to_string());
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_table_omni(Shard::All));
+            } else {
+                let shard = Shard::Direct(round_robin::next(context.shards));
+
+                if let Some(recorder) = self.recorder_mut() {
+                    recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table");
+                }
+
+                context
+                    .shards_calculator
+                    .push(ShardWithPriority::new_rr_no_table(shard));
             }
 
             context
@@ -212,43 +233,58 @@ impl QueryParser {
                     context.router_context.schema.is_loaded()
                 );
 
-                // Omnisharded by default.
-                let sticky = tables.iter().any(|table| {
-                    context
-                        .sharding_schema
-                        .tables()
-                        .is_omnisharded_sticky(table.name)
-                        == Some(true)
-                });
-
-                let (rr_index, explain) = if sticky
-                    || context
-                        .sharding_schema
-                        .tables()
-                        .is_omnisharded_sticky_default()
-                {
-                    (
-                        context.router_context.sticky.omni_index % context.shards,
-                        "sticky",
-                    )
-                } else {
-                    (round_robin::next(context.shards), "round robin")
-                };
-
-                let shard = Shard::Direct(rr_index);
-
-                // Routed to a single shard via the omnisharded-by-default path
-                // (non-sharded tables, including system catalogs).
+                // Omnisharded by default (non-sharded tables, including
+                // system catalogs).
                 omnisharded = true;
 
-                if let Some(recorder) = self.recorder_mut() {
-                    recorder
-                        .record_entry(Some(shard.clone()), format!("SELECT omnishard {}", explain));
-                }
+                if mutates {
+                    // A write through an omnisharded table, e.g. a
+                    // data-modifying CTE, must reach every shard to keep
+                    // them identical, like an omnisharded INSERT or UPDATE.
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(None, "SELECT omnishard write broadcasted");
+                    }
 
-                context
-                    .shards_calculator
-                    .push(ShardWithPriority::new_rr_omni(shard));
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_table_omni(Shard::All));
+                } else {
+                    // Any single shard can answer a read.
+                    let sticky = tables.iter().any(|table| {
+                        context
+                            .sharding_schema
+                            .tables()
+                            .is_omnisharded_sticky(table.name)
+                            == Some(true)
+                    });
+
+                    let (rr_index, explain) = if sticky
+                        || context
+                            .sharding_schema
+                            .tables()
+                            .is_omnisharded_sticky_default()
+                    {
+                        (
+                            context.router_context.sticky.omni_index % context.shards,
+                            "sticky",
+                        )
+                    } else {
+                        (round_robin::next(context.shards), "round robin")
+                    };
+
+                    let shard = Shard::Direct(rr_index);
+
+                    if let Some(recorder) = self.recorder_mut() {
+                        recorder.record_entry(
+                            Some(shard.clone()),
+                            format!("SELECT omnishard {}", explain),
+                        );
+                    }
+
+                    context
+                        .shards_calculator
+                        .push(ShardWithPriority::new_rr_omni(shard));
+                }
             }
         }
 

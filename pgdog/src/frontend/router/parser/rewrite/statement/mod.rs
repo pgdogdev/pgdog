@@ -12,6 +12,7 @@ pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
+pub(crate) mod nextval;
 pub(crate) mod offset;
 mod order_by;
 pub(crate) mod plan;
@@ -21,6 +22,7 @@ pub(crate) mod update;
 
 pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
+use plan::GeneratedId;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
@@ -151,6 +153,10 @@ impl<'a> StatementRewrite<'a> {
                 match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
                     Ok(Some(replacement)) => {
                         plan.unique_ids += 1;
+                        if self.extended {
+                            plan.generated_ids
+                                .push(((next_param - 1) as u16, GeneratedId::UniqueId));
+                        }
                         self.rewritten = true;
                         node.replace(replacement);
                         None
@@ -159,7 +165,16 @@ impl<'a> StatementRewrite<'a> {
                         err = Some(e);
                         None
                     }
-                    Ok(None) => Some(node),
+                    Ok(None) => {
+                        if let Some(replacement) =
+                            self.rewrite_sequence(node.as_ref(), mem, &mut next_param, &mut plan)
+                        {
+                            node.replace(replacement);
+                            None
+                        } else {
+                            Some(node)
+                        }
+                    }
                 }
             }),
         );

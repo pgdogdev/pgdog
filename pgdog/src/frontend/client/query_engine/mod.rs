@@ -10,8 +10,7 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
-use fnv::FnvHashMap;
-use temp_table::TempTableState;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -52,6 +51,7 @@ use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
 pub(crate) use split::Pipeline;
 pub(in crate::frontend) use temp_table::TempTableChange;
+use temp_table::TempTables;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
 
@@ -74,7 +74,7 @@ pub(crate) struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
-    temp_tables: FnvHashMap<String, TempTableState>,
+    temp_tables: TempTables,
 }
 
 impl QueryEngine {
@@ -108,6 +108,11 @@ impl QueryEngine {
 
     pub(crate) fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(&client.params, &client.comms, client.admin)
+    }
+
+    /// Token cancelled when an admin terminates this client's cluster (FORCE_RELOAD).
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.backend.cancellation_token()
     }
 
     /// Wait for an async message from the backend.
@@ -152,7 +157,7 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context) {
+        let rewrite_result = match self.parse_and_rewrite(context).await {
             Ok(rewrite_result) => rewrite_result,
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))

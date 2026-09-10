@@ -13,7 +13,7 @@ use crate::{
     backend::databases::reload_from_existing,
     config::{config, load_test_sharded, set},
     expect_message,
-    net::{CommandComplete, ErrorResponse, Parameters, Query, ReadyForQuery},
+    net::{CommandComplete, DataRow, ErrorResponse, Parameters, Query, ReadyForQuery},
 };
 
 use super::prelude::*;
@@ -257,6 +257,78 @@ async fn test_omni_read_blocked_after_set_sharding_key() {
 
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
+
+    reset_tables(&mut client).await;
+}
+
+/// Count rows with `id` on one specific shard.
+async fn count_on_shard(client: &mut TestClient, shard: usize, id: i64) -> i64 {
+    client
+        .send_simple(Query::new(format!(
+            "/* pgdog_shard: {shard} */ SELECT count(*) FROM sharded_omni WHERE id = {id}"
+        )))
+        .await;
+    let messages = client.read_until('Z').await.unwrap();
+    let row = messages
+        .iter()
+        .find(|m| m.code() == 'D')
+        .map(|m| DataRow::try_from(m.clone()).unwrap())
+        .expect("count(*) returns a row");
+    row.get_int(0, true).unwrap()
+}
+
+/// A write to an omnisharded table hidden inside a CTE of a SELECT is
+/// broadcast like a plain omnisharded INSERT: the row lands on every shard,
+/// and the client sees the `RETURNING` rows from one shard only. With a shard
+/// directive the same statement is rejected, since it could only reach the
+/// directed shard.
+#[tokio::test]
+async fn test_omni_write_in_cte_reaches_every_shard() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    reset_tables(&mut client).await;
+    let id = client.random_id_for_shard(1);
+
+    let cte = format!(
+        "WITH ins AS (INSERT INTO sharded_omni (id, value) VALUES ({id}, 'cte') RETURNING id) \
+         SELECT id FROM ins"
+    );
+
+    client.send_simple(Query::new(cte.clone())).await;
+    let messages = client
+        .read_until('Z')
+        .await
+        .expect("omnisharded write inside a CTE must succeed");
+    let rows: Vec<_> = messages
+        .iter()
+        .filter(|m| m.code() == 'D')
+        .map(|m| DataRow::try_from(m.clone()).unwrap())
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "RETURNING rows must be deduplicated to one shard"
+    );
+    assert_eq!(rows[0].get_int(0, true), Some(id));
+
+    assert_eq!(
+        count_on_shard(&mut client, 0, id).await,
+        1,
+        "row missing on shard 0"
+    );
+    assert_eq!(
+        count_on_shard(&mut client, 1, id).await,
+        1,
+        "row missing on shard 1"
+    );
+
+    // The same write pinned to one shard is rejected.
+    client
+        .send_simple(Query::new(format!("/* pgdog_shard: 1 */ {cte}")))
+        .await;
+    let err = expect_message!(client.read().await, ErrorResponse);
+    assert_omni_write_with_directive(&err);
+    let rfq = expect_message!(client.read().await, ReadyForQuery);
+    assert_eq!(rfq.status, 'I');
 
     reset_tables(&mut client).await;
 }

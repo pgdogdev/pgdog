@@ -7,6 +7,7 @@ use pgdog_config::{
     users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 use crate::backend::schema::SchemaCache;
 use crate::backend::server::ServerRequest;
@@ -87,6 +88,7 @@ pub(crate) struct Cluster {
     canonical_oids: Option<Arc<CanonicalOids>>,
     read_only: bool,
     failover_signal: ClusterFailoverSignalWatcher,
+    cancellation_token: CancellationToken,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -136,6 +138,7 @@ impl Default for Cluster {
             canonical_oids: Default::default(),
             read_only: Default::default(),
             failover_signal: ClusterFailoverSignalWatcher::default(),
+            cancellation_token: Default::default(),
         }
     }
 }
@@ -415,7 +418,23 @@ impl Cluster {
             canonical_oids,
             read_only,
             failover_signal,
+            cancellation_token: Default::default(),
         }
+    }
+
+    pub(crate) fn get_cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    /// Terminates all active connections for the `Cluster`
+    /// and marks all `Pool`s as offline to refuse future connections.
+    pub(crate) fn terminate_active_connections(&self) {
+        for shard in self.shards() {
+            for pool in shard.pools() {
+                pool.set_offline();
+            }
+        }
+        self.cancellation_token.cancel();
     }
 
     /// Change config to work with logical replication streaming.

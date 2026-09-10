@@ -57,6 +57,9 @@ pub(crate) enum Error {
     #[error("multi-tuple insert requires multi-shard binding")]
     MultiShardRequired,
 
+    #[error("terminating connection due to administrator command")]
+    AdminTermination,
+
     // FIXME: layer errors better so we don't have
     // to reach so deep into a module.
     #[error("{0}")]

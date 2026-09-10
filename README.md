@@ -467,7 +467,7 @@ Currently, support for certain SQL features in cross-shard queries is limited. H
 | Multi-tuple `INSERT`  | Supported | PgDog generates one statement per tuple and executes them automatically.                     |
 | Sharding key `UPDATE` | Supported | PgDog generates a `SELECT`, `INSERT` and `DELETE` statements and execute them automatically. |
 | Subqueries            | No        | The same subquery is executed on all shards.                                                 |
-| CTEs                  | No        | The same CTE is executed on all shards.                                                      |
+| CTEs                  | No        | The same CTE is executed on all shards. Data-modifying CTEs on omnisharded tables reach every shard. |
 
 #### Using `COPY`
 

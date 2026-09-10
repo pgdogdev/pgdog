@@ -263,6 +263,14 @@ impl Parameters {
         self.transaction_local_params.remove(&name);
     }
 
+    /// Restore parameters to the values supplied in the startup message,
+    /// dropping everything changed since with `SET`.
+    pub(crate) fn restore_startup(&mut self, startup: &Parameters) {
+        self.params.clone_from(&startup.params);
+        self.reset_params.clear();
+        self.hash = Self::compute_hash(&self.params);
+    }
+
     /// Reset all tracked parameters.
     pub(crate) fn reset_all(&mut self) {
         let mut keys: Vec<String> = self.params.keys().cloned().collect();

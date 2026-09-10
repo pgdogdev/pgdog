@@ -313,11 +313,9 @@ impl Pool {
             let mut to_guard = destination.lock();
 
             // Propagate pause state so a paused database stays paused after reload.
-            if from_guard.paused {
-                to_guard.paused = true;
-            }
-
+            to_guard.paused = from_guard.paused;
             from_guard.online = false;
+
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
                 to_guard.put(server, now)?;
@@ -338,9 +336,8 @@ impl Pool {
     /// Pause pool, closing all open connections.
     pub(crate) fn pause(&self) {
         let mut guard = self.lock();
-
-        guard.paused = true;
         guard.dump_idle();
+        guard.paused = true;
     }
 
     /// Send a cancellation request for all running queries.
@@ -352,6 +349,7 @@ impl Pool {
             .cancel_keys()
             .map(|key| Server::cancel(&addr, key.clone()))
             .collect();
+
         try_join_all(futures)
             .await
             .map_err(|_| Error::FastShutdown)?;
@@ -393,6 +391,13 @@ impl Pool {
         guard.close_waiters(Error::Offline);
         self.comms().shutdown.cancel();
         self.comms().ready.notify_waiters();
+    }
+
+    /// Sets the `Pool` offline (to refuse more connections)
+    /// Does not dump idle connections or shutdown.
+    pub(crate) fn set_offline(self) {
+        let mut guard = self.lock();
+        guard.online = false;
     }
 
     /// Pool exclusive lock.
