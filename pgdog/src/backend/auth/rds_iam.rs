@@ -50,22 +50,6 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
     })
 }
 
-/// Whether `addr` must sign its RDS IAM token with an assumed role (cross-account
-/// RDS IAM), and with what parameters. Returns `None` for the normal same-account
-/// path, where the token is signed with PgDog's ambient identity. Pure so the
-/// account-spanning decision is unit-testable without AWS.
-fn assume_role_plan(addr: &Address, region: &str) -> Option<AssumeRolePlan> {
-    let role_arn = addr.server_iam_assume_role.as_deref()?;
-    if role_arn.is_empty() {
-        return None;
-    }
-    Some(AssumeRolePlan {
-        role_arn: role_arn.to_owned(),
-        region: region.to_owned(),
-        session_name: IAM_ASSUME_ROLE_SESSION_NAME.to_owned(),
-    })
-}
-
 /// Parameters for the STS AssumeRole that precedes token generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AssumeRolePlan {
@@ -74,14 +58,32 @@ struct AssumeRolePlan {
     session_name: String,
 }
 
+impl AssumeRolePlan {
+    /// The plan to sign `addr`'s RDS IAM token with an assumed role (cross-account
+    /// RDS IAM), or `None` for the normal same-account path where the token is
+    /// signed with PgDog's ambient identity. Pure so the account-spanning decision
+    /// is unit-testable without AWS.
+    fn new(addr: &Address, region: &str) -> Option<Self> {
+        let role_arn = addr.server_iam_assume_role.as_deref()?;
+        if role_arn.is_empty() {
+            return None;
+        }
+        Some(Self {
+            role_arn: role_arn.to_owned(),
+            region: region.to_owned(),
+            session_name: IAM_ASSUME_ROLE_SESSION_NAME.to_owned(),
+        })
+    }
+}
+
 /// Build the AWS config used to sign the RDS IAM token.
 ///
 /// Same-account: PgDog's ambient identity (`load_defaults`). Cross-account: the
 /// ambient identity is used only as the *source* credentials to assume
 /// `server_iam_assume_role` in the database's account, and the token is signed
 /// with those assumed credentials.
-async fn sign_config(addr: &Address, region: &str) -> SdkConfig {
-    match assume_role_plan(addr, region) {
+async fn build_aws_sdk_config(addr: &Address, region: &str) -> SdkConfig {
+    match AssumeRolePlan::new(addr, region) {
         None => aws_config::load_defaults(BehaviorVersion::latest()).await,
         Some(plan) => {
             let base = aws_config::load_defaults(BehaviorVersion::latest()).await;
@@ -107,7 +109,7 @@ async fn sign_config(addr: &Address, region: &str) -> SdkConfig {
 /// directly — go through [`TokenCache::global`] instead.
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
     let region = resolve_region(&addr)?;
-    let sdk_config = sign_config(&addr, &region).await;
+    let sdk_config = build_aws_sdk_config(&addr, &region).await;
 
     let config = AuthTokenConfig::builder()
         .hostname(addr.host.as_str())
@@ -164,20 +166,20 @@ mod tests {
         }
     }
 
-    // ── assume_role_plan (cross-account RDS IAM) ─────────────────────────────
+    // ── AssumeRolePlan::new (cross-account RDS IAM) ──────────────────────────
 
     #[test]
     fn test_assume_role_plan_none_when_unset() {
         // Same-account path: no assume-role, token signed with ambient identity.
         let addr = make_addr();
-        assert_eq!(assume_role_plan(&addr, "us-east-1"), None);
+        assert_eq!(AssumeRolePlan::new(&addr, "us-east-1"), None);
     }
 
     #[test]
     fn test_assume_role_plan_none_when_empty() {
         let mut addr = make_addr();
         addr.server_iam_assume_role = Some(String::new());
-        assert_eq!(assume_role_plan(&addr, "us-east-1"), None);
+        assert_eq!(AssumeRolePlan::new(&addr, "us-east-1"), None);
     }
 
     #[test]
@@ -186,7 +188,7 @@ mod tests {
         addr.server_iam_assume_role =
             Some("arn:aws:iam::111122223333:role/pgdog-rds-connect".into());
 
-        let plan = assume_role_plan(&addr, "us-west-2").expect("cross-account plan");
+        let plan = AssumeRolePlan::new(&addr, "us-west-2").expect("cross-account plan");
         assert_eq!(
             plan.role_arn,
             "arn:aws:iam::111122223333:role/pgdog-rds-connect"

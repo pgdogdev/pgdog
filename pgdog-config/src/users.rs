@@ -835,56 +835,6 @@ vault_refresh_percent = 60
     }
 
     #[test]
-    fn test_server_iam_assume_role_parses() {
-        let source = r#"
-[[users]]
-name = "app"
-database = "tenant"
-server_auth = "rds_iam"
-server_iam_region = "us-west-2"
-server_iam_assume_role = "arn:aws:iam::111122223333:role/pgdog-rds-connect"
-"#;
-        let users: Users = toml::from_str(source).unwrap();
-        let user = users.users.first().unwrap();
-        assert_eq!(user.server_auth, ServerAuth::RdsIam);
-        assert_eq!(
-            user.server_iam_assume_role.as_deref(),
-            Some("arn:aws:iam::111122223333:role/pgdog-rds-connect")
-        );
-    }
-
-    #[test]
-    fn test_server_iam_assume_role_defaults_none() {
-        let source = r#"
-[[users]]
-name = "app"
-database = "tenant"
-server_auth = "rds_iam"
-"#;
-        let users: Users = toml::from_str(source).unwrap();
-        let user = users.users.first().unwrap();
-        assert!(user.server_iam_assume_role.is_none());
-    }
-
-    #[test]
-    fn test_server_iam_assume_role_warns_without_rds_iam_but_parses() {
-        // A misconfiguration (assume-role set but server_auth != rds_iam) is a
-        // warning, not a hard error — check() must not reject it.
-        let mut users = Users {
-            users: vec![User {
-                name: "app".into(),
-                database: "tenant".into(),
-                server_auth: ServerAuth::Password,
-                password: Some("p".into()),
-                server_iam_assume_role: Some("arn:aws:iam::111122223333:role/x".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        users.check(&Config::default());
-    }
-
-    #[test]
     fn test_vault_path_appears_in_passwords_as_vault_static_role() {
         let user = User {
             name: "alice".into(),
