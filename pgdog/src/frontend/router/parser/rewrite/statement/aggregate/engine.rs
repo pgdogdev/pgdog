@@ -3,7 +3,10 @@ use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
 use itertools::*;
 use pg_raw_parse::{Node, make, nodes};
 
-use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
+use super::{AggregateHelper, HelperKind};
+use crate::frontend::router::parser::rewrite::statement::projection::{
+    ProjectionRewritePlan, RewriteOutput,
+};
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
 /// variance-related functions that require additional helper aggregates when run
@@ -18,7 +21,7 @@ impl AggregatesRewrite {
         mem: make::MemoryToken<'a>,
         aggregate: &Aggregate,
     ) -> RewriteOutput {
-        let mut plan = AggregateRewritePlan::new();
+        let mut plan = ProjectionRewritePlan::new();
 
         let helper_nodes = aggregate
             .targets()
@@ -43,9 +46,9 @@ impl AggregatesRewrite {
                     format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
                 let node = mem.make_res_target(Some(&helper_alias), mem.empty(), func.uncast());
 
-                plan.add_helper(HelperMapping {
+                plan.add_aggregate_helper(AggregateHelper {
                     target_column: target.column(),
-                    helper_column: select.target_list().len() + idx,
+                    projected_column: select.target_list().len() + idx,
                     distinct: target.is_distinct(),
                     kind,
                     alias: helper_alias,
@@ -196,10 +199,10 @@ mod tests {
         let (ast, output) = rewrite("SELECT AVG(price) FROM menu");
         assert!(!output.plan.is_noop());
         assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1]);
-        assert_eq!(output.plan.helpers().len(), 1);
-        let helper = &output.plan.helpers()[0];
+        assert_eq!(output.plan.aggregate_helpers().len(), 1);
+        let helper = &output.plan.aggregate_helpers()[0];
         assert_eq!(helper.target_column, 0);
-        assert_eq!(helper.helper_column, 1);
+        assert_eq!(helper.projected_column, 1);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -217,10 +220,10 @@ mod tests {
     fn rewrite_engine_handles_mismatched_pair() {
         let (ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
         assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2]);
-        assert_eq!(output.plan.helpers().len(), 1);
-        let helper = &output.plan.helpers()[0];
+        assert_eq!(output.plan.aggregate_helpers().len(), 1);
+        let helper = &output.plan.aggregate_helpers()[0];
         assert_eq!(helper.target_column, 1);
-        assert_eq!(helper.helper_column, 2);
+        assert_eq!(helper.projected_column, 2);
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -240,16 +243,16 @@ mod tests {
     fn rewrite_engine_multiple_avg_helpers() {
         let (ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
         assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2, 3]);
-        assert_eq!(output.plan.helpers().len(), 2);
+        assert_eq!(output.plan.aggregate_helpers().len(), 2);
 
-        let helper_price = &output.plan.helpers()[0];
+        let helper_price = &output.plan.aggregate_helpers()[0];
         assert_eq!(helper_price.target_column, 0);
-        assert_eq!(helper_price.helper_column, 2);
+        assert_eq!(helper_price.projected_column, 2);
         assert!(matches!(helper_price.kind, HelperKind::Count));
 
-        let helper_discount = &output.plan.helpers()[1];
+        let helper_discount = &output.plan.aggregate_helpers()[1];
         assert_eq!(helper_discount.target_column, 1);
-        assert_eq!(helper_discount.helper_column, 3);
+        assert_eq!(helper_discount.projected_column, 3);
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
         let aggregate = Aggregate::parse(&ast, &Default::default());
@@ -269,11 +272,11 @@ mod tests {
         let (ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
         assert!(!output.plan.is_noop());
         assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1, 2, 3]);
-        assert_eq!(output.plan.helpers().len(), 3);
+        assert_eq!(output.plan.aggregate_helpers().len(), 3);
 
         let kinds: Vec<HelperKind> = output
             .plan
-            .helpers()
+            .aggregate_helpers()
             .iter()
             .map(|helper| {
                 assert_eq!(helper.target_column, 0);

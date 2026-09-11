@@ -3,7 +3,10 @@ use tracing::{info, trace};
 use crate::{
     frontend::{
         client::TransactionType,
-        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
+        router::parser::{
+            explain_trace::ExplainTrace,
+            rewrite::statement::{plan::RewriteResult, projection::ProjectionRewritePlan},
+        },
     },
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
@@ -13,6 +16,7 @@ use crate::{
     util::safe_timeout,
 };
 
+use std::collections::BTreeSet;
 use tracing::{debug, error};
 
 use super::hooks::schema::schema_changed;
@@ -146,6 +150,12 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
     ) -> Result<(), Error> {
+        if !self.backend.is_multishard() {
+            drop_projected_columns(
+                &mut message,
+                context.client_request.route().projection_rewrite_plan(),
+            )?;
+        }
         self.streaming = message.streaming();
 
         let code = message.code();
@@ -515,6 +525,30 @@ impl QueryEngine {
     }
 }
 
+fn drop_projected_columns(
+    message: &mut Message,
+    plan: &ProjectionRewritePlan,
+) -> Result<(), Error> {
+    if plan.is_noop() {
+        return Ok(());
+    }
+
+    let drop = plan.drop_columns().collect::<BTreeSet<_>>();
+    let payload = match message.code() {
+        'D' => {
+            let mut row = DataRow::from_bytes(message.to_bytes())?;
+            row.drop_columns(&drop);
+            row.to_bytes()
+        }
+        'T' => RowDescription::from_bytes(message.to_bytes())?
+            .drop_columns(drop)
+            .to_bytes(),
+        _ => return Ok(()),
+    };
+    message.replace_payload(payload);
+    Ok(())
+}
+
 #[derive(Debug, Default, Clone)]
 pub(super) struct ExplainResponseState {
     lines: Vec<String>,
@@ -545,5 +579,38 @@ impl ExplainResponseState {
 
     pub(crate) fn should_emit(&self) -> bool {
         self.supported && !self.annotated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        frontend::router::parser::rewrite::statement::projection::OrderByHelper,
+        net::{Field, Format},
+    };
+
+    #[test]
+    fn hidden_columns_are_removed_at_client_output_boundary() {
+        let mut plan = ProjectionRewritePlan::default();
+        plan.add_order_by_helper(OrderByHelper {
+            sort_position: 0,
+            projected_column: 1,
+        });
+
+        let description =
+            RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
+        let mut description = description.message();
+        drop_projected_columns(&mut description, &plan).unwrap();
+        let description = RowDescription::from_bytes(description.to_bytes()).unwrap();
+        assert_eq!(description.fields.len(), 1);
+
+        let mut row = DataRow::new();
+        row.add(42_i64).add("alice");
+        let mut row = row.message();
+        drop_projected_columns(&mut row, &plan).unwrap();
+        let row = DataRow::from_bytes(row.to_bytes()).unwrap();
+        assert_eq!(row.len(), 1);
+        assert_eq!(row.get::<i64>(0, Format::Text), Some(42));
     }
 }

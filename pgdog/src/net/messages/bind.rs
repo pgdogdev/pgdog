@@ -1,5 +1,6 @@
 //! Bind (F) message.
 use crate::net::c_string_buf_len;
+use bytes::BytesMut;
 
 use super::Error;
 use super::FromDataType;
@@ -212,6 +213,23 @@ impl Bind {
                 Format::Binary
             }
         })
+    }
+
+    /// Add a result format for a column appended by query rewriting.
+    pub(crate) fn push_result_format(&mut self, format: Format) {
+        // Zero formats means all text and one format applies to every result
+        // column, so only an explicit per-column list needs extending.
+        if self.results.len() <= 2 {
+            return;
+        }
+
+        let mut results = BytesMut::from(&self.results[..]);
+        results.put_i16(match format {
+            Format::Text => 0,
+            Format::Binary => 1,
+        });
+        self.results = results.freeze();
+        self.original = None;
     }
 
     pub(crate) fn new_statement(name: &str) -> Self {

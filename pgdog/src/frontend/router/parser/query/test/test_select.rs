@@ -21,6 +21,46 @@ fn test_order_by_vector_simple() {
 }
 
 #[test]
+fn test_order_by_non_projected_column_uses_rewrite_helper() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT id FROM sharded ORDER BY value").into(),
+    ]);
+
+    let route = command.route();
+    assert_eq!(
+        route.order_by().first().and_then(|order| order.index()),
+        Some(1)
+    );
+    assert_eq!(
+        route
+            .projection_rewrite_plan()
+            .drop_columns()
+            .collect::<Vec<_>>(),
+        [1]
+    );
+}
+
+#[test]
+fn test_order_by_helper_tracks_original_clause_position() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT id FROM sharded ORDER BY lower(value), value").into(),
+    ]);
+
+    assert_eq!(
+        command
+            .route()
+            .order_by()
+            .first()
+            .and_then(|order| order.index()),
+        Some(1)
+    );
+}
+
+#[test]
 fn test_order_by_vector_with_params() {
     let mut test = QueryParserTest::new();
 

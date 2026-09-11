@@ -9,7 +9,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::aggregate::AggregateRewritePlan,
+        rewrite::statement::projection::ProjectionRewritePlan,
     },
     net::{
         Decoder,
@@ -140,10 +140,10 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
-        let mut rows = if aggregate.is_empty() {
+        let rows = if aggregate.is_empty() {
             buffer
         } else if let Some(aggregates) = Aggregates::new(&buffer, decoder, aggregate, plan) {
             aggregates.aggregate()?
@@ -151,20 +151,19 @@ impl Buffer {
             buffer
         };
 
-        Self::drop_helper_columns(&mut rows, plan);
         self.buffer = rows;
 
         Ok(())
     }
 
-    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
+    pub(super) fn drop_columns(&mut self, plan: &ProjectionRewritePlan) {
         if plan.is_noop() {
             return;
         }
 
         let drop = plan.drop_columns().collect();
 
-        for row in rows.iter_mut() {
+        for row in self.buffer.iter_mut() {
             row.drop_columns(&drop);
         }
     }
@@ -240,6 +239,7 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::rewrite::statement::projection::OrderByHelper;
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
 
@@ -274,6 +274,37 @@ mod test {
     }
 
     #[test]
+    fn test_sort_by_hidden_column_before_dropping_it() {
+        let mut buf = Buffer::default();
+        let rd = RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
+        let decoder = Decoder::from(rd);
+        let mut plan = ProjectionRewritePlan::default();
+        plan.add_order_by_helper(OrderByHelper {
+            sort_position: 0,
+            projected_column: 1,
+        });
+
+        for (id, name) in [(1_i64, "z"), (2, "a"), (3, "m")] {
+            let mut row = DataRow::new();
+            row.add(id).add(name);
+            buf.add(row.message()).unwrap();
+        }
+
+        buf.sort(&[OrderBy::Asc(2)], &decoder);
+        buf.drop_columns(&plan);
+        buf.mark_full();
+
+        let ids = std::iter::from_fn(|| buf.take())
+            .map(|message| {
+                let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+                assert_eq!(row.len(), 1);
+                row.get::<i64>(0, Format::Text).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [2, 3, 1]);
+    }
+
+    #[test]
     fn test_aggregate_buffer() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("count")]);
@@ -285,7 +316,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 
@@ -312,7 +343,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 
