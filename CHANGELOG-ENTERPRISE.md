@@ -15,6 +15,7 @@ the most optimal way to share those changes.
 #### Features
 
 - **Experimental** Globally-distributed monotonic integer sequences, powered by Raft. You can use them by calling `pgdog.nextval('any_sequence_name')`. PgDog automatically injects this into omnisharded `INSERT`s to make sure the primary key is the same on all shards (set `primary_key = "rewrite_omni_global"` in `pgdog.toml`)
+- **Breaking** Replaced Kubernetes lease-based [high availability](https://docs.pgdog.dev/enterprise_edition/control_plane/ha/) implementation with Raft. The leader is elected on startup, and followers are configured as reverse proxies, forwarding requests to the leader. This works well with a Kubernetes `Service`, since all pods report healthy but only one is actually serving requests. This also removes the dependency on Kubernetes for control plane HA.
 
 #### Bug fixes
 
