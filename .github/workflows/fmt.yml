@@ -3,14 +3,15 @@ on:
   push:
     branches:
       - main
+      - main-ent
     paths:
-      - '**/*.rs'
-      - 'integration/**'
+      - "**/*.rs"
+      - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - '**/*.rs'
-      - 'integration/**'
+      - "**/*.rs"
+      - "integration/**"
 
 jobs:
   fmt:

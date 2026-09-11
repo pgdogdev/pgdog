@@ -3,14 +3,15 @@ on:
   push:
     branches:
       - main
+      - main-ent
     paths:
-      - '**/*.rs'
-      - 'integration/**'
+      - "**/*.rs"
+      - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - '**/*.rs'
-      - 'integration/**'
+      - "**/*.rs"
+      - "integration/**"
 
 jobs:
   # Build both pgdog artifacts in parallel:
@@ -76,30 +77,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: pgbench,       script: integration/pgbench/run.sh }
-          - { name: schema-sync,   script: integration/schema_sync/run.sh }
-          - { name: go,            script: integration/go/run.sh }
-          - { name: js,            script: integration/js/pg_tests/run.sh }
-          - { name: ruby,          script: integration/ruby/run.sh }
-          - { name: java,          script: integration/java/run.sh }
-          - { name: elixir,        script: integration/elixir/run.sh, needs_beam: true }
-          - { name: haskell,       script: integration/haskell/run.sh, needs_haskell: true }
-          - { name: mirror,        script: integration/mirror/run.sh }
-          - { name: sql,           script: integration/sql/run.sh }
-          - { name: toxi,          script: integration/toxi/run.sh }
-          - { name: rust,          script: integration/rust/run.sh }
-          - { name: python,        script: integration/python/run.sh }
-          - { name: two-pc,        script: integration/two_pc/run.sh }
-          - { name: complex,       script: integration/complex/run.sh }
-          - { name: dry-run,       script: integration/dry_run/run.sh }
-          - { name: copy-data,     script: integration/copy_data/run.sh }
+          - { name: pgbench, script: integration/pgbench/run.sh }
+          - { name: schema-sync, script: integration/schema_sync/run.sh }
+          - { name: go, script: integration/go/run.sh }
+          - { name: js, script: integration/js/pg_tests/run.sh }
+          - { name: ruby, script: integration/ruby/run.sh }
+          - { name: java, script: integration/java/run.sh }
+          - {
+              name: elixir,
+              script: integration/elixir/run.sh,
+              needs_beam: true,
+            }
+          - {
+              name: haskell,
+              script: integration/haskell/run.sh,
+              needs_haskell: true,
+            }
+          - { name: mirror, script: integration/mirror/run.sh }
+          - { name: sql, script: integration/sql/run.sh }
+          - { name: toxi, script: integration/toxi/run.sh }
+          - { name: rust, script: integration/rust/run.sh }
+          - { name: python, script: integration/python/run.sh }
+          - { name: two-pc, script: integration/two_pc/run.sh }
+          - { name: complex, script: integration/complex/run.sh }
+          - { name: dry-run, script: integration/dry_run/run.sh }
+          - { name: copy-data, script: integration/copy_data/run.sh }
           - { name: load-balancer, script: integration/load_balancer/run.sh }
-          - { name: tls,           script: integration/tls/run.sh }
+          - { name: tls, script: integration/tls/run.sh }
           - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
-          - { name: plugins,       script: integration/plugins/run.sh, needs_rust_cache: true, continue_on_error: true }
+          - {
+              name: plugins,
+              script: integration/plugins/run.sh,
+              needs_rust_cache: true,
+              continue_on_error: true,
+            }
     env:
       # All suites run against the llvm-cov instrumented debug binary so we
       # get line coverage from integration tests, not just unit tests.
