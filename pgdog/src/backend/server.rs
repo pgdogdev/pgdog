@@ -14,7 +14,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     ConnectReason, DisconnectReason, Error, Oids, PreparedStatements, ServerOptions, Stats,
-    pool::Address,
+    pool::{Address, OidMappings},
     prepared_statements::{HandleResult, Prepare},
 };
 use crate::{
@@ -42,7 +42,10 @@ use crate::{
         tls::UpstreamTlsSettings,
     },
 };
-use crate::{net::tweak, state::State};
+use crate::{net::tweak, state::State, tasks, util::safe_timeout};
+
+/// How long a message is held back while type OID mappings are refreshed.
+const OID_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A request executed on a server connection: simple-protocol queries,
 /// or an extended-protocol message batch ending in a Sync.
@@ -148,6 +151,8 @@ pub(crate) struct Server {
     sending_request: bool,
     pooler_mode: PoolerMode,
     stream_buffer: MessageBuffer,
+    /// Message held back while the type OID mappings are refreshed.
+    pending_message: Option<Message>,
     disconnect_reason: Option<DisconnectReason>,
     password_attempts: usize,
     /// Per-connection lifetime cap. When `Some`, the connection
@@ -436,6 +441,7 @@ impl Server {
             sending_request: false,
             pooler_mode: PoolerMode::Transaction,
             stream_buffer: MessageBuffer::new(config.config.memory.message_buffer, None),
+            pending_message: None,
             disconnect_reason: None,
             password_attempts: 1, // This is going to be changed by parent caller.
             max_age: None,
@@ -471,6 +477,7 @@ impl Server {
         }
 
         for message in client_request.messages.iter() {
+            self.resolve_unknown_canonical_oids(message).await;
             self.send_one(message).await?;
         }
         self.flush().await?;
@@ -482,6 +489,47 @@ impl Server {
         self.stats.state(State::ReceivingData);
 
         Ok(())
+    }
+
+    /// Send PgDog's own messages to the server. Unlike [`Self::send`], this
+    /// doesn't resolve unknown type OIDs, so it can be used while resolving them.
+    async fn send_internal(&mut self, messages: &[ProtocolMessage]) -> Result<(), Error> {
+        self.sending_request = true;
+        self.stats.state(State::Active);
+
+        for message in messages {
+            self.send_one(message).await?;
+        }
+        self.flush().await?;
+
+        self.sending_request = false;
+        self.stats.state(State::ReceivingData);
+
+        Ok(())
+    }
+
+    /// The client is using types this shard's OID mappings don't know about.
+    /// Refresh them before the statement is sent with the wrong OIDs.
+    async fn resolve_unknown_canonical_oids(&mut self, message: &ProtocolMessage) {
+        let unknown = self.prepared_statements.unknown_canonical_oids(message);
+        if unknown.is_empty() {
+            return;
+        }
+
+        self.refresh_oids(unknown.clone(), OidMappings::is_unknown_canonical_oid)
+            .await;
+
+        let unresolved = unknown
+            .into_iter()
+            .filter(|&oid| {
+                self.prepared_statements
+                    .oids()
+                    .get()
+                    .map(|mappings| mappings.is_unknown_canonical_oid(oid))
+                    .unwrap_or(false)
+            })
+            .collect();
+        self.prepared_statements.give_up_on(unresolved);
     }
 
     /// Send one message to the server but don't flush the buffer,
@@ -567,7 +615,34 @@ impl Server {
     /// This method is cancel-safe.
     ///
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
-        let message = loop {
+        // A previous read was cancelled while refreshing OID mappings.
+        if let Some(message) = self.pending_message.take() {
+            let message = self.resolve_pending_oids(message).await?;
+            return self.received(message);
+        }
+
+        let message = self.read_message().await?;
+
+        let message = if self.prepared_statements.pending_unknown_oids().is_some() {
+            self.resolve_pending_oids(message).await?
+        } else {
+            message
+        };
+
+        self.received(message)
+    }
+
+    /// Read a message in response to PgDog's own queries. Unlike [`Self::read`],
+    /// this doesn't resolve unknown type OIDs, so it can be used while resolving them.
+    async fn read_internal(&mut self) -> Result<Message, Error> {
+        let message = self.read_message().await?;
+        self.prepared_statements.discard_pending_oids();
+        self.received(message)
+    }
+
+    /// Read the next message from the stream, or a simulated one.
+    async fn read_message(&mut self) -> Result<Message, Error> {
+        Ok(loop {
             if let Some(message) = self.prepared_statements.state_mut().get_simulated() {
                 // INVARIANT: omni dedup in multi_shard relies on this being process-unique;
                 // never substitute a non-unique value here.
@@ -606,8 +681,74 @@ impl Server {
                     return Err(err.into());
                 }
             }
-        };
+        })
+    }
 
+    /// The message references types unknown to the OID mappings. Refresh them
+    /// from the shards and rewrite the message before anyone else sees it.
+    ///
+    /// The message is parked in `self.pending_message` while we wait, so a
+    /// cancelled read doesn't lose it.
+    async fn resolve_pending_oids(&mut self, message: Message) -> Result<Message, Error> {
+        self.pending_message = Some(message);
+
+        if let Some(unknown) = self.prepared_statements.pending_unknown_oids() {
+            let unknown = unknown.to_vec();
+            self.refresh_oids(unknown, OidMappings::is_unknown_shard_oid)
+                .await;
+        }
+
+        let mut message = self
+            .pending_message
+            .take()
+            .expect("pending message set above");
+        self.prepared_statements.finish_oid_rewrite(&mut message)?;
+
+        Ok(message)
+    }
+
+    /// Refresh the OID mappings so the given OIDs become known.
+    /// Errors are logged, not returned: the caller falls back to a config reload.
+    async fn refresh_oids(&self, unknown: Vec<u32>, is_unknown: fn(&OidMappings, u32) -> bool) {
+        let oids = Arc::clone(self.prepared_statements.oids());
+        let still_unknown = unknown.clone();
+
+        // Spawned: refreshing checks out a connection, which may open one,
+        // which sends messages through `send_one`. Awaiting it inline would
+        // make this future recursive.
+        let refresh = tasks::spawn("refresh type oids", async move {
+            oids.refresh(move |mappings| still_unknown.iter().any(|&oid| is_unknown(mappings, oid)))
+                .await
+        });
+
+        match safe_timeout(OID_REFRESH_TIMEOUT, refresh).await {
+            Ok(Ok(Ok(()))) => debug!(
+                "refreshed type info for unknown type oid(s) {:?} [{}]",
+                unknown,
+                self.addr()
+            ),
+            Ok(Ok(Err(err))) => warn!(
+                "failed to refresh type info for unknown type oid(s) {:?} [{}]: {}",
+                unknown,
+                self.addr(),
+                err
+            ),
+            Ok(Err(err)) => warn!(
+                "failed to refresh type info for unknown type oid(s) {:?} [{}]: {}",
+                unknown,
+                self.addr(),
+                err
+            ),
+            Err(_) => warn!(
+                "timed out refreshing type info for unknown type oid(s) {:?} [{}]",
+                unknown,
+                self.addr()
+            ),
+        }
+    }
+
+    /// Account for a message received from the server and track transaction state.
+    fn received(&mut self, message: Message) -> Result<Message, Error> {
         self.stats.receive(message.len(), message.code() as u8);
 
         match message.code() {
@@ -784,6 +925,12 @@ impl Server {
         self.changed_params.clear();
     }
 
+    /// The server returned a type the canonical OID mappings don't know about.
+    /// Resets the flag.
+    pub(crate) fn take_oids_stale(&mut self) -> bool {
+        self.prepared_statements.take_oids_stale()
+    }
+
     /// We can disconnect from this server.
     ///
     /// There are no more expected messages from the server connection
@@ -905,11 +1052,11 @@ impl Server {
         let mut messages = vec![];
         let expected = request.expected;
 
-        self.send(&request.messages.into()).await?;
+        self.send_internal(&request.messages).await?;
 
         let mut zs = 0;
         while zs < expected {
-            let message = self.read().await?;
+            let message = self.read_internal().await?;
             if message.code() == 'Z' {
                 zs += 1;
             }
@@ -1004,14 +1151,14 @@ impl Server {
     /// attempting to return the connection into a synchronized state.
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
-            self.read().await?;
+            self.read_internal().await?;
         }
 
         if !self.in_sync() {
-            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
+            self.send_internal(&[ProtocolMessage::Sync(Sync)]).await?;
 
             while !self.in_sync() {
-                self.read().await?;
+                self.read_internal().await?;
             }
         }
 
@@ -1351,6 +1498,7 @@ pub(crate) mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
+                pending_message: None,
                 client_params: Parameters::default(),
                 stats: Stats::connect(
                     id,

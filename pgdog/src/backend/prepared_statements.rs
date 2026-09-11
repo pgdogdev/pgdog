@@ -107,7 +107,35 @@ pub(crate) struct PreparedStatements {
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
+    /// A message from the server is waiting for the OID mappings to be refreshed.
+    pending_oids: Option<PendingOidRewrite>,
+    /// A type couldn't be resolved and the config should be reloaded.
+    oids_stale: bool,
     server_state: State,
+}
+
+/// A server message that references types unknown to the OID mappings,
+/// held back until the mappings are refreshed.
+#[derive(Debug)]
+enum PendingOidRewrite {
+    RowDescription {
+        /// Statement the RowDescription belongs to, if we're caching it.
+        describe: Option<String>,
+        unknown: Vec<u32>,
+    },
+    ParameterDescription {
+        unknown: Vec<u32>,
+    },
+}
+
+impl PendingOidRewrite {
+    fn unknown(&self) -> &[u32] {
+        match self {
+            Self::RowDescription { unknown, .. } | Self::ParameterDescription { unknown } => {
+                unknown
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +157,8 @@ impl PreparedStatements {
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
+            pending_oids: None,
+            oids_stale: false,
             server_state: State::Idle,
         }
     }
@@ -406,13 +436,7 @@ impl PreparedStatements {
             }
 
             'T' => {
-                let maybe_row_description = self.parse_and_rewrite_row_description(message)?;
-                if let Some(describe) = self.describes.pop_front() {
-                    let row_description = maybe_row_description
-                        .map(Ok)
-                        .unwrap_or_else(|| RowDescription::from_bytes(message.payload()))?;
-                    self.add_row_description(&describe, row_description);
-                };
+                self.handle_row_description(message)?;
             }
 
             // No data for DELETEs
@@ -448,7 +472,7 @@ impl PreparedStatements {
             }
 
             't' => {
-                self.rewrite_parameter_description_data_types(message)?;
+                self.handle_parameter_description(message)?;
             }
 
             _ => (),
@@ -626,6 +650,12 @@ impl PreparedStatements {
         self.oids = Arc::clone(oids)
     }
 
+    /// The server returned a type the OID mappings don't know about,
+    /// so they need to be reloaded. Resets the flag.
+    pub(crate) fn take_oids_stale(&mut self) -> bool {
+        std::mem::take(&mut self.oids_stale)
+    }
+
     fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
         let Some(mappings) = self.oids.get() else {
             return false;
@@ -633,41 +663,194 @@ impl PreparedStatements {
         parse.rewrite_data_types(&mappings.canonical_to_shard)
     }
 
-    /// Rewrite the given RowDescription Message to have the canonical set of
-    /// OIDs. Returns the parsed RowDescription if parsing occurred
-    fn parse_and_rewrite_row_description(
-        &self,
-        message: &mut Message,
-    ) -> Result<Option<RowDescription>, Error> {
-        // RowDescription is emitted during cluster startup, so we can't
-        // require OIDs to be loaded.
-        let empty_mapping = Default::default();
-        let mappings = &self.oids.get().unwrap_or(&empty_mapping).shard_to_canonical;
+    /// Canonical OIDs the client is about to send in the given message
+    /// that this shard's mappings don't know about.
+    ///
+    /// The server would reject them, so they have to be resolved first.
+    pub(crate) fn unknown_canonical_oids(&self, message: &ProtocolMessage) -> Vec<u32> {
+        let Some(mappings) = self.oids.get().filter(|mappings| mappings.loaded()) else {
+            return vec![];
+        };
 
-        if !mappings.is_empty() {
-            let mut row_description = RowDescription::from_bytes(message.payload())?;
-            if row_description.rewrite_data_types(mappings) {
-                message.replace_payload(row_description.to_bytes());
+        let unknown = |parse: &Parse| -> Vec<u32> {
+            parse
+                .data_types()
+                .filter(|&oid| mappings.is_unknown_canonical_oid(oid))
+                .collect()
+        };
+
+        match message {
+            ProtocolMessage::Parse(parse) => unknown(parse),
+            // Statements not yet prepared on this connection get their
+            // Parse prepended from the global cache.
+            ProtocolMessage::Bind(bind) if !self.local_cache.contains(bind.statement()) => self
+                .global_cache
+                .read()
+                .rewritten_parse(bind.statement())
+                .map(|parse| unknown(&parse))
+                .unwrap_or_default(),
+            ProtocolMessage::Describe(describe)
+                if describe.is_statement() && !self.local_cache.contains(describe.statement()) =>
+            {
+                self.global_cache
+                    .read()
+                    .rewritten_parse(describe.statement())
+                    .map(|parse| unknown(&parse))
+                    .unwrap_or_default()
             }
-            Ok(Some(row_description))
-        } else {
-            Ok(None)
+            _ => vec![],
         }
     }
 
-    fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
-        let Some(mappings) = self.oids.get() else {
+    /// Rewrite a RowDescription to have the canonical set of OIDs and cache it
+    /// for the statement being described, if any.
+    ///
+    /// If it references types the mappings don't know about, hold it back
+    /// (see [`Self::pending_unknown_oids`]) until they are refreshed.
+    fn handle_row_description(&mut self, message: &mut Message) -> Result<(), Error> {
+        let describe = self.describes.pop_front();
+
+        // RowDescription is emitted during cluster startup, so we can't
+        // require OIDs to be loaded.
+        let mappings = self
+            .oids
+            .get()
+            .filter(|mappings| mappings.loaded() || !mappings.shard_to_canonical.is_empty());
+
+        let Some(mappings) = mappings else {
+            if let Some(describe) = describe {
+                let row_description = RowDescription::from_bytes(message.payload())?;
+                self.add_row_description(&describe, row_description);
+            }
             return Ok(());
         };
-        let mappings = &mappings.shard_to_canonical;
-        if mappings.is_empty() {
+
+        let mut row_description = RowDescription::from_bytes(message.payload())?;
+        let unknown: Vec<u32> = row_description
+            .iter()
+            .map(|field| field.type_oid as u32)
+            .filter(|&oid| mappings.is_unknown_shard_oid(oid))
+            .collect();
+
+        if !unknown.is_empty() {
+            drop(mappings);
+            self.pending_oids = Some(PendingOidRewrite::RowDescription { describe, unknown });
             return Ok(());
         }
 
-        let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
-        parameter_description.rewrite_data_types(mappings);
-        message.replace_payload(parameter_description.to_bytes());
+        if row_description.rewrite_data_types(&mappings.shard_to_canonical) {
+            message.replace_payload(row_description.to_bytes());
+        }
+        drop(mappings);
+
+        if let Some(describe) = describe {
+            self.add_row_description(&describe, row_description);
+        }
+
         Ok(())
+    }
+
+    /// Rewrite a ParameterDescription to have the canonical set of OIDs,
+    /// holding it back if it references unknown types.
+    fn handle_parameter_description(&mut self, message: &mut Message) -> Result<(), Error> {
+        let Some(mappings) = self.oids.get().filter(|mappings| mappings.loaded()) else {
+            return Ok(());
+        };
+
+        let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
+        let unknown: Vec<u32> = parameter_description
+            .data_types()
+            .filter(|&oid| mappings.is_unknown_shard_oid(oid))
+            .collect();
+
+        if !unknown.is_empty() {
+            drop(mappings);
+            self.pending_oids = Some(PendingOidRewrite::ParameterDescription { unknown });
+            return Ok(());
+        }
+
+        if parameter_description.rewrite_data_types(&mappings.shard_to_canonical) {
+            message.replace_payload(parameter_description.to_bytes());
+        }
+
+        Ok(())
+    }
+
+    /// OIDs in the last message from the server that the mappings don't know about.
+    /// The message must not be forwarded until [`Self::finish_oid_rewrite`] is called.
+    pub(crate) fn pending_unknown_oids(&self) -> Option<&[u32]> {
+        self.pending_oids.as_ref().map(PendingOidRewrite::unknown)
+    }
+
+    /// Forward the held back message as is. Used for PgDog's own queries,
+    /// which don't need canonical OIDs.
+    pub(crate) fn discard_pending_oids(&mut self) {
+        self.pending_oids = None;
+    }
+
+    /// Rewrite the held back message with the refreshed mappings.
+    ///
+    /// Types that still can't be resolved are given up on, and a config
+    /// reload is requested as a last resort.
+    pub(crate) fn finish_oid_rewrite(&mut self, message: &mut Message) -> Result<(), Error> {
+        let Some(pending) = self.pending_oids.take() else {
+            return Ok(());
+        };
+
+        let Some(mappings) = self.oids.get() else {
+            return Ok(());
+        };
+
+        match pending {
+            PendingOidRewrite::RowDescription { describe, .. } => {
+                let mut row_description = RowDescription::from_bytes(message.payload())?;
+                let unresolved: Vec<u32> = row_description
+                    .iter()
+                    .map(|field| field.type_oid as u32)
+                    .filter(|&oid| mappings.is_unknown_shard_oid(oid))
+                    .collect();
+                if row_description.rewrite_data_types(&mappings.shard_to_canonical) {
+                    message.replace_payload(row_description.to_bytes());
+                }
+                drop(mappings);
+                self.give_up_on(unresolved);
+                if let Some(describe) = describe {
+                    self.add_row_description(&describe, row_description);
+                }
+            }
+
+            PendingOidRewrite::ParameterDescription { .. } => {
+                let mut parameter_description =
+                    ParameterDescription::from_bytes(message.payload())?;
+                let unresolved: Vec<u32> = parameter_description
+                    .data_types()
+                    .filter(|&oid| mappings.is_unknown_shard_oid(oid))
+                    .collect();
+                if parameter_description.rewrite_data_types(&mappings.shard_to_canonical) {
+                    message.replace_payload(parameter_description.to_bytes());
+                }
+                drop(mappings);
+                self.give_up_on(unresolved);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stop trying to resolve these OIDs and request a config reload instead.
+    pub(crate) fn give_up_on(&mut self, unresolved: Vec<u32>) {
+        if unresolved.is_empty() {
+            return;
+        }
+        self.oids.mark_unresolvable(unresolved);
+        if self.oids.mark_stale() {
+            self.oids_stale = true;
+        }
+    }
+
+    /// The OID mappings shared by all connections to this shard.
+    pub(crate) fn oids(&self) -> &Arc<Oids> {
+        &self.oids
     }
 }
 
@@ -1316,6 +1499,150 @@ pub(crate) mod test {
         assert_eq!(
             result,
             HandleResult::Rewrite(ProtocolMessage::Parse(expected))
+        );
+    }
+
+    fn row_description_with_oid(type_oid: i32) -> RowDescription {
+        RowDescription::new(&[crate::net::messages::Field {
+            name: "mood".into(),
+            table_oid: 0,
+            column: 0,
+            type_oid,
+            type_size: 4,
+            type_modifier: -1,
+            format: 0,
+        }])
+    }
+
+    /// Describe a statement that's already prepared on the connection and
+    /// forward the ParameterDescription, leaving the RowDescription expected.
+    fn describe_prepared(ps: &mut PreparedStatements, name: &str) {
+        ps.prepared(name);
+        ps.handle(&ProtocolMessage::Describe(Describe::new_statement(name)))
+            .unwrap();
+        let mut params = Message::new(ParameterDescription::empty().to_bytes());
+        assert!(ps.forward(&mut params).unwrap());
+    }
+
+    fn type_oid(message: &Message) -> i32 {
+        RowDescription::from_bytes(message.payload())
+            .unwrap()
+            .field(0)
+            .unwrap()
+            .type_oid
+    }
+
+    #[test]
+    fn row_description_rewrites_known_shard_oid() {
+        let mut ps = new_extended();
+        ps.oids = Oids::from_canonical([(16400, 17000)].into_iter().collect());
+        let name = insert_global("known_oid", "SELECT mood FROM t");
+        describe_prepared(&mut ps, &name);
+
+        let mut message = Message::new(row_description_with_oid(17000).to_bytes());
+        assert!(ps.forward(&mut message).unwrap());
+        assert_eq!(type_oid(&message), 16400);
+        assert!(ps.pending_unknown_oids().is_none());
+    }
+
+    #[test]
+    fn row_description_with_unknown_oid_is_held_until_refresh() {
+        let mut ps = new_extended();
+        ps.oids = Oids::from_canonical([(16400, 17000)].into_iter().collect());
+        let name = insert_global("unknown_oid", "SELECT mood FROM t");
+        describe_prepared(&mut ps, &name);
+
+        // A type created after the mappings were loaded.
+        let mut message = Message::new(row_description_with_oid(17001).to_bytes());
+        ps.forward(&mut message).unwrap();
+        assert_eq!(ps.pending_unknown_oids(), Some(&[17001][..]));
+        assert_eq!(type_oid(&message), 17001, "not rewritten yet");
+        assert!(
+            FrontendPreparedStatements::global()
+                .read()
+                .row_description(&name)
+                .is_none(),
+            "not cached with the shard's OID"
+        );
+
+        // Refresh happened (simulated), the message can be finished.
+        ps.oids
+            .set_canonical([(16400, 17000), (16401, 17001)].into_iter().collect());
+        ps.finish_oid_rewrite(&mut message).unwrap();
+        assert!(ps.pending_unknown_oids().is_none());
+        assert_eq!(type_oid(&message), 16401);
+        assert_eq!(
+            FrontendPreparedStatements::global()
+                .read()
+                .row_description(&name)
+                .unwrap()
+                .field(0)
+                .unwrap()
+                .type_oid,
+            16401,
+            "cached with the canonical OID"
+        );
+        assert!(!ps.take_oids_stale());
+    }
+
+    #[test]
+    fn row_description_with_unresolvable_oid_requests_reload_once() {
+        let mut ps = new_extended();
+        ps.oids = Oids::from_canonical([(16400, 17000)].into_iter().collect());
+        let name = insert_global("unresolvable_oid", "SELECT mood FROM t");
+        describe_prepared(&mut ps, &name);
+
+        let mut message = Message::new(row_description_with_oid(17001).to_bytes());
+        ps.forward(&mut message).unwrap();
+        assert!(ps.pending_unknown_oids().is_some());
+
+        // Refresh didn't help.
+        ps.finish_oid_rewrite(&mut message).unwrap();
+        assert_eq!(type_oid(&message), 17001, "forwarded as is");
+        assert!(ps.take_oids_stale(), "config reload requested");
+        assert!(!ps.take_oids_stale(), "flag was reset");
+
+        // Not held back again.
+        describe_prepared(&mut ps, &name);
+        let mut message = Message::new(row_description_with_oid(17001).to_bytes());
+        ps.forward(&mut message).unwrap();
+        assert!(ps.pending_unknown_oids().is_none());
+        assert!(!ps.take_oids_stale(), "reload requested only once");
+    }
+
+    #[test]
+    fn unknown_canonical_oids_in_parse_and_bind() {
+        let mut ps = new_extended();
+        ps.oids = Oids::from_canonical([(16400, 17000)].into_iter().collect());
+
+        let parse = Parse::named("stmt1", "SELECT $1, $2, $3");
+        let mapped_same_unknown = parse.with_data_types(&[16400, 17000, 16401]);
+        assert_eq!(
+            ps.unknown_canonical_oids(&ProtocolMessage::Parse(mapped_same_unknown)),
+            vec![16401]
+        );
+
+        let builtins = parse.with_data_types(&[25, 20, 16]);
+        assert!(
+            ps.unknown_canonical_oids(&ProtocolMessage::Parse(builtins))
+                .is_empty()
+        );
+
+        // Bind for a statement not yet prepared on this connection checks
+        // the Parse that will be prepended.
+        let cached = Parse::named("unknown_bind", "SELECT $1").with_data_types(&[16401]);
+        let (_, name) = FrontendPreparedStatements::global().write().insert(&cached);
+        let bind = Bind::new_statement(&name);
+        assert_eq!(
+            ps.unknown_canonical_oids(&ProtocolMessage::Bind(bind.clone())),
+            vec![16401]
+        );
+
+        // Already prepared: the Parse was sent (and checked) before.
+        ps.prepared(&name);
+        assert!(
+            ps.unknown_canonical_oids(&ProtocolMessage::Bind(bind))
+                .is_empty()
         );
     }
 

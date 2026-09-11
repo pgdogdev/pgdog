@@ -24,6 +24,9 @@ pub(crate) enum Error {
     #[error("unexpected transaction status: {0}")]
     UnexpectedTransactionStatus(char),
 
+    #[error("type information is not available")]
+    TypeInfoUnavailable,
+
     #[error("{0}")]
     ConnectionError(Box<ErrorResponse>),
 
@@ -116,9 +119,6 @@ pub(crate) enum Error {
 
     #[error("cannot ignore response for message type: {0}")]
     UnsupportedHandleIgnore(char),
-
-    #[error("missing canonical oid for type {0}")]
-    MissingCanonicalOid(String),
 }
 
 impl From<crate::frontend::Error> for Error {

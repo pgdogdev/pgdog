@@ -330,6 +330,7 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         if self.backend.done() {
             let changed_params = self.backend.changed_params();
+            let oids_stale = self.backend.take_oids_stale();
 
             // Release the connection back into the pool before flushing data to client.
             // Flushing can take a minute and we don't want to block the connection from being reused.
@@ -347,6 +348,20 @@ impl QueryEngine {
             {
                 info!(
                     "schema change detected, reloading config [{}]",
+                    self.backend.cluster()?.identifier(),
+                );
+                schema_changed()?;
+            } else if oids_stale
+                && self
+                    .backend
+                    .cluster()
+                    .map(|cluster| cluster.is_canonicalizing_oids())
+                    .unwrap_or_default()
+            {
+                // A type was created behind our back (e.g. DDL that ran
+                // on another PgDog or directly on the database).
+                info!(
+                    "unknown type detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
                 schema_changed()?;

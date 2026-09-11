@@ -42,7 +42,7 @@ pub(crate) use password::Password;
 pub(crate) use pool_impl::Pool;
 pub(crate) use request::Request;
 pub(crate) use role::PoolRole;
-pub(crate) use shard::{CanonicalOids, Oids, Shard};
+pub(crate) use shard::{CanonicalOids, OidMappings, Oids, Shard};
 pub(crate) use state::State;
 pub(crate) use stats::Stats;
 

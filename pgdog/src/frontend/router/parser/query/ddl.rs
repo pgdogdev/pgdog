@@ -1,4 +1,5 @@
 use crate::frontend::client::query_engine::TempTableChange;
+use pg_raw_parse::list::CastNodeList;
 use pg_raw_parse::raw::OnCommitAction::ONCOMMIT_DROP;
 use std::ffi::c_char;
 
@@ -74,6 +75,13 @@ impl QueryParser {
                     }
                 }
 
+                // Dropped types leave stale entries in the canonical OID mappings.
+                ObjectType::OBJECT_TYPE
+                | ObjectType::OBJECT_DOMAIN
+                | ObjectType::OBJECT_EXTENSION => {
+                    schema_changed = true;
+                }
+
                 _ => (),
             },
 
@@ -110,15 +118,36 @@ impl QueryParser {
                 }
             }
 
+            // Creating a type assigns it a fresh OID on every shard, so the
+            // canonical OID mappings have to be reloaded.
             Node::CreateEnumStmt(stmt) => {
-                let table = Table::try_from(stmt.type_name()).ok();
-                if let Some(table) = table {
-                    shard = schema
-                        .schemas
-                        .get(table.schema())
-                        .map(|schema| schema.shard().into())
-                        .unwrap_or(Shard::All);
-                }
+                schema_changed = true;
+                shard = Self::shard_ddl_type_name(stmt.type_name(), schema);
+            }
+
+            Node::CreateRangeStmt(stmt) => {
+                schema_changed = true;
+                shard = Self::shard_ddl_type_name(stmt.type_name(), schema);
+            }
+
+            Node::CreateDomainStmt(stmt) => {
+                schema_changed = true;
+                shard = Self::shard_ddl_type_name(stmt.domainname(), schema);
+            }
+
+            Node::CompositeTypeStmt(stmt) => {
+                schema_changed = true;
+                shard = Self::shard_ddl_table(stmt.typevar(), schema)?.unwrap_or(Shard::All);
+            }
+
+            Node::DefineStmt(stmt) if stmt.kind == ObjectType::OBJECT_TYPE => {
+                schema_changed = true;
+                shard = Self::shard_ddl_type_name(stmt.defnames(), schema);
+            }
+
+            // Extensions typically create types.
+            Node::CreateExtensionStmt(_) => {
+                schema_changed = true;
             }
 
             Node::AlterOwnerStmt(stmt) => {
@@ -224,6 +253,19 @@ impl QueryParser {
                 .with_schema_changed(schema_changed)
                 .with_temp_table_change(temp_table),
         ))
+    }
+
+    /// Shard for a type created in a (possibly sharded) schema,
+    /// given the qualified name of the type.
+    fn shard_ddl_type_name(
+        type_name: &CastNodeList<nodes::String>,
+        schema: &ShardingSchema,
+    ) -> Shard {
+        Table::try_from(type_name)
+            .ok()
+            .and_then(|table| schema.schemas.get(table.schema()))
+            .map(|schema| schema.shard().into())
+            .unwrap_or(Shard::All)
     }
 
     pub(super) fn shard_ddl_table(
@@ -459,14 +501,14 @@ mod test {
     fn test_create_enum_sharded() {
         let command = parse_stmt("CREATE TYPE shard_1.mood AS ENUM ('sad', 'ok', 'happy')");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
     fn test_create_enum_unsharded() {
         let command = parse_stmt("CREATE TYPE public.mood AS ENUM ('sad', 'ok', 'happy')");
         assert_eq!(command.route().shard(), &Shard::All);
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -578,6 +620,49 @@ mod test {
     #[test]
     fn test_unhandled_ddl_defaults_to_all() {
         let command = parse_stmt("COMMENT ON TABLE public.test IS 'test comment'");
+        assert_eq!(command.route().shard(), &Shard::All);
+        assert!(!command.route().is_schema_changed());
+    }
+
+    #[test]
+    fn test_create_type_changes_schema() {
+        for query in [
+            "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')",
+            "CREATE TYPE complex AS (r double precision, i double precision)",
+            "CREATE TYPE floatrange AS RANGE (subtype = float8)",
+            "CREATE TYPE box_t (INPUT = box_in, OUTPUT = box_out)",
+            "CREATE DOMAIN posint AS integer CHECK (VALUE > 0)",
+            "CREATE EXTENSION IF NOT EXISTS vector",
+            "DROP TYPE mood",
+            "DROP TYPE IF EXISTS mood, complex CASCADE",
+            "DROP DOMAIN posint",
+            "DROP EXTENSION vector",
+        ] {
+            let command = parse_stmt(query);
+            assert_eq!(command.route().shard(), &Shard::All, "{query}");
+            assert!(command.route().is_schema_changed(), "{query}");
+        }
+    }
+
+    #[test]
+    fn test_create_type_sharded_schema() {
+        for query in [
+            "CREATE TYPE shard_1.mood AS ENUM ('sad', 'ok', 'happy')",
+            "CREATE TYPE shard_1.complex AS (r double precision, i double precision)",
+            "CREATE TYPE shard_1.floatrange AS RANGE (subtype = float8)",
+            "CREATE TYPE shard_1.box_t (INPUT = box_in, OUTPUT = box_out)",
+            "CREATE DOMAIN shard_1.posint AS integer",
+        ] {
+            let command = parse_stmt(query);
+            assert_eq!(command.route().shard(), &Shard::Direct(1), "{query}");
+            assert!(command.route().is_schema_changed(), "{query}");
+        }
+    }
+
+    #[test]
+    fn test_alter_type_add_value_keeps_schema() {
+        // Adding a value doesn't change the type's OID.
+        let command = parse_stmt("ALTER TYPE mood ADD VALUE 'ecstatic'");
         assert_eq!(command.route().shard(), &Shard::All);
         assert!(!command.route().is_schema_changed());
     }

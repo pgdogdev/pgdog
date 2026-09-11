@@ -468,6 +468,23 @@ impl Binding {
         }
     }
 
+    /// Any held server returned a type the canonical OID
+    /// mappings don't know about. Resets the flags.
+    pub(crate) fn take_oids_stale(&mut self) -> bool {
+        match self {
+            Binding::Direct(server, ..) => server.take_oids_stale(),
+            Binding::MultiShard(servers, _) => {
+                // Reset every server's flag, not just the first stale one.
+                let mut stale = false;
+                for server in servers.iter_mut() {
+                    stale |= server.take_oids_stale();
+                }
+                stale
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn dirty(&mut self) {
         match self {
             Binding::Direct(server, ..) => server.mark_dirty(true),

@@ -112,6 +112,13 @@ impl Parse {
         self.data_types.clone()
     }
 
+    /// Parameter data type OIDs, as sent by the client.
+    pub(crate) fn data_types(&self) -> impl Iterator<Item = u32> + '_ {
+        let mut bytes = self.data_types.clone();
+        let num = bytes.get_u16();
+        (0..num).map(move |_| bytes.get_u32())
+    }
+
     /// Update the SQL for this prepared statement.
     pub(crate) fn set_query(&mut self, query: &str) {
         self.query = c_string_bytes(query);

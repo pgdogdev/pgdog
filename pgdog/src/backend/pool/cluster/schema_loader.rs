@@ -35,11 +35,7 @@ impl SchemaLoader for FromServer {
             tasks::spawn("load canonical oids", async move {
                 loop {
                     let result = tasks::shutdown_signal()
-                        .run_until_cancelled(async {
-                            canonical_oids
-                                .load(&mut *shard.primary_or_replica(&Default::default()).await?)
-                                .await
-                        })
+                        .run_until_cancelled(async { canonical_oids.load(&shard).await })
                         .await;
 
                     match result {
