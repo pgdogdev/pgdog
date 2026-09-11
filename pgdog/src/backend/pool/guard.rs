@@ -314,6 +314,83 @@ mod test {
         drop(guard);
     }
 
+    /// A client set a role and the connection was returned dirty. The next client
+    /// must not inherit it.
+    ///
+    /// `RESET ALL` does not clear `role`: Postgres flags it `GUC_NO_RESET_ALL` and
+    /// `ResetAllOptions()` skips such settings, so cleanup has to reset it explicitly.
+    ///
+    /// <https://github.com/pgdogdev/pgdog/issues/1341>
+    #[tokio::test]
+    async fn test_cleanup_resets_role() {
+        crate::logger();
+        let pool = pool();
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let pid_before: Vec<i32> = guard.fetch_all("SELECT pg_backend_pid()").await.unwrap();
+
+        guard.execute_checked("SET ROLE pgdog1").await.unwrap();
+        let role: Vec<String> = guard.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(role, vec!["pgdog1".to_string()]);
+
+        guard.mark_dirty(true);
+        drop(guard);
+
+        // Our test pool is only 1 connection, so this is the same backend.
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let pid_after: Vec<i32> = guard.fetch_all("SELECT pg_backend_pid()").await.unwrap();
+        assert_eq!(
+            pid_before, pid_after,
+            "1-connection pool should hand back the same backend"
+        );
+
+        let role: Vec<String> = guard.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(
+            role,
+            vec!["pgdog".to_string()],
+            "SET ROLE leaked across a dirty check-in"
+        );
+    }
+
+    /// Same as [`test_cleanup_resets_role`], for `SET SESSION AUTHORIZATION`.
+    ///
+    /// This one leaks `session_user` as well, and is not covered by `RESET ROLE`:
+    /// only `RESET SESSION AUTHORIZATION` restores the authenticated user.
+    ///
+    /// <https://github.com/pgdogdev/pgdog/issues/1341>
+    #[tokio::test]
+    async fn test_cleanup_resets_session_authorization() {
+        crate::logger();
+        let pool = pool();
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let pid_before: Vec<i32> = guard.fetch_all("SELECT pg_backend_pid()").await.unwrap();
+
+        guard
+            .execute_checked("SET SESSION AUTHORIZATION pgdog1")
+            .await
+            .unwrap();
+        let session_user: Vec<String> = guard.fetch_all("SELECT session_user").await.unwrap();
+        assert_eq!(session_user, vec!["pgdog1".to_string()]);
+
+        guard.mark_dirty(true);
+        drop(guard);
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let pid_after: Vec<i32> = guard.fetch_all("SELECT pg_backend_pid()").await.unwrap();
+        assert_eq!(
+            pid_before, pid_after,
+            "1-connection pool should hand back the same backend"
+        );
+
+        let session_user: Vec<String> = guard.fetch_all("SELECT session_user").await.unwrap();
+        assert_eq!(
+            session_user,
+            vec!["pgdog".to_string()],
+            "SET SESSION AUTHORIZATION leaked across a dirty check-in"
+        );
+    }
+
     #[tokio::test]
     async fn test_cleanup_prepared_statements() {
         crate::logger();
