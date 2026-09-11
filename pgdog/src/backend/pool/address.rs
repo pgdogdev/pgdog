@@ -32,6 +32,9 @@ pub(crate) struct Address {
     pub(crate) server_auth: ServerAuth,
     /// Optional IAM region override.
     pub(crate) server_iam_region: Option<String>,
+    /// Optional IAM role ARN to assume before minting the RDS IAM token, for
+    /// cross-account RDS IAM.
+    pub(crate) server_iam_assume_role: Option<String>,
     /// Vault path to fetch dynamic credentials from.
     #[serde(default)]
     pub(crate) vault_path: Option<String>,
@@ -99,6 +102,7 @@ impl Address {
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
+            server_iam_assume_role: user.server_iam_assume_role.clone(),
             vault_path: user.server_vault_path.clone(),
             vault_refresh_percent: user.vault_refresh_percent,
             database_number,
@@ -217,6 +221,7 @@ impl Address {
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
             server_iam_region: None,
+            server_iam_assume_role: None,
             vault_path: None,
             vault_refresh_percent: None,
             database_number: 0,
@@ -747,5 +752,32 @@ mod test {
             cache.cached_ip_for_testing(hostname),
             Some(socket_addr.ip())
         );
+    }
+
+    #[test]
+    fn test_address_carries_assume_role_from_user() {
+        let database = Database {
+            name: "db".into(),
+            host: "db.example.com".into(),
+            port: 5432,
+            ..Default::default()
+        };
+        let user = User {
+            name: "app".into(),
+            database: "db".into(),
+            server_auth: ServerAuth::RdsIam,
+            server_iam_assume_role: Some("arn:aws:iam::111122223333:role/pgdog-rds-connect".into()),
+            ..Default::default()
+        };
+
+        let addr = Address::new(&database, &user, 0);
+
+        assert_eq!(addr.server_auth, ServerAuth::RdsIam);
+        assert_eq!(
+            addr.server_iam_assume_role.as_deref(),
+            Some("arn:aws:iam::111122223333:role/pgdog-rds-connect")
+        );
+        // External-identity server auth carries no static password.
+        assert!(addr.passwords.is_empty());
     }
 }
