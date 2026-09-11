@@ -107,7 +107,7 @@ impl ReplicationSlot {
             Box::pin(Server::connect(
                 &self.address,
                 ServerOptions::new_replication(),
-                ConnectReason::Replication,
+                ConnectReason::Resharding,
                 Default::default(),
             ))
             .await?,
@@ -125,7 +125,7 @@ impl ReplicationSlot {
                 Server::connect(
                     &self.address,
                     ServerOptions::default(),
-                    ConnectReason::Replication,
+                    ConnectReason::Resharding,
                     Default::default(),
                 )
                 .await?,

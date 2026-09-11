@@ -143,6 +143,17 @@ Two behaviours are specific to the resharding context:
   COPY. Messages at or below that LSN are skipped; the row is already on the destination.
 - **Omnisharded tables** (`statements.omni = true`): upsert is broadcast to all shards
   simultaneously rather than routed to a single shard.
+- **Table ownership** ([`tables_sync()`](../pgdog/src/backend/replication/logical/tables_sync.rs)):
+  a table that is *sharded on the source* is copied and replayed from every source shard.
+  A table that is *omnisharded on the source* is copied and replayed from one source shard
+  only, chosen by publication order, because every source shard holds the same rows.
+- **Destination row contention**: a table that is sharded on the source and omnisharded on
+  the destination is replayed by every subscriber, and every subscriber writes to every
+  destination shard. Two subscribers therefore write the same destination row whenever one
+  key reaches two source shards, for example after a sharding-key update. Two subscribers
+  can then lock the same rows on two destinations in opposite order. No Postgres instance
+  sees the whole cycle, so no instance reports a deadlock. Set `lock_timeout` on the
+  destination user so a blocked apply is cancelled and retried by `Publisher::replicate()`.
 ---
 
 ### Cutover phases

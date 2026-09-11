@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use tracing::info;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub(crate) struct Table {
     /// Name of the table publication.
     pub(crate) publication: String,
@@ -159,8 +159,12 @@ impl Table {
     }
 
     /// Key used for duplicate check.
-    pub(super) fn key(&self) -> (String, String) {
+    pub(crate) fn key(&self) -> (String, String) {
         (self.table.schema.clone(), self.table.name.clone())
+    }
+
+    pub(crate) fn key_ref(&self) -> (&String, &String) {
+        (&self.table.schema, &self.table.name)
     }
 
     /// Check that the table supports replication.

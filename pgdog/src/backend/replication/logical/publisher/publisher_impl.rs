@@ -14,10 +14,10 @@ use tracing::{debug, info, warn};
 use super::super::{Error, ensure_validation, publisher::Table};
 use super::ReplicationSlot;
 
-use crate::backend::replication::logical::subscriber::omni_ownership::OmniOwnership;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::publisher::progress::Progress;
+use crate::backend::replication::tables_sync::tables_sync;
 use crate::backend::replication::{
     logical::publisher::ReplicationData, publisher::ParallelSyncManager,
 };
@@ -26,21 +26,6 @@ use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 use crate::tasks;
 use crate::util::{safe_interval, safe_sleep};
-
-fn merge_table_lsns(
-    tables: Vec<Table>,
-    existing_lsns: Option<&HashMap<(String, String), Lsn>>,
-) -> Vec<Table> {
-    tables
-        .into_iter()
-        .map(|mut table| {
-            if let Some(lsn) = existing_lsns.and_then(|tables| tables.get(&table.key())) {
-                table.lsn = *lsn;
-            }
-            table
-        })
-        .collect()
-}
 
 #[derive(Debug, Default)]
 pub(crate) struct Publisher {
@@ -70,76 +55,31 @@ impl Publisher {
         }
     }
 
-    fn distribute_omnisharded_tables(
-        &mut self,
-        omnisharded: HashMap<(String, String), Table>,
-        source: &Cluster,
-    ) {
-        let shard_count = source.shards().len();
-        // Downstream paths (e.g. Publisher::replicate) iterate every shard and
-        // require a (possibly empty) entry in `self.tables` for each one.
-        for number in 0..shard_count {
-            self.tables.entry(number).or_default();
-        }
-        for (shard_index, table) in omnisharded.into_values().enumerate() {
-            let shard = shard_index % shard_count;
-            if let Some(tables) = self.tables.get_mut(&shard) {
-                tables.push(table);
-            }
-        }
-    }
-
     /// Synchronize tables for all shards.
     pub(crate) async fn sync_tables(
         &mut self,
         data_sync: bool,
         source: &Cluster,
-        dest: &Cluster,
     ) -> Result<(), Error> {
-        let sharding_tables = dest.sharding_schema().tables;
-        let existing_lsns: HashMap<usize, HashMap<(String, String), Lsn>> = self
-            .tables
-            .iter()
-            .map(|(shard, tables)| {
-                (
-                    *shard,
-                    tables
-                        .iter()
-                        .map(|table| (table.key(), table.lsn))
-                        .collect::<HashMap<_, _>>(),
-                )
-            })
-            .collect();
+        let mut tables = tables_sync(source, source.sharded_tables(), &self.publication).await?;
 
-        // Omnisharded tables are split evenly between shards
-        // during copy to avoid duplicate key errors.
-        let mut omnisharded = HashMap::new();
-
-        for (number, shard) in source.shards().iter().enumerate() {
-            // Load tables from publication.
-            let mut primary = shard.primary(&Request::default()).await?;
-            let tables = Table::load(&self.publication, &mut primary).await?;
-
-            // For data sync, split omni tables evenly between shards.
-            if data_sync {
+        if !data_sync {
+            // fill out lsns from the existing tables if any
+            // TODO: make it explicit before running replication after copy_data task
+            for (shard, tables) in &mut tables {
                 for table in tables {
-                    let omni = !table.is_sharded(&sharding_tables);
-                    if omni {
-                        omnisharded.insert(table.key(), table);
-                    } else {
-                        let entry = self.tables.entry(number).or_insert(vec![]);
-                        entry.push(table);
+                    let existing = self
+                        .tables
+                        .get(shard)
+                        .and_then(|tables| tables.iter().find(|t| table.key_ref() == t.key_ref()));
+                    if let Some(existing) = existing {
+                        table.lsn = existing.lsn;
                     }
                 }
-            } else {
-                // For replication, process changes from all shards.
-                let tables = merge_table_lsns(tables, existing_lsns.get(&number));
-                self.tables.insert(number, tables);
             }
         }
 
-        // Distribute omni tables roughly equally between all shards.
-        self.distribute_omnisharded_tables(omnisharded, source);
+        self.tables = tables;
 
         Ok(())
     }
@@ -195,26 +135,23 @@ impl Publisher {
         let stop = CancellationToken::new();
 
         // Synchronize tables from publication.
-        self.sync_tables(false, source, dest).await?;
+        self.sync_tables(false, source).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
             Box::pin(self.create_slots(source, &stop)).await?;
         }
 
-        let n_sources = source.shards().len();
         for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
             let tables = self
                 .tables
                 .get(&number)
-                .ok_or(Error::NoReplicationTables(number))?;
-            // Handles the logical replication stream messages.
-            // Each subscriber owns a partition of destination shards for omni-table DML
-            // (dest_shard % n_sources == source_shard), preventing cross-subscriber deadlocks.
-            let mut stream =
-                StreamSubscriber::new(dest, tables, OmniOwnership::new(number, n_sources));
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+
+            let mut stream = StreamSubscriber::new(dest, tables);
 
             // Take ownership of the slot for replication.
             let mut slot = self
@@ -376,7 +313,7 @@ impl Publisher {
         require_replica_identity: bool,
     ) -> Result<(), Error> {
         // Fetch schema and column metadata first — valid() depends on it.
-        self.sync_tables(true, source, dest).await?;
+        self.sync_tables(true, source).await?;
 
         // Validate replica identity up front, before a potentially multi-hour
         // copy. Only streaming consumes it (to build the per-row UPDATE/DELETE
@@ -406,11 +343,7 @@ impl Publisher {
         let mut handles = FuturesUnordered::new();
 
         for (number, shard) in source.shards().iter().enumerate() {
-            let tables = self
-                .tables
-                .get(&number)
-                .ok_or(Error::NoReplicationTables(number))?
-                .clone();
+            let tables = self.tables.get(&number).cloned().unwrap_or_default();
 
             info!(
                 "table sync starting for {} tables, shard={}",
@@ -529,84 +462,8 @@ impl Waiter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::backend::replication::logical::publisher::{
-        PublicationTable, PublicationTableColumn, ReplicaIdentity,
-    };
     use crate::backend::server::test::test_replication_server;
     use crate::config::config;
-
-    fn make_table(schema: &str, name: &str, lsn: i64) -> Table {
-        Table {
-            publication: "test".to_string(),
-            table: PublicationTable {
-                schema: schema.to_string(),
-                name: name.to_string(),
-                attributes: String::new(),
-                parent_schema: String::new(),
-                parent_name: String::new(),
-            },
-            identity: ReplicaIdentity {
-                oid: pgdog_postgres_types::Oid(1),
-                identity: String::new(),
-                kind: String::new(),
-            },
-            columns: vec![PublicationTableColumn {
-                oid: 1,
-                name: "tenant_id".to_string(),
-                type_oid: pgdog_postgres_types::Oid(20),
-                identity: true,
-            }],
-            lsn: Lsn::from_i64(lsn),
-        }
-    }
-
-    #[test]
-    fn merge_table_lsns_preserves_existing_offsets() {
-        let existing = HashMap::from([(
-            ("copy_data".to_string(), "users".to_string()),
-            Lsn::from_i64(123),
-        )]);
-
-        let merged = merge_table_lsns(vec![make_table("copy_data", "users", 0)], Some(&existing));
-
-        assert_eq!(merged[0].lsn, Lsn::from_i64(123));
-    }
-
-    #[test]
-    fn merge_table_lsns_leaves_unknown_tables_unset() {
-        let existing = HashMap::from([(
-            ("copy_data".to_string(), "users".to_string()),
-            Lsn::from_i64(123),
-        )]);
-
-        let merged = merge_table_lsns(vec![make_table("copy_data", "orders", 0)], Some(&existing));
-
-        assert_eq!(merged[0].lsn, Lsn::default());
-    }
-
-    #[test]
-    fn distribute_omnisharded_tables_initializes_missing_shards() {
-        let config = config();
-        let cluster = Cluster::new_test(&config);
-        let mut publisher = Publisher::new("test", "slot".into());
-        let table = make_table("public", "omni_only", 0);
-
-        publisher.distribute_omnisharded_tables(HashMap::from([(table.key(), table)]), &cluster);
-
-        assert!(
-            publisher.tables.contains_key(&0),
-            "omni-only publications should initialize shard 0 even when no sharded tables exist"
-        );
-        assert!(
-            publisher.tables.contains_key(&1),
-            "data_sync iterates every shard and needs an entry for shard 1 even if it is empty"
-        );
-        assert_eq!(
-            publisher.tables.values().map(Vec::len).sum::<usize>(),
-            1,
-            "the omnisharded table should still be assigned exactly once"
-        );
-    }
 
     /// Tables without a primary key or replica identity index must be rejected
     /// before the copy starts, not after. Validates that `data_sync` returns
@@ -813,7 +670,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream = StreamSubscriber::new(&cluster, &[]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -833,7 +690,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[], OmniOwnership::test());
+        let mut stream = StreamSubscriber::new(&cluster, &[]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;
