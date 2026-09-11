@@ -4,14 +4,14 @@ pub(crate) use non_identity_columns_presence::*;
 pub(crate) mod slot;
 pub(crate) use slot::*;
 pub(crate) mod copy;
-pub(crate) mod parallel_sync;
 pub(crate) mod progress;
 pub(crate) mod publisher_impl;
 pub(crate) mod queries;
+pub(crate) mod resharding_replicas;
 pub(crate) mod table;
 pub(crate) use copy::*;
-pub(crate) use parallel_sync::ParallelSyncManager;
 pub(crate) use queries::*;
+pub(crate) use resharding_replicas::*;
 pub(crate) use table::*;
 
 #[cfg(test)]

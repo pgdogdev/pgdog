@@ -2,27 +2,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
 use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::try_join;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-use super::super::{Error, ensure_validation, publisher::Table};
+use super::super::{Error, publisher::Table};
 use super::ReplicationSlot;
 
+use crate::backend::replication::logical::publisher::ReplicationData;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::replication::publisher::progress::Progress;
 use crate::backend::replication::tables_sync::tables_sync;
-use crate::backend::replication::{
-    logical::publisher::ReplicationData, publisher::ParallelSyncManager,
-};
 use crate::backend::{Cluster, pool::Request};
-use crate::config::Role;
 use crate::net::replication::ReplicationMeta;
 use crate::tasks;
 use crate::util::{safe_interval, safe_sleep};
@@ -32,7 +28,7 @@ pub(crate) struct Publisher {
     /// Name of the publication.
     publication: String,
     /// Shard -> Tables mapping.
-    tables: HashMap<usize, Vec<Table>>,
+    pub(crate) tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
     /// Replication lag.
@@ -91,7 +87,7 @@ impl Publisher {
     /// If you're doing a cross-shard transaction, parts of it can be lost.
     ///
     /// TODO: Add support for 2-phase commit.
-    async fn create_slots(
+    pub(crate) async fn create_slots(
         &mut self,
         source: &Cluster,
         cancel: &CancellationToken,
@@ -301,104 +297,8 @@ impl Publisher {
         (*self.last_transaction.lock()).map(|last| last.elapsed())
     }
 
-    /// Sync data from all tables in a publication from one shard to N shards,
-    /// re-sharding the cluster in the process.
-    ///
-    /// TODO: Parallelize shard syncs.
-    pub(crate) async fn data_sync(
-        &mut self,
-        source: &Cluster,
-        dest: &Cluster,
-        cancel: &CancellationToken,
-        require_replica_identity: bool,
-    ) -> Result<(), Error> {
-        // Fetch schema and column metadata first — valid() depends on it.
-        self.sync_tables(true, source).await?;
-
-        // Validate replica identity up front, before a potentially multi-hour
-        // copy. Only streaming consumes it (to build the per-row UPDATE/DELETE
-        // filters); the initial COPY does not — so a sync-only run skips the
-        // gate and can copy tables that lack an identity.
-        if require_replica_identity {
-            let validation_errors: Vec<_> = self
-                .tables
-                .values()
-                .flat_map(|t| t.iter())
-                .filter_map(|t| t.valid().err())
-                .collect();
-
-            ensure_validation!(validation_errors);
-        }
-
-        // Create replication slots only after validation passes — a slot
-        // created before valid() would be orphaned on validation errors.
-        self.create_slots(source, cancel).await?;
-
-        // Create a child cancel token with the guard to cancel the spawned shard
-        // syncs below in case any of them fails without affecting the parent task.
-        // If every task succeeds the guard token will just cancel already finished work
-        let cancel = cancel.child_token();
-        let _guard = cancel.drop_guard_ref();
-
-        let mut handles = FuturesUnordered::new();
-
-        for (number, shard) in source.shards().iter().enumerate() {
-            let tables = self.tables.get(&number).cloned().unwrap_or_default();
-
-            info!(
-                "table sync starting for {} tables, shard={}",
-                tables.len(),
-                number
-            );
-
-            let include_primary = !shard.has_replicas();
-            let resharding_only = shard
-                .pools()
-                .into_iter()
-                .filter(|pool| pool.config().resharding_only)
-                .collect::<Vec<_>>();
-            let replicas = if resharding_only.is_empty() {
-                shard
-                    .pools_with_roles()
-                    .into_iter()
-                    .filter(|(r, _)| match *r {
-                        Role::Replica => true,
-                        Role::Primary => include_primary,
-                        Role::Auto => false,
-                    })
-                    .map(|(_, p)| p)
-                    .collect::<Vec<_>>()
-            } else {
-                resharding_only
-            };
-
-            let source = source.clone();
-            let dest = dest.clone();
-            let cancel = cancel.clone();
-            handles.push(tasks::spawn("parallel sync manager", async move {
-                let manager = ParallelSyncManager::new(tables, replicas, source, dest)?;
-                let tables = manager.run(cancel).await?;
-
-                Ok::<(usize, Vec<Table>), Error>((number, tables))
-            }));
-        }
-
-        // Short-circuit on first error and cancel other tasks (JoinHandles that are not cancellable on drop)
-        // thanks to cancel guard.
-        while let Some(joined) = handles.next().await {
-            let (number, tables) = joined??;
-            info!(
-                "table sync for {} tables complete [{}, shard: {}]",
-                tables.len(),
-                source.name(),
-                number,
-            );
-
-            // Update table LSN positions.
-            self.tables.insert(number, tables);
-        }
-
-        Ok(())
+    pub(crate) fn post_data_sync(&mut self, tables: HashMap<usize, Vec<Table>>) {
+        self.tables = tables;
     }
 
     /// Drop the replication slots created during data sync.
@@ -465,73 +365,10 @@ mod test {
     use crate::backend::server::test::test_replication_server;
     use crate::config::config;
 
-    /// Tables without a primary key or replica identity index must be rejected
-    /// before the copy starts, not after. Validates that `data_sync` returns
-    /// `TableValidation` carrying one entry per bad table and leaves no replication slots behind.
+    /// A pre-cancelled token aborts slot creation before the first slot,
+    /// leaving the publisher without slots.
     #[tokio::test]
-    async fn data_sync_rejects_no_pk_table_before_slots_created() {
-        crate::logger();
-
-        // Three tables with no replica identity — each would fail replication.
-        let mut server = test_replication_server().await;
-        for ddl in &[
-            "CREATE TABLE IF NOT EXISTS publication_test_no_pk   (data TEXT NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS publication_test_no_pk_2 (payload JSONB)",
-            "CREATE TABLE IF NOT EXISTS publication_test_no_pk_3 (ts TIMESTAMPTZ NOT NULL DEFAULT now(), value FLOAT8)",
-            "DROP PUBLICATION IF EXISTS publication_no_pk_validation",
-            "CREATE PUBLICATION publication_no_pk_validation FOR TABLE publication_test_no_pk, publication_test_no_pk_2, publication_test_no_pk_3",
-        ] {
-            server.execute(*ddl).await.unwrap();
-        }
-
-        // Real cluster so metadata is fetched from Postgres, not synthetic.
-        let source = Cluster::new_test(&config());
-        source.launch();
-        let dest = Cluster::new_test(&config());
-
-        let mut publisher = Publisher::new("publication_no_pk_validation", "sync_test_slot".into());
-
-        // Validation must fire before the copy begins.
-        let result = publisher
-            .data_sync(&source, &dest, &CancellationToken::new(), true)
-            .await;
-
-        let err = result.expect_err("data_sync must fail for a publication with no-pk tables");
-
-        // Errors are sorted by table name — assert the exact rendered output.
-        assert_eq!(
-            err.to_string(),
-            "Table validation failed:\n\
-            \ttable \"pgdog\".\"publication_test_no_pk\": has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_2\": has no replica identity columns\n\
-            \ttable \"pgdog\".\"publication_test_no_pk_3\": has no replica identity columns",
-        );
-
-        assert!(
-            publisher.slots.is_empty(),
-            "no replication slots should be created when valid() fails",
-        );
-
-        source.shutdown();
-        for ddl in &[
-            "DROP PUBLICATION IF EXISTS publication_no_pk_validation",
-            "DROP TABLE IF EXISTS publication_test_no_pk_3",
-            "DROP TABLE IF EXISTS publication_test_no_pk_2",
-            "DROP TABLE IF EXISTS publication_test_no_pk",
-        ] {
-            server.execute(*ddl).await.unwrap();
-        }
-    }
-
-    /// A sync-only copy (`require_replica_identity = false`) must not reject a
-    /// table that lacks a replica identity.
-    ///
-    /// Asserted without running the copy: the gate runs before the first
-    /// cancellation check, so a pre-cancelled token returns `DataSyncAborted`
-    /// (aborted at slot creation, past the skipped gate) — a `TableValidation`
-    /// error here would mean the gate wrongly fired.
-    #[tokio::test]
-    async fn data_sync_skips_replica_identity_validation_when_not_required() {
+    async fn create_slots_aborts_on_cancelled_token() {
         crate::logger();
 
         let mut server = test_replication_server().await;
@@ -545,19 +382,18 @@ mod test {
 
         let source = Cluster::new_test(&config());
         source.launch();
-        let dest = Cluster::new_test(&config());
 
         let mut publisher =
             Publisher::new("publication_sync_only_no_pk", "sync_only_no_pk_slot".into());
 
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let result = publisher.data_sync(&source, &dest, &cancel, false).await;
+        publisher.sync_tables(true, &source).await.unwrap();
+        let result = publisher.create_slots(&source, &cancel).await;
 
         assert!(
             matches!(result, Err(Error::DataSyncAborted)),
-            "sync-only copy must skip replica-identity validation and abort at slot \
-             creation, not fail validation; got: {result:?}"
+            "slot creation must abort on a cancelled token; got: {result:?}"
         );
         assert!(
             publisher.slots.is_empty(),
@@ -568,55 +404,6 @@ mod test {
         for ddl in &[
             "DROP PUBLICATION IF EXISTS publication_sync_only_no_pk",
             "DROP TABLE IF EXISTS publication_test_sync_only_no_pk",
-        ] {
-            server.execute(*ddl).await.unwrap();
-        }
-    }
-
-    /// `REPLICA IDENTITY NOTHING` must be rejected at `data_sync` time,
-    /// before any replication slot is created. This test executes against
-    /// a real Postgres instance so it validates the full metadata-fetch + valid() path.
-    #[tokio::test]
-    async fn data_sync_rejects_replica_identity_nothing() {
-        crate::logger();
-
-        let mut server = test_replication_server().await;
-        for ddl in &[
-            "CREATE TABLE IF NOT EXISTS pub_test_nothing (data TEXT NOT NULL)",
-            "ALTER TABLE pub_test_nothing REPLICA IDENTITY NOTHING",
-            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
-            "CREATE PUBLICATION pub_full_identity_nothing_test FOR TABLE pub_test_nothing",
-        ] {
-            server.execute(*ddl).await.unwrap();
-        }
-
-        let source = Cluster::new_test(&config());
-        source.launch();
-        let dest = Cluster::new_test(&config());
-
-        let mut publisher = Publisher::new(
-            "pub_full_identity_nothing_test",
-            "pub_full_identity_nothing_slot".into(),
-        );
-
-        let result = publisher
-            .data_sync(&source, &dest, &CancellationToken::new(), true)
-            .await;
-
-        let err = result.expect_err("data_sync must fail for REPLICA IDENTITY NOTHING table");
-        assert!(
-            err.to_string().contains("REPLICA IDENTITY NOTHING"),
-            "expected NOTHING in error message, got: {err}"
-        );
-        assert!(
-            publisher.slots.is_empty(),
-            "no replication slot must be created when NOTHING table is present"
-        );
-
-        source.shutdown();
-        for ddl in &[
-            "DROP PUBLICATION IF EXISTS pub_full_identity_nothing_test",
-            "DROP TABLE IF EXISTS pub_test_nothing",
         ] {
             server.execute(*ddl).await.unwrap();
         }

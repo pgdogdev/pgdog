@@ -6,6 +6,7 @@ pub mod show_config;
 pub mod show_version;
 pub mod tasks;
 
+use pgdog_stats::TaskProgress;
 use sqlx::{Column, Executor, Pool, Postgres, Row, TypeInfo};
 
 /// Wire layout expected from `SHOW TASKS`.
@@ -27,7 +28,7 @@ pub struct Task {
     pub parent_id: Option<i64>,
     pub id: Option<i64>,
     pub kind: String,
-    pub status: String,
+    pub status: TaskProgress,
     pub inner_status: String,
     pub started_at: String,
     pub updated_at: String,
@@ -66,6 +67,7 @@ impl Tasks {
                 assert!(!updated_at.is_empty(), "task {id:?}: updated_at is empty");
                 assert!(!elapsed.is_empty(), "task {id:?}: elapsed is empty");
                 assert!(!status.is_empty(), "task {id:?}: status is empty");
+                let status: TaskProgress = status.parse().unwrap();
                 assert!(elapsed_ms >= 0, "task {id:?}: elapsed_ms is negative");
                 assert!(
                     id.is_some() != parent_id.is_some(),

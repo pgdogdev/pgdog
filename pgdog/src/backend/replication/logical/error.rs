@@ -3,6 +3,7 @@ use std::num::ParseIntError;
 
 use derive_more::{Display, Error};
 
+use crate::util::sync::worker_pool;
 use crate::{
     backend::replication::publisher::PublicationTable,
     frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
@@ -130,9 +131,6 @@ pub(crate) enum Error {
     #[error("pipelined connection task closed")]
     PipelineClosed,
 
-    #[error("no replicas available for table sync")]
-    NoReplicas,
-
     #[error("{0}")]
     TableValidation(TableValidationErrors),
 
@@ -165,6 +163,9 @@ pub(crate) enum Error {
 
     #[error("missing key in replication stream, out of sync")]
     MissingKey,
+
+    #[error("Error while managing worker pool: {0}")]
+    WorkerPoolError(#[from] worker_pool::Error),
 
     #[error("toasted identity column in UPDATE: {table} (oid {oid})")]
     ToastedIdentityColumn {

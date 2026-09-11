@@ -12,7 +12,11 @@ use crate::{
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
 use pgdog_stats::Databases;
 use std::{fmt::Display, sync::Arc, time::Duration};
-use tokio::{select, sync::Mutex, time::Instant};
+use tokio::{
+    select,
+    sync::{Mutex, MutexGuard},
+    time::Instant,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -21,9 +25,9 @@ use crate::util::safe_interval;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Orchestrator {
-    source: Cluster,
-    destination: Cluster,
-    publication: String,
+    pub(crate) source: Cluster,
+    pub(crate) destination: Cluster,
+    pub(crate) publication: String,
     publisher: Arc<Mutex<Publisher>>,
     replication_slot: String,
 }
@@ -88,31 +92,8 @@ impl Orchestrator {
         &self.replication_slot
     }
 
-    /// The publication both ends replicate through.
-    pub(crate) fn publication(&self) -> &str {
-        &self.publication
-    }
-
-    pub(crate) async fn data_sync(
-        &self,
-        cancel: &CancellationToken,
-        require_replica_identity: bool,
-    ) -> Result<(), Error> {
-        let mut publisher = self.publisher.lock().await;
-
-        orchestrator_state(OrchestratorState::DataSync);
-        // Run data sync for all tables in parallel using multiple replicas,
-        // if available.
-        publisher
-            .data_sync(
-                &self.source,
-                &self.destination,
-                cancel,
-                require_replica_identity,
-            )
-            .await?;
-
-        Ok(())
+    pub(crate) async fn publisher(&self) -> MutexGuard<'_, Publisher> {
+        self.publisher.lock().await
     }
 
     /// Take a [`PublicationGuard`] over this orchestrator's replication slots.
@@ -452,7 +433,7 @@ impl ReplicationWaiter {
                 .schema_sync(
                     SchemaSyncTask::builder()
                         .databases(self.orchestrator.databases())
-                        .publication(self.orchestrator.publication().to_owned())
+                        .publication(self.orchestrator.publication.clone())
                         .phase(SchemaSyncPhase::Cutover)
                         .ignore_errors(true)
                         .build(),

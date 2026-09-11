@@ -3,7 +3,8 @@
 #
 # Requires:
 #   - local postgres at port 5432
-#   - databases: pgdog, pgdog1, pgdog2, shard_0, shard_1 (created by integration/setup.sh)
+#   - databases: pgdog, shard_0, shard_1 (created by integration/setup.sh);
+#     pgdog1 and pgdog2 are recreated by prepare.sh
 #   - max_replication_slots >= 32 in postgresql.conf
 #     Each data-sync creates one permanent slot per source shard plus one temporary
 #     slot per parallel table copy. With resharding_parallel_copies=5 and a 2-shard
@@ -25,6 +26,15 @@ export PGPASSWORD=pgdog
 BENCH_PID=""
 REPL_PID=""
 
+drop_replication_slots() {
+    local db
+    for db in pgdog pgdog1 pgdog2 shard_0 shard_1; do
+        psql -d "${db}" -tAc \
+            "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE database = current_database() AND NOT active" \
+            2>/dev/null || true
+    done
+}
+
 cleanup() {
     if [ -n "${BENCH_PID}" ]; then
         kill ${BENCH_PID} 2>/dev/null || true
@@ -34,6 +44,7 @@ cleanup() {
         kill ${REPL_PID} 2>/dev/null || true
         wait ${REPL_PID} 2>/dev/null || true
     fi
+    drop_replication_slots
 }
 trap cleanup EXIT
 
@@ -87,21 +98,12 @@ OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories copy_
 
 pushd ${SCRIPT_DIR}
 
-# Teardown: drop stale slots and schemas.
-psql -f "${SCRIPT_DIR}/init.sql"
-# Setup: populate source database.
-psql -f "${SCRIPT_DIR}/../setup.sql"
+drop_replication_slots
+PGDOG_BIN="${PGDOG_BIN}" bash "${SCRIPT_DIR}/prepare.sh"
 
 #
 # 0 -> 2
 #
-${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
-    schema-sync --from-database source --to-database destination --publication pgdog
-# event_types has REPLICA IDENTITY FULL (omni). The unique index on `code` is
-# PostData and is not synced by schema-sync pre-data, so create it explicitly on
-# each destination shard before data-sync so tables_missing_unique_index() finds it.
-psql -d "${DST_DB1}" -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
-psql -d "${DST_DB2}" -c "CREATE UNIQUE INDEX IF NOT EXISTS event_types_code_idx ON copy_data.event_types (code)"
 start_pgbench
 ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
     data-sync --from-database source --to-database destination --publication pgdog &
@@ -336,7 +338,5 @@ if [ "${XSHARD_TOTAL_2}" -ne 1 ]; then
     exit 1
 fi
 echo "OK cross-shard FULL UPDATE: seq=1 exists exactly once after shard move"
-
-psql -f "${SCRIPT_DIR}/init.sql"
 
 popd

@@ -287,6 +287,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
+    api::tasks_storage().cancel_all();
     tasks::shutdown().await;
 
     // Any shutdown routines go below.

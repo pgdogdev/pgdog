@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::setup::{admin_sqlx, connection_sqlx_direct};
+use pgdog_stats::TaskProgress;
 use sqlx::Executor;
 use tokio::time::{sleep, timeout};
 
@@ -39,11 +40,9 @@ async fn test_reshard() {
     let _ = admin.execute(format!("STOP_TASK {task_id}").as_str()).await;
     timeout(Duration::from_secs(30), async {
         loop {
-            if Tasks::fetch(&admin)
-                .await
-                .find(task_id)
-                .is_some_and(|t| matches!(t.status.as_str(), "cancelled" | "finished"))
-            {
+            if Tasks::fetch(&admin).await.find(task_id).is_some_and(|t| {
+                matches!(t.status, TaskProgress::Cancelled | TaskProgress::Finished)
+            }) {
                 return;
             }
             sleep(POLL).await;

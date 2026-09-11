@@ -1,4 +1,5 @@
 pub(crate) mod copy_statement;
+pub(crate) mod data_sync;
 pub(crate) mod ee;
 pub(crate) mod error;
 pub(crate) mod orchestrator;

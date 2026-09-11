@@ -272,9 +272,6 @@ INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
     (1, 999, 'sentinel', repeat(md5('sentinel'), 1024));
 
 -- Omni (non-sharded) table with REPLICA IDENTITY FULL.
--- The standalone unique index is PostData and is not copied to the destination
--- by schema-sync pre-data. run.sh creates it explicitly on each destination shard
--- after schema-sync and before data-sync, satisfying tables_missing_unique_index().
 -- 'click' row will be UPDATEd (label set to 'Click Updated') during the test run.
 CREATE TABLE IF NOT EXISTS copy_data.event_types (
     code        VARCHAR NOT NULL,

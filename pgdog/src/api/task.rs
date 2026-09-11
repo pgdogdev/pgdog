@@ -483,7 +483,7 @@ impl TaskStorage {
 
         let cancellation_token = entry.cancellation_token.clone();
 
-        tasks::spawn("async task waiter", async move {
+        tasks::spawn("api::task", async move {
             let res = select! {
                 _ = cancellation_token.cancelled() => {
                     ctx.transition(TaskProgress::Cancelling);
@@ -554,6 +554,14 @@ impl TaskStorage {
         entry.cancel();
 
         Some(state)
+    }
+
+    pub(crate) fn cancel_all(&self) {
+        info!("cancelling all current api tasks");
+
+        for task in &self.tasks.map {
+            task.value().cancel();
+        }
     }
 
     /// Drop every root task that reached a terminal state more than
@@ -1700,6 +1708,44 @@ mod tests {
 
         assert_eq!(progress.len(), 1);
         assert_eq!(progress[0], TaskProgress::Cancelled);
+    }
+
+    #[derive(Debug)]
+    struct CancelsItself;
+
+    impl Task for CancelsItself {
+        type Status = TaskStatus;
+        type Output = ();
+        type Error = std::io::Error;
+
+        fn definition(&self) -> impl Into<TaskDefinition> {
+            "cancels_itself"
+        }
+
+        async fn run(self, ctx: TaskContext<Self>) -> Result<(), std::io::Error> {
+            let cancel = ctx.cancellation_token();
+            let child = ctx.run(FailsOnCancel);
+            cancel.cancel();
+            child.await
+        }
+    }
+
+    #[test]
+    async fn test_own_token_cancel_reaches_the_subtask() {
+        let storage = TaskStorage::default();
+
+        let task = storage.run(CancelsItself);
+        let id = task.id();
+
+        let res = task.await;
+        assert!(matches!(res, Err(TaskError::Failed(_))));
+
+        let root = storage.task(id).unwrap();
+        assert_eq!(root.state().progress, TaskProgress::Cancelled);
+
+        let subtasks = root.subtasks();
+        assert_eq!(subtasks.len(), 1);
+        assert_eq!(subtasks[0].state().progress, TaskProgress::Cancelled);
     }
 
     #[test]

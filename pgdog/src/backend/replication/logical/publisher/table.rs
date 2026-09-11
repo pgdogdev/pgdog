@@ -1,29 +1,13 @@
 //! Table.
 
-use std::time::Duration;
-
-use tokio::select;
-use tracing::error;
-
-use crate::backend::pool::Address;
 use crate::backend::replication::publisher::Lsn;
-use crate::backend::replication::publisher::progress::Progress;
-
-use crate::backend::replication::status::TableCopy;
-use crate::backend::{Cluster, Server, ShardedTables};
-use crate::config::config;
+use crate::backend::{Server, ShardedTables};
 use crate::frontend::router::parser::Column;
-use crate::net::replication::StatusUpdate;
 use crate::util::escape_identifier;
 
-use super::super::{
-    Error, TableValidationError, TableValidationErrorKind, subscriber::CopySubscriber,
-};
+use super::super::{Error, TableValidationError, TableValidationErrorKind};
 use super::non_identity_columns_presence::NonIdentityColumnsPresence;
-use super::{Copy, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationSlot};
-use tokio_util::sync::CancellationToken;
-
-use tracing::info;
+use super::{PublicationTable, PublicationTableColumn, ReplicaIdentity};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Table {
@@ -433,85 +417,6 @@ impl Table {
         }
 
         false
-    }
-
-    pub(crate) async fn data_sync(
-        &mut self,
-        source: &Address,
-        source_cluster: &Cluster,
-        dest: &Cluster,
-        cancel: &CancellationToken,
-        tracker: &TableCopy,
-    ) -> Result<Lsn, Error> {
-        info!(
-            "data sync for \"{}\".\"{}\" started [{}]",
-            self.table.schema, self.table.name, source
-        );
-
-        // Sync data using COPY.
-        // Publisher uses COPY [...] TO STDOUT.
-        // Subscriber uses COPY [...] FROM STDIN.
-        let copy = Copy::new(self, config().config.general.resharding_copy_format);
-
-        tracker.update_sql(&copy.statement().copy_out());
-
-        // Create new standalone connection for the copy.
-        // let mut server = Server::connect(source, ServerOptions::new_replication()).await?;
-        let mut copy_sub = CopySubscriber::new(copy.statement(), source_cluster, dest)?;
-        copy_sub.connect().await?;
-
-        // Create sync slot.
-        let mut slot = ReplicationSlot::data_sync(&self.publication, source);
-        slot.connect().await?;
-        self.lsn = slot.create_slot().await?;
-
-        // Reload table info just to be sure it's consistent.
-        self.reload(slot.server()?).await?;
-
-        // Copy rows over.
-        copy.start(slot.server()?).await?;
-        copy_sub.start_copy().await?;
-        let progress = Progress::new_data_sync(&self.table);
-
-        while let Some(data_row) = copy.data(slot.server()?).await? {
-            select! {
-                _ = cancel.cancelled() =>  {
-                    error!("aborting data sync for table {}", self.table);
-
-                    return Err(Error::CopyAborted(self.table.clone()))
-                },
-                result = copy_sub.copy_data(data_row) => {
-                    let (rows, bytes) = result?;
-                    progress.update(copy_sub.bytes_sharded(), slot.lsn().lsn);
-                    tracker.update_progress(bytes, rows);
-                }
-            }
-        }
-
-        copy_sub.copy_done().await?;
-
-        copy_sub.disconnect().await?;
-        progress.done();
-
-        slot.server()?.execute("COMMIT").await?;
-
-        // Close slot.
-        slot.start_replication().await?;
-        slot.status_update(StatusUpdate::new_reply(self.lsn))
-            .await?;
-        slot.stop_replication().await?;
-
-        // Drain slot
-        while slot.replicate(Duration::MAX).await?.is_some() {}
-
-        // Slot is temporary and will be dropped when the connection closes.
-
-        info!(
-            "data sync for \"{}\".\"{}\" finished at lsn {} [{}]",
-            self.table.schema, self.table.name, self.lsn, source
-        );
-
-        Ok(self.lsn)
     }
 }
 
