@@ -14,7 +14,9 @@ use tokio::time::{sleep, timeout};
 use super::{Task, Tasks, assert_layout};
 use pgdog_stats::TaskProgress;
 
-const TEST_TABLE: &str = "_pgdog_test_task";
+const TEST_SCHEMA: &str = "resharding_test";
+
+const TEST_TABLE: &str = "items";
 
 const TEST_PUB: &str = "pgdog_test_pub";
 
@@ -22,40 +24,16 @@ const SLOT_FILTER: &str = "slot_name LIKE '__pgdog_repl_%'";
 
 const POLL: Duration = Duration::from_millis(200);
 
-async fn drop_table(pool: &Pool<Postgres>, table: &str) {
-    let _ = pool
-        .execute(format!("DROP TABLE IF EXISTS {table} CASCADE").as_str())
-        .await;
-    let _ = pool
-        .execute(format!("DROP TYPE  IF EXISTS {table} CASCADE").as_str())
-        .await;
-}
-
-async fn drop_test_tables_on(pool: &Pool<Postgres>) {
-    drop_table(pool, TEST_TABLE).await;
-    let tables: Vec<String> = pool
-        .fetch_all(
-            format!(
-                "SELECT tablename FROM pg_tables \
-                 WHERE schemaname = ANY (current_schemas(false)) \
-                 AND starts_with(tablename, '{TEST_TABLE}')"
-            )
-            .as_str(),
-        )
+async fn drop_test_schema_on(pool: &Pool<Postgres>) {
+    pool.execute(format!("DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE").as_str())
         .await
-        .unwrap()
-        .iter()
-        .map(|row| row.get("tablename"))
-        .collect();
-    for table in tables {
-        drop_table(pool, &table).await;
-    }
+        .expect("test schema cleanup must succeed");
 }
 
-async fn drop_test_tables(direct: &Pool<Postgres>) {
-    drop_test_tables_on(direct).await;
+async fn drop_test_schemas(direct: &Pool<Postgres>) {
+    drop_test_schema_on(direct).await;
     for db in &["shard_0", "shard_1"] {
-        drop_test_tables_on(&connection_sqlx_direct_db(db).await).await;
+        drop_test_schema_on(&connection_sqlx_direct_db(db).await).await;
     }
 }
 
@@ -138,7 +116,7 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
         .await;
 
-    drop_test_tables(direct).await;
+    drop_test_schemas(direct).await;
 }
 
 async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: TaskProgress) {
@@ -183,10 +161,12 @@ async fn fail_if_task_errored(admin: &Pool<Postgres>, task_id: i64) {
 }
 
 async fn relation_present(pool: &Pool<Postgres>, name: &str) -> bool {
-    pool.fetch_one(format!("SELECT to_regclass('{name}') IS NOT NULL AS present").as_str())
-        .await
-        .unwrap()
-        .get::<bool, _>("present")
+    pool.fetch_one(
+        format!("SELECT to_regclass('{TEST_SCHEMA}.{name}') IS NOT NULL AS present").as_str(),
+    )
+    .await
+    .unwrap()
+    .get::<bool, _>("present")
 }
 
 async fn wait_for_relation_on_shards(admin: &Pool<Postgres>, task_id: i64, name: &str) {
@@ -215,7 +195,7 @@ async fn shard_row_count(db: &str, table: &str) -> i64 {
     if !relation_present(&pool, table).await {
         return 0;
     }
-    pool.fetch_one(format!("SELECT COUNT(*)::bigint AS n FROM {table}").as_str())
+    pool.fetch_one(format!("SELECT COUNT(*)::bigint AS n FROM {TEST_SCHEMA}.{table}").as_str())
         .await
         .unwrap()
         .get::<i64, _>("n")
@@ -267,7 +247,14 @@ async fn wait_for_task(admin: &Pool<Postgres>, desc: &str, pred: impl Fn(&Task) 
 
 async fn create_test_table(direct: &Pool<Postgres>) {
     direct
-        .execute(format!("CREATE TABLE {TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)").as_str())
+        .execute(format!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}").as_str())
+        .await
+        .expect("test schema creation must succeed");
+    direct
+        .execute(
+            format!("CREATE TABLE {TEST_SCHEMA}.{TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)")
+                .as_str(),
+        )
         .await
         .unwrap();
 }
@@ -276,7 +263,7 @@ async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
     direct
         .execute(
             format!(
-                "INSERT INTO {TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
+                "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
             )
             .as_str(),
         )
@@ -286,7 +273,9 @@ async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
 
 async fn create_publication(direct: &Pool<Postgres>) {
     direct
-        .execute(format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_TABLE}").as_str())
+        .execute(
+            format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_SCHEMA}.{TEST_TABLE}").as_str(),
+        )
         .await
         .unwrap();
 }

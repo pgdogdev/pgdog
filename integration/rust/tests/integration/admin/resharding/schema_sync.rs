@@ -3,8 +3,8 @@ use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres, Row};
 
 use super::{
-    TEST_PUB, TEST_TABLE, assert_layout, cleanup, create_publication, create_test_table,
-    run_task_command, wait_for_relation_on_shards,
+    TEST_PUB, TEST_SCHEMA, TEST_TABLE, assert_layout, cleanup, create_publication,
+    create_test_table, run_task_command, wait_for_relation_on_shards, wait_for_task_status,
 };
 
 const SHOW_SCHEMA_SYNC_LAYOUT: &[(&str, &str)] = &[
@@ -131,6 +131,7 @@ async fn test_schema_sync_pre() {
     )
     .await;
 
+    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
     wait_for_relation_on_shards(&admin, task_id, TEST_TABLE).await;
 
     assert_schema_sync_rows(&admin, task_id, "pre_data").await;
@@ -147,7 +148,9 @@ async fn test_schema_sync_post() {
     let secondary_index = format!("{TEST_TABLE}_val_idx");
     create_test_table(&direct).await;
     direct
-        .execute(format!("CREATE INDEX {secondary_index} ON {TEST_TABLE} (val)").as_str())
+        .execute(
+            format!("CREATE INDEX {secondary_index} ON {TEST_SCHEMA}.{TEST_TABLE} (val)").as_str(),
+        )
         .await
         .unwrap();
     create_publication(&direct).await;
@@ -157,6 +160,7 @@ async fn test_schema_sync_post() {
         &format!("SCHEMA_SYNC pre pgdog pgdog_sharded {TEST_PUB}"),
     )
     .await;
+    wait_for_task_status(&admin, pre_task_id, TaskProgress::Finished).await;
     wait_for_relation_on_shards(&admin, pre_task_id, TEST_TABLE).await;
 
     let task_id = run_task_command(
@@ -165,6 +169,7 @@ async fn test_schema_sync_post() {
     )
     .await;
 
+    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
     wait_for_relation_on_shards(&admin, task_id, &secondary_index).await;
     assert_schema_sync_rows(&admin, task_id, "post_data").await;
 

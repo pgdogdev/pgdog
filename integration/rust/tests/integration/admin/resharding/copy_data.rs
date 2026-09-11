@@ -5,9 +5,9 @@ use sqlx::{Executor, Pool, Postgres, Row};
 
 use super::table_copies::{copy_row, poll};
 use super::{
-    TEST_PUB, TEST_TABLE, cleanup, create_publication, create_test_table, run_task_command,
-    seed_rows, shard_row_count, wait_for_relation_on_shards, wait_for_rows_each_shard,
-    wait_for_task,
+    TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
+    run_task_command, seed_rows, shard_row_count, wait_for_relation_on_shards,
+    wait_for_rows_each_shard, wait_for_task,
 };
 
 const SIBLING_ROWS: i64 = 200_000;
@@ -18,15 +18,20 @@ fn numbered_table(i: usize) -> String {
 }
 
 async fn create_table(pool: &Pool<Postgres>, table: &str) {
-    pool.execute(format!("CREATE TABLE {table} (id BIGSERIAL PRIMARY KEY, val TEXT)").as_str())
+    pool.execute(format!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}").as_str())
         .await
-        .unwrap();
+        .expect("test schema creation must succeed");
+    pool.execute(
+        format!("CREATE TABLE {TEST_SCHEMA}.{table} (id BIGSERIAL PRIMARY KEY, val TEXT)").as_str(),
+    )
+    .await
+    .unwrap();
 }
 
 async fn seed_table(direct: &Pool<Postgres>, table: &str, n: i64) {
     direct
         .execute(
-            format!("INSERT INTO {table} (val) SELECT 'v' || g FROM generate_series(1, {n}) g")
+            format!("INSERT INTO {TEST_SCHEMA}.{table} (val) SELECT 'v' || g FROM generate_series(1, {n}) g")
                 .as_str(),
         )
         .await
@@ -76,7 +81,7 @@ async fn test_failed_copy_cancels_siblings_and_rolls_back() {
     seed_table(&direct, &numbered_table(TABLE_COUNT), 1_000).await;
 
     let tables = (1..=TABLE_COUNT)
-        .map(numbered_table)
+        .map(|i| format!("{TEST_SCHEMA}.{}", numbered_table(i)))
         .collect::<Vec<_>>()
         .join(", ");
     direct
@@ -89,7 +94,10 @@ async fn test_failed_copy_cancels_siblings_and_rolls_back() {
         let shard = connection_sqlx_direct_db(db).await;
         create_table(&shard, &poisoned).await;
         shard
-            .execute(format!("INSERT INTO {poisoned} (id, val) VALUES (1, 'poison')").as_str())
+            .execute(
+                format!("INSERT INTO {TEST_SCHEMA}.{poisoned} (id, val) VALUES (1, 'poison')")
+                    .as_str(),
+            )
             .await
             .unwrap();
     }

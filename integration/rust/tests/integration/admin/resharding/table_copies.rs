@@ -8,8 +8,8 @@ use tokio::time::{sleep, timeout};
 
 use super::super::assert_layout;
 use super::{
-    POLL, TEST_PUB, TEST_TABLE, cleanup, create_publication, create_test_table, run_task_command,
-    seed_rows, wait_for_rows_each_shard, wait_for_task,
+    POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
+    run_task_command, seed_rows, wait_for_rows_each_shard, wait_for_task,
 };
 
 /// Wire layout expected from `SHOW TABLE_COPIES`.
@@ -45,8 +45,9 @@ pub(super) async fn copy_row(admin: &Pool<Postgres>, table: &str) -> Option<PgRo
     if !rows.is_empty() {
         assert_layout(&rows, SHOW_TABLE_COPIES_LAYOUT);
     }
-    rows.into_iter()
-        .find(|r| r.get::<String, _>("table") == table)
+    rows.into_iter().find(|row| {
+        row.get::<String, _>("schema") == TEST_SCHEMA && row.get::<String, _>("table") == table
+    })
 }
 
 pub(super) async fn poll<T>(desc: &str, mut check: impl AsyncFnMut() -> Option<T>) -> T {
@@ -76,7 +77,7 @@ async fn test_show_table_copies_during_copy() {
     create_test_table(&direct).await;
     seed_rows(&direct, SEEDED_ROWS).await;
     direct
-        .execute(format!("ANALYZE {TEST_TABLE}").as_str())
+        .execute(format!("ANALYZE {TEST_SCHEMA}.{TEST_TABLE}").as_str())
         .await
         .unwrap();
     create_publication(&direct).await;
@@ -93,7 +94,6 @@ async fn test_show_table_copies_during_copy() {
         copy_row(&admin, TEST_TABLE)
     })
     .await;
-    assert_eq!(row.get::<String, _>("schema"), "public");
     let progress = row
         .get::<String, _>("progress")
         .parse::<TaskProgress>()
