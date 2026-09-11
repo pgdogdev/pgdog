@@ -32,7 +32,7 @@ impl QueryEngine {
                     self.check_lock();
                     // execute() cleaned up before temp tracking was cleared.
                     // Try again now that the backend is unpinned.
-                    self.cleanup_backend(context)?;
+                    self.cleanup_backend(context).await?;
                 }
                 return Ok(());
             }
@@ -47,7 +47,7 @@ impl QueryEngine {
                 self.backend.unlisten_all();
                 self.reset_session_params(context);
                 self.check_lock();
-                self.cleanup_backend(context)?;
+                self.cleanup_backend(context).await?;
             }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }

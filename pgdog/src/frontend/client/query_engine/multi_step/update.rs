@@ -100,7 +100,7 @@ impl<'a> UpdateMulti<'a> {
         // Just in case we change how transactions are
         // routed in the future.
         {
-            self.engine.cleanup_backend(context)?;
+            self.engine.cleanup_backend(context).await?;
             return Err(UpdateError::TransactionRequired.into());
         }
 

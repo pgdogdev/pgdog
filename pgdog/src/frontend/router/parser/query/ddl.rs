@@ -100,6 +100,7 @@ impl QueryParser {
             }
 
             Node::CreateFunctionStmt(stmt) => {
+                schema_changed = true;
                 let table = Table::try_from(stmt.funcname()).ok();
                 if let Some(table) = table {
                     shard = schema
@@ -111,6 +112,7 @@ impl QueryParser {
             }
 
             Node::CreateEnumStmt(stmt) => {
+                schema_changed = true;
                 let table = Table::try_from(stmt.type_name()).ok();
                 if let Some(table) = table {
                     shard = schema
@@ -126,6 +128,7 @@ impl QueryParser {
             }
 
             Node::RenameStmt(stmt) => {
+                schema_changed = true;
                 shard = Self::shard_ddl_table(stmt.relation(), schema)?.unwrap_or(Shard::All);
             }
 
