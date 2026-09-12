@@ -19,6 +19,21 @@ pub(crate) trait OpenMetric: Send + Sync {
     fn help(&self) -> Option<String> {
         None
     }
+
+    /// Render measurement lines. The default renders one line per
+    /// measurement; multi-series families (histograms) override this to
+    /// control the sample names (`_bucket`, `_sum`, `_count`).
+    fn render_measurements(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        prefix: &str,
+        name: &str,
+    ) -> std::fmt::Result {
+        for measurement in self.measurements() {
+            writeln!(f, "{}{}", prefix, measurement.render(name))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -127,10 +142,7 @@ impl std::fmt::Display for Metric {
             writeln!(f, "# HELP {}{} {}", prefix, name, help)?;
         }
 
-        for measurement in self.measurements() {
-            writeln!(f, "{}{}", prefix, measurement.render(&name))?;
-        }
-        Ok(())
+        self.render_measurements(f, prefix, &name)
     }
 }
 
