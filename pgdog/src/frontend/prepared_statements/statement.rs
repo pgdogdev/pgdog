@@ -9,6 +9,7 @@ use super::prelude::*;
 pub(crate) struct Statement {
     pub(super) stmt: StatementType,
     pub(super) row_description: Option<RowDescription>,
+    pub(super) parameter_description: Option<ParameterDescription>,
     pub(super) cache_key: CacheKey,
 }
 
@@ -59,6 +60,11 @@ impl MemoryUsage for Statement {
             } else {
                 0
             }
+            + self
+                .parameter_description
+                .as_ref()
+                .map(|params| params.memory_usage())
+                .unwrap_or_default()
             + self.cache_key.memory_usage()
     }
 }
