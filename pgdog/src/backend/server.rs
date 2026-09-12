@@ -32,6 +32,7 @@ use crate::{
         },
     },
     stats::memory::MemoryUsage,
+    util::safe_timeout,
 };
 use crate::{
     config::{PoolerMode, TlsVerifyMode, config},
@@ -879,6 +880,30 @@ impl Server {
         &self.params
     }
 
+    pub(super) async fn check_automatic_primary_backend(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<bool, Error> {
+        let replica: bool = safe_timeout(
+            timeout,
+            self.fetch_all::<DataRow>("SELECT pg_is_in_recovery()"),
+        )
+        .await
+        .unwrap_or(Err(Error::AutomaticPrimaryCheckTimeout))
+        .and_then(|rows| {
+            rows.into_iter()
+                .next()
+                .ok_or(Error::AutomaticPrimaryCheckInvalidResponse)
+        })
+        .and_then(|row| {
+            row.get(0, Format::Text)
+                .ok_or(Error::AutomaticPrimaryCheckInvalidResponse)
+        })
+        .inspect_err(|_| self.stats.state(State::ForceClose))?;
+
+        Ok(!replica)
+    }
+
     /// Execute a batch of queries and return all results.
     pub(crate) async fn execute_batch(
         &mut self,
@@ -1387,6 +1412,134 @@ pub(crate) mod test {
 
             server
         }
+    }
+
+    pub(crate) async fn automatic_role_server(value: Option<&'static str>) -> Server {
+        automatic_role_server_response(value.map(AutomaticRoleResponse::Value)).await
+    }
+
+    pub(crate) async fn automatic_role_error_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Error)).await
+    }
+
+    pub(crate) async fn automatic_role_empty_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Empty)).await
+    }
+
+    pub(crate) async fn automatic_role_disconnect_server() -> Server {
+        automatic_role_server_response(Some(AutomaticRoleResponse::Disconnect)).await
+    }
+
+    pub(crate) async fn live_server() -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = tokio::net::TcpStream::connect(listener.local_addr().unwrap());
+        let (client, accepted) = tokio::join!(connect, listener.accept());
+        let socket = accepted.unwrap().0;
+        tokio::spawn(async move {
+            let _socket = socket;
+            std::future::pending::<()>().await;
+        });
+
+        let mut server = Server::default();
+        server.stream = Some(Stream::plain(client.unwrap(), 4096));
+        server
+    }
+
+    enum AutomaticRoleResponse {
+        Value(&'static str),
+        Error,
+        Empty,
+        Disconnect,
+    }
+
+    async fn automatic_role_server_response(response: Option<AutomaticRoleResponse>) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = tokio::net::TcpStream::connect(listener.local_addr().unwrap());
+        let (client, accepted) = tokio::join!(connect, listener.accept());
+        let mut socket = accepted.unwrap().0;
+        tokio::spawn(async move {
+            let code = socket.read_u8().await.unwrap();
+            let len = socket.read_i32().await.unwrap();
+            assert_eq!(code, b'Q');
+            let mut payload = vec![0; len as usize - 4];
+            socket.read_exact(&mut payload).await.unwrap();
+
+            let Some(response) = response else {
+                std::future::pending::<()>().await;
+                return;
+            };
+
+            let mut bytes = BytesMut::new();
+            match response {
+                AutomaticRoleResponse::Value(value) => {
+                    let mut row = DataRow::new();
+                    row.add(value);
+                    bytes.extend_from_slice(
+                        &RowDescription::new(&[Field::bool("pg_is_in_recovery")]).to_bytes(),
+                    );
+                    bytes.extend_from_slice(&row.to_bytes());
+                    bytes.extend_from_slice(&CommandComplete::new("SELECT 1").to_bytes());
+                }
+                AutomaticRoleResponse::Error => {
+                    bytes.extend_from_slice(
+                        &ErrorResponse {
+                            code: "XX000".into(),
+                            message: "backend role query failed".into(),
+                            ..Default::default()
+                        }
+                        .to_bytes(),
+                    );
+                }
+                AutomaticRoleResponse::Empty => {
+                    bytes.extend_from_slice(
+                        &RowDescription::new(&[Field::bool("pg_is_in_recovery")]).to_bytes(),
+                    );
+                    bytes.extend_from_slice(&CommandComplete::new("SELECT 0").to_bytes());
+                }
+                AutomaticRoleResponse::Disconnect => return,
+            }
+            bytes.extend_from_slice(&ReadyForQuery::idle().to_bytes());
+            socket.write_all(&bytes).await.unwrap();
+        });
+
+        let mut server = Server::default();
+        server.stream = Some(Stream::plain(client.unwrap(), 4096));
+        server
+    }
+
+    async fn assert_automatic_primary_check_fails_closed(mut server: Server) {
+        let result = server
+            .check_automatic_primary_backend(Duration::from_millis(25))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(server.stats().get_state(), State::ForceClose);
+    }
+
+    #[tokio::test]
+    async fn test_automatic_primary_backend_check() {
+        let timeout = Duration::from_millis(50);
+        let mut writer = automatic_role_server(Some("f")).await;
+        let mut standby = automatic_role_server(Some("t")).await;
+
+        assert!(
+            writer
+                .check_automatic_primary_backend(timeout)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !standby
+                .check_automatic_primary_backend(timeout)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_automatic_primary_backend_check_fails_closed() {
+        assert_automatic_primary_check_fails_closed(automatic_role_error_server().await).await;
+        assert_automatic_primary_check_fails_closed(automatic_role_empty_server().await).await;
+        assert_automatic_primary_check_fails_closed(automatic_role_server(None).await).await;
     }
 
     pub(crate) async fn test_server() -> Server {
