@@ -17,6 +17,9 @@ use tracing::{debug, error, info};
 use super::super::{Manager, TwoPcTransaction};
 use super::*;
 
+mod selection;
+use selection::SegmentDependencies;
+
 // In charge of automatically removing WAL segments
 // that refer to transactions we already comitted/rolled back.
 #[derive(Debug, Clone)]
@@ -80,45 +83,60 @@ impl Checkpointer {
         });
     }
 
-    // Clean up unused segments.
+    // Clean up unused segments, retaining the identities needed by every
+    // retained phase record, even when its transaction has already finished.
     async fn run_once(&self) -> Result<(), Error> {
-        let segments = SegmentRegistry::get()
-            .inactive()
-            .into_iter()
-            .map(|id| (id, Segment::path(&self.wal_directory, id)))
-            .collect::<Vec<_>>();
-
         let now = Instant::now();
-
-        for (id, path) in &segments {
-            let transactions = Self::read_tids(path).await?;
-            let can_remove = transactions
-                .iter()
-                .all(|transaction| self.manager.transaction(transaction).is_none());
-
-            if can_remove {
-                debug!(
-                    r#"[2pc] checkpointer removing segment "{}""#,
-                    path.display()
-                );
-                match remove_file(path).await {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == ErrorKind::NotFound => {}
-                    Err(err) => return Err(err.into()),
+        let mut segments = Vec::new();
+        for id in SegmentRegistry::get().inactive() {
+            let path = Segment::path(&self.wal_directory, id);
+            match Segment::load(&path).await {
+                Ok(segment) => segments.push(SegmentDependencies::new(segment)?),
+                // A previous checkpoint may have been interrupted after unlink
+                // but before directory fsync or registry removal. Finish that
+                // durability barrier before considering any dependencies.
+                Err(Error::Io(err)) if err.kind() == ErrorKind::NotFound => {
+                    self.remove_segment(id).await?;
                 }
-
-                SegmentRegistry::get().remove(*id);
+                Err(err) => return Err(err),
             }
         }
 
-        if !segments.is_empty() {
+        let candidates = selection::candidates(&segments, &self.manager);
+        for id in &candidates {
+            self.remove_segment(*id).await?;
+        }
+
+        if !candidates.is_empty() {
             info!(
                 "[2pc] checkpointer removed {} WAL segments in {:.3}s",
-                segments.len(),
+                candidates.len(),
                 now.elapsed().as_secs_f32()
             );
         }
 
+        Ok(())
+    }
+
+    // Candidates are deleted newest first. Persist each unlink before removing
+    // an older identity segment, including when retrying an interrupted unlink.
+    async fn remove_segment(&self, id: u64) -> Result<(), Error> {
+        let path = Segment::path(&self.wal_directory, id);
+        debug!(
+            r#"[2pc] checkpointer removing segment "{}""#,
+            path.display()
+        );
+        match remove_file(&path).await {
+            Ok(()) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        #[cfg(unix)]
+        {
+            let directory = tokio::fs::File::open(&self.wal_directory).await?;
+            directory.sync_all().await?;
+        }
+        SegmentRegistry::get().remove(id);
         Ok(())
     }
 
@@ -128,27 +146,7 @@ impl Checkpointer {
     pub(super) fn shutdown(&self) {
         self.shutdown.cancel();
     }
-
-    // Fetch transaction IDs referred to in the segment.
-    //
-    // The idea is if all of them are not present in the in-memory state of
-    // the transaction manager, we can delete that segment, i.e., we don't need
-    // it for recovery anymore.
-    async fn read_tids(segment_path: &Path) -> Result<Vec<TwoPcTransaction>, Error> {
-        let segment = Segment::load(segment_path).await?;
-
-        let mut tids = vec![];
-
-        for record in segment.records {
-            if let Ok(record) = Records::try_from(record) {
-                match record {
-                    Records::Identity(record) => tids.push(record.transaction),
-                    Records::Phase(record) => tids.push(record.transaction),
-                    Records::Remove(record) => tids.push(record.transaction),
-                }
-            }
-        }
-
-        Ok(tids)
-    }
 }
+
+#[cfg(test)]
+mod tests;

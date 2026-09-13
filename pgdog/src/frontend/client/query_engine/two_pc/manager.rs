@@ -103,6 +103,7 @@ impl Manager {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn transaction(&self, transaction: &TwoPcTransaction) -> Option<TransactionInfo> {
         self.inner.lock().transactions.get(transaction).cloned()
     }
@@ -236,12 +237,15 @@ impl Manager {
 
     /// Apply a phase transition restored from the WAL.
     pub(super) fn set_transaction_phase(&self, transaction: TwoPcTransaction, phase: TwoPcPhase) {
-        self.inner
-            .lock()
-            .transactions
-            .get_mut(&transaction)
-            .expect("2pc WAL phase record is missing its identity")
-            .phase = phase;
+        if let Some(info) = self.inner.lock().transactions.get_mut(&transaction) {
+            info.phase = phase;
+        } else {
+            // BUG: checkpointer removed required segment!
+            warn!(
+                "[2pc] recovery skipping phase record without identity for transaction {}",
+                transaction
+            );
+        }
     }
 
     /// Enqueue all transactions into the cleanup manager.

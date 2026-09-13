@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use super::{Record, Segment, SegmentRegistry, SegmentStatus};
+use super::{Record, Segment, SegmentRegistry, SegmentStatus, TwoPcRecordPhase};
 use crate::{
     net::{Error, ToBytes},
     tasks,
@@ -125,6 +125,11 @@ impl LiveSegment {
     /// actually makes it to disk.
     #[must_use]
     pub(super) fn add(&self, record: Record) -> Waiter {
+        if record.code == '2'
+            && let Ok(phase) = TwoPcRecordPhase::try_from(record.clone())
+        {
+            SegmentRegistry::get().add_phase_reference(self.counter, phase.transaction);
+        }
         let len = record.len();
         let needs_fsync = record.needs_fsync();
 
