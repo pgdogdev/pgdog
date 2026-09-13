@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Set up toxiproxy for resharding benchmarks.
 #
-# Two proxies, both upstream 127.0.0.1:5432:
+# Four proxies, all upstream 127.0.0.1:5432:
 #
 #   Name                     Listen port   Used by
 #   ──────────────────────────────────────────────
-#   resharding_source        15400         pgdog1, pgdog2, pgdog3
+#   resharding_source        15400         primary entries (pgdog1, pgdog2, pgdog3)
+#   resharding_replica_1     15410         copy worker entries (pgdog.toxi.toml)
+#   resharding_replica_2     15411         copy worker entries (pgdog.toxi.toml)
 #   resharding_destination   15401         shard_0, shard_1, shard_2, shard_3
 #
 # Toxics applied to each proxy (all configurable via env):
-#   SOURCE_LATENCY_MS   -- latency on source reads,      --downstream (PG -> pgdog)
-#   DEST_LATENCY_MS     -- latency on destination writes, --upstream   (pgdog -> PG)
-#   SOURCE_BW_KBPS      -- bandwidth cap on source reads,      --downstream
+#   SOURCE_LATENCY_MS   -- latency on source reads, fast source proxies,       --downstream
+#   SLOW_LATENCY_MS     -- latency on source reads, resharding_replica_2,      --downstream
+#   SOURCE_BW_KBPS      -- bandwidth cap per connection, all source proxies,   --downstream
+#   DEST_LATENCY_MS     -- latency on destination writes, --upstream
 #   DEST_BW_KBPS        -- bandwidth cap on destination writes, --upstream
 #
 # Usage:
@@ -29,6 +32,7 @@ UPSTREAM="127.0.0.1:5432"
 SOURCE_LATENCY_MS="${SOURCE_LATENCY_MS:-0}"
 DEST_LATENCY_MS="${DEST_LATENCY_MS:-0}"
 SOURCE_BW_KBPS="${SOURCE_BW_KBPS:-10000}"
+SLOW_LATENCY_MS="${SLOW_LATENCY_MS:-500}"
 DEST_BW_KBPS="${DEST_BW_KBPS:-10000}"
 
 # ── Start server ─────────────────────────────────────────────────────────────
@@ -49,24 +53,37 @@ create_proxy() {
 # ── Proxies ───────────────────────────────────────────────────────────────────
 create_proxy resharding_source      15400
 create_proxy resharding_destination 15401
+create_proxy resharding_replica_1  15410
+create_proxy resharding_replica_2  15411
 
 # ── Toxics ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Applying toxics..."
 
+for proxy in resharding_source resharding_replica_1; do
+    "${CLI}" toxic add \
+        --toxicName latency \
+        --type      latency \
+        --downstream \
+        --attribute  latency="${SOURCE_LATENCY_MS}" \
+        "${proxy}"
+done
+
 "${CLI}" toxic add \
     --toxicName latency \
     --type      latency \
     --downstream \
-    --attribute  latency="${SOURCE_LATENCY_MS}" \
-    resharding_source
+    --attribute  latency="${SLOW_LATENCY_MS}" \
+    resharding_replica_2
 
-"${CLI}" toxic add \
-    --toxicName bandwidth \
-    --type      bandwidth \
-    --downstream \
-    --attribute  rate="${SOURCE_BW_KBPS}" \
-    resharding_source
+for proxy in resharding_source resharding_replica_1 resharding_replica_2; do
+    "${CLI}" toxic add \
+        --toxicName bandwidth \
+        --type      bandwidth \
+        --downstream \
+        --attribute  rate="${SOURCE_BW_KBPS}" \
+        "${proxy}"
+done
 
 "${CLI}" toxic add \
     --toxicName latency \
@@ -86,7 +103,8 @@ echo ""
 "${CLI}" list
 echo ""
 echo "Toxiproxy ready (API port=8474)."
-echo "  source      latency=${SOURCE_LATENCY_MS}ms  bandwidth=${SOURCE_BW_KBPS} KB/s"
-echo "  destination latency=${DEST_LATENCY_MS}ms  bandwidth=${DEST_BW_KBPS} KB/s"
+echo "  fast source pipes latency=${SOURCE_LATENCY_MS}ms  bandwidth=${SOURCE_BW_KBPS} KB/s per connection"
+echo "  slow replica      latency=${SLOW_LATENCY_MS}ms per round trip (resharding_replica_2)"
+echo "  destination  latency=${DEST_LATENCY_MS}ms  bandwidth=${DEST_BW_KBPS} KB/s"
 echo ""
 echo "Run teardown.sh to stop, or just re-run setup.sh to restart."
