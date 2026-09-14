@@ -4,6 +4,23 @@ use crate::frontend::router::parser::OrderBy;
 
 use super::projection::{OrderByHelper, ProjectionRewritePlan};
 
+/// A `*` in the select list already projects every column of its table, so
+/// nothing sorted by those columns needs a helper.
+fn projects_star(select: &nodes::SelectStmtMut<'_, '_>) -> bool {
+    select.target_list().iter().any(|target| {
+        matches!(target.val(), Node::ColumnRef(column)
+            if column.fields().into_iter().any(|field| matches!(field, Node::A_Star(_))))
+    })
+}
+
+fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, name: &str) -> bool {
+    select.target_list().iter().any(|target| {
+        target.name() == Some(name)
+            || matches!(target.val(), Node::ColumnRef(projected)
+                if projected.fields().into_iter().next_back().and_then(Node::as_str) == Some(name))
+    })
+}
+
 /// Project ORDER BY expressions that are missing from the SELECT list
 /// so cross-shard results can be sorted, then stripped.
 pub(super) fn rewrite_select<'a>(
@@ -12,6 +29,10 @@ pub(super) fn rewrite_select<'a>(
     order_by: &[OrderBy],
     plan: &mut ProjectionRewritePlan,
 ) {
+    if projects_star(select) {
+        return;
+    }
+
     let mut helpers = Vec::new();
     let mut sort_position = 0;
     for sort in select.sort_clause() {
@@ -32,36 +53,26 @@ pub(super) fn rewrite_select<'a>(
             continue;
         }
 
+        let current_sort_position = sort_position;
+        sort_position += 1;
+
         let needs_helper = match node {
-            Node::ColumnRef(column) => {
-                let Some(name) = column
-                    .fields()
-                    .into_iter()
-                    .next_back()
-                    .and_then(Node::as_str)
-                else {
-                    continue;
-                };
-                !select.target_list().iter().any(|target| {
-                    target.name() == Some(name)
-                        || matches!(
-                            target.val(),
-                            Node::ColumnRef(projected)
-                                if projected.fields().into_iter().next_back().and_then(Node::as_str)
-                                    == Some(name)
-                        )
-                })
-            }
+            Node::ColumnRef(column) => match column
+                .fields()
+                .into_iter()
+                .next_back()
+                .and_then(Node::as_str)
+            {
+                Some(name) => !projects_column(select, name),
+                None => false,
+            },
             Node::A_Expr(_) => matches!(order, OrderBy::AscVectorL2Column(_, _)),
             _ => false,
         };
-        let current_sort_position = sort_position;
-        sort_position += 1;
         if !needs_helper {
             continue;
         }
 
-        let projected_column = select.target_list().len() + helpers.len();
         let alias = format!("__pgdog_order_col{current_sort_position}");
         helpers.push(mem.make_res_target(
             Some(&alias),
@@ -70,7 +81,7 @@ pub(super) fn rewrite_select<'a>(
         ));
         plan.add_order_by_helper(OrderByHelper {
             sort_position: current_sort_position,
-            projected_column,
+            alias,
         });
     }
 
@@ -115,7 +126,7 @@ mod tests {
 
         assert!(sql.contains("price AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers().len(), 1);
-        assert_eq!(plan.order_by_helpers()[0].projected_column, 1);
+        assert_eq!(plan.order_by_helpers()[0].alias, "__pgdog_order_col0");
     }
 
     #[test]
@@ -123,6 +134,28 @@ mod tests {
         let (sql, plan) = rewrite(
             "SELECT id, price FROM products ORDER BY price",
             vec![OrderBy::AscColumn("price".into())],
+        );
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn skips_star_select() {
+        let (sql, plan) = rewrite(
+            "SELECT * FROM products ORDER BY id",
+            vec![OrderBy::AscColumn("id".into())],
+        );
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn skips_qualified_star_select() {
+        let (sql, plan) = rewrite(
+            "SELECT products.* FROM products ORDER BY products.id",
+            vec![OrderBy::AscColumn("id".into())],
         );
 
         assert!(!sql.contains("__pgdog_order_col"));

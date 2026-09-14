@@ -176,17 +176,30 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
     }
 }
 
+/// `$1 + $2` is ambiguous to Postgres when both sides are untyped parameters,
+/// so spell out the type both operands would have had as LIMIT/OFFSET.
+fn to_bigint<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+    mem.make_type_cast(
+        mem.make_unique(node).uncast(),
+        mem.make_list(&[
+            mem.make_string(Some("pg_catalog")),
+            mem.make_string(Some("int8")),
+        ]),
+    )
+    .uncast()
+}
+
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
 ) {
-    let limit = select.limit_count();
-    let offset = select.limit_offset();
+    let limit = to_bigint(select.limit_count(), mem);
+    let offset = to_bigint(select.limit_offset(), mem);
     let combined = mem.make_a_expr(
         nodes::A_Expr_Kind::AEXPR_OP,
         mem.make_list(&[mem.make_string(Some("+")).uncast()]),
-        mem.make_unique(limit),
-        mem.make_unique(offset),
+        limit,
+        offset,
     );
     select.set_limit_count(combined.uncast());
     select.set_limit_offset(mem.none());

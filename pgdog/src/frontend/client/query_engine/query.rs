@@ -545,5 +545,5 @@ impl ExplainResponseState {
 
     pub(crate) fn should_emit(&self) -> bool {
         self.supported && !self.annotated
-    }
+        }
 }
