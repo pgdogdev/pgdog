@@ -1,6 +1,6 @@
 //! Multi-shard connection state.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 use crate::{
     frontend::router::Route,
@@ -312,15 +312,11 @@ impl MultiShard {
             // Only send it to the client once all shards sent it,
             // so we don't get early requests from clients.
             let plan = self.route.projection_rewrite_plan();
-            let drop = if plan.is_noop() {
-                BTreeSet::new()
-            } else {
-                plan.drop_columns(&rd)
-            };
-            if drop.is_empty() {
+            if plan.is_noop() {
                 forward = Some(message);
             } else {
-                forward = Some(rd.drop_columns(drop).message());
+                let client_rd = rd.drop_columns(plan.drop_columns());
+                forward = Some(client_rd.message());
             }
 
             // The next statement describes a different result set.

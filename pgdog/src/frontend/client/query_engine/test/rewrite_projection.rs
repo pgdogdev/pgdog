@@ -287,16 +287,13 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     assert!(!query.query().contains("OFFSET"));
 
     let route = context.client_request.route();
-    assert_eq!(
-        route.order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
-    );
+    assert_eq!(route.order_by(), &[OrderBy::Asc(3)]);
     assert_eq!(
         route
             .projection_rewrite_plan()
-            .aliases()
+            .drop_columns()
             .collect::<Vec<_>>(),
-        ["__pgdog_count_col0", "__pgdog_order_col0"]
+        [1, 2]
     );
     assert_eq!(
         route.limit(),

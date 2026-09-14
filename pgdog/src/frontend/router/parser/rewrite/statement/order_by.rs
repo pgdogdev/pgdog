@@ -73,6 +73,7 @@ pub(super) fn rewrite_select<'a>(
             continue;
         }
 
+        let projected_column = select.target_list().len() + helpers.len();
         let alias = format!("__pgdog_order_col{current_sort_position}");
         helpers.push(mem.make_res_target(
             Some(&alias),
@@ -81,7 +82,7 @@ pub(super) fn rewrite_select<'a>(
         ));
         plan.add_order_by_helper(OrderByHelper {
             sort_position: current_sort_position,
-            alias,
+            projected_column,
         });
     }
 
@@ -126,7 +127,7 @@ mod tests {
 
         assert!(sql.contains("price AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers().len(), 1);
-        assert_eq!(plan.order_by_helpers()[0].alias, "__pgdog_order_col0");
+        assert_eq!(plan.order_by_helpers()[0].projected_column, 1);
     }
 
     #[test]

@@ -151,25 +151,18 @@ impl Buffer {
             buffer
         };
 
-        Self::drop_helper_columns(&mut rows, plan, decoder);
+        Self::drop_helper_columns(&mut rows, plan);
         self.buffer = rows;
 
         Ok(())
     }
 
-    fn drop_helper_columns(
-        rows: &mut VecDeque<DataRow>,
-        plan: &ProjectionRewritePlan,
-        decoder: &Decoder,
-    ) {
+    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &ProjectionRewritePlan) {
         if plan.is_noop() {
             return;
         }
 
-        let drop = plan.drop_columns(decoder.row_description());
-        if drop.is_empty() {
-            return;
-        }
+        let drop = plan.drop_columns().collect();
 
         for row in rows.iter_mut() {
             row.drop_columns(&drop);
