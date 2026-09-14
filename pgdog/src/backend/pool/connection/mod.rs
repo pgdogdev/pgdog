@@ -17,7 +17,10 @@ use crate::{
     config::{PoolerMode, User, config},
     frontend::{
         ClientRequest, Router,
-        router::{CopyRow, Route, parser::Shard},
+        router::{
+            CopyRow, Route,
+            parser::{Shard, rewrite::statement::projection::ProjectionRewritePlan},
+        },
     },
     net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
     state::State,
@@ -58,6 +61,7 @@ pub(crate) struct Connection {
     cancellation_token: CancellationToken,
     mirrors: Vec<MirrorHandler>,
     pub_sub: PubSubClient,
+    projection_rewrite: ProjectionRewritePlan,
 }
 
 impl Connection {
@@ -75,6 +79,7 @@ impl Connection {
             database: database.to_owned(),
             mirrors: vec![],
             pub_sub: PubSubClient::new(),
+            projection_rewrite: ProjectionRewritePlan::default(),
         };
 
         if !admin {
@@ -236,7 +241,7 @@ impl Connection {
             }
 
             // This is cancel-safe.
-            message = self.binding.read() => {
+            message = self.binding.read(&self.projection_rewrite) => {
                 message
             }
         }
@@ -300,6 +305,10 @@ impl Connection {
         router: &mut Router,
         streaming: bool,
     ) -> Result<(), Error> {
+        if !client_request.is_sync_only() {
+            self.projection_rewrite = client_request.route().projection_rewrite_plan().clone();
+        }
+
         if client_request.is_copy() && !streaming {
             let rows = router
                 .copy_data(client_request)

@@ -156,18 +156,6 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_columns(&mut self, plan: &ProjectionRewritePlan) {
-        if plan.is_noop() {
-            return;
-        }
-
-        let drop = plan.drop_columns().collect();
-
-        for row in self.buffer.iter_mut() {
-            row.drop_columns(&drop);
-        }
-    }
-
     pub(super) fn distinct(&mut self, distinct: &Option<DistinctBy>, decoder: &Decoder) {
         if let Some(distinct) = distinct {
             match distinct {
@@ -239,7 +227,6 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::projection::OrderByHelper;
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
 
@@ -274,15 +261,10 @@ mod test {
     }
 
     #[test]
-    fn test_sort_by_hidden_column_before_dropping_it() {
+    fn test_sort_by_hidden_column() {
         let mut buf = Buffer::default();
         let rd = RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
         let decoder = Decoder::from(rd);
-        let mut plan = ProjectionRewritePlan::default();
-        plan.add_order_by_helper(OrderByHelper {
-            sort_position: 0,
-            projected_column: 1,
-        });
 
         for (id, name) in [(1_i64, "z"), (2, "a"), (3, "m")] {
             let mut row = DataRow::new();
@@ -291,13 +273,12 @@ mod test {
         }
 
         buf.sort(&[OrderBy::Asc(2)], &decoder);
-        buf.drop_columns(&plan);
         buf.mark_full();
 
         let ids = std::iter::from_fn(|| buf.take())
             .map(|message| {
                 let row = DataRow::from_bytes(message.to_bytes()).unwrap();
-                assert_eq!(row.len(), 1);
+                assert_eq!(row.len(), 2);
                 row.get::<i64>(0, Format::Text).unwrap()
             })
             .collect::<Vec<_>>();

@@ -7,12 +7,17 @@ use crate::{
             TwoPcPhase,
             two_pc::{TwoPcTransaction, statement::phase_control},
         },
+        router::parser::rewrite::statement::projection::ProjectionRewritePlan,
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{
+        DataRow, FromBytes, FrontendPid, ProtocolMessage, Query, RowDescription, ToBytes,
+        parameter::Parameters,
+    },
     state::State,
 };
 
 use futures::future::join_all;
+use std::collections::BTreeSet;
 
 use super::*;
 use crate::util::safe_sleep;
@@ -85,15 +90,18 @@ impl Binding {
         }
     }
 
-    pub(super) async fn read(&mut self) -> Result<Message, Error> {
-        match self {
-            Binding::Direct(guard, _) => guard.read().await,
+    pub(super) async fn read(
+        &mut self,
+        projection_rewrite: &ProjectionRewritePlan,
+    ) -> Result<Message, Error> {
+        let mut message = match self {
+            Binding::Direct(guard, _) => guard.read().await?,
 
             Binding::NotConnected => loop {
                 safe_sleep(Duration::MAX).await
             },
 
-            Binding::Admin(backend) => Ok(backend.read().await?),
+            Binding::Admin(backend) => backend.read().await?,
             Binding::MultiShard(shards, state) => {
                 if shards.is_empty() {
                     loop {
@@ -102,37 +110,42 @@ impl Binding {
                 } else {
                     // Loop until we read a message from a shard
                     // or there are no more messages to be read.
-                    loop {
-                        // Return all sorted data rows if any.
-                        if let Some(message) = state.get_server_message() {
-                            return Ok(message);
-                        }
-                        let mut read = false;
-                        for server in shards.iter_mut() {
-                            if !server.has_more_messages() {
-                                continue;
+                    'message: {
+                        loop {
+                            // Return all sorted data rows if any.
+                            if let Some(message) = state.get_server_message() {
+                                break 'message message;
+                            }
+                            let mut read = false;
+                            for server in shards.iter_mut() {
+                                if !server.has_more_messages() {
+                                    continue;
+                                }
+
+                                let message = server.read().await?;
+
+                                read = true;
+                                if let Some(message) = state.handle_server_message(message)? {
+                                    break 'message message;
+                                }
                             }
 
-                            let message = server.read().await?;
-
-                            read = true;
-                            if let Some(message) = state.handle_server_message(message)? {
-                                return Ok(message);
+                            if !read {
+                                break;
                             }
                         }
 
-                        if !read {
-                            break;
+                        loop {
+                            state.query_complete();
+                            safe_sleep(Duration::MAX).await;
                         }
-                    }
-
-                    loop {
-                        state.query_complete();
-                        safe_sleep(Duration::MAX).await;
                     }
                 }
             }
-        }
+        };
+
+        drop_projected_columns(&mut message, projection_rewrite)?;
+        Ok(message)
     }
 
     /// Send an entire buffer of messages to the servers(s).
@@ -552,5 +565,62 @@ impl Binding {
                 return Err(Error::NotConnected);
             }
         })
+    }
+}
+
+fn drop_projected_columns(
+    message: &mut Message,
+    plan: &ProjectionRewritePlan,
+) -> Result<(), Error> {
+    if plan.is_noop() {
+        return Ok(());
+    }
+
+    let drop = plan.drop_columns().collect::<BTreeSet<_>>();
+    let payload = match message.code() {
+        'D' => {
+            let mut row = DataRow::from_bytes(message.to_bytes())?;
+            row.drop_columns(&drop);
+            row.to_bytes()
+        }
+        'T' => RowDescription::from_bytes(message.to_bytes())?
+            .drop_columns(drop)
+            .to_bytes(),
+        _ => return Ok(()),
+    };
+    message.replace_payload(payload);
+    Ok(())
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    use crate::{
+        frontend::router::parser::rewrite::statement::projection::OrderByHelper,
+        net::{Field, Format},
+    };
+
+    #[test]
+    fn hidden_columns_are_removed_at_binding_boundary() {
+        let mut plan = ProjectionRewritePlan::default();
+        plan.add_order_by_helper(OrderByHelper {
+            sort_position: 0,
+            projected_column: 1,
+        });
+
+        let description =
+            RowDescription::new(&[Field::bigint("id"), Field::text("__pgdog_order_by_0")]);
+        let mut description = description.message();
+        drop_projected_columns(&mut description, &plan).unwrap();
+        let description = RowDescription::from_bytes(description.to_bytes()).unwrap();
+        assert_eq!(description.fields.len(), 1);
+
+        let mut row = DataRow::new();
+        row.add(42_i64).add("alice");
+        let mut row = row.message();
+        drop_projected_columns(&mut row, &plan).unwrap();
+        let row = DataRow::from_bytes(row.to_bytes()).unwrap();
+        assert_eq!(row.len(), 1);
+        assert_eq!(row.get::<i64>(0, Format::Text), Some(42));
     }
 }
