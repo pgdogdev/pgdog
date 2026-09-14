@@ -167,11 +167,11 @@ psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'dup_c
 # PgDog must fill body from old_full before routing (P1 fix) and before building the INSERT.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET tenant_id = 3 WHERE seq = 1"
 
+stop_pgbench
 # REPLICATION SENTINEL — must be the last DML issued against the source.
 # Updating this row to 'sentinel_done' produces a WAL record that is downstream of
 # every preceding change. The poll loop below waits for it to land on the destination.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'sentinel_done' WHERE seq = 999"
-stop_pgbench
 
 # Wait for the replication sentinel to land on the destination.
 # seq=999 is dedicated solely to this purpose — see setup.sql.

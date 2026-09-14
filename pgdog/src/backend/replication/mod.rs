@@ -7,3 +7,5 @@ pub(crate) use error::Error;
 pub(crate) use logical::*;
 pub(crate) use sharded_schema::*;
 pub(crate) use sharded_tables::ShardedTables;
+#[cfg(test)]
+mod tests;

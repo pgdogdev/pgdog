@@ -39,9 +39,14 @@ ALTER TABLE copy_data.order_items REPLICA IDENTITY FULL;
 CREATE TABLE IF NOT EXISTS copy_data.log_actions(
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT,
+    user_id BIGINT,
     action VARCHAR,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT log_actions_user_fk FOREIGN KEY (user_id, tenant_id)
+        REFERENCES copy_data.users (id, tenant_id)
 );
+
+CREATE INDEX log_actions_user_idx ON copy_data.log_actions (user_id, tenant_id);
 
 CREATE TABLE copy_data.with_identity(
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS identity,
@@ -180,6 +185,11 @@ SELECT
         floor(random() * 6 + 1)::int
     ] AS action
 FROM generate_series(1, 100000);
+
+INSERT INTO copy_data.log_actions (tenant_id, user_id, action)
+SELECT tenant_id, id, 'fk_seed'
+FROM copy_data.users
+WHERE id <= 100;
 
 
 INSERT INTO copy_data.with_identity (tenant_id)
