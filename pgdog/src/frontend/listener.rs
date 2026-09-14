@@ -281,6 +281,8 @@ impl Listener {
                 Startup::Cancel { ref id } => {
                     if comms().verify_cancel(id) {
                         let _ = databases().cancel(FrontendPid::from(id)).await;
+                    } else {
+                        super::ee::broadcast_cancel(id).await?;
                     }
                     break;
                 }

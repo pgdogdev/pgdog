@@ -5,6 +5,7 @@ pub(crate) mod client;
 pub(crate) mod client_request;
 pub(crate) mod comms;
 pub(crate) mod connected_client;
+pub(crate) mod ee;
 pub(crate) mod error;
 pub(crate) mod listener;
 pub(crate) mod prepared_statements;
