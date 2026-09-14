@@ -27,7 +27,7 @@ use tracing::{error, info, warn};
 use util::pgdog_version;
 
 use arc_swap::ArcSwapOption;
-use pgdog_config::{General, LogFormat};
+use pgdog_config::{General, LogFormat, Memory};
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
@@ -130,16 +130,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     plugin::load_from_config()?;
 
-    let runtime = build_runtime(
-        config.config.general.workers,
-        config.config.memory.stack_size,
-    )?;
+    let runtime = build_runtime(&config.config.general, &config.config.memory)?;
 
     info!(
-        "spawning {} threads (stack size: {}MiB)",
+        "spawning {} threads (stack size: {}MiB, bg workers: {})",
         config.config.general.workers,
-        config.config.memory.stack_size / 1024 / 1024
+        config.config.memory.stack_size / 1024 / 1024,
+        config.config.general.background_workers
     );
+
     info!(
         "using \"{}\" unique 64-bit ID generator",
         config.config.general.unique_id_function
@@ -316,11 +315,12 @@ fn install_sigterm_handler() {
     }
 }
 
-fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::runtime::Runtime> {
-    match workers {
+fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::runtime::Runtime> {
+    match general.workers {
         0 => Builder::new_current_thread()
             .enable_all()
-            .thread_stack_size(stack_size)
+            .thread_stack_size(memory.stack_size)
+            .max_blocking_threads(general.background_workers)
             .build(),
         workers => {
             let mut builder = Builder::new_multi_thread();
@@ -331,7 +331,11 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
                 builder.enable_alt_timer();
             }
 
-            builder.enable_all().thread_stack_size(stack_size).build()
+            builder
+                .max_blocking_threads(general.background_workers)
+                .enable_all()
+                .thread_stack_size(memory.stack_size)
+                .build()
         }
     }
 }
