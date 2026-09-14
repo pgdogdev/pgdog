@@ -693,9 +693,16 @@ impl PgDumpOutput {
                                             // FK columns referencing integer PKs are
                                             // computed from fk_columns at the end
                                             if state == SyncState::PostData {
-                                                result.push(
-                                                    Statement::new(original).set_skip_if_exists(),
-                                                );
+                                                let sql = if cons.skip_validation {
+                                                    original.to_owned()
+                                                } else {
+                                                    format!(
+                                                        "{} NOT VALID",
+                                                        original.trim_end().trim_end_matches(';')
+                                                    )
+                                                };
+                                                result
+                                                    .push(Statement::new(sql).set_skip_if_exists());
                                             }
                                         } else if state == SyncState::PostData {
                                             result.push(
@@ -1214,6 +1221,66 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
             statements[2].sql,
             "ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id)"
         );
+        assert_eq!(
+            output.statements(SyncState::PostData).unwrap()[0].sql,
+            "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID"
+        );
+        assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_foreign_key_not_valid_preserves_options() {
+        let sql = "ALTER TABLE child ADD CONSTRAINT child_parent_fk \
+                   FOREIGN KEY (tenant_id, parent_id) REFERENCES parent(tenant_id, id) \
+                   MATCH FULL ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED NOT VALID;";
+        let output = parse(sql);
+        let statements = output.statements(SyncState::PostData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].sql, sql.trim_end_matches(';'));
+        assert!(output.statements(SyncState::PreData).unwrap().is_empty());
+        assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_foreign_key_preserves_postdata_order() {
+        let output = parse(
+            "ALTER TABLE parent ADD CONSTRAINT parent_key UNIQUE (code);
+             ALTER TABLE child ADD CONSTRAINT child_parent_fk
+                 FOREIGN KEY (parent_code) REFERENCES parent(code);
+             ALTER TABLE child ADD CONSTRAINT child_key UNIQUE (id);",
+        );
+        let statements = output.statements(SyncState::PostData).unwrap();
+
+        assert_eq!(statements.len(), 3);
+        assert_eq!(
+            statements[0].sql,
+            "ALTER TABLE parent ADD CONSTRAINT parent_key UNIQUE (code)"
+        );
+        assert!(statements[1].sql.contains("CONSTRAINT child_parent_fk"));
+        assert!(statements[1].sql.ends_with("NOT VALID"));
+        assert_eq!(
+            statements[2].sql,
+            "ALTER TABLE child ADD CONSTRAINT child_key UNIQUE (id)"
+        );
+    }
+
+    #[test]
+    fn test_partitioned_foreign_key_not_valid() {
+        let output = parse(
+            "CREATE TABLE parent (id BIGINT PRIMARY KEY);
+             CREATE TABLE child (id BIGINT, parent_id BIGINT) PARTITION BY RANGE (id);
+             CREATE TABLE child_0 PARTITION OF child FOR VALUES FROM (0) TO (100);
+             ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);",
+        );
+        let statements = output.statements(SyncState::PostData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            statements[0].sql.trim(),
+            "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID"
+        );
+        assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
     }
 
     #[test]

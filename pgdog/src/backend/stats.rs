@@ -10,7 +10,7 @@ pub(crate) use pgdog_stats::server::Counts;
 use tokio::time::Instant;
 
 use crate::{
-    backend::{Pool, ServerOptions, pool::stats::MemoryStats},
+    backend::{Pool, pool::stats::MemoryStats},
     config::Memory,
     net::{
         Parameters,
@@ -56,11 +56,10 @@ pub(crate) struct ServerStats {
 }
 
 impl ServerStats {
-    fn new(id: BackendPid, options: &ServerOptions, config: &Memory) -> Self {
+    fn new(id: BackendPid, config: &Memory) -> Self {
         let now = Instant::now();
         let inner = pgdog_stats::server::Stats {
             memory: *MemoryStats::new(config),
-            pool_id: options.pool_id,
             ..Default::default()
         };
 
@@ -117,10 +116,9 @@ impl Stats {
         id: BackendPid,
         addr: &Address,
         params: &Parameters,
-        options: &ServerOptions,
         config: &Memory,
     ) -> Self {
-        let local = ServerStats::new(id, options, config);
+        let local = ServerStats::new(id, config);
 
         let server = ConnectedServer {
             stats: local,
