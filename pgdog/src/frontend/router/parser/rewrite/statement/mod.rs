@@ -14,6 +14,7 @@ pub(crate) mod insert;
 pub(crate) mod nextval;
 pub(crate) mod offset;
 pub(crate) mod plan;
+pub(crate) mod projection;
 pub(crate) mod simple_prepared;
 pub(crate) mod unique_id;
 pub(crate) mod update;

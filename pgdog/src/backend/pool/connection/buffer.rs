@@ -9,7 +9,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::aggregate::AggregateRewritePlan,
+        rewrite::statement::projection::ProjectionRewritePlan,
     },
     net::{
         Decoder,
@@ -140,7 +140,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let mut rows = if aggregate.is_empty() {
@@ -157,7 +157,7 @@ impl Buffer {
         Ok(())
     }
 
-    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
+    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &ProjectionRewritePlan) {
         if plan.is_noop() {
             return;
         }
@@ -285,7 +285,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 
@@ -312,7 +312,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 

@@ -279,7 +279,7 @@ impl QueryParser {
 
         // Only rewrite if query is cross-shard.
         if query.is_cross_shard() && context.shards > 1 {
-            query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
+            query.set_projection_rewrite_plan(cached_ast.rewrite_plan.projection.clone());
         }
 
         Ok(Command::Query(

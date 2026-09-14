@@ -264,7 +264,7 @@ impl MultiShard {
                     .aggregate(
                         self.route.aggregate(),
                         &self.decoder,
-                        self.route.aggregate_rewrite_plan(),
+                        self.route.projection_rewrite_plan(),
                     )
                     .map_err(Error::from)?;
 
@@ -311,7 +311,7 @@ impl MultiShard {
         {
             // Only send it to the client once all shards sent it,
             // so we don't get early requests from clients.
-            let plan = self.route.aggregate_rewrite_plan();
+            let plan = self.route.projection_rewrite_plan();
             if plan.is_noop() {
                 forward = Some(message);
             } else {

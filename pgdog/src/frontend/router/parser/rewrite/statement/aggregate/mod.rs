@@ -1,13 +1,30 @@
 mod engine;
-mod plan;
 
+pub(crate) use super::projection::AggregateHelper;
 use super::{Error, RewritePlan, StatementRewrite};
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::aggregate::Aggregate;
 use pg_raw_parse::{make::MemoryToken, nodes::SelectStmtMut};
 
 pub(crate) use engine::AggregatesRewrite;
-pub(crate) use plan::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
+
+/// Type of aggregate function added to the result set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HelperKind {
+    Count,
+    Sum,
+    SumSquares,
+}
+
+impl HelperKind {
+    pub(crate) fn alias_suffix(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::SumSquares => "sumsq",
+        }
+    }
+}
 
 impl StatementRewrite<'_> {
     /// Add missing COUNT(*) and other helps when using aggregates.
@@ -32,7 +49,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        plan.aggregates = output.plan;
+        plan.projection = output.plan;
         self.rewritten = true;
         Ok(())
     }

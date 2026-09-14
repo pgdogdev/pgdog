@@ -8,7 +8,7 @@ use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
 use super::{
-    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
+    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, projection::ProjectionRewritePlan,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,9 +50,8 @@ pub(crate) struct RewritePlan {
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
 
-    /// Position in the result where the count(*) or count(name)
-    /// functions are added.
-    pub(crate) aggregates: AggregateRewritePlan,
+    /// Temporary result columns needed while merging cross-shard results.
+    pub(crate) projection: ProjectionRewritePlan,
 
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
@@ -91,7 +90,7 @@ impl RewritePlan {
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
-            && self.aggregates.is_noop()
+            && self.projection.is_noop()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
