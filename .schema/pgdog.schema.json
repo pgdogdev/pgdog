@@ -26,7 +26,7 @@
       "$ref": "#/$defs/General",
       "default": {
         "auth_type": "scram",
-        "background_workers": 2,
+        "background_workers": 0,
         "ban_replica_lag": 9223372036854775807,
         "ban_replica_lag_bytes": 9223372036854775807,
         "ban_timeout": 300000,
@@ -696,7 +696,7 @@
           "description": "Maximum number of background workers, used for executing blocking tasks. We typically offload CPU-intensive workloads here.",
           "type": "integer",
           "format": "uint",
-          "default": 2,
+          "default": 0,
           "minimum": 0
         },
         "ban_replica_lag": {
