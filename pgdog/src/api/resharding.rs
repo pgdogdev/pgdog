@@ -17,6 +17,7 @@ use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
 /// Run the full migration from a source database to a target: schema sync
@@ -66,7 +67,7 @@ impl Task for ReshardTask {
         let mut orchestrator = self.orchestrator;
         let schema_sync = SchemaSyncTask::builder()
             .databases(orchestrator.databases())
-            .publication(orchestrator.publication().to_owned())
+            .publication(orchestrator.publication.clone())
             .ignore_errors(true);
 
         // Pre-data schema sync, unless skipped. It runs before any replication
@@ -96,6 +97,7 @@ impl Task for ReshardTask {
                 ctx.run(
                     CopyDataTask::builder()
                         .orchestrator(orchestrator.clone())
+                        .format(config().config.general.resharding_copy_format)
                         // Only streaming needs replica identity, not a sync-only copy.
                         .require_replica_identity(!self.sync_only)
                         .build(),

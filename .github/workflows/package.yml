@@ -1,9 +1,9 @@
 name: package
 on:
   push:
-    branches: ['main']
+    branches: ["main", "main-ent"]
     paths:
-      - '**/*.rs'
+      - "**/*.rs"
   release:
     types: [published]
   workflow_dispatch:

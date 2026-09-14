@@ -21,7 +21,7 @@ password = "pgdog"
 # Example: backend authentication with Azure Workload Identity token generation.
 # PgDog still authenticates the client as configured by `general.auth_type`;
 # this only affects how PgDog authenticates to PostgreSQL servers.
-# server_auth = "azure_workload_identiy"
+# server_auth = "azure_workload_identity"
 
 # Example: backend authentication with HashiCorp Vault dynamic credentials.
 # Requires the [vault] section in pgdog.toml. PgDog fetches a generated

@@ -1,37 +1,10 @@
-use std::{sync::Arc, time::SystemTime};
+use std::time::SystemTime;
 
 use derive_more::Display;
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
 
 use crate::{Lsn, User};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TableCopy {
-    pub schema: String,
-    pub table: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TableCopyState {
-    pub sql: Arc<String>,
-    pub rows: usize,
-    pub bytes: usize,
-    pub bytes_per_sec: usize,
-    pub last_update: SystemTime,
-}
-
-impl Default for TableCopyState {
-    fn default() -> Self {
-        Self {
-            sql: Arc::new(String::default()),
-            rows: 0,
-            bytes: 0,
-            bytes_per_sec: 0,
-            last_update: SystemTime::now(),
-        }
-    }
-}
 
 /// Replication slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]

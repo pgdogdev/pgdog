@@ -100,6 +100,7 @@ impl QueryParser {
             }
 
             Node::CreateFunctionStmt(stmt) => {
+                schema_changed = true;
                 let table = Table::try_from(stmt.funcname()).ok();
                 if let Some(table) = table {
                     shard = schema
@@ -111,6 +112,7 @@ impl QueryParser {
             }
 
             Node::CreateEnumStmt(stmt) => {
+                schema_changed = true;
                 let table = Table::try_from(stmt.type_name()).ok();
                 if let Some(table) = table {
                     shard = schema
@@ -126,6 +128,7 @@ impl QueryParser {
             }
 
             Node::RenameStmt(stmt) => {
+                schema_changed = true;
                 shard = Self::shard_ddl_table(stmt.relation(), schema)?.unwrap_or(Shard::All);
             }
 
@@ -443,7 +446,7 @@ mod test {
             "CREATE FUNCTION shard_0.test_func() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql",
         );
         assert_eq!(command.route().shard(), &Shard::Direct(0));
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -452,21 +455,21 @@ mod test {
             "CREATE FUNCTION public.test_func() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql",
         );
         assert_eq!(command.route().shard(), &Shard::All);
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
     fn test_create_enum_sharded() {
         let command = parse_stmt("CREATE TYPE shard_1.mood AS ENUM ('sad', 'ok', 'happy')");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
     fn test_create_enum_unsharded() {
         let command = parse_stmt("CREATE TYPE public.mood AS ENUM ('sad', 'ok', 'happy')");
         assert_eq!(command.route().shard(), &Shard::All);
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
@@ -489,14 +492,14 @@ mod test {
     fn test_rename_table_sharded() {
         let command = parse_stmt("ALTER TABLE shard_1.test RENAME TO new_test");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]
     fn test_rename_table_unsharded() {
         let command = parse_stmt("ALTER TABLE public.test RENAME TO new_test");
         assert_eq!(command.route().shard(), &Shard::All);
-        assert!(!command.route().is_schema_changed());
+        assert!(command.route().is_schema_changed());
     }
 
     #[test]

@@ -118,6 +118,10 @@ pub struct General {
     #[serde(default = "General::workers")]
     pub workers: usize,
 
+    /// Maximum number of background workers, used for executing blocking tasks. We typically offload CPU-intensive workloads here.
+    #[serde(default = "General::background_workers")]
+    pub background_workers: usize,
+
     /// Default maximum number of server connections per database pool.
     ///
     /// **Note:** We strongly recommend keeping this value well below the supported connections of the backend database(s) to allow connections for maintenance in high load scenarios.
@@ -902,6 +906,7 @@ impl Default for General {
             port: Self::port(),
             listen_backlog: Self::listen_backlog(),
             workers: Self::workers(),
+            background_workers: Self::background_workers(),
             default_pool_size: Self::default_pool_size(),
             min_pool_size: Self::min_pool_size(),
             pooler_mode: Self::pooler_mode(),
@@ -1065,6 +1070,10 @@ impl General {
 
     fn workers() -> usize {
         Self::env_or_default("PGDOG_WORKERS", 2)
+    }
+
+    fn background_workers() -> usize {
+        Self::env_or_default("PGDOG_BACKGROUND_WORKERS", 0)
     }
 
     fn default_pool_size() -> usize {

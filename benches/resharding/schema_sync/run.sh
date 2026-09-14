@@ -50,17 +50,18 @@ for stage in ${BENCH_STAGES}; do
     flags="$(stage_flags "${stage}")"
 
     echo ""
-    echo ">>>>> benchmark: schema_sync ${stage} (dry run)"
+    echo ">>>>> benchmark: schema_sync ${stage}"
 
-    DRY_RUN_CMD="\${PGDOG_BIN} \
+    SYNC_CMD="\${PGDOG_BIN} \
         --config '${PGDOG_CONFIG}' \
         --users  '${SETUP_DIR}/users.toml' \
         schema-sync \
         --from-database source \
         --to-database   destination \
         --publication   bench_schema \
-        --dry-run \
         ${flags} >/dev/null"
 
-    bench_run "resharding.schema_sync.${stage}.dry_run" "${DRY_RUN_CMD}" "$@"
+    bench_run "resharding.schema_sync.${stage}" "${SYNC_CMD}" \
+        --prepare "${SCRIPT_DIR}/prepare.sh ${stage}" \
+        "$@"
 done

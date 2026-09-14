@@ -3,6 +3,7 @@ pub mod replication;
 #[allow(clippy::module_inception)]
 pub mod resharding;
 pub mod schema_sync;
+pub mod table_copies;
 
 use std::time::Duration;
 
@@ -11,8 +12,11 @@ use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
 
 use super::{Task, Tasks, assert_layout};
+use pgdog_stats::TaskProgress;
 
-const TEST_TABLE: &str = "_pgdog_test_task";
+const TEST_SCHEMA: &str = "resharding_test";
+
+const TEST_TABLE: &str = "items";
 
 const TEST_PUB: &str = "pgdog_test_pub";
 
@@ -20,37 +24,28 @@ const SLOT_FILTER: &str = "slot_name LIKE '__pgdog_repl_%'";
 
 const POLL: Duration = Duration::from_millis(200);
 
-async fn drop_table(pool: &Pool<Postgres>, table: &str) {
-    let _ = pool
-        .execute(format!("DROP TABLE IF EXISTS {table} CASCADE").as_str())
-        .await;
-    let _ = pool
-        .execute(format!("DROP TYPE  IF EXISTS {table} CASCADE").as_str())
-        .await;
+async fn drop_test_schema_on(pool: &Pool<Postgres>) {
+    pool.execute(format!("DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE").as_str())
+        .await
+        .expect("test schema cleanup must succeed");
 }
 
-async fn drop_table_everywhere(table: &str, direct: &Pool<Postgres>) {
-    drop_table(direct, table).await;
+async fn drop_test_schemas(direct: &Pool<Postgres>) {
+    drop_test_schema_on(direct).await;
     for db in &["shard_0", "shard_1"] {
-        drop_table(&connection_sqlx_direct_db(db).await, table).await;
+        drop_test_schema_on(&connection_sqlx_direct_db(db).await).await;
     }
-}
-
-fn is_terminal(status: &str) -> bool {
-    matches!(status, "finished" | "cancelled")
-        || status.starts_with("failed")
-        || status.starts_with("panicked")
 }
 
 async fn drain_tasks(admin: &Pool<Postgres>) {
     timeout(Duration::from_secs(60), async {
         loop {
             let tasks = Tasks::fetch(admin).await;
-            if tasks.rows.iter().all(|t| is_terminal(t.status.as_str())) {
+            if tasks.rows.iter().all(|t| t.status.is_terminal()) {
                 break;
             }
             for task in &tasks.rows {
-                if is_terminal(task.status.as_str()) {
+                if task.status.is_terminal() {
                     continue;
                 }
 
@@ -121,19 +116,19 @@ async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
         .await;
 
-    drop_table_everywhere(TEST_TABLE, direct).await;
+    drop_test_schemas(direct).await;
 }
 
-async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: &str) {
+async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: TaskProgress) {
     let result = timeout(Duration::from_secs(30), async {
         loop {
             if let Some(task) = Tasks::fetch(admin).await.find(task_id) {
                 if task.status == status {
                     return;
                 }
-                if task.status.starts_with("failed") || task.status.starts_with("panicked") {
+                if task.status.is_error() {
                     panic!(
-                        "task {task_id} errored while waiting for {status:?}: {} (inner_status {:?})",
+                        "task {task_id} errored while waiting for {status}: {} (inner_status {:?})",
                         task.status, task.inner_status
                     );
                 }
@@ -143,20 +138,20 @@ async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: &str
     })
     .await;
     if result.is_err() {
-        panic!("task {task_id} did not reach status {status:?} in SHOW TASKS in time");
+        panic!("task {task_id} did not reach status {status} in SHOW TASKS in time");
     }
 }
 
 async fn task_status_line(admin: &Pool<Postgres>, task_id: i64) -> String {
     match Tasks::fetch(admin).await.find(task_id) {
-        Some(t) => format!("status {:?}, inner_status {:?}", t.status, t.inner_status),
+        Some(t) => format!("status {}, inner_status {:?}", t.status, t.inner_status),
         None => "task absent from SHOW TASKS".to_string(),
     }
 }
 
 async fn fail_if_task_errored(admin: &Pool<Postgres>, task_id: i64) {
     if let Some(t) = Tasks::fetch(admin).await.find(task_id)
-        && (t.status.starts_with("failed") || t.status.starts_with("panicked"))
+        && t.status.is_error()
     {
         panic!(
             "task {task_id} errored: {} (inner_status {:?})",
@@ -166,10 +161,12 @@ async fn fail_if_task_errored(admin: &Pool<Postgres>, task_id: i64) {
 }
 
 async fn relation_present(pool: &Pool<Postgres>, name: &str) -> bool {
-    pool.fetch_one(format!("SELECT to_regclass('{name}') IS NOT NULL AS present").as_str())
-        .await
-        .unwrap()
-        .get::<bool, _>("present")
+    pool.fetch_one(
+        format!("SELECT to_regclass('{TEST_SCHEMA}.{name}') IS NOT NULL AS present").as_str(),
+    )
+    .await
+    .unwrap()
+    .get::<bool, _>("present")
 }
 
 async fn wait_for_relation_on_shards(admin: &Pool<Postgres>, task_id: i64, name: &str) {
@@ -198,7 +195,7 @@ async fn shard_row_count(db: &str, table: &str) -> i64 {
     if !relation_present(&pool, table).await {
         return 0;
     }
-    pool.fetch_one(format!("SELECT COUNT(*)::bigint AS n FROM {table}").as_str())
+    pool.fetch_one(format!("SELECT COUNT(*)::bigint AS n FROM {TEST_SCHEMA}.{table}").as_str())
         .await
         .unwrap()
         .get::<i64, _>("n")
@@ -250,7 +247,14 @@ async fn wait_for_task(admin: &Pool<Postgres>, desc: &str, pred: impl Fn(&Task) 
 
 async fn create_test_table(direct: &Pool<Postgres>) {
     direct
-        .execute(format!("CREATE TABLE {TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)").as_str())
+        .execute(format!("CREATE SCHEMA IF NOT EXISTS {TEST_SCHEMA}").as_str())
+        .await
+        .expect("test schema creation must succeed");
+    direct
+        .execute(
+            format!("CREATE TABLE {TEST_SCHEMA}.{TEST_TABLE} (id BIGSERIAL PRIMARY KEY, val TEXT)")
+                .as_str(),
+        )
         .await
         .unwrap();
 }
@@ -259,7 +263,7 @@ async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
     direct
         .execute(
             format!(
-                "INSERT INTO {TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
+                "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) SELECT 'v' || g FROM generate_series(1, {n}) g"
             )
             .as_str(),
         )
@@ -269,7 +273,9 @@ async fn seed_rows(direct: &Pool<Postgres>, n: i64) {
 
 async fn create_publication(direct: &Pool<Postgres>) {
     direct
-        .execute(format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_TABLE}").as_str())
+        .execute(
+            format!("CREATE PUBLICATION {TEST_PUB} FOR TABLE {TEST_SCHEMA}.{TEST_TABLE}").as_str(),
+        )
         .await
         .unwrap();
 }

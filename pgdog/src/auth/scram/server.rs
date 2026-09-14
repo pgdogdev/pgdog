@@ -3,10 +3,10 @@
 use crate::frontend::Error;
 use crate::net::Stream;
 use crate::net::messages::*;
+use crate::util::maybe_spawn_blocking;
 
 use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
-use tokio::task::spawn_blocking;
 use tracing::error;
 
 use rand::Rng;
@@ -209,9 +209,7 @@ impl Server {
 
         let scram = match self.provider {
             Provider::Plain(plain) => {
-                // Key derivation is CPU-bound; keep it off the async runtime
-                // so connection storms don't stall other clients.
-                let precomputed = spawn_blocking(move || plain.hash()).await?;
+                let precomputed = maybe_spawn_blocking(move || plain.hash()).await?;
                 Scram::Plain(Self::scram_server(precomputed, plus, cbind)?)
             }
             Provider::Hashed(hashed) => Scram::Hashed(Self::scram_server(hashed, plus, cbind)?),
@@ -260,6 +258,7 @@ impl Server {
 mod tests {
     use super::*;
     use crate::auth::scram::Client;
+    use crate::config::{self, ConfigAndUsers};
     use scram::AuthenticationStatus;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -468,11 +467,16 @@ mod tests {
         );
     }
 
-    /// Key derivation for plain passwords must run off the async runtime.
+    /// With background workers enabled, key derivation for plain passwords
+    /// must run off the async runtime.
     /// On a single-threaded runtime, a concurrent ticker would be starved
     /// for the entire PBKDF2 derivation if it ran inline on the worker.
     #[tokio::test]
     async fn scram_handshake_does_not_block_runtime() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.background_workers = 2;
+        config::set(config).expect("enable background workers");
+
         let passwords = (0..128)
             .map(|i| PasswordKind::Plain(format!("password_{}", i)))
             .collect::<Vec<_>>();

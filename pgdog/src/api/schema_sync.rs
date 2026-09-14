@@ -221,7 +221,6 @@ mod tests {
             SchemaSyncStatus::ApplyingStatements {
                 statements: Arc::default(),
             },
-            SchemaSyncStatus::Other,
         ]
         .map(|status| status.to_string());
 

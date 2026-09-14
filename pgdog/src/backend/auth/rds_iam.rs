@@ -1,9 +1,14 @@
 use std::time::{Duration, SystemTime};
 
-use aws_config::{BehaviorVersion, Region};
+use aws_config::sts::AssumeRoleProvider;
+use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
 use crate::backend::{Error, pool::Address};
+
+/// STS session name used when PgDog assumes a role to mint a cross-account RDS
+/// IAM token.
+const IAM_ASSUME_ROLE_SESSION_NAME: &str = "pgdog-rds-connect";
 
 fn infer_region_from_rds_host(host: &str) -> Option<String> {
     let host = host.to_ascii_lowercase();
@@ -45,6 +50,58 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
     })
 }
 
+/// Parameters for the STS AssumeRole that precedes token generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AssumeRolePlan {
+    role_arn: String,
+    region: String,
+    session_name: String,
+}
+
+impl AssumeRolePlan {
+    /// The plan to sign `addr`'s RDS IAM token with an assumed role (cross-account
+    /// RDS IAM), or `None` for the normal same-account path where the token is
+    /// signed with PgDog's ambient identity. Pure so the account-spanning decision
+    /// is unit-testable without AWS.
+    fn new(addr: &Address, region: &str) -> Option<Self> {
+        let role_arn = addr.server_iam_assume_role.as_deref()?;
+        if role_arn.is_empty() {
+            return None;
+        }
+        Some(Self {
+            role_arn: role_arn.to_owned(),
+            region: region.to_owned(),
+            session_name: IAM_ASSUME_ROLE_SESSION_NAME.to_owned(),
+        })
+    }
+}
+
+/// Build the AWS config used to sign the RDS IAM token.
+///
+/// Same-account: PgDog's ambient identity (`load_defaults`). Cross-account: the
+/// ambient identity is used only as the *source* credentials to assume
+/// `server_iam_assume_role` in the database's account, and the token is signed
+/// with those assumed credentials.
+async fn build_aws_sdk_config(addr: &Address, region: &str) -> SdkConfig {
+    match AssumeRolePlan::new(addr, region) {
+        None => aws_config::load_defaults(BehaviorVersion::latest()).await,
+        Some(plan) => {
+            let base = aws_config::load_defaults(BehaviorVersion::latest()).await;
+            let provider = AssumeRoleProvider::builder(plan.role_arn)
+                .session_name(plan.session_name)
+                .region(Region::new(plan.region.clone()))
+                .configure(&base)
+                .build()
+                .await;
+            aws_config::defaults(BehaviorVersion::latest())
+                .region(Region::new(plan.region))
+                .credentials_provider(provider)
+                .load()
+                .await
+        }
+    }
+}
+
 /// Fetch a fresh RDS IAM token for `addr`.
 ///
 /// This is the raw fetcher passed to [`TokenCache::get_or_fetch`] and
@@ -52,7 +109,7 @@ fn resolve_region(addr: &Address) -> Result<String, Error> {
 /// directly — go through [`TokenCache::global`] instead.
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
     let region = resolve_region(&addr)?;
-    let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let sdk_config = build_aws_sdk_config(&addr, &region).await;
 
     let config = AuthTokenConfig::builder()
         .hostname(addr.host.as_str())
@@ -101,11 +158,44 @@ mod tests {
             database_number: 0,
             server_auth: ServerAuth::RdsIam,
             server_iam_region: Some("us-east-1".into()),
+            server_iam_assume_role: None,
             vault_path: Default::default(),
             vault_refresh_percent: None,
             configured_role: Role::Auto,
             ..Default::default()
         }
+    }
+
+    // ── AssumeRolePlan::new (cross-account RDS IAM) ──────────────────────────
+
+    #[test]
+    fn test_assume_role_plan_none_when_unset() {
+        // Same-account path: no assume-role, token signed with ambient identity.
+        let addr = make_addr();
+        assert_eq!(AssumeRolePlan::new(&addr, "us-east-1"), None);
+    }
+
+    #[test]
+    fn test_assume_role_plan_none_when_empty() {
+        let mut addr = make_addr();
+        addr.server_iam_assume_role = Some(String::new());
+        assert_eq!(AssumeRolePlan::new(&addr, "us-east-1"), None);
+    }
+
+    #[test]
+    fn test_assume_role_plan_set() {
+        let mut addr = make_addr();
+        addr.server_iam_assume_role =
+            Some("arn:aws:iam::111122223333:role/pgdog-rds-connect".into());
+
+        let plan = AssumeRolePlan::new(&addr, "us-west-2").expect("cross-account plan");
+        assert_eq!(
+            plan.role_arn,
+            "arn:aws:iam::111122223333:role/pgdog-rds-connect"
+        );
+        // Region flows from the resolved token region, not a hard-coded default.
+        assert_eq!(plan.region, "us-west-2");
+        assert_eq!(plan.session_name, IAM_ASSUME_ROLE_SESSION_NAME);
     }
 
     // ── infer_region_from_rds_host ───────────────────────────────────────────

@@ -69,6 +69,8 @@ impl Pools {
         let mut avg_idle_xact_time = vec![];
         let mut total_query_time = vec![];
         let mut avg_query_time = vec![];
+        let mut total_wait_time = vec![];
+        let mut avg_wait_time = vec![];
         let mut total_close = vec![];
         let mut avg_close = vec![];
         let mut total_server_errors = vec![];
@@ -239,6 +241,16 @@ impl Pools {
                     avg_query_time.push(Measurement {
                         labels: labels.clone(),
                         measurement: millis(averages.query_time).into(),
+                    });
+
+                    total_wait_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: millis(totals.wait_time).into(),
+                    });
+
+                    avg_wait_time.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: millis(averages.wait_time).into(),
                     });
 
                     total_close.push(Measurement {
@@ -600,6 +612,22 @@ impl Pools {
             name: "avg_query_time".into(),
             measurements: avg_query_time,
             help: "Average time spent executing queries.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_wait_time".into(),
+            measurements: total_wait_time,
+            help: "Total time spent waiting for connection.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_wait_time".into(),
+            measurements: avg_wait_time,
+            help: "Average time spent waiting for connection.".into(),
             unit: None,
             metric_type: None,
         }));

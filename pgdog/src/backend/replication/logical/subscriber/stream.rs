@@ -20,7 +20,6 @@ use super::super::{
 };
 use super::PipelinedConnection;
 use super::StreamContext;
-use super::omni_ownership::OmniOwnership;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
@@ -130,13 +129,10 @@ pub(crate) struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
-
-    // Determines which destination shards this subscriber owns for omni tables.
-    partition: OmniOwnership,
 }
 
 impl StreamSubscriber {
-    pub(crate) fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
+    pub(crate) fn new(cluster: &Cluster, tables: &[Table]) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -163,7 +159,6 @@ impl StreamSubscriber {
             lsn_changed: true,
             in_transaction: false,
             keys: HashMap::default(),
-            partition,
         }
     }
 
@@ -183,7 +178,7 @@ impl StreamSubscriber {
                 .find(|(r, _)| r == &Role::Primary)
                 .ok_or(Error::NoPrimary)?
                 .1
-                .standalone(ConnectReason::Replication)
+                .standalone(ConnectReason::Resharding)
                 .await?;
             conns.push(primary);
         }
@@ -246,7 +241,6 @@ impl StreamSubscriber {
             }
         }
 
-        let partition = self.partition;
         let n_conns = self.connections.len();
         let is_direct = val.is_direct();
 
@@ -256,13 +250,9 @@ impl StreamSubscriber {
         let mut pending: Option<usize> = None;
         for shard in 0..n_conns {
             let target = match val {
-                // With a single destination shard the router collapses Shard::All
-                // to Direct(0), bypassing the partition ownership check.  Apply
-                // partition.owns() for all variants when there is only one connection
-                // so that omni-table writes are still partitioned across subscribers.
-                Shard::Direct(direct) if n_conns > 1 => shard == *direct,
-                Shard::Multi(multi) if n_conns > 1 => multi.contains(&shard),
-                _ => partition.owns(shard),
+                Shard::Direct(direct) => shard == *direct,
+                Shard::Multi(multi) => multi.contains(&shard),
+                _ => true,
             };
             if !target {
                 continue;
@@ -1028,7 +1018,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], OmniOwnership::test())
+        StreamSubscriber::new(&cluster, &[])
     }
 
     #[test]

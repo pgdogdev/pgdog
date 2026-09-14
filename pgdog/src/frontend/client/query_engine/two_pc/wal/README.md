@@ -27,6 +27,17 @@ It can naturally handle partially written segments. We didn't add checksums. Cor
 It runs on a loop and removes segments that don't have any in-progress 2pc transactions. Pretty simple process, since 2pc transactions are short-lived and we are not expected to keep
 any other state about them once they are done.
 
+Checkpointing retains segments containing active transactions and the identity segments needed by every
+retained Phase 2 record, including records queued in live segments. Dependencies are followed transitively:
+retaining an identity segment can retain more identities if it also contains other Phase 2 records.
+This can keep completed transactions' WAL around until the segments that depend on it can be removed.
+
+Removable segments are deleted newest first, with a directory fsync after each deletion on Unix, before
+deleting an older identity segment. This preserves dependencies across interrupted checkpoints.
+
+Older versions removed segments independently and could leave Phase 2 records without identities.
+Recovery tolerates those leftover records. Dependency-aware checkpointing prevents creating new ones.
+
 ## Notable differences
 
 Our WAL segment size is a suggestion. We initiate the segment swap when a segment reaches it, but we let in-flight clients write to it until the swap is complete. This is by design to avoid a lock

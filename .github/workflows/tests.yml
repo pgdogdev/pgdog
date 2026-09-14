@@ -3,12 +3,13 @@ on:
   push:
     branches:
       - main
+      - main-ent
     paths:
-      - '**/*.rs'
+      - "**/*.rs"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - '**/*.rs'
+      - "**/*.rs"
 
 jobs:
   tests:

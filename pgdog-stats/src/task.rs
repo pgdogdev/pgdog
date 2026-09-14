@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 use indexmap::IndexMap;
 
 use derive_more::{Display, Error, From, FromStr};
+use pgdog_config::CopyFormat;
 use pgdog_postgres_types::ToDataRowColumn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,17 +54,19 @@ pub enum TaskStatus {
     /// generic variants for any task
     RatioProgress(RatioProgress),
     /// specific tasks for known tasks used for enterprise
-    Reshard(ReshardStatus),
-    CopyData(CopyDataStatus),
+    // v1, in use
     SchemaSync(SchemaSyncStatus),
     SchemaShard(SchemaShardStatus),
+    // in progress, not used
     TableCopy(TableCopyStatus),
+    CopyData(CopyDataStatus),
     Replication(ReplicationStatus),
     ReplicationSlot(ReplicationSlotStatus),
+    Reshard(ReshardStatus),
     /// Any other task status that is either doesn't report any status
     /// or is not compatible with other versions of tasks.
     #[default]
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
@@ -117,6 +120,29 @@ impl TaskProgress {
 
     pub fn is_error(&self) -> bool {
         matches!(self, Self::Error { .. } | Self::Panic { .. })
+    }
+}
+
+impl std::str::FromStr for TaskProgress {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "started" => Self::Started,
+            "running" => Self::Running,
+            "finished" => Self::Finished,
+            "cancelling" => Self::Cancelling,
+            "cancelled" => Self::Cancelled,
+            _ => {
+                if let Some(message) = s.strip_prefix("failed: ") {
+                    Self::error(message)
+                } else if let Some(message) = s.strip_prefix("panicked: ") {
+                    Self::panic(message)
+                } else {
+                    Self::Unknown
+                }
+            }
+        })
     }
 }
 
@@ -314,16 +340,18 @@ where
 #[derive(Debug, Clone, Default, PartialEq, Display, From, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskDefinitionKind {
-    Reshard(ReshardDefinition),
-    CopyData(CopyDataDefinition),
+    // v1, in use
     SchemaSync(SchemaSyncDefinition),
-    Replication(ReplicationDefinition),
-    TableCopy(TableCopyDefinition),
-    ReplicationSlot(ReplicationSlotDefinition),
     SchemaShard(SchemaShardDefinition),
+    // In progress, not used yet
+    CopyData(CopyDataDefinition),
+    TableCopy(TableCopyDefinition),
+    Replication(ReplicationDefinition),
+    ReplicationSlot(ReplicationSlotDefinition),
+    Reshard(ReshardDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
@@ -369,6 +397,7 @@ pub struct ReshardDefinition {
 #[display("copy_data {databases}")]
 pub struct CopyDataDefinition {
     pub databases: Databases,
+    pub format: CopyFormat,
 }
 
 /// The schema sync one schema-sync task runs, and at which stage.
@@ -419,16 +448,33 @@ pub enum ReshardStatus {
     #[display("replicating")]
     Replication,
     /// A stage this build does not know.
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
 
 /// Stages of a bulk data copy, reported as the task's status. Per-table
 /// progress lives on the [`TableCopyStatus`] child tasks.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[display("{stage}")]
+pub struct CopyDataStatus {
+    pub stage: CopyDataStage,
+    pub tables_per_shard: Option<Vec<u64>>,
+}
+
+impl From<CopyDataStage> for CopyDataStatus {
+    fn from(stage: CopyDataStage) -> Self {
+        Self {
+            stage,
+            tables_per_shard: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
-pub enum CopyDataStatus {
+pub enum CopyDataStage {
     /// Fetching table and column metadata from the source.
     #[display("loading table metadata")]
     LoadingTableMetadata,
@@ -442,7 +488,7 @@ pub enum CopyDataStatus {
     #[display("copying tables")]
     CopyingTables,
     /// A stage this build does not know.
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
@@ -487,7 +533,7 @@ pub enum SchemaSyncStatus {
         statements: Arc<Vec<SchemaSyncStatement>>,
     },
     /// A status this build does not know.
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
@@ -567,7 +613,7 @@ pub enum ReplicationStatus {
     #[display("stopping")]
     Stopping,
     /// A stage this build does not know.
-    #[display("-")]
+    #[display("")]
     #[serde(other)]
     Other,
 }
@@ -602,16 +648,37 @@ pub struct ReplicationSlotStatus {
 pub struct TableCopyDefinition {
     pub schema: String,
     pub table: String,
-    pub sql: String,
+    pub source_shard: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TableCopyStage {
+    #[display("estimating")]
+    Estimation,
+    #[display("waiting")]
+    WaitingForCopyHandler,
+    #[display("copy in progress")]
+    InProgress { rows: u64, bytes: u64 },
+    #[display("error backoff")]
+    ErrorBackoff,
+    #[display("")]
+    #[serde(other)]
+    Other,
 }
 
 /// How much of one table has been copied.
-#[derive(Debug, Clone, Copy, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{rows} rows, {bytes} bytes, {bytes_per_sec} bytes/s")]
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[display("{stage}")]
 pub struct TableCopyStatus {
-    pub rows: u64,
-    pub bytes: u64,
-    pub bytes_per_sec: u64,
+    pub stage: TableCopyStage,
+    pub attempt: usize,
+    pub estimated_rows: Option<u64>,
+    pub estimated_bytes: Option<u64>,
+    pub rows_per_sec: Option<u64>,
+    pub bytes_per_sec: Option<u64>,
+    pub last_error: Option<String>,
 }
 
 /// The destination shard one schema-sync subtask restores into.
@@ -632,7 +699,7 @@ mod test {
         TableCopyDefinition {
             schema: "public".into(),
             table: "users".into(),
-            sql: "COPY ...".into(),
+            source_shard: 0,
         }
     }
 
@@ -658,6 +725,7 @@ mod test {
             .into(),
             CopyDataDefinition {
                 databases: databases(),
+                format: CopyFormat::Binary,
             }
             .into(),
             SchemaSyncDefinition {
@@ -740,7 +808,8 @@ mod test {
 
         assert_eq!(
             TaskDefinition::from(CopyDataDefinition {
-                databases: databases()
+                databases: databases(),
+                format: CopyFormat::Binary,
             })
             .to_string(),
             "copy_data prod -> prod_sharded"
@@ -834,7 +903,10 @@ mod test {
         let statuses = [
             TaskStatus::RatioProgress(RatioProgress { done: 3, total: 12 }),
             TaskStatus::Reshard(ReshardStatus::SyncingData),
-            TaskStatus::CopyData(CopyDataStatus::CopyingTables),
+            TaskStatus::CopyData(CopyDataStatus {
+                stage: CopyDataStage::CopyingTables,
+                tables_per_shard: Some(vec![5, 3]),
+            }),
             TaskStatus::SchemaSync(SchemaSyncStatus::ApplyingStatements {
                 statements: Arc::new(vec![
                     SchemaSyncStatement::new("CREATE INDEX ...").set_skip_if_exists(),
@@ -851,9 +923,25 @@ mod test {
                 }],
             }),
             TaskStatus::TableCopy(TableCopyStatus {
-                rows: 10,
-                bytes: 2048,
-                bytes_per_sec: 512,
+                stage: TableCopyStage::InProgress {
+                    rows: 10,
+                    bytes: 2048,
+                },
+                attempt: 1,
+                estimated_rows: Some(100),
+                estimated_bytes: Some(20480),
+                rows_per_sec: Some(5),
+                bytes_per_sec: Some(512),
+                last_error: None,
+            }),
+            TaskStatus::TableCopy(TableCopyStatus {
+                stage: TableCopyStage::ErrorBackoff,
+                attempt: 2,
+                estimated_rows: None,
+                estimated_bytes: None,
+                rows_per_sec: None,
+                bytes_per_sec: None,
+                last_error: Some("connection reset".into()),
             }),
             TaskStatus::Replication(ReplicationStatus::Replicating),
             TaskStatus::ReplicationSlot(ReplicationSlotStatus {
@@ -941,9 +1029,14 @@ mod test {
             TaskStatus::Reshard(ReshardStatus::Other)
         );
         assert_eq!(
-            serde_json::from_str::<TaskStatus>(r#"{"kind":"copy_data","status":"new_stage"}"#)
-                .unwrap(),
-            TaskStatus::CopyData(CopyDataStatus::Other)
+            serde_json::from_str::<TaskStatus>(
+                r#"{"kind":"copy_data","stage":{"status":"new_stage"},"tables_per_shard":[5]}"#
+            )
+            .unwrap(),
+            TaskStatus::CopyData(CopyDataStatus {
+                stage: CopyDataStage::Other,
+                tables_per_shard: Some(vec![5]),
+            })
         );
         assert_eq!(
             serde_json::from_str::<TaskStatus>(r#"{"kind":"schema_sync","status":"new_status"}"#)
@@ -1001,13 +1094,29 @@ mod test {
         assert!(TaskId::new(2) < TaskId::new(10));
     }
 
+    #[test]
+    fn test_task_progress_display_round_trip() {
+        let cases = [
+            TaskProgress::Started,
+            TaskProgress::Running,
+            TaskProgress::Finished,
+            TaskProgress::Cancelling,
+            TaskProgress::Cancelled,
+            TaskProgress::error("boom"),
+            TaskProgress::panic("boom"),
+            TaskProgress::Unknown,
+        ];
+        for progress in cases {
+            let parsed: TaskProgress = progress.to_string().parse().unwrap();
+            assert_eq!(parsed, progress);
+        }
+    }
+
     /// A definition renders its name, its kind renders the detail.
     #[test]
     fn test_display() {
-        assert_eq!(TaskStatus::Other.to_string(), "-");
         assert_eq!(TaskStatus::default(), TaskStatus::Other);
         assert_eq!(TaskDefinition::from("test task").to_string(), "test task");
-        assert_eq!(TaskDefinitionKind::Other.to_string(), "-");
         assert_eq!(
             TaskDefinitionKind::from(table_copy()).to_string(),
             "public.users"
@@ -1028,22 +1137,29 @@ mod test {
             "syncing data"
         );
         assert_eq!(
-            TaskStatus::CopyData(CopyDataStatus::LoadingTableMetadata).to_string(),
-            "loading table metadata"
-        );
-        assert_eq!(
             TaskStatus::RatioProgress(RatioProgress { done: 3, total: 12 }).to_string(),
             "3 of 12"
         );
+        assert_eq!(TaskStatus::Other.to_string(), "");
+        assert_eq!(
+            TaskStatus::CopyData(CopyDataStage::LoadingTableMetadata.into()).to_string(),
+            "loading table metadata"
+        );
         assert_eq!(
             TaskStatus::TableCopy(TableCopyStatus {
-                rows: 10,
-                bytes: 2048,
-                bytes_per_sec: 512,
+                stage: TableCopyStage::InProgress { rows: 1, bytes: 2 },
+                attempt: 1,
+                estimated_rows: None,
+                estimated_bytes: None,
+                rows_per_sec: None,
+                bytes_per_sec: None,
+                last_error: None,
             })
             .to_string(),
-            "10 rows, 2048 bytes, 512 bytes/s"
+            "copy in progress"
         );
+        assert_eq!(TableCopyStage::Estimation.to_string(), "estimating");
+        assert_eq!(SchemaSyncStatus::Other.to_string(), "");
     }
 
     fn at(ms: u64) -> SystemTime {

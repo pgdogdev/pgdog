@@ -14,7 +14,7 @@
 #   bash benches/resharding/copy_data/run.sh --baseline main
 #
 # Tuning:
-#   BENCH_SCALE=N  rows (inline tables); TOAST tables use scale/100
+#   BENCH_SCALE=N  rows (sessions); TOAST tables use scale/100
 #   USE_TOXI=1     route pgdog through toxiproxy (started/stopped automatically)
 #
 set -euo pipefail
@@ -29,19 +29,21 @@ export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGUSER=pgdog
 export PGPASSWORD=pgdog
+export PGOPTIONS='-c client_min_messages=warning'
 
 SOURCE_DBS=(pgdog1 pgdog2 pgdog3)
 NUM_SHARDS=${#SOURCE_DBS[@]}
-export BENCH_SCALE=${BENCH_SCALE:-5000000}
 
 PGDOG_CONFIG="${SETUP_DIR}/pgdog.toml"
 if [[ "${USE_TOXI:-0}" == "1" ]]; then
     PGDOG_CONFIG="${SETUP_DIR}/pgdog.toxi.toml"
+    export BENCH_SCALE=${BENCH_SCALE:-500000}
     # Register teardown before setup so a partial-setup failure still tears down.
     trap 'bash "${SETUP_DIR}/toxi/teardown.sh"' EXIT
     bash "${SETUP_DIR}/toxi/setup.sh"
 fi
 export PGDOG_CONFIG
+export BENCH_SCALE=${BENCH_SCALE:-2000000}
 
 echo "============================================================"
 echo ">>>>> setup"

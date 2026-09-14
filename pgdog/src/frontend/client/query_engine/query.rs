@@ -274,7 +274,7 @@ impl QueryEngine {
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
-        self.cleanup_backend(context)?;
+        self.cleanup_backend(context).await?;
 
         // Pipelined requests only return
         // one ReadyForQuery message.
@@ -328,7 +328,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(super) fn cleanup_backend(
+    pub(super) async fn cleanup_backend(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
@@ -353,7 +353,7 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                schema_changed()?;
+                schema_changed().await?;
             }
 
             self.router.reset();

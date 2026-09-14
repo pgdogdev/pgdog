@@ -11,6 +11,14 @@
 --
 -- The destination schema is created by pgdog schema-sync, not here.
 
+\set QUIET on
+SET client_min_messages TO warning;
+
+\if :{?copies}
+\else
+\set copies 40
+\endif
+
 DROP SCHEMA IF EXISTS bench_copy CASCADE;
 CREATE SCHEMA bench_copy;
 
@@ -76,6 +84,14 @@ CREATE TABLE bench_copy.ledger (
     posted_at     TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 ALTER TABLE bench_copy.ledger ALTER COLUMN notes SET STORAGE EXTERNAL;
+
+SELECT format(
+    'CREATE TABLE bench_copy.%I (LIKE bench_copy.%I INCLUDING ALL)',
+    t || '_' || lpad(g::text, 3, '0'),
+    t
+)
+FROM unnest(ARRAY['sessions', 'documents', 'files', 'ledger']) AS t,
+     generate_series(2, :copies) AS g \gexec
 
 -- ── Publication ───────────────────────────────────────────────────────────────
 DROP PUBLICATION IF EXISTS bench_copy;

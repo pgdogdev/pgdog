@@ -8,7 +8,7 @@
 #
 [general]
 resharding_copy_format = "binary"
-resharding_parallel_copies = 5
+resharding_parallel_copies = 2
 
 [[databases]]
 name = "source"
@@ -21,6 +21,33 @@ shard = 0
 name = "source"
 host = "127.0.0.1"
 port = 15400
+database_name = "pgdog1"
+shard = 0
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15410
+database_name = "pgdog1"
+shard = 0
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15411
+database_name = "pgdog1"
+shard = 0
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
 database_name = "pgdog2"
 shard = 1
 
@@ -28,8 +55,62 @@ shard = 1
 name = "source"
 host = "127.0.0.1"
 port = 15400
+database_name = "pgdog2"
+shard = 1
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15410
+database_name = "pgdog2"
+shard = 1
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15411
+database_name = "pgdog2"
+shard = 1
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
 database_name = "pgdog3"
 shard = 2
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15400
+database_name = "pgdog3"
+shard = 2
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15410
+database_name = "pgdog3"
+shard = 2
+role = "replica"
+resharding_only = true
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+port = 15411
+database_name = "pgdog3"
+shard = 2
+role = "replica"
+resharding_only = true
 
 [[sharded_tables]]
 database = "source"

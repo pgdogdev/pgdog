@@ -3,116 +3,13 @@ use std::{ops::Deref, sync::Arc, time::SystemTime};
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use pgdog_stats::{Lsn, SchemaStatementTask, TableCopyState};
+use pgdog_stats::{Lsn, SchemaStatementTask};
 
+use crate::backend::pool::Address;
 use crate::backend::replication::ee::{
-    data_sync_done, data_sync_error, data_sync_progress, replication_slot_create,
-    replication_slot_drop, replication_slot_error, replication_slot_update,
+    replication_slot_create, replication_slot_drop, replication_slot_error, replication_slot_update,
 };
-use crate::backend::{pool::Address, replication::logical::Error as LogicalError};
 use crate::net::ErrorResponse;
-
-/// Status of table copies.
-static COPIES: Lazy<TableCopies> = Lazy::new(TableCopies::default);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TableCopy {
-    pub(crate) schema: Arc<String>,
-    pub(crate) table: Arc<String>,
-}
-
-impl From<&TableCopy> for pgdog_stats::TableCopy {
-    fn from(value: &TableCopy) -> Self {
-        pgdog_stats::TableCopy {
-            schema: value.schema.to_string(),
-            table: value.table.to_string(),
-        }
-    }
-}
-
-impl TableCopy {
-    pub(crate) fn new(schema: &str, table: &str) -> Self {
-        let copy = Self {
-            schema: Arc::new(schema.to_owned()),
-            table: Arc::new(table.to_owned()),
-        };
-        let state = TableCopyState {
-            last_update: SystemTime::now(),
-            ..Default::default()
-        };
-
-        TableCopies::get().insert(copy.clone(), state.clone());
-
-        data_sync_progress(&copy, &state);
-
-        copy
-    }
-
-    pub(crate) fn update_progress(&self, bytes: usize, rows: usize) {
-        if let Some(mut state) = TableCopies::get().get_mut(self) {
-            state.bytes += bytes;
-            state.rows += rows;
-            let elapsed = SystemTime::now()
-                .duration_since(state.last_update)
-                .unwrap_or_default()
-                .as_secs();
-            if elapsed > 0 {
-                state.bytes_per_sec = state.bytes / elapsed as usize;
-            }
-
-            data_sync_progress(self, &state);
-        }
-    }
-
-    pub(crate) fn error(&self, error: &LogicalError) {
-        data_sync_error(self, error);
-    }
-
-    pub(crate) fn update_sql(&self, sql: &str) {
-        if let Some(mut state) = TableCopies::get().get_mut(self) {
-            state.sql = Arc::new(sql.to_owned());
-        }
-    }
-
-    /// Reset byte and row counters before retrying a failed table copy.
-    /// Prevents accumulated counts from a discarded attempt inflating totals
-    /// and throughput calculations across retries.
-    pub(crate) fn reset(&self) {
-        if let Some(mut state) = TableCopies::get().get_mut(self) {
-            state.bytes = 0;
-            state.rows = 0;
-            state.bytes_per_sec = 0;
-            state.last_update = SystemTime::now();
-            data_sync_progress(self, &state);
-        }
-    }
-}
-
-impl Drop for TableCopy {
-    fn drop(&mut self) {
-        data_sync_done(self);
-        COPIES.copies.remove(self);
-    }
-}
-
-#[derive(Default, Clone)]
-pub(crate) struct TableCopies {
-    copies: Arc<DashMap<TableCopy, TableCopyState>>,
-}
-
-impl Deref for TableCopies {
-    type Target = DashMap<TableCopy, TableCopyState>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.copies
-    }
-}
-
-impl TableCopies {
-    pub(crate) fn get() -> Self {
-        COPIES.clone()
-    }
-}
 
 static REPLICATION_SLOTS: Lazy<ReplicationSlots> = Lazy::new(ReplicationSlots::default);
 

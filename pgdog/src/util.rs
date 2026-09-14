@@ -1,5 +1,8 @@
 //! What's a project without a util module.
 
+pub(crate) mod sql;
+pub(crate) mod stats;
+pub(crate) mod sync;
 pub(crate) mod time;
 
 use chrono::{DateTime, Local, Utc};
@@ -8,7 +11,8 @@ use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
 use std::ops::ControlFlow;
 use std::panic::Location;
-use std::{env, future::Future, future::pending, time::Duration};
+use std::{env, future::Future, future::pending, future::ready, time::Duration};
+use tokio::task::{JoinError, spawn_blocking};
 use tokio::time::Interval;
 use tracing::warn;
 
@@ -355,6 +359,24 @@ pub(crate) fn safe_interval(period: Duration) -> SafeInterval {
             );
             SafeInterval(None)
         }
+    }
+}
+
+/// Run on the blocking pool when background workers are enabled, or inline otherwise.
+pub(crate) fn maybe_spawn_blocking<F, R>(f: F) -> impl Future<Output = Result<R, JoinError>>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let background_workers = crate::config::config_quick()
+        .config
+        .general
+        .background_workers;
+
+    if background_workers > 0 {
+        Either::Left(spawn_blocking(f))
+    } else {
+        Either::Right(ready(Ok(f())))
     }
 }
 
