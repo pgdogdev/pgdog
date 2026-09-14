@@ -4,6 +4,7 @@ on:
     branches: ["main", "main-ent"]
     paths:
       - "**/*.rs"
+      - "**/Cargo.toml"
   release:
     types: [published]
   workflow_dispatch:
