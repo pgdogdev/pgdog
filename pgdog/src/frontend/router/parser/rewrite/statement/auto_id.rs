@@ -556,7 +556,11 @@ mod tests {
         let mut plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut copy = mem.make_unique(&*ast.into_inner());
-            plan = rewriter.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem, None)?;
+            plan = rewriter.maybe_rewrite(
+                copy.as_mut().into_iter().next().unwrap(),
+                mem,
+                crate::frontend::client::QueryTimestamps::now(),
+            )?;
             Ok::<_, Error>(copy)
         })?;
         let sql = pg_raw_parse::deparse_stmts(&*ast)?;

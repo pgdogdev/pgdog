@@ -39,7 +39,7 @@ fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
             .maybe_rewrite(
                 ast.as_mut().into_iter().next().expect("statement"),
                 mem,
-                None,
+                crate::frontend::client::QueryTimestamps::now(),
             )
             .expect("rewrite succeeds");
         ast
@@ -133,7 +133,11 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                 let mut prepare_request =
                     ClientRequest::from(vec![ProtocolMessage::Parse(parse.clone())]);
                 let result = plan
-                    .apply(&mut prepare_request, &mut Parameters::default(), None)
+                    .apply(
+                        &mut prepare_request,
+                        &mut Parameters::default(),
+                        crate::frontend::client::QueryTimestamps::now(),
+                    )
                     .await
                     .expect("prepare succeeds");
                 assert!(matches!(result, RewriteResult::InPlace { .. }));
@@ -148,7 +152,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                     plan.apply_generated_ids(
                         &mut bind,
                         &mut Parameters::default(),
-                        None,
+                        crate::frontend::client::QueryTimestamps::now(),
                         async |call: &SequenceCall| {
                             assert_eq!(call, &SequenceCall::Nextval("users_id_seq".into()));
                             value += 1;

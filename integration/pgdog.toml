@@ -25,7 +25,7 @@ tls_certificate = "integration/tls/cert.pem"
 tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 system_catalogs = "omnisharded_sticky"
-reload_schema_on_ddl = false
+reload_schema_on_ddl = true
 # idle_healthcheck_delay = 50000000
 unique_id_function = "standard"
 auth_type = "scram"
@@ -436,10 +436,9 @@ primary = true
 # ------------------------------------------------------------------------------
 # ----- Omnisharded Tables -----------------------------------------------------
 
-# TODO: I'll rename test_omni_ts to something nicer
 [[omnisharded_tables]]
 database = "pgdog_sharded"
-tables = ["sharded_omni", "test_omni_ts"]
+tables = ["sharded_omni"]
 
 # ------------------------------------------------------------------------------
 # ----- Schema-based sharding --------------------------------------------------

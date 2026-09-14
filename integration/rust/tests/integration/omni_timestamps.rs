@@ -1,24 +1,405 @@
+use std::ops::Sub;
+
 use crate::setup::connection_sqlx_direct_db;
 use crate::setup::connections_sqlx;
 use chrono::DateTime;
 use chrono::Duration;
+use chrono::FixedOffset;
+use chrono::NaiveDate;
 use chrono::NaiveDateTime;
+use chrono::NaiveTime;
 use chrono::Utc;
 use chrono_tz::Tz;
 use sqlx::PgTransaction;
+use sqlx::Pool;
 use sqlx::Postgres;
 use sqlx::Transaction;
 use sqlx::postgres::PgRow;
+use sqlx::postgres::types::PgTimeTz;
 use sqlx::{Executor, Row};
 
-// TODO: Test raw postgres behavior against this for equivilence
-// TODO: Other column types with the functions, e.g. text
 // TODO: Test changing schema for a column while this is cached
 // TODO: Test for other caching issues
-// TODO: Test other functions (as well as present time vs transaction time vs statement time)
-// TODO: Test to make sure this doesn't affect omnisharded tables (it doesn't; but doesn't hurt to assert that)
+// TODO: Test to make sure this doesn't affect harded tables (it doesn't; but doesn't hurt to assert that)
 // TODO: Assert what happens if we don't explicitly set timezone
 
+/// LOCAL_TIME testing
+/// - Case 1: `test_time_text` has no DEFAULT w/ precision arg & text col.
+/// - Case 2: `test_time_regular` has DEFAULT w/ no precision arg & time col.
+///
+/// Tests against NYC timezone.
+#[tokio::test]
+async fn omni_timestamp_rewrite_local_time() {
+    let schema = "test_time_text text, test_time_regular time DEFAULT LOCALTIME";
+    let insertion_col = "test_time_text";
+    let func_call = "LOCALTIME(3)";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            NaiveTime::parse_from_str(s, "%H:%M:%S%.f")
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_time_regular",
+            Duration::seconds(5),
+            |t: NaiveTime| t,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// CURRENT_TIME testing
+/// - Case 1: `test_time_text` has no DEFAULT w/ precision arg & text col.
+/// - Case 2: `test_time_regular` has DEFAULT w/ no precision arg & timetz col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_current_time() {
+    let schema = "test_time_text text, test_time_regular timetz DEFAULT CURRENT_TIME";
+    let insertion_col = "test_time_text";
+    let func_call = "CURRENT_TIME(3)";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            NaiveTime::parse_from_str(s, "%H:%M:%S%.f%#z")
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_time_regular",
+            Duration::seconds(5),
+            |t: PgTimeTz<NaiveTime, FixedOffset>| t.time - t.offset,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// CURRENT_DATE testing
+/// - Case 1: `test_date_text` has no DEFAULT and it uses text col.
+/// - Case 2: `test_date_regular` has DEFAULT and it uses date col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_current_date() {
+    let schema = "test_date_text text, test_date_regular date DEFAULT CURRENT_DATE";
+    let insertion_col = "test_date_text";
+    let func_call = "CURRENT_DATE";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        })
+        .await;
+
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_date_regular",
+            Duration::hours(25),
+            |d: NaiveDate| d,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// LOCALTIMESTAMP testing
+/// - Case 1: `test_timestamp_text` has no DEFAULT w/ precision arg & text col.
+/// - Case 2: `test_timestamp_regular` has DEFAULT w/ no precision arg & timestamp col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_local_timestamp() {
+    let schema =
+        "test_timestamp_text text, test_timestamp_regular timestamp DEFAULT LOCALTIMESTAMP";
+    let insertion_col = "test_timestamp_text";
+    let func_call = "LOCALTIMESTAMP(2)";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_timestamp_regular",
+            Duration::seconds(5),
+            |t: NaiveDateTime| t,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// clock_timestamp() testing
+/// - Case 1: `test_clock_text` has no DEFAULT & text col.
+/// - Case 2: `test_clock_regular` has DEFAULT & timestamptz col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_clock_timestamp() {
+    let schema = "test_clock_text text, test_clock_regular timestamptz DEFAULT clock_timestamp()";
+    let insertion_col = "test_clock_text";
+    let func_call = "clock_timestamp()";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%#z")
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_clock_regular",
+            Duration::seconds(5),
+            |t: DateTime<Utc>| t,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// statement_timestamp() testing
+/// - Case 1: `test_statement_text` has no DEFAULT & text col.
+/// - Case 2: `test_statement_regular` has DEFAULT & timestamptz col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_statement_timestamp() {
+    let schema = "test_statement_text text, test_statement_regular timestamptz DEFAULT statement_timestamp()";
+    let insertion_col = "test_statement_text";
+    let func_call = "statement_timestamp()";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%#z")
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            "test_statement_regular",
+            Duration::seconds(5),
+            |t: DateTime<Utc>| t,
+        )
+        .await;
+    })
+    .await;
+}
+
+/// statement_timestamp() = same for every value in one statement (explicit and DEFAULT, across rows)
+/// However it changes between statements in the same transaction.
+#[tokio::test]
+async fn omni_timestamp_rewrite_statement_timestamp_consistency() {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+    conn.execute("DROP TABLE IF EXISTS dummy_omni_table")
+        .await
+        .unwrap();
+    conn.execute(
+        "CREATE TABLE dummy_omni_table(id BIGSERIAL PRIMARY KEY, explicit timestamptz, by_default timestamptz DEFAULT statement_timestamp())",
+    )
+    .await
+    .unwrap();
+
+    let mut transaction = conn.begin().await.unwrap();
+
+    let first_rows = sqlx::query(
+        "INSERT INTO dummy_omni_table(id, explicit) VALUES ($1, statement_timestamp()), ($2, statement_timestamp()) RETURNING *",
+    )
+    .bind(1)
+    .bind(2)
+    .fetch_all(&mut *transaction)
+    .await
+    .unwrap();
+
+    let second_row = sqlx::query(
+        "INSERT INTO dummy_omni_table(id, explicit) VALUES ($1, statement_timestamp()) RETURNING *",
+    )
+    .bind(3)
+    .fetch_one(&mut *transaction)
+    .await
+    .unwrap();
+
+    transaction.rollback().await.unwrap();
+    conn.execute("DROP TABLE dummy_omni_table").await.unwrap();
+
+    let times = |row: &PgRow| {
+        (
+            row.get::<DateTime<Utc>, _>("explicit"),
+            row.get::<DateTime<Utc>, _>("by_default"),
+        )
+    };
+
+    let (row_1_explicit, row_1_default) = times(&first_rows[0]);
+    let (row_2_explicit, row_2_default) = times(&first_rows[1]);
+    let (row_3_explicit, _) = times(&second_row);
+
+    assert_eq!(row_1_explicit, row_2_explicit);
+    assert_eq!(row_1_explicit, row_1_default);
+    assert_eq!(row_1_default, row_2_default);
+    assert_ne!(row_1_explicit, row_3_explicit);
+}
+
+/// timeofday() testing
+/// - Case 1: `test_timeofday_text` has no DEFAULT & text col.
+#[tokio::test]
+async fn omni_timestamp_rewrite_time_of_day() {
+    const TIME_OF_DAY_FORMAT: &str = "%a %b %d %H:%M:%S%.f %Y %Z";
+
+    let schema = "test_timeofday_text text";
+    let insertion_col = "test_timeofday_text";
+    let func_call = "timeofday()";
+
+    reusable_func_test(schema, insertion_col, func_call, async |pg_row, dog_row| {
+        assert_text_format(pg_row, dog_row, insertion_col, |s| {
+            NaiveDateTime::parse_from_str(s, TIME_OF_DAY_FORMAT)
+        })
+        .await;
+        assert_equality(
+            pg_row,
+            dog_row,
+            insertion_col,
+            Duration::seconds(5),
+            |s: String| NaiveDateTime::parse_from_str(&s, TIME_OF_DAY_FORMAT).unwrap(),
+        )
+        .await;
+    })
+    .await;
+}
+
+/// Asserts, after normalization, that the value for `col_name` for `pg_row` and `dog_row` are within
+/// the bound of `acceptable_diff`
+async fn assert_equality<T, U>(
+    pg_row: &PgRow,
+    dog_row: &PgRow,
+    col_name: &str,
+    acceptable_diff: Duration,
+    normalize: impl Fn(T) -> U,
+) where
+    T: for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+    U: Sub<Output = Duration>,
+{
+    let (pg_value, dog_value) = (
+        normalize(pg_row.get::<T, _>(col_name)),
+        normalize(dog_row.get::<T, _>(col_name)),
+    );
+
+    assert!((pg_value - dog_value).abs() < acceptable_diff);
+}
+
+/// Asserts that the parsed value for `col_name` from `pg_row` and `dog_row` both work;
+/// proving that both (Postgres and PgDog) work the same, and that both are correctly formatted.
+async fn assert_text_format<T>(
+    pg_row: &PgRow,
+    dog_row: &PgRow,
+    col_name: &str,
+    parse: impl Fn(&str) -> chrono::ParseResult<T>,
+) {
+    let (pg_text, dog_text) = (
+        pg_row.get::<&str, &str>(col_name),
+        dog_row.get::<&str, &str>(col_name),
+    );
+
+    assert!(parse(pg_text).is_ok());
+    assert!(parse(dog_text).is_ok());
+}
+
+/// Inserts 3 rows
+/// - Row 1: Simple
+/// - Row 2: Extended
+/// - Row 3: Prepare / Execute
+///
+///  Uses RETURNING * on each, and returns all the PgRows for analysis.
+async fn test_simple_extended_and_prepare(
+    conn: &Pool<Postgres>,
+    cols: &str,
+    vals: &str,
+) -> Vec<PgRow> {
+    // TODO: Could be useful to test BOTH UTC and NYC.
+    let mut transaction = conn.begin().await.unwrap();
+
+    // Allows us to test things like local time (instead of everything being UTC)
+    transaction
+        .execute("SET TIME ZONE 'America/New_York'")
+        .await
+        .unwrap();
+
+    let row1 = sqlx::raw_sql(
+        format!("INSERT INTO dummy_omni_table(id, {cols}) VALUES (1, {vals}) RETURNING *").as_str(),
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .unwrap();
+
+    // By putting the Bind parameter first, it forces us to use the Binary text format, testing vs the already tested String.
+    let row2 = sqlx::query(
+        format!("INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *")
+            .as_str(),
+    )
+    .bind(2)
+    .fetch_one(&mut *transaction)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(
+        format!(
+            "PREPARE stmt AS INSERT INTO dummy_omni_table(id, {cols}) VALUES ($1, {vals}) RETURNING *"
+        )
+        .as_str(),
+    )
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+
+    let row3 = sqlx::raw_sql("EXECUTE stmt(3)")
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+
+    transaction.rollback().await.unwrap();
+
+    vec![row1, row2, row3]
+}
+
+async fn reusable_func_test(
+    schema: &str,
+    insertion_col: &str,
+    func_call: &str,
+    validate: impl AsyncFn(&PgRow, &PgRow),
+) {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+    conn.execute("DROP TABLE IF EXISTS dummy_omni_table")
+        .await
+        .unwrap();
+    conn.execute(
+        format!("CREATE TABLE IF NOT EXISTS dummy_omni_table(id BIGSERIAL PRIMARY KEY, {schema})")
+            .as_str(),
+    )
+    .await
+    .unwrap();
+
+    let pg_rows = test_simple_extended_and_prepare(
+        &connection_sqlx_direct_db("shard_0").await,
+        insertion_col,
+        func_call,
+    )
+    .await;
+
+    let dog_rows = test_simple_extended_and_prepare(
+        connections_sqlx().await.get(1).unwrap(),
+        insertion_col,
+        func_call,
+    )
+    .await;
+
+    for (pg_row, dog_row) in pg_rows.iter().zip(&dog_rows) {
+        validate(pg_row, dog_row).await;
+    }
+
+    conn.execute("DROP TABLE dummy_omni_table").await.unwrap();
+}
+
+/// NOTE: The tests below assert that everything is intercepted and handled; therefore, I didn't try to mimic that in the above tests,
+///       given that they share a re-usable abstraction (would be redundant)
+///
 /// Re-usable harness for other tests (simple protocol, extended protocol, prepare/execute) to equally test if
 /// different INSERT methods work correctly.
 ///
@@ -139,13 +520,12 @@ async fn omni_timestamp_rewrite_prepare_execute() {
     }).await;
 }
 
-/// Doc comment.
+/// TODO: Doc comment.
 async fn check_shards(sesh: &mut Transaction<'_, Postgres>, fetch_tz: &str, insertion_tz: &str) {
     let now = Utc::now();
     let (shard_0_rows, shard_1_rows) = fetch_rows_with_tz(sesh, fetch_tz).await;
 
-    for (i, (shard_0_row, shard_1_row)) in shard_0_rows.iter().zip(&shard_1_rows).enumerate() {
-        println!("Iteration #{i}");
+    for (shard_0_row, shard_1_row) in shard_0_rows.iter().zip(&shard_1_rows) {
         assert_timestamp_col_validity(
             shard_0_row,
             shard_1_row,

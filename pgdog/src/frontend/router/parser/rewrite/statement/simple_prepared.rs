@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use chrono::Utc;
 use pg_raw_parse::{
     ConstValue, NodeMut,
     make::MemoryToken,
@@ -8,7 +7,7 @@ use pg_raw_parse::{
 
 use crate::{
     frontend::{
-        client::Transaction,
+        client::QueryTimestamps,
         prepared_statements::PreparedPlan,
         router::parser::{
             Limit,
@@ -68,7 +67,7 @@ impl StatementRewrite<'_> {
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
         timestamp_rewrite: bool,
     ) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
@@ -77,7 +76,7 @@ impl StatementRewrite<'_> {
             return Ok(result);
         }
 
-        match self.rewrite_single_prepared(node, mem, plan, transaction, timestamp_rewrite)? {
+        match self.rewrite_single_prepared(node, mem, plan, timestamps, timestamp_rewrite)? {
             SimplePreparedRewrite::Prepared { prepare } => {
                 result.rewrites.push(PrepareExecute::Prepare(prepare));
                 result.rewritten = true;
@@ -98,7 +97,7 @@ impl StatementRewrite<'_> {
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
         timestamp_rewrite: bool,
     ) -> Result<SimplePreparedRewrite, Error> {
         match node {
@@ -165,7 +164,7 @@ impl StatementRewrite<'_> {
                             mem,
                             &plan.generated_ids,
                             self.timezone,
-                            transaction,
+                            &timestamps,
                         );
                     }
 
@@ -190,20 +189,11 @@ fn insert_generated_ids<'a>(
     mem: MemoryToken<'a>,
     generated_ids: &Vec<(u16, GeneratedId)>,
     timezone: Option<&ParameterValue>,
-    transaction: Option<&Transaction>,
+    timestamps: &QueryTimestamps,
 ) {
-    let transaction_start_time = transaction.map(|t| t.start_time()).unwrap_or(Utc::now());
-
-    // TODO: Implement statement start time
-    let fake_statement_start_time = Utc::now();
-
     for (_, source) in generated_ids {
         let (text, _) = match source {
-            GeneratedId::ProxyTime(time) => time.formatted_time(
-                &transaction_start_time,
-                &fake_statement_start_time,
-                timezone,
-            ),
+            GeneratedId::ProxyTime(time) => time.formatted_time(timestamps, timezone),
             // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
             _ => panic!("not supported yet!"),
         };
@@ -483,8 +473,11 @@ mod tests {
             let mut plan = Default::default();
             let ast = pg_raw_parse::make::try_owned(|mem| {
                 let mut copy = mem.make_unique(&*stmt.into_inner());
-                plan =
-                    rewrite.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem, None)?;
+                plan = rewrite.maybe_rewrite(
+                    copy.as_mut().into_iter().next().unwrap(),
+                    mem,
+                    QueryTimestamps::now(),
+                )?;
                 Ok::<_, Error>(copy)
             })?;
             let sql = pg_raw_parse::deparse_stmts(&*ast)?;

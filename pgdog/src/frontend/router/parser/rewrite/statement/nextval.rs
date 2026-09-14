@@ -238,7 +238,7 @@ mod tests {
                 .maybe_rewrite(
                     ast.as_mut().into_iter().next().expect("statement"),
                     mem,
-                    None,
+                    crate::frontend::client::QueryTimestamps::now(),
                 )
                 .expect("rewrite succeeds");
             ast
@@ -471,7 +471,7 @@ mod tests {
             plan.apply_generated_ids(
                 &mut bind,
                 &mut Parameters::default(),
-                None,
+                crate::frontend::client::QueryTimestamps::now(),
                 async |call: &SequenceCall| {
                     let SequenceCall::Nextval(name) = call else {
                         panic!("expected nextval");
@@ -542,9 +542,14 @@ mod tests {
         };
         for expected in [2, 4] {
             let mut bind = Bind::default();
-            plan.apply_generated_ids(&mut bind, &mut Parameters::default(), None, &mut nextval)
-                .await
-                .expect("values");
+            plan.apply_generated_ids(
+                &mut bind,
+                &mut Parameters::default(),
+                crate::frontend::client::QueryTimestamps::now(),
+                &mut nextval,
+            )
+            .await
+            .expect("values");
             assert_eq!(
                 bind.parameter(1)
                     .expect("format")
@@ -566,7 +571,11 @@ mod tests {
             let (_, plan) = rewrite(&format!("SELECT pgdog.{call}"), true);
             let mut request = ClientRequest::from(vec![ProtocolMessage::Bind(Bind::default())]);
             let error = plan
-                .apply(&mut request, &mut Parameters::default(), None)
+                .apply(
+                    &mut request,
+                    &mut Parameters::default(),
+                    crate::frontend::client::QueryTimestamps::now(),
+                )
                 .await
                 .expect_err("EE hook rejects sequence");
             assert!(matches!(error, Error::Enterprise(ee::Error::EERequired)));
@@ -587,7 +596,11 @@ mod tests {
                 Parse::new_anonymous(&original),
             )]);
             extended_plan
-                .apply(&mut request, &mut Parameters::default(), None)
+                .apply(
+                    &mut request,
+                    &mut Parameters::default(),
+                    crate::frontend::client::QueryTimestamps::now(),
+                )
                 .await
                 .expect("prepare does not fetch");
 
@@ -595,7 +608,11 @@ mod tests {
             let mut request =
                 ClientRequest::from(vec![ProtocolMessage::Query(Query::new(&original))]);
             let error = simple_plan
-                .apply(&mut request, &mut Parameters::default(), None)
+                .apply(
+                    &mut request,
+                    &mut Parameters::default(),
+                    crate::frontend::client::QueryTimestamps::now(),
+                )
                 .await
                 .expect_err("simple query calls the EE hook");
             assert!(matches!(error, Error::Enterprise(ee::Error::EERequired)));
@@ -724,7 +741,7 @@ mod tests {
                     plan.apply_generated_ids(
                         &mut bind,
                         &mut Parameters::default(),
-                        None,
+                        crate::frontend::client::QueryTimestamps::now(),
                         &mut execute,
                     )
                     .await

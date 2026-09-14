@@ -5,7 +5,7 @@ use crate::{
     backend::Cluster,
     frontend::{
         BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
-        client::Sticky,
+        client::{QueryTimestamps, Sticky},
         router::{
             parser::{AstContext, Cache, Shard},
             sharding::lookup,
@@ -55,7 +55,7 @@ impl StreamContext {
             &BufferedQuery::Prepared(parse),
             &ast_context,
             &mut PreparedStatements::default(),
-            None,
+            QueryTimestamps::now(),
         )?;
         request.ast = Some(ast);
 

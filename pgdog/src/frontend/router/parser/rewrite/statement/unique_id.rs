@@ -294,7 +294,9 @@ mod tests {
         let ast = make::owned(|mem| {
             let mut copy = mem.make_unique(&*stmt.into_inner());
             let stmt = copy.as_mut().into_iter().next().unwrap();
-            plan = rewrite.maybe_rewrite(stmt, mem, None).unwrap();
+            plan = rewrite
+                .maybe_rewrite(stmt, mem, crate::frontend::client::QueryTimestamps::now())
+                .unwrap();
             copy
         });
         let sql = pg_raw_parse::deparse_stmts(&*ast).unwrap();

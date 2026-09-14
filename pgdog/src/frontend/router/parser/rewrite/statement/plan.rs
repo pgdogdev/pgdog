@@ -1,5 +1,3 @@
-use chrono::Utc;
-
 use super::super::ee;
 use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
@@ -7,7 +5,7 @@ use super::offset::OffsetPlan;
 use super::{
     Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
 };
-use crate::frontend::client::Transaction;
+use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::rewrite::statement::timestamp::TimeFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -108,9 +106,9 @@ impl RewritePlan {
         &self,
         bind: &mut Bind,
         params: &mut Parameters,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
     ) -> Result<(), Error> {
-        self.apply_generated_ids(bind, params, transaction, SequenceCall::execute)
+        self.apply_generated_ids(bind, params, timestamps, SequenceCall::execute)
             .await
     }
 
@@ -119,31 +117,25 @@ impl RewritePlan {
         &self,
         bind: &mut Bind,
         params: &mut Parameters,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
         mut execute: impl AsyncFnMut(&SequenceCall) -> Result<i64, ee::Error>,
     ) -> Result<(), Error> {
         // TODO: This should be re-done to look nicer.
         #[derive(Debug)]
         enum MyResponse {
             Int(i64),
-            Time((String, i64)),
+            Time((String, Vec<u8>)),
         }
 
-        let transaction_start_time = transaction.map(|t| t.start_time()).unwrap_or(Utc::now());
-
         let format = bind.default_param_format();
-        for (_, source) in &self.generated_ids {
+        for (num, source) in &self.generated_ids {
+            assert_eq!(bind.params_raw().len() + 1, *num as usize);
+
             let id = match source {
                 GeneratedId::UniqueId => MyResponse::Int(UniqueId::generator()?.next_id()),
                 GeneratedId::Sequence(call) => MyResponse::Int(execute(call).await?),
                 GeneratedId::ProxyTime(time) => {
-                    // TODO: Statement time is not implemented yet.
-                    let fake_statement_start_time = Utc::now();
-                    MyResponse::Time(time.formatted_time(
-                        &transaction_start_time,
-                        &fake_statement_start_time,
-                        params.get("timezone"),
-                    ))
+                    MyResponse::Time(time.formatted_time(&timestamps, params.get("timezone")))
                 }
             };
 
@@ -153,14 +145,12 @@ impl RewritePlan {
                     Format::Text => Parameter::new(itoa::Buffer::new().format(id).as_bytes()),
                 },
                 // TODO: This could use pgdog-postgres-types/src/timestamp.rs
-                MyResponse::Time((text, time)) => match format {
-                    Format::Binary => Parameter::new(&time.to_be_bytes()),
+                MyResponse::Time((text, binary)) => match format {
+                    Format::Binary => Parameter::new(binary.as_slice()),
                     Format::Text => Parameter::new(text.as_bytes()),
                 },
             };
 
-            // TODO: I'm not sure the way the timestamp is ordered (right now) in the Vec conforms with the Bind order.
-            //       assert! here based on the un-used index param in generated_ids to ensure proper ordering.
             bind.push_param(param, format);
         }
 
@@ -199,7 +189,7 @@ impl RewritePlan {
         &self,
         request: &mut ClientRequest,
         params: &mut Parameters,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
     ) -> Result<RewriteResult, Error> {
         // Prepend any required Prepare messages for EXECUTE statements.
         if !self.prepare_rewrites.is_empty() {
@@ -222,7 +212,7 @@ impl RewritePlan {
             match message {
                 ProtocolMessage::Parse(parse) => self.apply_parse(parse),
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
-                ProtocolMessage::Bind(bind) => self.apply_bind(bind, params, transaction).await?,
+                ProtocolMessage::Bind(bind) => self.apply_bind(bind, params, timestamps).await?,
                 _ => {}
             }
         }
@@ -295,9 +285,13 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan::default();
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 0);
     }
 
@@ -310,9 +304,13 @@ mod tests {
             ..Default::default()
         };
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 1);
 
         // Default format is Text, so data should be a string
@@ -336,9 +334,13 @@ mod tests {
         // Create bind with uniform binary format (1 code applies to all)
         let mut bind =
             Bind::new_params_codes("test", &[Parameter::new(b"existing")], &[Format::Binary]);
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 2);
 
         // Should use binary format: 8 bytes big-endian
@@ -367,9 +369,13 @@ mod tests {
             &[Parameter::new(b"a"), Parameter::new(b"b")],
             &[Format::Binary, Format::Binary],
         );
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 3);
 
         // New param should be text (default for one-to-one)
@@ -395,9 +401,13 @@ mod tests {
             ..Default::default()
         };
         let mut bind = Bind::default();
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 3);
 
         let mut ids = HashSet::new();
@@ -422,9 +432,13 @@ mod tests {
             "test",
             &[Parameter::new(b"existing1"), Parameter::new(b"existing2")],
         );
-        plan.apply_bind(&mut bind, &mut Parameters::default(), None)
-            .await
-            .unwrap();
+        plan.apply_bind(
+            &mut bind,
+            &mut Parameters::default(),
+            QueryTimestamps::now(),
+        )
+        .await
+        .unwrap();
         assert_eq!(bind.params_raw().len(), 4);
 
         assert_eq!(bind.params_raw()[0].data.as_ref(), b"existing1");

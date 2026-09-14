@@ -80,7 +80,12 @@ mod tests {
 
         let buffered = BufferedQuery::Query(Query::new(sql));
         let ast = Cache::get()
-            .query(&buffered, &ast_ctx, &mut stmts, None)
+            .query(
+                &buffered,
+                &ast_ctx,
+                &mut stmts,
+                crate::frontend::client::QueryTimestamps::now(),
+            )
             .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
@@ -114,7 +119,12 @@ mod tests {
 
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));
         let ast = Cache::get()
-            .query(&buffered, &ast_ctx, &mut stmts, None)
+            .query(
+                &buffered,
+                &ast_ctx,
+                &mut stmts,
+                crate::frontend::client::QueryTimestamps::now(),
+            )
             .unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);

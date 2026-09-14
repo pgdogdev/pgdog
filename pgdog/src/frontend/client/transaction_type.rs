@@ -38,6 +38,32 @@ impl Transaction {
     }
 }
 
+/// Reference times used to rewrite time functions
+/// (e.g. now(), statement_timestamp()) consistently across shards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QueryTimestamps {
+    /// Start of the transaction.
+    /// If not in transaction, this is same as statement start.
+    pub(crate) transaction_start: DateTime<Utc>,
+    /// When we received the first message of the client's request.
+    pub(crate) statement_start: DateTime<Utc>,
+}
+
+impl QueryTimestamps {
+    pub(crate) fn new(transaction: Option<&Transaction>, statement_start: DateTime<Utc>) -> Self {
+        Self {
+            transaction_start: transaction
+                .map(|t| t.start_time())
+                .unwrap_or(statement_start),
+            statement_start,
+        }
+    }
+
+    pub(crate) fn now() -> Self {
+        Self::new(None, Utc::now())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TransactionType {
     ReadOnly,

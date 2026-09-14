@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn};
@@ -41,7 +42,7 @@ pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub(crate) use transaction_type::{Transaction, TransactionType};
+pub(crate) use transaction_type::{QueryTimestamps, Transaction, TransactionType};
 
 /// PostgreSQL client.
 ///
@@ -96,6 +97,8 @@ pub(crate) struct Client {
     query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     query_size_limit: Option<usize>,
+    /// When we received the first message of the current request.
+    statement_start: DateTime<Utc>,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -435,6 +438,7 @@ impl Client {
             database: database.to_string(),
             query_log_stdout: false,
             query_size_limit: None,
+            statement_start: Utc::now(),
         }))
     }
 
@@ -475,6 +479,7 @@ impl Client {
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,
+            statement_start: Utc::now(),
         }
     }
 
@@ -698,6 +703,7 @@ impl Client {
 
             if timer.is_none() {
                 timer = Some(Instant::now());
+                self.statement_start = Utc::now();
             }
 
             // Terminate (B & F).

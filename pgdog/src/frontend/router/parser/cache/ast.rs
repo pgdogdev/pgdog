@@ -12,7 +12,7 @@ use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
 use crate::config::Role;
 use crate::frontend::PreparedStatements;
-use crate::frontend::client::Transaction;
+use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::sharding::ShardOrLookup;
@@ -71,7 +71,7 @@ impl Ast {
         query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
     ) -> Result<Self, Error> {
         let now = Instant::now();
 
@@ -94,7 +94,7 @@ impl Ast {
             let mut ast = mem.parse(query.query_without_comment)?;
             // Parser should not receive multi-query requests.
             if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
-                rewrite_plan = rewriter.maybe_rewrite(stmt, mem, transaction)?;
+                rewrite_plan = rewriter.maybe_rewrite(stmt, mem, timestamps)?;
             }
             Ok::<_, Error>(ast)
         })?;

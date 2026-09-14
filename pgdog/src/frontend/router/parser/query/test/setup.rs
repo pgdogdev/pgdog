@@ -218,7 +218,12 @@ impl QueryParserTest {
                 let ctx = AstContext::from_cluster(&self.cluster, &self.params);
                 // The engine surfaces cache-time errors (e.g. a comment
                 // directive that fails to resolve) as client errors.
-                let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared, None)?;
+                let ast = Cache::get().query(
+                    &buffered_query,
+                    &ctx,
+                    &mut self.prepared,
+                    crate::frontend::client::QueryTimestamps::now(),
+                )?;
                 request.ast = Some(ast);
             }
         }

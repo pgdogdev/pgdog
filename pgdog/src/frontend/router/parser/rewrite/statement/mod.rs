@@ -5,7 +5,7 @@ use crate::config::config;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::AstContext;
 use crate::net::parameter::ParameterValue;
-use crate::{backend::ShardingSchema, frontend::client::Transaction};
+use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
 use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 
 pub(crate) mod aggregate;
@@ -112,7 +112,7 @@ impl<'a> StatementRewrite<'a> {
         &mut self,
         mut stmt: nodes::RawStmtMut<'mem, '_>,
         mem: make::MemoryToken<'mem>,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
@@ -211,7 +211,7 @@ impl<'a> StatementRewrite<'a> {
                         mem,
                         &mut next_param,
                         &mut plan,
-                        transaction,
+                        timestamps,
                     );
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
@@ -221,7 +221,7 @@ impl<'a> StatementRewrite<'a> {
                             mem,
                             &mut next_param,
                             &mut plan,
-                            transaction,
+                            timestamps,
                         );
                     }
                 }
@@ -234,7 +234,7 @@ impl<'a> StatementRewrite<'a> {
             stmt.stmt_mut(),
             mem,
             &mut plan,
-            transaction,
+            timestamps,
             timestamp_rewrite,
         )?;
         if prepared_result.rewritten {
@@ -247,7 +247,7 @@ impl<'a> StatementRewrite<'a> {
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {
-            self.split_insert(insert, &mut plan)?;
+            self.split_insert(insert, &mut plan, timestamps)?;
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {

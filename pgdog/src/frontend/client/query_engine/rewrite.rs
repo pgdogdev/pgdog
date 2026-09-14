@@ -38,20 +38,13 @@ impl QueryEngine {
         if let Some(query) = query {
             let cluster = self.backend.cluster()?;
             let ast_ctx = AstContext::from_cluster(cluster, context.params);
-            let ast = Cache::get().query(
-                &query,
-                &ast_ctx,
-                context.prepared_statements,
-                context.transaction.as_ref(),
-            )?;
+            let timestamps = context.timestamps();
+            let ast =
+                Cache::get().query(&query, &ast_ctx, context.prepared_statements, timestamps)?;
 
             let rewrite_result = ast
                 .rewrite_plan
-                .apply(
-                    context.client_request,
-                    context.params,
-                    context.transaction.as_ref(),
-                )
+                .apply(context.client_request, context.params, timestamps)
                 .await?;
             context.client_request.ast = Some(ast);
             Ok(Some(rewrite_result))

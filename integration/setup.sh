@@ -92,13 +92,6 @@ for db in pgdog shard_0 shard_1 shard_2 shard_3; do
             )" ${db} -U pgdog
     done
 
-    # TODO: See if I can get rid of this.
-    #       PgDog doesn't cache the column `Relation` if I defer the table creation strictly to the integration test
-    for table in test_omni_ts; do
-        psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U pgdog
-        psql -c "CREATE TABLE IF NOT EXISTS ${table} (id BIGSERIAL PRIMARY KEY, created_at TIMESTAMP, created_at_tz TIMESTAMPTZ, created_at_default TIMESTAMP DEFAULT now(), created_at_tz_default TIMESTAMPTZ DEFAULT now())" ${db} -U pgdog
-    done
-
     psql -c "CREATE TABLE IF NOT EXISTS sharded_varchar (id_varchar VARCHAR)" ${db} -U pgdog
     psql -c "CREATE TABLE IF NOT EXISTS sharded_uuid (id_uuid UUID PRIMARY KEY)" -d "$db" -U pgdog
 

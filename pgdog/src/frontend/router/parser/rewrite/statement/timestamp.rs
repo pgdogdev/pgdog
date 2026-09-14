@@ -1,6 +1,7 @@
+use std::fmt;
 use std::ops::Deref;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, Offset, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use pg_raw_parse::{
     ConstValue, Node, NodeMut,
@@ -15,7 +16,7 @@ use std::str::FromStr;
 use crate::{
     frontend::{
         RewritePlan,
-        client::Transaction,
+        client::QueryTimestamps,
         router::parser::{
             StatementParser, StatementRewrite, Table,
             rewrite::statement::{Error, plan::GeneratedId},
@@ -23,9 +24,6 @@ use crate::{
     },
     net::parameter::ParameterValue,
 };
-
-/// TODO: There's some redundancy here between pgdog-postgres-types/src/* (I copied this out for ease-of-development)
-const POSTGRES_EPOCH_MICROS: i64 = 946684800000000;
 
 /// A "parsed" time function the Client specified; either from database schema or manual commands.
 /// Column type represents the data type attached, so that we can correctly assemble the String.
@@ -42,20 +40,18 @@ impl TimeFunction {
     /// the String and binary equivalent to be put in the final String.
     pub(crate) fn formatted_time(
         &self,
-        transaction_start_time: &DateTime<Utc>,
-        statement_start_time: &DateTime<Utc>,
+        timestamps: &QueryTimestamps,
         timezone_param: Option<&ParameterValue>,
-    ) -> (String, i64) {
+    ) -> (String, Vec<u8>) {
         // TODO: Get rid of unwrap()
         let tz = timezone_param.map(|tz_str| tz_str.as_str().unwrap().parse::<Tz>().unwrap());
-        let tz = tz.as_ref();
 
         let timestamp = self.column_type.eq("timestamp without time zone");
 
         let reference_time = match self.time_function_type.time_reference() {
             TimeReference::Current => Utc::now(),
-            TimeReference::TransactionStart => *transaction_start_time,
-            TimeReference::StatementStart => *statement_start_time,
+            TimeReference::TransactionStart => timestamps.transaction_start,
+            TimeReference::StatementStart => timestamps.statement_start,
         };
 
         let mut time_output: TimeFunctionOutput = self.time_function_type.default_output_type();
@@ -65,51 +61,66 @@ impl TimeFunction {
             time_output = TimeFunctionOutput::Timestamp
         }
 
-        Self::generate_based_on_format_str(
-            &reference_time,
-            tz,
-            time_output.local(),
-            time_output
-                .format_str(self.time_function_type.precision())
-                .as_str(),
-        )
+        let precision = self.time_function_type.precision();
+
+        let formatted_string = match tz {
+            Some(tz) => time_output.format(&reference_time, &tz, precision),
+            None => time_output.format(&reference_time, &Local, precision),
+        };
+        let binary = formatted_string.as_bytes().to_vec();
+
+        (formatted_string, binary)
     }
 
-    /// Generates a formatted time string and binary equivalent based on the time reference, if it should
-    /// be based on the local timezone, and on the format string.
-    fn generate_based_on_format_str(
-        utc_time_reference: &DateTime<Utc>,
-        tz: Option<&Tz>,
-        use_local_time: bool,
-        format_str: &str,
-    ) -> (String, i64) {
-        if !use_local_time {
-            // This adapts to whatever local time they're calling Postgres with in the SELECT.
-            // Postgres stores the time in UTC in this instance, so that it can perform the conversion later.
-            (
-                utc_time_reference.format(format_str).to_string(),
-                utc_time_reference.timestamp_micros() - POSTGRES_EPOCH_MICROS,
-            )
-        } else {
-            // This uses 2 branches because of DateTime<Tz> vs DateTime<Local> (incompatible types)
-            let (local_naive, formatted_time) = match tz {
-                Some(tz) => {
-                    let time_ref = utc_time_reference.with_timezone(tz);
-                    (time_ref.naive_local(), time_ref.format(format_str))
-                }
-                None => {
-                    let time_ref = utc_time_reference.with_timezone(&Local);
-                    (time_ref.naive_local(), time_ref.format(format_str))
-                }
-            };
-
-            // TODO: Probably not going to be the same for the other types outside of timestamp/timestamptz;
-            //       ideally can re-use the pgdog-postgres-types/src/* types to perform conversion
-            (
-                formatted_time.to_string(),
-                local_naive.and_utc().timestamp_micros() - POSTGRES_EPOCH_MICROS,
-            )
+    /// Some data types we get aren't compatible as-is with the pg_catalog type
+    /// needed to specify for Bind param types / Prepare ParamRef types. This maps them to
+    /// the correct pg_catalog types.
+    ///
+    /// Why do we need to cast? This is because, for example, if we try to use CURRENT_TIME (timetz) with a
+    /// text column in a binary format Bind param, Postgres will error without an explicit cast (expected UTF-8).
+    /// The alternative is manually calculating the binary format, which is a lot more of a headache! :)
+    ///
+    /// TODO: There might be some missing. Could be worth emitting an Error for any unexpected/untested types.
+    fn col_type_to_type_cast_alias(&self) -> &str {
+        match self.column_type.as_str() {
+            "time with time zone" => "timetz",
+            "timestamp with time zone" => "timestamptz",
+            "timestamp without time zone" => "timestamp",
+            "time without time zone" => "time",
+            string => string,
         }
+    }
+}
+
+/// Postgres trims trailing zeros from fractional seconds
+/// It also drops the dot when there's none
+fn fractional_seconds(nanoseconds: u32) -> String {
+    let microseconds = nanoseconds / 1_000;
+
+    if microseconds == 0 {
+        return String::new();
+    }
+
+    format!(".{microseconds:06}")
+        .trim_end_matches('0')
+        .to_string()
+}
+
+/// Postgres prints UTC offsets as +HH
+/// Adds :MM and :SS when they're non-zero.
+fn utc_offset(local_minus_utc: i32) -> String {
+    let sign = if local_minus_utc < 0 { '-' } else { '+' };
+    let total_seconds = local_minus_utc.unsigned_abs();
+    let (hours, minutes, seconds) = (
+        total_seconds / 3600,
+        total_seconds / 60 % 60,
+        total_seconds % 60,
+    );
+
+    match (minutes, seconds) {
+        (0, 0) => format!("{sign}{hours:02}"),
+        (_, 0) => format!("{sign}{hours:02}:{minutes:02}"),
+        _ => format!("{sign}{hours:02}:{minutes:02}:{seconds:02}"),
     }
 }
 
@@ -144,27 +155,38 @@ enum TimeFunctionOutput {
 }
 
 impl TimeFunctionOutput {
-    /// TODO: Docs.
-    fn local(&self) -> bool {
-        match self {
-            Self::Date => true,
-            Self::TimeWithTimeZone => false,
-            Self::TimestampWithTimeZone => false,
-            Self::Time => true,
-            Self::Timestamp => true,
-            Self::TextFormattedTimestampWithTimeZone => false,
-        }
-    }
+    /// Formats `utc_time` how Postgres outputs for this time func. Timezone taken into account (`tz`).
+    /// Seconds with fractions rounded to `precision` (which are capped by Postgres at 6)
+    fn format<Z>(&self, utc_time: &DateTime<Utc>, tz: &Z, precision: u8) -> String
+    where
+        Z: TimeZone,
+        Z::Offset: fmt::Display,
+    {
+        let local_time = utc_time.with_timezone(tz);
+        let rounded = local_time
+            .clone()
+            .round_subsecs(u16::from(precision.min(6)));
 
-    /// TODO: Docs. Finish.
-    fn format_str(self, precision: u8) -> String {
+        let date = rounded.format("%Y-%m-%d");
+        let time = format!(
+            "{}{}",
+            rounded.format("%H:%M:%S"),
+            fractional_seconds(rounded.nanosecond())
+        );
+        let offset = utc_offset(rounded.offset().fix().local_minus_utc());
+
         match self {
-            Self::Date => "".to_string(),
-            Self::TimeWithTimeZone => "".to_string(),
-            Self::TimestampWithTimeZone => format!("%Y-%m-%d %H:%M:%S%.{precision}f%:z"),
-            Self::Time => "".to_string(),
-            Self::Timestamp => format!("%Y-%m-%d %H:%M:%S%.{precision}f%:z"),
-            Self::TextFormattedTimestampWithTimeZone => "".to_string(),
+            Self::Date => local_time.format("%Y-%m-%d").to_string(),
+            Self::Time => time,
+            Self::TimeWithTimeZone => format!("{time}{offset}"),
+            Self::Timestamp => format!("{date} {time}"),
+            Self::TimestampWithTimeZone => format!("{date} {time}{offset}"),
+            Self::TextFormattedTimestampWithTimeZone => format!(
+                "{}.{:06} {}",
+                local_time.format("%a %b %d %H:%M:%S"),
+                local_time.nanosecond() / 1_000,
+                local_time.format("%Y %Z"),
+            ),
         }
     }
 }
@@ -213,12 +235,11 @@ impl TimeFunctionType {
     /// `TimeFunction`'s output on?
     fn time_reference(self) -> TimeReference {
         match self {
+            Self::ClockTimestamp | Self::TimeOfDay => TimeReference::Current,
             Self::CurrentDate
             | Self::CurrentTime(_)
-            | Self::ClockTimestamp
+            | Self::CurrentTimestamp(_)
             | Self::LocalTime(_)
-            | Self::TimeOfDay => TimeReference::Current,
-            Self::CurrentTimestamp(_)
             | Self::LocalTimestamp(_)
             | Self::TransactionTimestamp
             | Self::Now => TimeReference::TransactionStart,
@@ -261,6 +282,7 @@ impl TimeFunctionType {
         }
     }
 
+    /// TODO: Doc comment.
     fn from_sql_value_function(op: SQLValueFunctionOp::Type, typmod: i32) -> Option<Self> {
         use SQLValueFunctionOp::*;
 
@@ -289,7 +311,7 @@ impl TimeFunctionType {
             Self::CurrentTimestamp(_) => "current_timestamp",
             Self::ClockTimestamp => "clock_timestamp",
             Self::LocalTime(_) => "localtime",
-            Self::LocalTimestamp(_) => "local_timestamp",
+            Self::LocalTimestamp(_) => "localtimestamp",
             Self::Now => "now",
             Self::StatementTimestamp => "statement_timestamp",
             Self::TimeOfDay => "timeofday",
@@ -352,7 +374,7 @@ impl StatementRewrite<'_> {
         // TODO: Replace `next_param` with plan.param directly
         next_param: &mut i32,
         plan: &mut RewritePlan,
-        transaction: Option<&Transaction>,
+        timestamps: QueryTimestamps,
     ) {
         let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema, None);
         let is_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);
@@ -361,8 +383,6 @@ impl StatementRewrite<'_> {
         if is_sharded {
             return;
         }
-
-        let transaction_start_time = transaction.map(|t| t.start_time()).unwrap_or(Utc::now());
 
         //
         let Some((relation, cols, not_covered_cols)) = self.find_not_used_cols(&mut stmt, mem)
@@ -377,7 +397,7 @@ impl StatementRewrite<'_> {
             mem,
             relation,
             cols,
-            transaction_start_time,
+            timestamps,
         };
 
         // 1. iterates through Schema to find DEFAULT columns
@@ -439,7 +459,7 @@ struct TimestampRewrite<'mem, 'a, 's> {
     mem: MemoryToken<'mem>,
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
-    transaction_start_time: DateTime<Utc>,
+    timestamps: QueryTimestamps,
 }
 
 impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
@@ -551,13 +571,7 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
     /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted time later.
     fn make_node(&mut self, time_function: &TimeFunction) -> Unique<'mem, Node<'mem>> {
         if !self.rewrite.extended || !self.rewrite.prepared {
-            // TODO: Statement time hasn't been implemented yet.
-            let fake_statement_time = Utc::now();
-            let source = time_function.formatted_time(
-                &self.transaction_start_time,
-                &fake_statement_time,
-                self.rewrite.timezone,
-            );
+            let source = time_function.formatted_time(&self.timestamps, self.rewrite.timezone);
             self.mem
                 .make_a_const(ConstValue::String(source.0.as_str()))
                 .uncast()
@@ -571,15 +585,25 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                 GeneratedId::ProxyTime(time_function.clone()),
             ));
 
-            // TODO:
-            //  mem.make_type_cast(
-            param_ref.uncast()
-            //       mem.make_list(&[
-            //          mem.make_string(Some("pg_catalog")),
-            //         mem.make_string(Some(&time_function.column_type)), (this won't work; needs to be properly converted)
-            //     ]),
-            // )
-            //  .uncast()
+            // Example: CAST($1::pg_catalog.text AS timetz)
+            // This is 30x less code at the expense of query verbosity;
+            // I talk about why in doc comment on `col_type_to_type_cast_alias`
+            self.mem
+                .make_type_cast(
+                    self.mem
+                        .make_type_cast(
+                            param_ref.uncast(),
+                            self.mem.make_list(&[
+                                self.mem.make_string(Some("pg_catalog")),
+                                self.mem.make_string(Some("text")),
+                            ]),
+                        )
+                        .uncast(),
+                    self.mem.make_list(&[self
+                        .mem
+                        .make_string(Some(time_function.col_type_to_type_cast_alias()))]),
+                )
+                .uncast()
         }
     }
 }
