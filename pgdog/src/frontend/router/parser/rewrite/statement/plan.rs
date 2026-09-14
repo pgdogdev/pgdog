@@ -7,9 +7,7 @@ use super::super::ee;
 use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
-use super::{
-    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, projection::ProjectionRewritePlan,
-};
+use super::{Error, InsertSplit, PrepareExecute, ShardingKeyUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GeneratedId {
@@ -50,9 +48,6 @@ pub(crate) struct RewritePlan {
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
 
-    /// Temporary result columns needed while merging cross-shard results.
-    pub(crate) projection: ProjectionRewritePlan,
-
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
     pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
@@ -69,11 +64,18 @@ pub(crate) enum RewriteResult {
 }
 
 impl RewriteResult {
-    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+    pub(crate) fn offset_plan(&self) -> Option<&OffsetPlan> {
+        match self {
+            Self::InPlace { offset } => offset.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn apply_after_route(&self, request: &mut ClientRequest) -> Result<(), Error> {
         match self {
             Self::InPlace {
                 offset: Some(offset),
-            } => offset.apply_after_parser(request),
+            } => offset.apply_after_route(request),
             _ => Ok(()),
         }
     }
@@ -90,7 +92,6 @@ impl RewritePlan {
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
-            && self.projection.is_noop()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }

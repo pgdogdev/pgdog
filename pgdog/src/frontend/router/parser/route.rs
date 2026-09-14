@@ -253,6 +253,10 @@ impl Route {
         &self.order_by
     }
 
+    pub(crate) fn set_order_by(&mut self, order_by: Vec<OrderBy>) {
+        self.order_by = order_by;
+    }
+
     pub(crate) fn aggregate(&self) -> &Aggregate {
         &self.aggregate
     }

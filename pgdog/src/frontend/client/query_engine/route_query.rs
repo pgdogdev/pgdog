@@ -4,6 +4,7 @@ use tracing::trace;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
+use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::sharding::lookup;
 use crate::util::safe_timeout;
 
@@ -147,9 +148,15 @@ impl QueryEngine {
                     context.client_request.messages, command,
                 );
 
-                // Apply post-parser rewrites, e.g. offset/limit.
+                projection::finalize_after_route(
+                    context.client_request,
+                    &cluster.schema(),
+                    rewrite_result.and_then(RewriteResult::offset_plan),
+                )?;
+
+                // Resolve route-dependent values, e.g. offset/limit.
                 if let Some(rewrite_result) = rewrite_result {
-                    rewrite_result.apply_after_parser(context.client_request)?;
+                    rewrite_result.apply_after_route(context.client_request)?;
                 }
 
                 // Only validate shard placement for requests that actually execute

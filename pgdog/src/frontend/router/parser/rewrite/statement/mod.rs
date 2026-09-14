@@ -181,8 +181,7 @@ impl<'a> StatementRewrite<'a> {
             return Err(err);
         }
 
-        if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
-            self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+        if let NodeMut::SelectStmt(select) = stmt.stmt_mut() {
             self.limit_offset(&select, &mut plan);
         }
 
