@@ -55,7 +55,12 @@ static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Load configuration.
 pub(crate) fn config() -> Arc<ConfigAndUsers> {
-    CONFIG.load().clone()
+    CONFIG.load_full()
+}
+
+/// Get the configuration quickly, but let go of this guard as quickly as possible.
+pub(crate) fn config_quick() -> arc_swap::Guard<Arc<ConfigAndUsers>> {
+    CONFIG.load()
 }
 
 /// Load the configuration file from disk.

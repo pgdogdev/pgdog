@@ -133,10 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = build_runtime(&config.config.general, &config.config.memory)?;
 
     info!(
-        "spawning {} threads (stack size: {}MiB, bg workers: {})",
+        "spawning {} threads (stack size: {}MiB)",
         config.config.general.workers,
         config.config.memory.stack_size / 1024 / 1024,
-        config.config.general.background_workers
     );
 
     info!(
@@ -316,12 +315,8 @@ fn install_sigterm_handler() {
 }
 
 fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::runtime::Runtime> {
-    match general.workers {
-        0 => Builder::new_current_thread()
-            .enable_all()
-            .thread_stack_size(memory.stack_size)
-            .max_blocking_threads(general.background_workers)
-            .build(),
+    let mut builder = match general.workers {
+        0 => Builder::new_current_thread(),
         workers => {
             let mut builder = Builder::new_multi_thread();
             builder.worker_threads(workers);
@@ -332,12 +327,21 @@ fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::r
             }
 
             builder
-                .max_blocking_threads(general.background_workers)
-                .enable_all()
-                .thread_stack_size(memory.stack_size)
-                .build()
         }
+    };
+
+    if general.background_workers > 0 {
+        info!("enabling up to {} bg workers", general.background_workers);
+        builder.max_blocking_threads(general.background_workers);
+    } else {
+        // Avoid CPU churning.
+        builder.max_blocking_threads(1);
     }
+
+    builder
+        .enable_all()
+        .thread_stack_size(memory.stack_size)
+        .build()
 }
 
 fn bootstrap_logger(config_path: &Path) {

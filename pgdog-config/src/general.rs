@@ -1073,7 +1073,7 @@ impl General {
     }
 
     fn background_workers() -> usize {
-        Self::env_or_default("PGDOG_BACKGROUND_WORKERS", 2)
+        Self::env_or_default("PGDOG_BACKGROUND_WORKERS", 0)
     }
 
     fn default_pool_size() -> usize {
