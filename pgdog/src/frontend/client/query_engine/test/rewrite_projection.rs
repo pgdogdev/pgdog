@@ -283,17 +283,20 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     };
     assert!(query.query().contains("__pgdog_count_col0"));
     assert!(query.query().contains("created_at AS __pgdog_order_col0"));
-    assert!(query.query().contains("LIMIT 10 + 5"));
+    assert!(query.query().contains("LIMIT 10::bigint + 5::bigint"));
     assert!(!query.query().contains("OFFSET"));
 
     let route = context.client_request.route();
-    assert_eq!(route.order_by(), &[OrderBy::Asc(3)]);
+    assert_eq!(
+        route.order_by(),
+        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+    );
     assert_eq!(
         route
             .projection_rewrite_plan()
-            .drop_columns()
+            .aliases()
             .collect::<Vec<_>>(),
-        [1, 2]
+        ["__pgdog_count_col0", "__pgdog_order_col0"]
     );
     assert_eq!(
         route.limit(),
