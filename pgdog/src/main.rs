@@ -27,7 +27,7 @@ use tracing::{error, info, warn};
 use util::pgdog_version;
 
 use arc_swap::ArcSwapOption;
-use pgdog_config::{General, LogFormat};
+use pgdog_config::{General, LogFormat, Memory};
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
@@ -130,16 +130,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     plugin::load_from_config()?;
 
-    let runtime = build_runtime(
-        config.config.general.workers,
-        config.config.memory.stack_size,
-    )?;
+    let runtime = build_runtime(&config.config.general, &config.config.memory)?;
 
     info!(
         "spawning {} threads (stack size: {}MiB)",
         config.config.general.workers,
-        config.config.memory.stack_size / 1024 / 1024
+        config.config.memory.stack_size / 1024 / 1024,
     );
+
     info!(
         "using \"{}\" unique 64-bit ID generator",
         config.config.general.unique_id_function
@@ -316,12 +314,9 @@ fn install_sigterm_handler() {
     }
 }
 
-fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::runtime::Runtime> {
-    match workers {
-        0 => Builder::new_current_thread()
-            .enable_all()
-            .thread_stack_size(stack_size)
-            .build(),
+fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::runtime::Runtime> {
+    let mut builder = match general.workers {
+        0 => Builder::new_current_thread(),
         workers => {
             let mut builder = Builder::new_multi_thread();
             builder.worker_threads(workers);
@@ -331,9 +326,22 @@ fn build_runtime(workers: usize, stack_size: usize) -> std::io::Result<tokio::ru
                 builder.enable_alt_timer();
             }
 
-            builder.enable_all().thread_stack_size(stack_size).build()
+            builder
         }
+    };
+
+    if general.background_workers > 0 {
+        info!("enabling up to {} bg workers", general.background_workers);
+        builder.max_blocking_threads(general.background_workers);
+    } else {
+        // Avoid CPU churning.
+        builder.max_blocking_threads(1);
     }
+
+    builder
+        .enable_all()
+        .thread_stack_size(memory.stack_size)
+        .build()
 }
 
 fn bootstrap_logger(config_path: &Path) {

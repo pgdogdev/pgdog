@@ -26,6 +26,7 @@
       "$ref": "#/$defs/General",
       "default": {
         "auth_type": "scram",
+        "background_workers": 0,
         "ban_replica_lag": 9223372036854775807,
         "ban_replica_lag_bytes": 9223372036854775807,
         "ban_timeout": 300000,
@@ -690,6 +691,13 @@
           "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",
           "default": "scram"
+        },
+        "background_workers": {
+          "description": "Maximum number of background workers, used for executing blocking tasks. We typically offload CPU-intensive workloads here.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
         },
         "ban_replica_lag": {
           "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>",
