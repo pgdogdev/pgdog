@@ -206,7 +206,7 @@ mod tests {
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::net::messages::bind::{Format, Parameter};
-    use crate::net::{Bind, Parse, ProtocolMessage, Query};
+    use crate::net::{Bind, Parameters, Parse, ProtocolMessage, Query};
     use pgdog_config::Rewrite;
 
     use super::*;
@@ -229,12 +229,17 @@ mod tests {
             db_schema: &db_schema,
             user: "test",
             search_path: None,
+            timezone: None,
         });
         let mut plan = RewritePlan::default();
         let ast = make::owned(|mem| {
             let mut ast = mem.parse(sql).expect("valid SQL");
             plan = rewriter
-                .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
+                .maybe_rewrite(
+                    ast.as_mut().into_iter().next().expect("statement"),
+                    mem,
+                    None,
+                )
                 .expect("rewrite succeeds");
             ast
         });
@@ -463,14 +468,19 @@ mod tests {
             let mut bind = Bind::new_params_codes("stmt", &original_params, &codes);
             let mut calls = Vec::new();
             let mut value = -2i64;
-            plan.apply_generated_ids(&mut bind, async |call: &SequenceCall| {
-                let SequenceCall::Nextval(name) = call else {
-                    panic!("expected nextval");
-                };
-                calls.push(name.to_owned());
-                value += 1;
-                Ok(value)
-            })
+            plan.apply_generated_ids(
+                &mut bind,
+                &mut Parameters::default(),
+                None,
+                async |call: &SequenceCall| {
+                    let SequenceCall::Nextval(name) = call else {
+                        panic!("expected nextval");
+                    };
+                    calls.push(name.to_owned());
+                    value += 1;
+                    Ok(value)
+                },
+            )
             .await
             .expect("sequence values appended");
 
@@ -532,7 +542,7 @@ mod tests {
         };
         for expected in [2, 4] {
             let mut bind = Bind::default();
-            plan.apply_generated_ids(&mut bind, &mut nextval)
+            plan.apply_generated_ids(&mut bind, &mut Parameters::default(), None, &mut nextval)
                 .await
                 .expect("values");
             assert_eq!(
@@ -556,7 +566,7 @@ mod tests {
             let (_, plan) = rewrite(&format!("SELECT pgdog.{call}"), true);
             let mut request = ClientRequest::from(vec![ProtocolMessage::Bind(Bind::default())]);
             let error = plan
-                .apply(&mut request)
+                .apply(&mut request, &mut Parameters::default(), None)
                 .await
                 .expect_err("EE hook rejects sequence");
             assert!(matches!(error, Error::Enterprise(ee::Error::EERequired)));
@@ -577,7 +587,7 @@ mod tests {
                 Parse::new_anonymous(&original),
             )]);
             extended_plan
-                .apply(&mut request)
+                .apply(&mut request, &mut Parameters::default(), None)
                 .await
                 .expect("prepare does not fetch");
 
@@ -585,7 +595,7 @@ mod tests {
             let mut request =
                 ClientRequest::from(vec![ProtocolMessage::Query(Query::new(&original))]);
             let error = simple_plan
-                .apply(&mut request)
+                .apply(&mut request, &mut Parameters::default(), None)
                 .await
                 .expect_err("simple query calls the EE hook");
             assert!(matches!(error, Error::Enterprise(ee::Error::EERequired)));
@@ -711,9 +721,14 @@ mod tests {
             for first in [1, 44] {
                 if extended {
                     let mut bind = Bind::default();
-                    plan.apply_generated_ids(&mut bind, &mut execute)
-                        .await
-                        .expect("values appended");
+                    plan.apply_generated_ids(
+                        &mut bind,
+                        &mut Parameters::default(),
+                        None,
+                        &mut execute,
+                    )
+                    .await
+                    .expect("values appended");
                     assert_eq!(bind.params_raw().len(), 6);
                     for (index, value) in [first, first, -42, -42, 42, 43].into_iter().enumerate() {
                         assert_eq!(

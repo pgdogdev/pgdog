@@ -1,10 +1,11 @@
 //! Statement rewriter.
 
-use crate::backend::ShardingSchema;
 use crate::backend::schema::Schema;
+use crate::config::config;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::AstContext;
 use crate::net::parameter::ParameterValue;
+use crate::{backend::ShardingSchema, frontend::client::Transaction};
 use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 
 pub(crate) mod aggregate;
@@ -15,11 +16,14 @@ pub(crate) mod nextval;
 pub(crate) mod offset;
 pub(crate) mod plan;
 pub(crate) mod simple_prepared;
+pub(crate) mod timestamp;
 pub(crate) mod unique_id;
 pub(crate) mod update;
 
 pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
+use pgdog_config::RewriteMode;
+//use pgdog_config::RewriteMode;
 use plan::GeneratedId;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
@@ -43,6 +47,8 @@ pub(crate) struct StatementRewriteContext<'a> {
     pub(crate) user: &'a str,
     /// Search path for table lookups.
     pub(crate) search_path: Option<&'a ParameterValue>,
+    /// Timezone for now() time generation for TIMEZONE columns.
+    pub(crate) timezone: Option<&'a ParameterValue>,
 }
 
 #[derive(Debug)]
@@ -66,6 +72,8 @@ pub(crate) struct StatementRewrite<'a> {
     user: &'a str,
     /// Search path for table lookups.
     search_path: Option<&'a ParameterValue>,
+    /// Timezone for now() time generation for TIMEZONE columns.
+    timezone: Option<&'a ParameterValue>,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -83,6 +91,7 @@ impl<'a> StatementRewrite<'a> {
             db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
+            timezone: ctx.timezone,
         }
     }
 
@@ -93,6 +102,7 @@ impl<'a> StatementRewrite<'a> {
             db_schema: self.db_schema.clone(),
             user: self.user,
             search_path: self.search_path,
+            timezone: self.timezone,
         }
     }
 
@@ -102,6 +112,7 @@ impl<'a> StatementRewrite<'a> {
         &mut self,
         mut stmt: nodes::RawStmtMut<'mem, '_>,
         mem: make::MemoryToken<'mem>,
+        transaction: Option<&Transaction>,
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
@@ -133,7 +144,9 @@ impl<'a> StatementRewrite<'a> {
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
         match stmt.stmt_mut() {
-            NodeMut::InsertStmt(insert) => self.inject_auto_id(insert, mem, &mut plan)?,
+            NodeMut::InsertStmt(insert) => {
+                self.inject_auto_id(insert, mem, &mut plan)?;
+            }
             NodeMut::PrepareStmt(mut prepare) => {
                 if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
                     self.inject_auto_id(insert, mem, &mut plan)?;
@@ -185,8 +198,45 @@ impl<'a> StatementRewrite<'a> {
             self.limit_offset(&select, &mut plan);
         }
 
+        let timestamp_rewrite = matches!(
+            config().config.rewrite.omni_database_defaults,
+            RewriteMode::Rewrite | RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
+        );
+
+        if timestamp_rewrite {
+            match stmt.stmt_mut() {
+                NodeMut::InsertStmt(_) => {
+                    self.rewrite_timestamp_functions(
+                        stmt.stmt_mut(),
+                        mem,
+                        &mut next_param,
+                        &mut plan,
+                        transaction,
+                    );
+                }
+                NodeMut::PrepareStmt(mut prepare) => {
+                    if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
+                        self.rewrite_timestamp_functions(
+                            prepare.query_mut(),
+                            mem,
+                            &mut next_param,
+                            &mut plan,
+                            transaction,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Handle top-level PREPARE/EXECUTE statements.
-        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan)?;
+        let prepared_result = self.rewrite_simple_prepared(
+            stmt.stmt_mut(),
+            mem,
+            &mut plan,
+            transaction,
+            timestamp_rewrite,
+        )?;
         if prepared_result.rewritten {
             self.rewritten = true;
             plan.prepare_rewrites = prepared_result.rewrites;

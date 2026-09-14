@@ -55,6 +55,7 @@ impl StreamContext {
             &BufferedQuery::Prepared(parse),
             &ast_context,
             &mut PreparedStatements::default(),
+            None,
         )?;
         request.ast = Some(ast);
 

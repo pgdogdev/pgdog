@@ -50,7 +50,7 @@ mod test_show {
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffered = BufferedQuery::Query(Query::new(query));
         let ast = Cache::get()
-            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .query(&buffered, &ctx, &mut PreparedStatements::default(), None)
             .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);
@@ -64,7 +64,7 @@ mod test_show {
         let query = "SHOW TRANSACTION ISOLATION LEVEL";
         let buffered = BufferedQuery::Query(Query::new(query));
         let ast = Cache::get()
-            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .query(&buffered, &ctx, &mut PreparedStatements::default(), None)
             .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
         buffer.ast = Some(ast);

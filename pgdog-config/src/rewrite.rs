@@ -92,6 +92,10 @@ pub struct Rewrite {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>
     #[serde(default = "Rewrite::default_primary_key")]
     pub primary_key: RewriteMode,
+
+    // TODO: docs repo
+    #[serde(default = "Rewrite::default_omni_database_defaults")]
+    pub omni_database_defaults: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -101,6 +105,7 @@ impl Default for Rewrite {
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
+            omni_database_defaults: Self::default_omni_database_defaults(),
         }
     }
 }
@@ -115,6 +120,10 @@ impl Rewrite {
     }
 
     const fn default_primary_key() -> RewriteMode {
+        RewriteMode::Ignore
+    }
+
+    const fn default_omni_database_defaults() -> RewriteMode {
         RewriteMode::Ignore
     }
 }

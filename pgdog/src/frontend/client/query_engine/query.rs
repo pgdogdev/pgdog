@@ -2,7 +2,7 @@ use tracing::{info, trace};
 
 use crate::{
     frontend::{
-        client::TransactionType,
+        client::{TransactionType, transaction_type::Transaction},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
@@ -196,10 +196,12 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    let error_state = match context.transaction {
-                        Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
+                    let error_state = match context.transaction.map(|t| t.transaction_type()) {
+                        Some(TransactionType::ReadOnly) => {
+                            Some(Transaction::new(TransactionType::ErrorReadOnly))
+                        }
                         Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(TransactionType::ErrorReadWrite)
+                            Some(Transaction::new(TransactionType::ErrorReadWrite))
                         }
                         _ => None,
                     };
@@ -221,20 +223,22 @@ impl QueryEngine {
                         self.end_two_pc(false).await?;
                         two_pc_auto = true;
                     }
-                    match context.transaction {
+                    match context.transaction.map(|t| t.transaction_type()) {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
                         None => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction =
+                                Some(Transaction::new(TransactionType::ReadWrite));
                         }
 
                         // Restore transaction state after rollback to savepoint.
                         Some(TransactionType::ErrorReadOnly) => {
-                            context.transaction = Some(TransactionType::ReadOnly);
+                            context.transaction = Some(Transaction::new(TransactionType::ReadOnly));
                         }
 
                         Some(TransactionType::ErrorReadWrite) => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction =
+                                Some(Transaction::new(TransactionType::ReadWrite));
                         }
 
                         _ => (),

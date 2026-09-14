@@ -141,7 +141,7 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::config::load_test;
-    use crate::frontend::client::TransactionType;
+    use crate::frontend::client::{Transaction, TransactionType};
     use crate::net::Stream;
 
     #[tokio::test]
@@ -151,7 +151,7 @@ mod tests {
         // Create a test client with DevNull stream (doesn't require real I/O)
         let mut client =
             crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
-        client.transaction = Some(TransactionType::ReadWrite);
+        client.transaction = Some(Transaction::new(TransactionType::ReadWrite));
 
         // Create a default query engine (avoids backend connection)
         let mut engine = QueryEngine::from_client(&client).unwrap();
@@ -161,9 +161,14 @@ mod tests {
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(
-            context.transaction, None,
+            context
+                .transaction
+                .map(|transaction| transaction.transaction_type()),
+            None,
             "Transaction state should be None, but is {:?}",
-            context.transaction
+            context
+                .transaction
+                .map(|transaction| transaction.transaction_type())
         );
     }
 }

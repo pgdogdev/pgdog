@@ -203,7 +203,7 @@ impl StatementRewrite<'_> {
                 BufferedQuery::Query(Query::new(&stmt))
             };
             let ast = cache
-                .query(&query, &ctx, self.prepared_statements)
+                .query(&query, &ctx, self.prepared_statements, None)
                 .map_err(|e| Error::Cache(e.to_string()))?;
 
             // If this is a named prepared statement, register the split in the global cache
@@ -294,6 +294,7 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            timezone: None,
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(insert, &mut plan).unwrap();

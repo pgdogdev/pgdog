@@ -88,6 +88,7 @@ async fn bench_ast_cache() {
                         &BufferedQuery::Prepared(Parse::new_anonymous(query)),
                         &ctx,
                         &mut prepared_statements,
+                        None,
                     )
                     .unwrap();
                 cached_time += start.elapsed();
@@ -125,6 +126,7 @@ fn run_prepared(query: &str) -> Ast {
             &BufferedQuery::Prepared(Parse::new_anonymous(query)),
             &ctx,
             &mut prepared_statements,
+            None,
         )
         .unwrap()
 }

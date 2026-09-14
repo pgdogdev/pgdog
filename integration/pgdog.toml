@@ -41,6 +41,9 @@ enabled = false
 shard_key = "ignore"
 split_inserts = "error"
 # primary_key = "rewrite"
+#
+# TODO: This doesn't strictly affect DEFAULT; might want to re-name
+omni_database_defaults = "rewrite"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -430,9 +433,10 @@ primary = true
 # ------------------------------------------------------------------------------
 # ----- Omnisharded Tables -----------------------------------------------------
 
+# TODO: I'll rename test_omni_ts to something nicer
 [[omnisharded_tables]]
 database = "pgdog_sharded"
-tables = ["sharded_omni"]
+tables = ["sharded_omni", "test_omni_ts"]
 
 # ------------------------------------------------------------------------------
 # ----- Schema-based sharding --------------------------------------------------

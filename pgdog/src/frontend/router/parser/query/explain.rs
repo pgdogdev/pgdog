@@ -79,7 +79,9 @@ mod tests {
         let ast_ctx = AstContext::from_cluster(&cluster, &params);
 
         let buffered = BufferedQuery::Query(Query::new(sql));
-        let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
+        let ast = Cache::get()
+            .query(&buffered, &ast_ctx, &mut stmts, None)
+            .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
         buffer.ast = Some(ast);
 
@@ -111,7 +113,9 @@ mod tests {
         let ast_ctx = AstContext::from_cluster(&cluster, &params);
 
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));
-        let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
+        let ast = Cache::get()
+            .query(&buffered, &ast_ctx, &mut stmts, None)
+            .unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
         buffer.ast = Some(ast);
 

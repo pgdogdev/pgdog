@@ -2,7 +2,7 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         Client, ClientRequest, PreparedStatements,
-        client::{Sticky, TransactionType, timeouts::Timeouts},
+        client::{Sticky, timeouts::Timeouts, transaction_type::Transaction},
     },
     net::{FrontendPid, Parameters, Stream},
 };
@@ -26,7 +26,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
-    pub(super) transaction: Option<TransactionType>,
+    pub(super) transaction: Option<Transaction>,
     /// Timeouts
     pub(super) timeouts: Timeouts,
     /// Cross shard  queries are disabled.
@@ -99,7 +99,7 @@ impl<'a> QueryEngineContext<'a> {
         }
     }
 
-    pub(crate) fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<Transaction> {
         self.transaction
     }
 

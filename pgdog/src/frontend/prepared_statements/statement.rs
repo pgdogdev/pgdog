@@ -1,5 +1,6 @@
 use crate::{
-    frontend::router::parser::rewrite::statement::offset::OffsetPlan, net::Prepare,
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedId},
+    net::Prepare,
     stats::memory::MemoryUsage,
 };
 
@@ -10,6 +11,14 @@ pub(crate) struct Statement {
     pub(super) stmt: StatementType,
     pub(super) row_description: Option<RowDescription>,
     pub(super) cache_key: CacheKey,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedPlan {
+    pub(crate) prepare: Prepare,
+    pub(crate) unique_ids: u16,
+    pub(crate) offset_plan: Option<OffsetPlan>,
+    pub(crate) generated_ids: Vec<(u16, GeneratedId)>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +41,8 @@ pub(crate) enum StatementType {
         /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
         /// modify limit/offset values before execution if it ends up being cross-shard.
         offset_plan: Option<OffsetPlan>,
+
+        generated_ids: Vec<(u16, GeneratedId)>,
     },
 }
 
@@ -71,13 +82,21 @@ impl Statement {
         }
     }
 
-    pub(super) fn prepare_and_unique_ids(&self) -> Option<(Prepare, u16, Option<OffsetPlan>)> {
+    // TODO: Could consolidate the storage into `PreparedPlan` too.
+    // TODO: This should be renamed; "prepare_and_unique_ids" doesn't represent what it does now.
+    pub(super) fn prepare_and_unique_ids(&self) -> Option<PreparedPlan> {
         match &self.stmt {
             StatementType::Prepare {
                 prepare,
                 unique_ids,
                 offset_plan,
-            } => Some((prepare.clone(), *unique_ids, offset_plan.clone())),
+                generated_ids,
+            } => Some(PreparedPlan {
+                prepare: prepare.clone(),
+                unique_ids: *unique_ids,
+                offset_plan: offset_plan.clone(),
+                generated_ids: generated_ids.clone(),
+            }),
             _ => None,
         }
     }

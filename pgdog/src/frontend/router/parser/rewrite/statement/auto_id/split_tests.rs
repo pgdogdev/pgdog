@@ -6,7 +6,7 @@ use crate::backend::ShardingSchema;
 use crate::frontend::router::parser::StatementRewriteContext;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{Bind, Parameters, Parse, ProtocolMessage, Query};
 use pgdog_config::Rewrite;
 
 fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
@@ -30,12 +30,17 @@ fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
         db_schema: &db_schema,
         user: "",
         search_path: None,
+        timezone: None,
     });
     let mut plan = RewritePlan::default();
     make::owned(|mem| {
         let mut ast = mem.parse(sql).expect("valid SQL");
         plan = rewriter
-            .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
+            .maybe_rewrite(
+                ast.as_mut().into_iter().next().expect("statement"),
+                mem,
+                None,
+            )
             .expect("rewrite succeeds");
         ast
     });
@@ -128,7 +133,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                 let mut prepare_request =
                     ClientRequest::from(vec![ProtocolMessage::Parse(parse.clone())]);
                 let result = plan
-                    .apply(&mut prepare_request)
+                    .apply(&mut prepare_request, &mut Parameters::default(), None)
                     .await
                     .expect("prepare succeeds");
                 assert!(matches!(result, RewriteResult::InPlace { .. }));
@@ -140,11 +145,16 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                         &[format],
                     );
                     let mut value = 200;
-                    plan.apply_generated_ids(&mut bind, async |call: &SequenceCall| {
-                        assert_eq!(call, &SequenceCall::Nextval("users_id_seq".into()));
-                        value += 1;
-                        Ok(value)
-                    })
+                    plan.apply_generated_ids(
+                        &mut bind,
+                        &mut Parameters::default(),
+                        None,
+                        async |call: &SequenceCall| {
+                            assert_eq!(call, &SequenceCall::Nextval("users_id_seq".into()));
+                            value += 1;
+                            Ok(value)
+                        },
+                    )
                     .await
                     .expect("sequence values appended");
                     let request = if separate_parse {

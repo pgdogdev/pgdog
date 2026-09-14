@@ -10,13 +10,12 @@ use tracing::warn;
 
 use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
-use crate::backend::schema::Schema;
+use crate::config::Role;
 use crate::frontend::PreparedStatements;
+use crate::frontend::client::Transaction;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::sharding::ShardOrLookup;
-use crate::net::parameter::ParameterValue;
-use crate::{backend::ShardingSchema, config::Role};
 
 /// Abstract syntax tree (query) cache entry,
 /// with statistics.
@@ -68,13 +67,11 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub(super) fn new(
+    pub(super) fn with_context(
         query: &AstQuery,
-        schema: &ShardingSchema,
-        db_schema: &Schema,
+        ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        user: &str,
-        search_path: Option<&ParameterValue>,
+        transaction: Option<&Transaction>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
 
@@ -86,17 +83,18 @@ impl Ast {
             extended: query.original_query.extended(),
             prepared: query.original_query.prepared(),
             prepared_statements,
-            schema,
-            db_schema,
-            user,
-            search_path,
+            schema: &ctx.sharding_schema,
+            db_schema: &ctx.db_schema,
+            user: ctx.user,
+            search_path: ctx.search_path,
+            timezone: ctx.timezone,
         });
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut ast = mem.parse(query.query_without_comment)?;
             // Parser should not receive multi-query requests.
             if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
-                rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
+                rewrite_plan = rewriter.maybe_rewrite(stmt, mem, transaction)?;
             }
             Ok::<_, Error>(ast)
         })?;
@@ -105,13 +103,13 @@ impl Ast {
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
 
-        if let Some(threshold) = schema.log_min_duration_parse
+        if let Some(threshold) = ctx.sharding_schema.log_min_duration_parse
             && elapsed >= threshold
         {
             warn!(
                 "[slow_query_parse] parse_time_in_ms={}ms truncated_query=\"{}\"",
                 elapsed.as_millis(),
-                query.truncated_query(schema.log_query_sample_length),
+                query.truncated_query(ctx.sharding_schema.log_query_sample_length),
             );
         }
 
@@ -127,22 +125,6 @@ impl Ast {
                 query_without_comment: query.query_without_comment.into(),
             }),
         })
-    }
-
-    /// Parse statement using AstContext for schema and user information.
-    pub(super) fn with_context(
-        query: &AstQuery,
-        ctx: &super::AstContext<'_>,
-        prepared_statements: &mut PreparedStatements,
-    ) -> Result<Self, Error> {
-        Self::new(
-            query,
-            &ctx.sharding_schema,
-            &ctx.db_schema,
-            prepared_statements,
-            ctx.user,
-            ctx.search_path,
-        )
     }
 
     /// Record new AST entry, without rewriting or comment-routing.

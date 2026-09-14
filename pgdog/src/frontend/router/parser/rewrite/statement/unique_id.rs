@@ -288,12 +288,13 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            timezone: None,
         });
         let mut plan = Default::default();
         let ast = make::owned(|mem| {
             let mut copy = mem.make_unique(&*stmt.into_inner());
             let stmt = copy.as_mut().into_iter().next().unwrap();
-            plan = rewrite.maybe_rewrite(stmt, mem).unwrap();
+            plan = rewrite.maybe_rewrite(stmt, mem, None).unwrap();
             copy
         });
         let sql = pg_raw_parse::deparse_stmts(&*ast).unwrap();

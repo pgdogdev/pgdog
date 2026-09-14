@@ -81,6 +81,7 @@ mod test {
                     )),
                     &ctx,
                     &mut prepared_statements,
+                    None,
                 )
                 .unwrap();
         }

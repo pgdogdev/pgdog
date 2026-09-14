@@ -110,7 +110,7 @@ impl StatementRewrite<'_> {
     }
 
     /// Get the table from an INSERT statement.
-    fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
+    pub(crate) fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
         let relation = insert.relation().expect("INSERT always has table");
         let is_sharded = StatementParser::new(insert.into(), None, self.schema, None).is_sharded(
             self.db_schema,
@@ -551,11 +551,12 @@ mod tests {
             db_schema,
             user: "",
             search_path: None,
+            timezone: None,
         });
         let mut plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut copy = mem.make_unique(&*ast.into_inner());
-            plan = rewriter.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem)?;
+            plan = rewriter.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem, None)?;
             Ok::<_, Error>(copy)
         })?;
         let sql = pg_raw_parse::deparse_stmts(&*ast)?;

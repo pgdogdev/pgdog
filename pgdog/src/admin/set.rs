@@ -135,6 +135,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_omni_database_defaults" => {
+                config.config.rewrite.omni_database_defaults = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }

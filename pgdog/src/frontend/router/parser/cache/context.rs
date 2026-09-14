@@ -23,6 +23,8 @@ pub(crate) struct AstContext<'a> {
     pub(crate) user: &'a str,
     /// Search path for table lookups.
     pub(crate) search_path: Option<&'a ParameterValue>,
+    /// Allows `timestamp` types to use the Client's local time when excecuting a `TimeFunction`
+    pub(crate) timezone: Option<&'a ParameterValue>,
 }
 
 impl<'a> AstContext<'a> {
@@ -33,6 +35,7 @@ impl<'a> AstContext<'a> {
             db_schema: cluster.schema(),
             user: cluster.user(),
             search_path: params.get("search_path"),
+            timezone: params.get("timezone"),
         }
     }
 }

@@ -15,7 +15,7 @@ use crate::config::ReadWriteStrategy;
 use crate::frontend::router::parser::{AstContext, Cache};
 use crate::frontend::{
     BufferedQuery, ClientRequest, PreparedStatements, RouterContext,
-    client::{Sticky, TransactionType},
+    client::{Sticky, Transaction, TransactionType},
 };
 use crate::net::messages::Query;
 
@@ -50,7 +50,7 @@ fn parse_query(query: &str) -> Command {
     let params = Parameters::default();
     let ctx = AstContext::from_cluster(&cluster, &params);
     let ast = Cache::get()
-        .query(&buffered, &ctx, &mut PreparedStatements::default())
+        .query(&buffered, &ctx, &mut PreparedStatements::default(), None)
         .unwrap();
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
     client_request.ast = Some(ast);
@@ -72,12 +72,12 @@ macro_rules! command {
         let params = Parameters::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
         let ast = crate::frontend::router::parser::Cache::get()
-            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .query(&buffered, &ctx, &mut PreparedStatements::default(), None)
             .unwrap();
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
         client_request.ast = Some(ast);
         let transaction = if $in_transaction {
-            Some(TransactionType::ReadWrite)
+            Some(Transaction::new(TransactionType::ReadWrite))
         } else {
             None
         };
@@ -125,13 +125,13 @@ macro_rules! query_parser {
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
 
         let mut ast = crate::frontend::router::parser::Cache::get()
-            .query(&buffered_query, &ctx, &mut prep_stmts)
+            .query(&buffered_query, &ctx, &mut prep_stmts, None)
             .unwrap();
         ast.cached = false; // Dry run test needs this.
         client_request.ast = Some(ast);
 
         let maybe_transaction = if $in_transaction {
-            Some(TransactionType::ReadWrite)
+            Some(Transaction::new(TransactionType::ReadWrite))
         } else {
             None
         };
@@ -179,7 +179,7 @@ macro_rules! parse {
         let ctx =
             crate::frontend::router::parser::AstContext::from_cluster(&cluster, &client_params);
         let ast = crate::frontend::router::parser::Cache::get()
-            .query(&buffered, &ctx, &mut PreparedStatements::default())
+            .query(&buffered, &ctx, &mut PreparedStatements::default(), None)
             .unwrap();
         let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
         client_request.ast = Some(ast);
@@ -464,11 +464,11 @@ fn test_set() {
     let params = Parameters::default();
     let ctx = AstContext::from_cluster(&cluster, &params);
     let ast = Cache::get()
-        .query(&buffered_query, &ctx, &mut prep_stmts)
+        .query(&buffered_query, &ctx, &mut prep_stmts, None)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
-    let transaction = Some(TransactionType::ReadWrite);
+    let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
@@ -609,11 +609,11 @@ WHERE t2.account = (
     let params = Parameters::default();
     let ctx = AstContext::from_cluster(&cluster, &params);
     let ast = Cache::get()
-        .query(&buffered_query, &ctx, &mut prep_stmts)
+        .query(&buffered_query, &ctx, &mut prep_stmts, None)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
-    let transaction = Some(TransactionType::ReadWrite);
+    let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
