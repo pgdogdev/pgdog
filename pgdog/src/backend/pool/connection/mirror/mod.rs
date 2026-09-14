@@ -378,7 +378,7 @@ mod test {
             },
         ]);
 
-        // Destination cluster in session mode: no tracking needed.
+        // Destination cluster in session mode follows the `[general]` default.
         let cluster = Cluster::new_test_session_mode(&config);
         let mirror = Mirror::new(&params, &config, &cluster);
         assert_eq!(
