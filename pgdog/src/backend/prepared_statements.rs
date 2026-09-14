@@ -8,8 +8,8 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
-        ToBytes,
+        Close, CloseComplete, Describe, FromBytes, Message, ParseComplete, Protocol,
+        ProtocolMessage, ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -60,6 +60,7 @@ pub(super) struct Prepare {
     /// Some if statement was prepared previously, but has expired since
     close: Option<ProtocolMessage>,
     parse: ProtocolMessage,
+    describe: Option<ProtocolMessage>,
 }
 
 impl Prepare {
@@ -72,8 +73,15 @@ impl Prepare {
         &self.parse
     }
 
+    pub(super) fn describe(&self) -> Option<&ProtocolMessage> {
+        self.describe.as_ref()
+    }
+
     fn anonymize(&mut self) {
         self.parse.anonymize();
+        if let Some(describe) = &mut self.describe {
+            describe.anonymize();
+        }
     }
 }
 
@@ -88,6 +96,10 @@ pub(super) enum HandleResult {
         rewrite: ProtocolMessage,
     },
     PrependProtocolMessage(ProtocolMessage),
+    PrependProtocolMessageRewrite {
+        prepend: ProtocolMessage,
+        rewrite: ProtocolMessage,
+    },
 }
 
 /// Server-specific prepared statements.
@@ -177,6 +189,7 @@ impl PreparedStatements {
                             }
                             self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
+                            message.describe = self.internal_describe(bind.statement());
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
@@ -192,11 +205,24 @@ impl PreparedStatements {
                         }
 
                         None => {
+                            let mut describe = self.internal_describe(bind.statement());
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
+                                if let Some(describe) = &mut describe {
+                                    describe.anonymize();
+                                }
+                                if let Some(describe) = describe {
+                                    return Ok(HandleResult::PrependProtocolMessageRewrite {
+                                        prepend: describe,
+                                        rewrite: ProtocolMessage::Bind(bind),
+                                    });
+                                }
                                 return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
+                            }
+                            if let Some(describe) = describe {
+                                return Ok(HandleResult::PrependProtocolMessage(describe));
                             }
                         }
                     }
@@ -518,7 +544,25 @@ impl PreparedStatements {
             // it still holds.
             close: expired.then(|| ProtocolMessage::Close(Close::named(name))),
             parse: ProtocolMessage::Parse(parse),
+            describe: None,
         }))
+    }
+
+    fn internal_describe(&mut self, name: &str) -> Option<ProtocolMessage> {
+        if self.describes.iter().any(|describe| describe == name)
+            || !self
+                .global_cache
+                .read()
+                .cross_shard_variant_needs_row_description(name)
+        {
+            return None;
+        }
+
+        self.describes.push_back(name.to_owned());
+        self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
+        self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
+
+        Some(ProtocolMessage::Describe(Describe::new_statement(name)))
     }
 
     /// The server has prepared this statement already.
@@ -677,8 +721,9 @@ pub(crate) mod test {
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
         Bind, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
-        Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
-        messages::ReadyForQuery,
+        Prepare as SimplePrepare, ProtocolMessage, Query, Sync,
+        bind::Parameter,
+        messages::{ReadyForQuery, row_description::Field},
     };
     use pgdog_config::PreparedStatementsLevel;
 
@@ -760,6 +805,75 @@ pub(crate) mod test {
         let mut ps = new_with_ttl();
 
         assert_parse_without_close!(ps.handle(&bind(&name)).unwrap());
+    }
+
+    #[test]
+    fn bind_describes_a_pending_statement_when_result_shape_is_missing() {
+        let base = insert_global(
+            "internal_description",
+            "SELECT AVG(value) FROM measurements_internal_rd",
+        );
+        let name = FrontendPreparedStatements::global()
+            .write()
+            .cross_shard_variant(
+                &base,
+                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 \
+                 FROM measurements_internal_rd",
+            )
+            .unwrap();
+        let mut ps = new_extended();
+        let parse = ProtocolMessage::Parse(ps.parse(&name).unwrap());
+
+        assert_eq!(ps.handle(&parse).unwrap(), HandleResult::Forward);
+
+        let HandleResult::PrependProtocolMessage(ProtocolMessage::Describe(describe)) =
+            ps.handle(&bind(&name)).unwrap()
+        else {
+            panic!("expected an internal Describe before Bind");
+        };
+        assert_eq!(describe.statement(), name);
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(ps.forward(&mut parse_complete).unwrap());
+
+        let mut parameter_description = Message::new(ParameterDescription::empty().to_bytes());
+        assert!(!ps.forward(&mut parameter_description).unwrap());
+
+        let row_description =
+            RowDescription::new(&[Field::double("avg"), Field::bigint("__pgdog_count_col0")]);
+        let mut message = Message::new(row_description.to_bytes());
+        assert!(!ps.forward(&mut message).unwrap());
+
+        assert_eq!(
+            ps.global_cache.read().row_description(&name).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn bind_prepares_and_describes_an_unseen_cross_shard_variant() {
+        let base = insert_global(
+            "prepare_and_describe",
+            "SELECT AVG(value) FROM measurements_prepare_and_describe",
+        );
+        let name = FrontendPreparedStatements::global()
+            .write()
+            .cross_shard_variant(
+                &base,
+                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 \
+                 FROM measurements_prepare_and_describe",
+            )
+            .unwrap();
+        let mut ps = new_extended();
+
+        let HandleResult::Prepend(prepare) = ps.handle(&bind(&name)).unwrap() else {
+            panic!("expected Parse and internal Describe before Bind");
+        };
+        assert!(matches!(prepare.parse(), ProtocolMessage::Parse(parse) if parse.name() == name));
+        assert!(
+            matches!(prepare.describe(), Some(ProtocolMessage::Describe(describe))
+                if describe.statement() == name)
+        );
     }
 
     #[test]

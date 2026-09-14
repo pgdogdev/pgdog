@@ -9,7 +9,6 @@ use crate::net::ProtocolMessage;
 use pg_raw_parse::{Node, StmtList, make};
 use std::sync::Arc;
 
-/// Aggregate function projected temporarily for cross-shard merging.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AggregateHelper {
     pub(crate) target_column: usize,
@@ -19,14 +18,12 @@ pub(crate) struct AggregateHelper {
     pub(crate) alias: String,
 }
 
-/// Column projected temporarily for cross-shard ordering.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OrderByHelper {
     pub(crate) sort_position: usize,
     pub(crate) projected_column: usize,
 }
 
-/// Temporary result columns required while merging cross-shard results.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ProjectionRewritePlan {
     aggregate_helpers: Vec<AggregateHelper>,
@@ -38,10 +35,6 @@ impl ProjectionRewritePlan {
         self.aggregate_helpers.is_empty() && self.order_by_helpers.is_empty()
     }
 
-    /// Positions of the columns we added to the select list.
-    ///
-    /// Helpers are only ever added to an explicit select list, so the position
-    /// in the statement is the position in the result set.
     pub(crate) fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
         self.aggregate_helpers
             .iter()
@@ -87,11 +80,6 @@ impl RewriteOutput {
     }
 }
 
-/// Add temporary columns needed to merge a cross-shard SELECT.
-///
-/// This deliberately operates on a copy of the cached AST. The cached AST is
-/// the route-independent representation and must remain suitable for direct
-/// execution.
 pub(crate) fn finalize_after_route(
     request: &mut ClientRequest,
     schema: &Schema,

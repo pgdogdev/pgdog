@@ -154,7 +154,6 @@ impl QueryEngine {
                     rewrite_result.and_then(RewriteResult::offset_plan),
                 )?;
 
-                // Resolve route-dependent values, e.g. offset/limit.
                 if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_route(context.client_request)?;
                 }

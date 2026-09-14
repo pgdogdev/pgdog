@@ -139,9 +139,6 @@ impl GlobalCache {
         }
     }
 
-    /// Create, or retrieve, the server-side prepared statement variant used
-    /// for cross-shard execution. Variants are derived data owned by the base
-    /// statement and therefore do not have an independent usage counter.
     pub(crate) fn cross_shard_variant(&mut self, name: &str, query: &str) -> Option<String> {
         let variant_name = format!("{name}_cross_shard");
         if self.cross_shard_variants.contains_key(&variant_name) {
@@ -236,6 +233,12 @@ impl GlobalCache {
             .get(name)
             .or_else(|| self.names.get(name))
             .and_then(|p| p.row_description.clone())
+    }
+
+    pub(crate) fn cross_shard_variant_needs_row_description(&self, name: &str) -> bool {
+        self.cross_shard_variants
+            .get(name)
+            .is_some_and(|statement| statement.row_description.is_none())
     }
 
     /// Number of prepared statements in the local cache.

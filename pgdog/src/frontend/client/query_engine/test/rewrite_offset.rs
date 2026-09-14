@@ -144,7 +144,6 @@ async fn test_offset_with_unique_id_simple() {
         "should have bigint cast: {rewritten_sql}"
     );
 
-    // Finalize with a cross-shard route.
     context.client_request.route = Some(cross_shard_route());
     projection::finalize_after_route(
         context.client_request,
@@ -169,12 +168,12 @@ async fn test_offset_with_unique_id_simple() {
         "unique_id rewrite must survive post-route finalization: {final_sql}"
     );
     assert!(
-        final_sql.contains("::bigint"),
-        "bigint cast must survive: {final_sql}"
+        final_sql.contains(")::bigint FROM"),
+        "unique_id bigint cast must survive: {final_sql}"
     );
     // LIMIT/OFFSET must be rewritten for cross-shard.
     assert!(
-        final_sql.contains("LIMIT 10 + 5"),
+        final_sql.contains("LIMIT 10::bigint + 5::bigint"),
         "LIMIT should request limit+offset rows: {final_sql}"
     );
     assert!(
@@ -217,7 +216,6 @@ async fn test_offset_with_unique_id_extended() {
         "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3"
     );
 
-    // Post-route finalization rewrites the SQL without changing Bind values.
     context.client_request.route = Some(cross_shard_route());
     projection::finalize_after_route(
         context.client_request,
@@ -231,17 +229,15 @@ async fn test_offset_with_unique_id_extended() {
         .apply_after_route(context.client_request)
         .unwrap();
 
-    // SQL uses a stable expression suitable for prepared-statement caching.
     let final_sql = match &context.client_request.messages[0] {
         ProtocolMessage::Parse(p) => p.query().to_owned(),
         _ => panic!("expected Parse"),
     };
     assert_eq!(
-        final_sql, "SELECT $4::bigint, $1 FROM test LIMIT $2 + $3",
+        final_sql, "SELECT $4::bigint, $1 FROM test LIMIT $2::bigint + $3::bigint",
         "SQL must push down limit+offset"
     );
 
-    // Bind parameters retain the client values used by the SQL expression.
     if let ProtocolMessage::Bind(bind) = &context.client_request.messages[1] {
         assert_eq!(bind.params_raw()[0].data.as_ref(), b"hello");
         assert_eq!(bind.params_raw()[1].data.as_ref(), b"10");

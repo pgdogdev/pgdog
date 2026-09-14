@@ -4,8 +4,6 @@ use crate::frontend::router::parser::OrderBy;
 
 use super::projection::{OrderByHelper, ProjectionRewritePlan};
 
-/// A `*` in the select list already projects every column of its table, so
-/// nothing sorted by those columns needs a helper.
 fn projects_star(select: &nodes::SelectStmtMut<'_, '_>) -> bool {
     select.target_list().iter().any(|target| {
         matches!(target.val(), Node::ColumnRef(column)
@@ -21,8 +19,6 @@ fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, name: &str) -> bool {
     })
 }
 
-/// Project ORDER BY expressions that are missing from the SELECT list
-/// so cross-shard results can be sorted, then stripped.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
