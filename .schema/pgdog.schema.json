@@ -224,6 +224,7 @@
       "$ref": "#/$defs/Rewrite",
       "default": {
         "enabled": false,
+        "omni_database_defaults": "ignore",
         "primary_key": "ignore",
         "shard_key": "error",
         "split_inserts": "error"
@@ -1938,6 +1939,10 @@
           "description": "Enables/disables the query rewrite engine.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#enabled>",
           "type": "boolean",
           "default": false
+        },
+        "omni_database_defaults": {
+          "$ref": "#/$defs/RewriteMode",
+          "default": "ignore"
         },
         "primary_key": {
           "description": "Behavior for `INSERT` missing a `BIGINT` primary key: `error` rejects, `rewrite` auto-injects `pgdog.unique_id()`, `ignore` allows without modification.\n\n_Default:_ `ignore`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>",
