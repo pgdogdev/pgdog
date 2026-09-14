@@ -107,17 +107,7 @@ impl ShardingKeyUpdate {
                 return false;
             }
 
-            if let Some(schema) = sharded.schema.as_ref()
-                && let Some(table_schema) = table.schema
-                && table_schema != schema
-            {
-                return false;
-            }
-
-            self.from_update
-                .target_list()
-                .iter()
-                .any(|rt| rt.name() == Some(&*sharded.column))
+            sharded.schema.as_deref() == table.schema
         })
     }
 }
@@ -559,18 +549,6 @@ mod test {
                     [ShardedTable {
                         name: Some("other".into()),
                         column: "id".into(),
-                        ..Default::default()
-                    }]
-                    .as_slice()
-                ))
-                .is_none()
-        );
-        assert!(
-            result
-                .sharded_table(&ShardedTables::from(
-                    [ShardedTable {
-                        name: Some("sharded".into()),
-                        column: "user_id".into(),
                         ..Default::default()
                     }]
                     .as_slice()
