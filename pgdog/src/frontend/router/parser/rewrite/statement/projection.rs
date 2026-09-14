@@ -1,6 +1,7 @@
 use super::Error;
 use super::aggregate::{AggregatesRewrite, HelperKind};
 use super::offset::{self, OffsetPlan};
+use super::order_by;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{Aggregate, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
@@ -188,7 +189,7 @@ fn build(
         if !aggregate.is_empty() {
             plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate).plan;
         }
-        rewrite_order_by(&mut select.as_mut(), mem, order_by, &mut plan);
+        order_by::rewrite_select(&mut select.as_mut(), mem, order_by, &mut plan);
         if rewrite_offset {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
@@ -200,81 +201,6 @@ fn build(
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
 
     Ok(Some(PostRouteRewrite { sql, plan }))
-}
-
-fn rewrite_order_by<'a>(
-    select: &mut pg_raw_parse::nodes::SelectStmtMut<'a, '_>,
-    mem: make::MemoryToken<'a>,
-    order_by: &[OrderBy],
-    plan: &mut ProjectionRewritePlan,
-) {
-    let mut helpers = Vec::new();
-    let mut sort_position = 0;
-    for sort in select.sort_clause() {
-        let node = sort.node();
-        let Some(order) = order_by.get(sort_position) else {
-            break;
-        };
-        let supported = matches!(
-            (node, order),
-            (Node::A_Const(_), OrderBy::Asc(_) | OrderBy::Desc(_))
-                | (
-                    Node::ColumnRef(_),
-                    OrderBy::AscColumn(_) | OrderBy::DescColumn(_)
-                )
-                | (Node::A_Expr(_), OrderBy::AscVectorL2Column(_, _))
-        );
-        if !supported {
-            continue;
-        }
-
-        let needs_helper = match node {
-            Node::ColumnRef(column) => {
-                let Some(name) = column
-                    .fields()
-                    .into_iter()
-                    .next_back()
-                    .and_then(Node::as_str)
-                else {
-                    continue;
-                };
-                !select.target_list().iter().any(|target| {
-                    target.name() == Some(name)
-                        || matches!(
-                            target.val(),
-                            Node::ColumnRef(projected)
-                                if projected.fields().into_iter().next_back().and_then(Node::as_str)
-                                    == Some(name)
-                        )
-                })
-            }
-            Node::A_Expr(_) => matches!(order, OrderBy::AscVectorL2Column(_, _)),
-            _ => false,
-        };
-        let current_sort_position = sort_position;
-        sort_position += 1;
-        if !needs_helper {
-            continue;
-        }
-
-        let projected_column = select.target_list().len() + helpers.len();
-        let alias = format!("__pgdog_order_col{current_sort_position}");
-        helpers.push(mem.make_res_target(
-            Some(&alias),
-            mem.empty(),
-            mem.make_unique(node).uncast(),
-        ));
-        plan.add_order_by_helper(OrderByHelper {
-            sort_position: current_sort_position,
-            projected_column,
-        });
-    }
-
-    if !helpers.is_empty() {
-        select
-            .target_list_mut()
-            .extend(mem, mem.make_list(&helpers));
-    }
 }
 
 #[cfg(test)]
