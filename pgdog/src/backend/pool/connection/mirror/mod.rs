@@ -51,9 +51,11 @@ pub(crate) struct Mirror {
 }
 
 impl Mirror {
-    fn new(params: &Parameters, config: &ConfigAndUsers) -> Self {
+    fn new(params: &Parameters, config: &ConfigAndUsers, cluster: &Cluster) -> Self {
         let mut prepared_statements = PreparedStatements::new();
-        prepared_statements.set_level(config.prepared_statements());
+        // Follow the destination cluster's pooler mode, like a regular client
+        // of that cluster would, rather than the `[general]` default.
+        prepared_statements.set_level(config.prepared_statements_for(cluster.pooler_mode()));
 
         Self {
             id: FrontendPid::new(),
@@ -96,7 +98,7 @@ impl Mirror {
         ]);
 
         // Mirror traffic handler.
-        let mut mirror = Self::new(&params, &config);
+        let mut mirror = Self::new(&params, &config, cluster);
 
         // Same query engine as the client, except with a potentially different database config.
         // Use mirror.id so pool checkout (Request) and comms keying share one identity.
@@ -367,10 +369,22 @@ mod test {
             },
         ]);
 
-        let mirror = Mirror::new(&params, &config);
+        // Destination cluster in session mode: no tracking needed.
+        let cluster = Cluster::new_test_session_mode(&config);
+        let mirror = Mirror::new(&params, &config, &cluster);
         assert_eq!(
             mirror.prepared_statements.level(),
             PreparedStatementsLevel::Disabled
+        );
+
+        // Destination cluster in transaction mode (the test cluster default)
+        // must track statements even though `[general]` is session mode.
+        let cluster = Cluster::new_test(&config);
+        assert_eq!(cluster.pooler_mode(), PoolerMode::Transaction);
+        let mirror = Mirror::new(&params, &config, &cluster);
+        assert_eq!(
+            mirror.prepared_statements.level(),
+            PreparedStatementsLevel::Extended
         );
     }
 }

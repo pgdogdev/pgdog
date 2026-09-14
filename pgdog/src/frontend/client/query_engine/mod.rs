@@ -10,6 +10,7 @@ use crate::{
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
+use pgdog_config::PoolerMode;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -128,6 +129,16 @@ impl QueryEngine {
     /// Current state.
     pub(crate) fn client_state(&self) -> State {
         self.stats.state
+    }
+
+    /// Pooler mode of the cluster this client is connected to, resolved from
+    /// the user, database and `[general]` config. `None` when the client has
+    /// no cluster (e.g. admin database).
+    pub(crate) fn pooler_mode(&self) -> Option<PoolerMode> {
+        self.backend
+            .cluster()
+            .ok()
+            .map(|cluster| cluster.pooler_mode())
     }
 
     /// Handle client request.
