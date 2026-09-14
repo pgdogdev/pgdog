@@ -864,13 +864,19 @@ impl Server {
     }
 
     /// A request is being sent by a client.
-    pub(crate) fn sending_request(&self) -> bool {
+    pub(crate) fn is_sending_request(&self) -> bool {
         self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
-    pub(crate) fn force_close(&self) -> bool {
+    pub(crate) fn is_force_close(&self) -> bool {
         self.stats().get_state() == State::ForceClose || self.io_in_progress()
+    }
+
+    /// Indicate that this connection should be closed
+    /// when it's returned to the connection pool.
+    pub(crate) fn force_close(&mut self) {
+        self.stats_mut().state(State::ForceClose);
     }
 
     /// Server parameters.
@@ -1000,6 +1006,24 @@ impl Server {
         }
     }
 
+    /// Return connection to synchronized extended protocol state.
+    ///
+    /// Sends [`Sync`] to the server and receives all messages it returns, up to
+    /// [`ReadyForQuery`].
+    pub(super) async fn synchronize(&mut self) -> Result<(), Error> {
+        if !self.in_sync() {
+            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
+
+            while !self.in_sync() {
+                self.read().await?;
+            }
+
+            self.re_synced = true;
+        }
+
+        Ok(())
+    }
+
     /// Drain any remaining messages on the server connection,
     /// attempting to return the connection into a synchronized state.
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
@@ -1007,16 +1031,7 @@ impl Server {
             self.read().await?;
         }
 
-        if !self.in_sync() {
-            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
-
-            while !self.in_sync() {
-                self.read().await?;
-            }
-        }
-
-        self.re_synced = true;
-        Ok(())
+        self.synchronize().await
     }
 
     /// Synchronize prepared statements from Postgres.
@@ -1039,6 +1054,9 @@ impl Server {
     }
 
     /// Close any prepared statements that exceed cache capacity.
+    ///
+    /// N.B.: Caller is responsible for actually sending these to the server
+    /// to synchronize state, see [`Self::close_many`].
     pub(super) fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
@@ -3968,7 +3986,7 @@ pub(crate) mod test {
             }
         };
         assert!(matches!(err, Error::ExecutionError(_)));
-        assert!(server.force_close());
+        assert!(server.is_force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
     }
 
