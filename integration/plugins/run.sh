@@ -35,6 +35,11 @@ pushd ${SCRIPT_DIR}/../../plugins/pgdog-example-plugin
 build_plugin
 popd
 
+# The Google plugin has no cargo features; build it into the workspace target.
+pushd ${SCRIPT_DIR}/../../plugins/pgdog-google-auth
+cargo build --release
+popd
+
 export LD_LIBRARY_PATH=${SCRIPT_DIR}/target/release:${SCRIPT_DIR}/../../target/release
 export DYLD_LIBRARY_PATH=${LD_LIBRARY_PATH}
 
@@ -55,5 +60,19 @@ run_pgdog ${SCRIPT_DIR}/auth
 wait_for_pgdog
 pushd ${SCRIPT_DIR}
 bundle exec rspec auth/auth_spec.rb
+popd
+stop_pgdog
+
+# Phase 3: Google access-token plugin (pgdog_google_auth). The spec starts a
+# tokeninfo mock on 127.0.0.1:18080 itself; google/google-auth.toml points the
+# plugin at it over loopback HTTP. setup.sql creates the impersonated role for
+# alice@example.com and deliberately leaves dave@example.com without one.
+PGPASSWORD=pgdog psql -h 127.0.0.1 -p 5432 -U pgdog -d pgdog -v ON_ERROR_STOP=1 \
+    -f ${SCRIPT_DIR}/google/setup.sql
+
+run_pgdog ${SCRIPT_DIR}/google
+wait_for_pgdog
+pushd ${SCRIPT_DIR}
+bundle exec rspec google/google_auth_spec.rb
 popd
 stop_pgdog

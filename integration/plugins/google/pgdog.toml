@@ -1,0 +1,12 @@
+[general]
+auth_type = "plugin"
+passthrough_auth = "enabled_plain"
+log_connections = true
+
+[[plugins]]
+name = "pgdog_google_auth"
+config = "integration/plugins/google/google-auth.toml"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
