@@ -353,8 +353,16 @@ impl ClientRequest {
                 // Sync is always in its own request. This ensures
                 // we can handle ReadyForQuery separately from query results.
                 'S' => {
-                    // Push any accumulated messages first
+                    // Push any accumulated messages first. Since Sync is moved
+                    // to a separate request, force Postgres to deliver the
+                    // responses for this request before we wait for them.
                     if !current_request.is_empty() {
+                        if current_request
+                            .last()
+                            .is_none_or(|message| message.code() != 'H')
+                        {
+                            current_request.push(Flush.into());
+                        }
                         requests.push(std::mem::take(&mut current_request));
                     }
                     // Sync goes in its own request
@@ -422,7 +430,7 @@ mod test {
             Parse::named("test", "SELECT $1").into(),
             Bind::new_statement("test").into(),
             Execute::new().into(),
-            Describe::new_statement("test").into(),
+            Describe::new_portal("").into(),
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
@@ -467,10 +475,11 @@ mod test {
             panic!("Expected Bind message");
         }
 
-        // Third slice should contain: Describe("test")
+        // Third slice should contain: Describe portal, Flush
         let third_slice = &splice[2];
-        assert_eq!(third_slice.len(), 1);
+        assert_eq!(third_slice.len(), 2);
         assert_eq!(third_slice[0].code(), 'D'); // Describe
+        assert_eq!(third_slice[1].code(), 'H'); // Flush
 
         // Fourth slice should contain: Sync (always separate)
         let fourth_slice = &splice[3];
