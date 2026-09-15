@@ -2555,6 +2555,24 @@ mod test {
         // "orders" table (NOT omnisharded)
         relations.insert(("public".into(), "orders".into()), make_table("orders"));
 
+        // "comments" table (NOT omnisharded, no tenant_id column)
+        let mut columns = IndexMap::new();
+        columns.insert(
+            "id".to_string(),
+            SchemaColumn {
+                table_name: "comments".into(),
+                column_name: "id".into(),
+                ordinal_position: 1,
+                is_primary_key: true,
+                ..Default::default()
+            }
+            .into(),
+        );
+        relations.insert(
+            ("public".into(), "comments".into()),
+            Relation::test_table("public", "comments", columns),
+        );
+
         Schema::from_parts(vec!["public".into()], relations)
     }
 
@@ -2597,6 +2615,48 @@ mod test {
         assert!(
             result,
             "Query with mixed omnisharded and regular tables should be sharded"
+        );
+    }
+
+    #[test]
+    fn test_omnisharded_joined_to_table_without_sharding_column_is_not_sharded() {
+        // "users" is omnisharded and has tenant_id; "comments" is not
+        // omnisharded and has no tenant_id, so it defaults to omnisharded.
+        let result =
+            run_is_sharded_test("SELECT * FROM users u JOIN comments c ON c.user_id = u.id");
+        assert!(
+            !result,
+            "Omnisharded table with sharding column shouldn't make the join sharded"
+        );
+    }
+
+    fn run_shard_test(stmt: &str) -> Option<Shard> {
+        let schema = make_omnisharded_sharding_schema();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
+        let stmt = raw.stmts().next().unwrap();
+        let mut parser = StatementParser::new(stmt, None, &schema, None);
+        parser.shard().unwrap()
+    }
+
+    #[test]
+    fn test_omnisharded_table_sharding_key_is_ignored_in_join() {
+        let shard = run_shard_test(
+            "SELECT * FROM users u JOIN comments c ON c.user_id = u.id WHERE u.tenant_id = 1",
+        );
+        assert_eq!(
+            shard, None,
+            "Sharding key on an omnisharded table shouldn't route"
+        );
+    }
+
+    #[test]
+    fn test_sharded_table_sharding_key_routes_in_join_with_omnisharded() {
+        let shard = run_shard_test(
+            "SELECT * FROM users u JOIN orders o ON o.user_id = u.id WHERE o.tenant_id = 1",
+        );
+        assert!(
+            matches!(shard, Some(Shard::Direct(_))),
+            "Sharding key on a sharded table should still route"
         );
     }
 
