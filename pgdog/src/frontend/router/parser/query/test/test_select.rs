@@ -388,6 +388,94 @@ fn test_omnisharded_join_omni_and_sharded_is_not_omni() {
     assert!(!command.route().is_omnisharded());
 }
 
+/// `listed` is in `[omnisharded_tables]` and also matches a `[[sharded_tables]]`
+/// rule on `org_id`. The omnisharded config takes priority.
+fn omni_listed_with_sharding_key() -> crate::backend::ShardedTables {
+    use crate::backend::ShardedTables;
+    use crate::frontend::router::sharding::ShardedTable;
+    use pgdog_config::{OmnishardedTable, SystemCatalogsBehavior};
+
+    ShardedTables::new(
+        vec![
+            ShardedTable {
+                database: "pgdog".into(),
+                name: Some("listed".into()),
+                column: "org_id".into(),
+                ..Default::default()
+            },
+            ShardedTable {
+                database: "pgdog".into(),
+                name: Some("orders".into()),
+                column: "org_id".into(),
+                ..Default::default()
+            },
+        ],
+        vec![OmnishardedTable {
+            name: "listed".into(),
+            sticky_routing: true,
+        }],
+        true,
+        SystemCatalogsBehavior::default(),
+    )
+}
+
+/// Joining a listed omnisharded table to an unlisted table defaults the
+/// unlisted table to omnisharded
+#[test]
+fn test_omnisharded_listed_with_key_join_unlisted() {
+    let mut test = QueryParserTest::new().with_sharded_tables(omni_listed_with_sharding_key());
+
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT l.* FROM listed l INNER JOIN unlisted u ON u.listed_id = l.id WHERE u.id = 1",
+        )
+        .into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A sharding key on a listed omnisharded table doesn't make the join sharded.
+#[test]
+fn test_omnisharded_listed_with_key_join_unlisted_key_in_where() {
+    let mut test = QueryParserTest::new().with_sharded_tables(omni_listed_with_sharding_key());
+
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT l.* FROM listed l INNER JOIN unlisted u ON u.listed_id = l.id WHERE u.id = 1 AND l.org_id = 7",
+        )
+        .into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(command.route().is_omnisharded());
+}
+
+/// A sharding key on a listed omnisharded table can't route a join with a
+/// sharded table: the sharded table has no key, so the query fans out.
+#[test]
+fn test_omnisharded_listed_with_key_join_sharded() {
+    let mut test = QueryParserTest::new().with_sharded_tables(omni_listed_with_sharding_key());
+
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT o.* FROM listed l INNER JOIN orders o ON o.listed_id = l.id WHERE l.org_id = 7",
+        )
+        .into(),
+    ]);
+    assert_eq!(command.route().shard(), &Shard::All);
+    assert!(!command.route().is_omnisharded());
+
+    // The sharding key on the sharded table still routes.
+    let command = test.execute(vec![
+        Query::new(
+            "SELECT o.* FROM listed l INNER JOIN orders o ON o.listed_id = l.id WHERE o.org_id = 7",
+        )
+        .into(),
+    ]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+    assert!(!command.route().is_omnisharded());
+}
+
 /// A sharded table queried without a sharding key fans out to all shards and is
 /// NOT omnisharded.
 #[test]
