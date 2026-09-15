@@ -1,7 +1,7 @@
 use crate::{
     frontend::router::parser::{
         DistinctBy, OrderBy, Shard, ShardWithPriority,
-        rewrite::statement::projection::{OrderByHelper, ProjectionRewritePlan},
+        rewrite::statement::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan},
     },
     net::{BindComplete, DataRow, Field, Format},
 };
@@ -68,6 +68,7 @@ fn test_order_by_helper_is_dropped_after_sorting() {
     let mut plan = ProjectionRewritePlan::default();
     plan.add_order_by_helper(OrderByHelper {
         sort_position: 0,
+        source: OrderBySource::Column("price".into()),
         projected_column: 1,
     });
     let mut route = Route::select(

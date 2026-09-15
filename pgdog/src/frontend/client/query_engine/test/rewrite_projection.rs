@@ -1,4 +1,5 @@
 use crate::backend::schema::Schema;
+use crate::frontend::router::parser::cache::ast::Ast;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
@@ -6,6 +7,7 @@ use crate::frontend::{
     PreparedStatements,
     router::parser::{Limit, OrderBy},
 };
+use pgdog_vector::Vector;
 
 use super::prelude::*;
 use super::test_sharded_client;
@@ -247,6 +249,73 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     );
 }
 
+#[test]
+fn cached_projection_does_not_depend_on_first_route_order() {
+    let sql = "SELECT id FROM products ORDER BY embedding <-> $1, price";
+    let ast = Ast::new_record(sql).unwrap();
+    let mut first = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+    first.ast = Some(ast.clone());
+    first.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::AscColumn("price".into())],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(&mut first, &Schema::default(), None).unwrap();
+    let first_query = match &first.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert!(first_query.query().contains("__pgdog_order_col0"));
+    assert!(first_query.query().contains("__pgdog_order_col1"));
+    assert_eq!(first.route().order_by(), &[OrderBy::Asc(3)]);
+
+    let mut second = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+    second.ast = Some(ast);
+    second.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![
+            OrderBy::AscVectorL2Column("embedding".into(), Vector::from(&[1.0, 2.0, 3.0][..])),
+            OrderBy::AscColumn("price".into()),
+        ],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(&mut second, &Schema::default(), None).unwrap();
+    assert_eq!(
+        second.route().order_by(),
+        &[OrderBy::Asc(2), OrderBy::Asc(3)]
+    );
+}
+
+#[test]
+fn helper_replaces_the_matching_duplicate_order_by_position() {
+    let sql = "SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY a.price, b.price";
+    let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![
+            OrderBy::AscColumn("price".into()),
+            OrderBy::AscColumn("price".into()),
+        ],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+
+    assert_eq!(
+        request.route().order_by(),
+        &[OrderBy::AscColumn("price".into()), OrderBy::Asc(2)]
+    );
+}
+
 #[tokio::test]
 async fn aggregate_order_by_and_offset_compose_after_route() {
     let mut client = test_sharded_client();
@@ -305,7 +374,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
 }
 
 #[tokio::test]
-async fn split_anonymous_prepare_finalizes_saved_parse_on_execute() {
+async fn split_anonymous_prepare_rewrites_each_execution_once() {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::default();
     client
@@ -317,6 +386,35 @@ async fn split_anonymous_prepare_finalizes_saved_parse_on_execute() {
         .client_request
         .push(ProtocolMessage::Describe(Describe::new_statement("")));
     client.client_request.push(Flush.into());
+
+    {
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+        context.client_request.route = Some(route(Shard::All));
+        projection::finalize_after_route(
+            context.client_request,
+            &Schema::default(),
+            result.as_ref().and_then(RewriteResult::offset_plan),
+        )
+        .unwrap();
+    }
+
+    let parse = match &client.client_request.messages[0] {
+        ProtocolMessage::Parse(parse) => parse,
+        _ => panic!("expected Parse"),
+    };
+    assert_eq!(parse.query().matches("__pgdog_count_col0").count(), 1);
+    assert!(
+        !client
+            .client_request
+            .last_parse
+            .as_ref()
+            .unwrap()
+            .query()
+            .contains("__pgdog_count_col0")
+    );
+
     client.client_request.clear();
     client
         .client_request
@@ -338,14 +436,16 @@ async fn split_anonymous_prepare_finalizes_saved_parse_on_execute() {
     )
     .unwrap();
 
-    assert!(
+    assert_eq!(
         context
             .client_request
             .last_parse
             .as_ref()
             .unwrap()
             .query()
-            .contains("__pgdog_count_col0")
+            .matches("__pgdog_count_col0")
+            .count(),
+        1
     );
     assert!(
         context

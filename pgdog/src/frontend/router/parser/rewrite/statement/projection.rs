@@ -21,7 +21,27 @@ pub(crate) struct AggregateHelper {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OrderByHelper {
     pub(crate) sort_position: usize,
+    pub(crate) source: OrderBySource,
     pub(crate) projected_column: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OrderBySource {
+    Column(String),
+    Vector(String),
+}
+
+impl OrderByHelper {
+    fn matches(&self, order_by: &OrderBy) -> bool {
+        match (&self.source, order_by) {
+            (OrderBySource::Column(source), OrderBy::AscColumn(column))
+            | (OrderBySource::Column(source), OrderBy::DescColumn(column))
+            | (OrderBySource::Vector(source), OrderBy::AscVectorL2Column(column, _)) => {
+                source == column
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -93,10 +113,9 @@ pub(crate) fn finalize_after_route(
         return Ok(());
     };
     let rewrite_offset = offset_plan.is_some_and(|plan| !plan.prepare_execute);
-    let order_by = request.route().order_by();
     let Some(rewrite) = ast
         .post_route_rewrite
-        .get_or_try_init(|| build(&ast.ast, schema, order_by, rewrite_offset))?
+        .get_or_try_init(|| build(&ast.ast, schema, rewrite_offset))?
     else {
         return Ok(());
     };
@@ -108,11 +127,8 @@ pub(crate) fn finalize_after_route(
         }
         _ => None,
     });
-    let variant = base_name.and_then(|name| {
-        PreparedStatements::global()
-            .write()
-            .cross_shard_variant(name, &rewrite.sql)
-    });
+    let variant =
+        base_name.and_then(|name| PreparedStatements::cross_shard_variant(name, &rewrite.sql));
 
     for message in &mut request.messages {
         match message {
@@ -136,7 +152,9 @@ pub(crate) fn finalize_after_route(
             _ => {}
         }
     }
-    if let Some(parse) = request.last_parse.as_mut() {
+    if request.is_executable()
+        && let Some(parse) = request.last_parse.as_mut()
+    {
         parse.set_query(&rewrite.sql);
     }
     if !rewrite.plan.is_noop()
@@ -145,7 +163,12 @@ pub(crate) fn finalize_after_route(
         route.set_projection_rewrite_plan(rewrite.plan.clone());
         let mut order_by = route.order_by().to_vec();
         for helper in rewrite.plan.order_by_helpers() {
-            let Some(sort) = order_by.get_mut(helper.sort_position) else {
+            let position = order_by
+                .get(helper.sort_position)
+                .filter(|sort| helper.matches(sort))
+                .map(|_| helper.sort_position)
+                .or_else(|| order_by.iter().position(|sort| helper.matches(sort)));
+            let Some(sort) = position.and_then(|position| order_by.get_mut(position)) else {
                 continue;
             };
             *sort = if sort.asc() {
@@ -163,7 +186,6 @@ pub(crate) fn finalize_after_route(
 fn build(
     ast: &StmtList,
     schema: &Schema,
-    order_by: &[OrderBy],
     rewrite_offset: bool,
 ) -> Result<Option<PostRouteRewrite>, Error> {
     let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
@@ -171,7 +193,7 @@ fn build(
     };
 
     let aggregate = Aggregate::parse(select, schema);
-    if aggregate.is_empty() && order_by.is_empty() && !rewrite_offset {
+    if aggregate.is_empty() && select.sort_clause().is_empty() && !rewrite_offset {
         return Ok(None);
     }
 
@@ -181,7 +203,7 @@ fn build(
         if !aggregate.is_empty() {
             plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate).plan;
         }
-        order_by::rewrite_select(&mut select.as_mut(), mem, order_by, &mut plan);
+        order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
         if rewrite_offset {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
@@ -211,6 +233,7 @@ mod tests {
         });
         plan.add_order_by_helper(OrderByHelper {
             sort_position: 0,
+            source: OrderBySource::Column("created_at".into()),
             projected_column: 2,
         });
 

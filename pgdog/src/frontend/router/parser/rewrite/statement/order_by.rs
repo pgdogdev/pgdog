@@ -1,8 +1,8 @@
-use pg_raw_parse::{Node, make, nodes};
+use pg_raw_parse::{ConstValue, Node, make, nodes};
 
-use crate::frontend::router::parser::OrderBy;
+use crate::frontend::router::parser::Column;
 
-use super::projection::{OrderByHelper, ProjectionRewritePlan};
+use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
 
 fn same_column(left: &nodes::ColumnRef, right: &nodes::ColumnRef) -> bool {
     left.fields()
@@ -49,25 +49,32 @@ fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, column: &nodes::Column
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
-    order_by: &[OrderBy],
     plan: &mut ProjectionRewritePlan,
 ) {
     let mut helpers = Vec::new();
     let mut sort_position = 0;
     for sort in select.sort_clause() {
         let node = sort.node();
-        let Some(order) = order_by.get(sort_position) else {
-            break;
+        let source = match node {
+            Node::ColumnRef(column) => column
+                .fields()
+                .into_iter()
+                .next_back()
+                .and_then(Node::as_str)
+                .map(|name| OrderBySource::Column(name.to_owned())),
+            Node::A_Expr(expr)
+                if expr.name().iter().next().and_then(Node::as_str) == Some("<->") =>
+            {
+                [expr.lexpr(), expr.rexpr()]
+                    .into_iter()
+                    .find_map(|node| Column::try_from(node).ok())
+                    .map(|column| OrderBySource::Vector(column.name.to_owned()))
+            }
+            _ => None,
         };
-        let supported = matches!(
-            (node, order),
-            (Node::A_Const(_), OrderBy::Asc(_) | OrderBy::Desc(_))
-                | (
-                    Node::ColumnRef(_),
-                    OrderBy::AscColumn(_) | OrderBy::DescColumn(_)
-                )
-                | (Node::A_Expr(_), OrderBy::AscVectorL2Column(_, _))
-        );
+        let supported = source.is_some()
+            || matches!(node, Node::A_Const(constant)
+                if matches!(constant.val(), Some(ConstValue::Integer(_))));
         if !supported {
             continue;
         }
@@ -77,7 +84,7 @@ pub(super) fn rewrite_select<'a>(
 
         let needs_helper = match node {
             Node::ColumnRef(column) => !projects_column(select, column),
-            Node::A_Expr(_) => matches!(order, OrderBy::AscVectorL2Column(_, _)),
+            Node::A_Expr(_) => source.is_some(),
             _ => false,
         };
         if !needs_helper {
@@ -93,6 +100,7 @@ pub(super) fn rewrite_select<'a>(
         ));
         plan.add_order_by_helper(OrderByHelper {
             sort_position: current_sort_position,
+            source: source.expect("only columns and vector expressions need helpers"),
             projected_column,
         });
     }
@@ -109,7 +117,7 @@ mod tests {
     use super::*;
     use pg_raw_parse::{Node, make};
 
-    fn rewrite(sql: &str, order_by: Vec<OrderBy>) -> (String, ProjectionRewritePlan) {
+    fn rewrite(sql: &str) -> (String, ProjectionRewritePlan) {
         let ast = pg_raw_parse::parse(sql).unwrap();
         let mut plan = ProjectionRewritePlan::default();
         let rewritten = make::owned(|mem| {
@@ -117,7 +125,7 @@ mod tests {
                 panic!("expected SELECT");
             };
             let mut select = mem.make_unique(select);
-            rewrite_select(&mut select.as_mut(), mem, &order_by, &mut plan);
+            rewrite_select(&mut select.as_mut(), mem, &mut plan);
             select
         });
         (
@@ -131,10 +139,7 @@ mod tests {
 
     #[test]
     fn projects_missing_sort_column() {
-        let (sql, plan) = rewrite(
-            "SELECT id FROM products ORDER BY price",
-            vec![OrderBy::AscColumn("price".into())],
-        );
+        let (sql, plan) = rewrite("SELECT id FROM products ORDER BY price");
 
         assert!(sql.contains("price AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers().len(), 1);
@@ -143,10 +148,7 @@ mod tests {
 
     #[test]
     fn skips_already_projected_sort_column() {
-        let (sql, plan) = rewrite(
-            "SELECT id, price FROM products ORDER BY price",
-            vec![OrderBy::AscColumn("price".into())],
-        );
+        let (sql, plan) = rewrite("SELECT id, price FROM products ORDER BY price");
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
@@ -154,10 +156,7 @@ mod tests {
 
     #[test]
     fn skips_star_select() {
-        let (sql, plan) = rewrite(
-            "SELECT * FROM products ORDER BY id",
-            vec![OrderBy::AscColumn("id".into())],
-        );
+        let (sql, plan) = rewrite("SELECT * FROM products ORDER BY id");
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
@@ -165,10 +164,7 @@ mod tests {
 
     #[test]
     fn skips_qualified_star_select() {
-        let (sql, plan) = rewrite(
-            "SELECT products.* FROM products ORDER BY products.id",
-            vec![OrderBy::AscColumn("id".into())],
-        );
+        let (sql, plan) = rewrite("SELECT products.* FROM products ORDER BY products.id");
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
@@ -176,10 +172,7 @@ mod tests {
 
     #[test]
     fn projects_column_not_covered_by_qualified_star() {
-        let (sql, plan) = rewrite(
-            "SELECT a.* FROM a JOIN b ON a.id = b.a_id ORDER BY b.score",
-            vec![OrderBy::AscColumn("score".into())],
-        );
+        let (sql, plan) = rewrite("SELECT a.* FROM a JOIN b ON a.id = b.a_id ORDER BY b.score");
 
         assert!(sql.contains("b.score AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers().len(), 1);
@@ -187,12 +180,20 @@ mod tests {
 
     #[test]
     fn distinguishes_same_named_columns_from_different_relations() {
-        let (sql, plan) = rewrite(
-            "SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price",
-            vec![OrderBy::AscColumn("price".into())],
-        );
+        let (sql, plan) =
+            rewrite("SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY a.price, b.price");
 
-        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(sql.contains("b.price AS __pgdog_order_col1"));
+        assert_eq!(plan.order_by_helpers().len(), 1);
+        assert_eq!(plan.order_by_helpers()[0].sort_position, 1);
+    }
+
+    #[test]
+    fn projects_vector_distance_without_resolved_parameter() {
+        let (sql, plan) = rewrite("SELECT id FROM products ORDER BY embedding <-> $1 LIMIT 5");
+
+        assert!(sql.contains("embedding <-> $1"));
+        assert!(sql.contains("AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers().len(), 1);
     }
 }

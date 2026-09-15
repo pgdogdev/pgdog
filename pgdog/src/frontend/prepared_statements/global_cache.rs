@@ -47,6 +47,13 @@ impl MemoryUsage for GlobalCache {
 }
 
 impl GlobalCache {
+    pub(crate) fn cross_shard_variant_name(&self, name: &str) -> Option<String> {
+        let variant_name = format!("{name}_cross_shard");
+        self.cross_shard_variants
+            .contains_key(&variant_name)
+            .then_some(variant_name)
+    }
+
     /// Record a Parse message with the global cache and return a globally unique
     /// name PgDog is using for that statement.
     ///
@@ -140,10 +147,10 @@ impl GlobalCache {
     }
 
     pub(crate) fn cross_shard_variant(&mut self, name: &str, query: &str) -> Option<String> {
-        let variant_name = format!("{name}_cross_shard");
-        if self.cross_shard_variants.contains_key(&variant_name) {
+        if let Some(variant_name) = self.cross_shard_variant_name(name) {
             return Some(variant_name);
         }
+        let variant_name = format!("{name}_cross_shard");
 
         let mut parse = self.rewritten_parse(name)?;
         parse.rename(&variant_name);
@@ -405,6 +412,10 @@ mod test {
             )
             .unwrap();
         assert_eq!(variant, format!("{base}_cross_shard"));
+        assert_eq!(
+            cache.cross_shard_variant_name(&base).as_deref(),
+            Some(variant.as_str())
+        );
         assert_eq!(
             cache.rewritten_parse(&base).unwrap().query(),
             "SELECT AVG(value) FROM measurements"

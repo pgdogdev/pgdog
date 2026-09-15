@@ -246,3 +246,78 @@ async fn test_offset_with_unique_id_extended() {
         panic!("expected Bind");
     }
 }
+
+#[tokio::test]
+async fn split_anonymous_pagination_keeps_original_plan() {
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::default();
+    client
+        .client_request
+        .push(ProtocolMessage::Parse(Parse::new_anonymous(
+            "SELECT * FROM test LIMIT 10 OFFSET 5",
+        )));
+    client
+        .client_request
+        .push(ProtocolMessage::Describe(Describe::new_statement("")));
+    client.client_request.push(Flush.into());
+
+    {
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+        context.client_request.route = Some(cross_shard_route());
+        projection::finalize_after_route(
+            context.client_request,
+            &Schema::default(),
+            result.as_ref().and_then(RewriteResult::offset_plan),
+        )
+        .unwrap();
+        result
+            .as_ref()
+            .unwrap()
+            .apply_after_route(context.client_request)
+            .unwrap();
+    }
+
+    assert_eq!(
+        client.client_request.last_parse.as_ref().unwrap().query(),
+        "SELECT * FROM test LIMIT 10 OFFSET 5"
+    );
+
+    client.client_request.clear();
+    client
+        .client_request
+        .push(ProtocolMessage::Bind(Bind::new_params("", &[])));
+    client
+        .client_request
+        .push(ProtocolMessage::Execute(Execute::new()));
+    client.client_request.push(ProtocolMessage::Sync(Sync));
+
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let mut context = QueryEngineContext::new(&mut client);
+    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    context.client_request.route = Some(cross_shard_route());
+    projection::finalize_after_route(
+        context.client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+    result
+        .as_ref()
+        .unwrap()
+        .apply_after_route(context.client_request)
+        .unwrap();
+
+    assert_eq!(
+        context.client_request.last_parse.as_ref().unwrap().query(),
+        "SELECT * FROM test LIMIT 10::bigint + 5::bigint"
+    );
+    assert_eq!(
+        context.client_request.route().limit(),
+        &Limit {
+            limit: Some(10),
+            offset: Some(5),
+        }
+    );
+}
