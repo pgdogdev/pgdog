@@ -131,7 +131,7 @@ pub(crate) struct StreamSubscriber {
 }
 
 impl StreamSubscriber {
-    pub(crate) fn new(cluster: &Cluster, tables: &[Table]) -> Self {
+    pub(crate) fn new(cluster: &Cluster, tables: Vec<Table>) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -140,14 +140,14 @@ impl StreamSubscriber {
             table_lsns: HashMap::new(),
             changed_tables: HashSet::new(),
             tables: tables
-                .iter()
+                .into_iter()
                 .map(|table| {
                     (
                         Key {
                             schema: table.table.schema.clone(),
                             name: table.table.name.clone(),
                         },
-                        table.clone(),
+                        table,
                     )
                 })
                 .collect(),
@@ -936,7 +936,7 @@ impl StreamSubscriber {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct MissedRows {
     insert: usize,
     delete: usize,
@@ -949,7 +949,6 @@ impl MissedRows {
     }
 
     /// Missed-row counts as `(insert, update, delete)`.
-    #[cfg(test)]
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         (self.insert, self.update, self.delete)
     }
@@ -1009,7 +1008,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[])
+        StreamSubscriber::new(&cluster, vec![])
     }
 
     #[test]

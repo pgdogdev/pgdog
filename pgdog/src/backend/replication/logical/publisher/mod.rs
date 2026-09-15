@@ -7,6 +7,7 @@ pub(crate) mod copy;
 pub(crate) mod progress;
 pub(crate) mod publisher_impl;
 pub(crate) mod queries;
+pub(crate) mod replicate;
 pub(crate) mod resharding_replicas;
 pub(crate) mod table;
 pub(crate) use copy::*;

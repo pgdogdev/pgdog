@@ -3,25 +3,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use tokio::select;
 use tokio::task::JoinHandle;
+#[cfg(test)]
 use tokio::time::Instant;
-use tokio::try_join;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
 
 use super::super::{Error, publisher::Table};
 use super::ReplicationSlot;
 
-use crate::backend::replication::logical::publisher::ReplicationData;
-use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
-use crate::backend::replication::publisher::Lsn;
-use crate::backend::replication::publisher::progress::Progress;
+use super::replicate::Replication;
 use crate::backend::replication::tables_sync::tables_sync;
 use crate::backend::{Cluster, pool::Request};
-use crate::net::replication::ReplicationMeta;
 use crate::tasks;
-use crate::util::{safe_interval, safe_sleep};
 
 #[derive(Debug, Default)]
 pub(crate) struct Publisher {
@@ -31,10 +24,7 @@ pub(crate) struct Publisher {
     pub(crate) tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
-    /// Replication lag.
-    replication_lag: Arc<Mutex<HashMap<usize, i64>>>,
-    /// Last transaction.
-    last_transaction: Arc<Mutex<Option<Instant>>>,
+    replications: Mutex<HashMap<usize, Arc<Replication>>>,
     /// Slot name.
     slot_name: String,
 }
@@ -45,8 +35,7 @@ impl Publisher {
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
-            replication_lag: Arc::new(Mutex::new(HashMap::new())),
-            last_transaction: Arc::new(Mutex::new(None)),
+            replications: Mutex::default(),
             slot_name,
         }
     }
@@ -141,144 +130,23 @@ impl Publisher {
         for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
-            let tables = self
-                .tables
-                .get(&number)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-
-            let mut stream = StreamSubscriber::new(dest, tables);
+            let tables = self.tables.remove(&number).unwrap_or_default();
 
             // Take ownership of the slot for replication.
-            let mut slot = self
+            let slot = self
                 .slots
                 .remove(&number)
                 .ok_or(Error::NoReplicationSlot(number))?;
-            stream.set_current_lsn(slot.lsn().lsn);
 
-            let mut check_lag = safe_interval(Duration::from_secs(1));
-            let replication_lag = self.replication_lag.clone();
+            let replication = Arc::new(Replication::new(source, dest));
+            self.replications
+                .get_mut()
+                .insert(number, Arc::clone(&replication));
             let stop = stop.clone();
-            let last_transaction = self.last_transaction.clone();
-
-            let source_cluster = source.clone();
-            let dest = dest.clone();
 
             // Replicate in parallel.
             let handle = tasks::spawn("replication", async move {
-                slot.start_replication().await?;
-                let progress = Progress::new_stream();
-                let max_attempts = dest.resharding_replication_retry_max_attempts();
-                let delay = dest.resharding_replication_retry_min_delay();
-                let mut attempt = 0usize;
-                // Latches on the first cancellation so the `cancelled()` arm fires
-                // once (it stays ready forever after `cancel()`); the drain below
-                // then runs to completion.
-                let mut stopping = false;
-                loop {
-                    select! {
-                        _ = stop.cancelled(), if !stopping => {
-                            slot.stop_replication().await?;
-                            stopping = true;
-                        }
-
-                        // This is cancellation-safe.
-                        replication_data = slot.replicate(Duration::MAX) => {
-                            // Returns Ok(true) when the slot is drained and the loop
-                            // should break; Ok(false) to continue. All errors bubble up
-                            // to the single retry/abort site below.
-                            let done: Result<bool, Error> = async {
-                                let Some(replication_data) = replication_data? else {
-                                    slot.drop_slot().await?;
-                                    return Ok(true);
-                                };
-                                match replication_data {
-                                    ReplicationData::CopyData(data) => {
-                                        if let Some(ReplicationMeta::KeepAlive(ka)) =
-                                            data.replication_meta()
-                                        {
-                                            // Advance the lsn if we are not in the transaction currently
-                                            // (we don't use transactions actually without streaming on protocol version 4,
-                                            // but let it be as a safeguard).
-                                            // If we got the keep-alive message and not the update message
-                                            // then it's for the unrelated changes that advanced WAL.
-                                            // Since it's unrelated we can advance our progress and
-                                            // consider that lag replication
-                                            let advanced = !stream.in_transaction()
-                                                && stream.set_current_lsn(ka.wal_end);
-
-                                            // Reply to walsender if it asked for reply or
-                                            // if we advanced due to the WAL progress but
-                                            // the update was not related
-                                            if advanced || ka.reply() {
-                                                slot.status_update(stream.status_update()).await?;
-                                            }
-                                            debug!(
-                                                "origin at lsn {} [{}]",
-                                                Lsn::from_i64(ka.wal_end),
-                                                slot.server()?.addr()
-                                            );
-                                            progress.update(stream.bytes_sharded(), ka.wal_end);
-                                        } else {
-                                            if let Some(su) = stream.handle(data).await? {
-                                                slot.status_update(su).await?;
-                                                *last_transaction.lock() = Some(Instant::now());
-                                            }
-                                            attempt = 0;
-                                            progress.update(stream.bytes_sharded(), stream.lsn());
-                                        }
-                                        Ok(false)
-                                    }
-                                    ReplicationData::CopyDone => Ok(false),
-                                }
-                            }
-                            .await;
-
-                            match done {
-                                Ok(true) => break,
-                                Ok(false) => {}
-                                Err(err)
-                                    if err.is_retryable()
-                                        && (max_attempts == 0 || attempt < max_attempts) =>
-                                {
-                                    attempt += 1;
-                                    warn!(
-                                        "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
-                                        delay.as_millis()
-                                    );
-                                    safe_sleep(delay).await;
-                                    if let Err(reconnect_err) =
-                                        try_join!(slot.reconnect(), stream.reconnect())
-                                    {
-                                        if !reconnect_err.is_retryable() {
-                                            return Err(reconnect_err);
-                                        }
-                                        stream.reset_connections();
-                                        warn!(
-                                            "[replication] reconnect error ({attempt}/{max_attempts}): {reconnect_err}, will retry"
-                                        );
-                                    }
-                                }
-                                Err(err) => return Err(err),
-                            }
-                        }
-
-                        _ = check_lag.tick() => {
-                            let lag = slot.replication_lag().await?;
-
-                            let mut guard = replication_lag.lock();
-                            guard.insert(number, lag);
-
-                            let missed = stream.missed_rows();
-                            if missed.non_zero() {
-                                warn!("replication {} => {} has missing rows: {}", source_cluster.name(), dest.name(), missed);
-                            }
-
-                        }
-                    }
-                }
-
-                Ok::<(), Error>(())
+                Box::pin(replication.run(slot, tables, &stop)).await
             });
 
             streams.push(handle);
@@ -289,12 +157,23 @@ impl Publisher {
 
     /// Get current replication lag.
     pub(crate) fn replication_lag(&self) -> HashMap<usize, i64> {
-        self.replication_lag.lock().clone()
+        self.replications
+            .lock()
+            .iter()
+            .filter_map(|(&shard, replication)| {
+                replication.info().replication_lag.map(|lag| (shard, lag))
+            })
+            .collect()
     }
 
     /// Get how long ago last transaction was committed.
     pub(crate) fn last_transaction(&self) -> Option<Duration> {
-        (*self.last_transaction.lock()).map(|last| last.elapsed())
+        self.replications
+            .lock()
+            .values()
+            .filter_map(|replication| replication.info().last_transaction)
+            .max()
+            .map(|last| last.elapsed())
     }
 
     pub(crate) fn post_data_sync(&mut self, tables: HashMap<usize, Vec<Table>>) {
@@ -322,11 +201,19 @@ impl Publisher {
 #[cfg(test)]
 impl Publisher {
     pub(crate) fn set_replication_lag(&self, shard: usize, lag: i64) {
-        self.replication_lag.lock().insert(shard, lag);
+        self.replications
+            .lock()
+            .entry(shard)
+            .or_default()
+            .set_replication_lag(lag);
     }
 
     pub(crate) fn set_last_transaction(&self, instant: Option<Instant>) {
-        *self.last_transaction.lock() = instant;
+        let mut replications = self.replications.lock();
+        replications.entry(0).or_default();
+        for replication in replications.values() {
+            replication.set_last_transaction(instant);
+        }
     }
 }
 
@@ -363,6 +250,7 @@ impl Waiter {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
     use crate::backend::server::test::test_replication_server;
     use crate::config::config;
 
@@ -458,7 +346,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[]);
+        let mut stream = StreamSubscriber::new(&cluster, vec![]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -478,7 +366,7 @@ mod test {
         let cfg = config();
         let cluster = Cluster::new_test(&cfg);
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, &[]);
+        let mut stream = StreamSubscriber::new(&cluster, vec![]);
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;

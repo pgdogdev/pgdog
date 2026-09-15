@@ -7,9 +7,9 @@ use tokio::time::{sleep, timeout};
 
 use super::table_copies::poll;
 use super::{
-    POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication,
-    create_test_table, fail_if_task_errored, run_task_command, seed_rows, task_status_line,
-    wait_for_task, wait_for_task_status,
+    POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
+    fail_if_task_errored, run_task_command, seed_rows, task_status_line, wait_for_task,
+    wait_for_task_status,
 };
 
 pub(super) async fn prepare_replication(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
@@ -21,10 +21,7 @@ pub(super) async fn prepare_replication(admin: &Pool<Postgres>, direct: &Pool<Po
     admin.execute("RELOAD").await.expect("reload must succeed");
 }
 
-pub(super) async fn start_replication(
-    admin: &Pool<Postgres>,
-    slot: Option<&str>,
-) -> i64 {
+pub(super) async fn start_replication(admin: &Pool<Postgres>, slot: Option<&str>) -> i64 {
     let command = match slot {
         Some(slot) => format!("REPLICATE pgdog pgdog_sharded {TEST_PUB} {slot}"),
         None => format!("REPLICATE pgdog pgdog_sharded {TEST_PUB}"),
