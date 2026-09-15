@@ -52,7 +52,12 @@ pub enum AuthType {
     /// Delegate client authentication to the loaded plugins through the
     /// authenticate hook. The client sends its credential in plaintext and the
     /// first plugin that does not skip decides; when every plugin skips, the
-    /// login is denied (there is no password fallback).
+    /// credential is checked against the user's configured password, or
+    /// passthrough authentication is used for users that are not configured.
+    /// An explicit deny is final.
+    ///
+    /// A configured password therefore remains a way in: leave it out of
+    /// `users.toml` for users that must only authenticate through a plugin.
     Plugin,
 }
 
