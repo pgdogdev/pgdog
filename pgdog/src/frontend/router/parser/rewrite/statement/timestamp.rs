@@ -423,8 +423,7 @@ impl StatementRewrite<'_> {
         let relation = insert_stmt.relation().expect("INSERT always has table");
         let table = Table::from(relation);
 
-        // TODO: Replace the unwrap with an Error
-        let relation = self.db_schema.table(table, self.user, None).unwrap();
+        let relation = self.db_schema.table(table, self.user, None)?;
         let cols = insert_stmt.cols();
 
         // Find the columns that the insert does NOT cover.
