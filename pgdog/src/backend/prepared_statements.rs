@@ -750,6 +750,15 @@ pub(crate) mod test {
         ps
     }
 
+    fn new_with_limit(limit: usize) -> PreparedStatements {
+        let mut ps = new_extended();
+        ps.configure(PreparedStatementsConfig {
+            limit,
+            ..ps.config()
+        });
+        ps
+    }
+
     pub(crate) fn prepare_expired(ps: &mut PreparedStatements, name: &str) {
         let config = ps.config();
         ps.configure(PreparedStatementsConfig {
@@ -1427,5 +1436,98 @@ pub(crate) mod test {
             let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
             assert!(matches!(result, HandleResult::Forward));
         }
+    }
+
+    // -------------------------------------------------------
+    // Local cache eviction and memory accounting
+    // -------------------------------------------------------
+
+    #[test]
+    fn ensure_capacity_evicts_in_least_recently_used_order() {
+        let mut ps = new_with_limit(3);
+        for name in ["a", "b", "c", "d", "e"] {
+            ps.prepared(name);
+        }
+
+        let close = ps.ensure_capacity();
+
+        assert_eq!(close, [Close::named("a"), Close::named("b")]);
+        assert_eq!(ps.len(), 3);
+        for name in ["c", "d", "e"] {
+            assert!(ps.statement(name).is_some(), "{name} should have survived");
+        }
+    }
+
+    #[test]
+    fn ensure_capacity_evicts_nothing_at_the_limit() {
+        let mut ps = new_with_limit(3);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        assert!(ps.ensure_capacity().is_empty());
+        assert_eq!(ps.len(), 3);
+    }
+
+    #[test]
+    fn contains_keeps_a_statement_out_of_the_next_eviction() {
+        let mut ps = new_with_limit(2);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        assert!(ps.contains("a"));
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+        assert!(ps.statement("a").is_some());
+    }
+
+    #[test]
+    fn check_prepared_keeps_a_statement_out_of_the_next_eviction() {
+        let mut ps = new_with_limit(2);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        assert!(ps.check_prepared("a").unwrap().is_none());
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+        assert!(ps.statement("a").is_some());
+    }
+
+    #[test]
+    fn prepared_keeps_a_statement_out_of_the_next_eviction() {
+        let mut ps = new_with_limit(2);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        ps.prepared("a");
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+        assert!(ps.statement("a").is_some());
+    }
+
+    #[test]
+    fn prepared_counts_a_repeated_name_once_in_memory_used() {
+        let mut ps = new_extended();
+        ps.prepared("a");
+        let once = ps.memory_used();
+
+        ps.prepared("a");
+
+        assert_eq!(ps.memory_used(), once);
+        assert_eq!(ps.len(), 1);
+    }
+
+    #[test]
+    fn ensure_capacity_reclaims_memory_for_evicted_statements() {
+        let mut ps = new_with_limit(1);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        assert_eq!(ps.ensure_capacity().len(), 2);
+        assert_eq!(ps.memory_used(), entry_mem("c"));
     }
 }
