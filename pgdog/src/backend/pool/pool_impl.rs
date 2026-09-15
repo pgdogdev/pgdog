@@ -486,6 +486,18 @@ impl Pool {
             });
         }
 
+        // Impersonation role from `User.server_role`. Sent in the startup
+        // packet so it becomes the session's reset value: `RESET ROLE` and
+        // `DISCARD ALL` fall back to it and `RESET ALL` leaves it alone
+        // (`role` is GUC_NO_RESET_ALL), so cleanup between checkouts never
+        // clears it.
+        if let Some(role) = &self.inner.addr.server_role {
+            params.push(Parameter {
+                name: "role".into(),
+                value: role.as_str().into(),
+            });
+        }
+
         ServerOptions {
             params,
             pool_id: self.id(),

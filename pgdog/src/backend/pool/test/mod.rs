@@ -1260,3 +1260,32 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
 
     destination.shutdown();
 }
+
+#[test]
+fn test_server_options_role() {
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            server_role: Some("analytics".into()),
+            ..Address::new_test()
+        },
+        config: Config::default(),
+    });
+    let options = pool.server_options(ConnectReason::default());
+    let role = options
+        .params
+        .iter()
+        .find(|p| p.name == "role")
+        .expect("role startup parameter");
+    assert_eq!(role.value.as_str(), Some("analytics"));
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address::new_test(),
+        config: Config::default(),
+    });
+    assert!(
+        pool.server_options(ConnectReason::default())
+            .params
+            .iter()
+            .all(|p| p.name != "role")
+    );
+}

@@ -30,6 +30,10 @@ pub(crate) struct Address {
     /// Server auth mode for backend connections.
     #[serde(default)]
     pub(crate) server_auth: ServerAuth,
+    /// PostgreSQL role backend connections assume via the `role` startup
+    /// parameter, from `User.server_role`.
+    #[serde(default)]
+    pub(crate) server_role: Option<String>,
     /// Optional IAM region override.
     pub(crate) server_iam_region: Option<String>,
     /// Optional IAM role ARN to assume before minting the RDS IAM token, for
@@ -101,6 +105,7 @@ impl Address {
                     .collect()
             },
             server_auth,
+            server_role: user.server_role.clone(),
             server_iam_region: user.server_iam_region.clone(),
             server_iam_assume_role: user.server_iam_assume_role.clone(),
             vault_path: user.server_vault_path.clone(),
@@ -220,6 +225,7 @@ impl Address {
             passwords: vec!["pgdog".into()],
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
+            server_role: None,
             server_iam_region: None,
             server_iam_assume_role: None,
             vault_path: None,

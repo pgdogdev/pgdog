@@ -329,6 +329,13 @@
             "null"
           ]
         },
+        "server_role": {
+          "description": "PostgreSQL role this user's backend connections assume. PgDog connects\nas `server_user` and passes `role` in the startup packet, which makes\nit the session's reset value: `RESET ROLE` and `DISCARD ALL` fall back\nto it and `RESET ALL` leaves it untouched, so connection cleanup never\nclears it. Clients on this pool cannot change it: `SET ROLE`,\n`RESET ROLE`, `SET SESSION AUTHORIZATION` and the `set_config(...)`\nspellings are rejected with a permission error.\n\n**Note:** `server_user` needs a working backend credential of its own\n(`server_password` or a non-password `server_auth`) and must be a\nmember of `server_role`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "server_user": {
           "description": "Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows you to override this configuration and use a different user.\n\n**Note:** Values specified in `pgdog.toml` take priority over this configuration.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#server_user>",
           "type": [

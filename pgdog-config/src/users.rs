@@ -90,6 +90,20 @@ impl Users {
                 );
             }
 
+            if user.server_role.is_some()
+                && user.server_auth == ServerAuth::Password
+                && user.server_password.is_none()
+                && !user
+                    .passwords()
+                    .iter()
+                    .any(|p| matches!(p, PasswordKind::Plain(_)))
+            {
+                warn!(
+                    r#"user "{}" (database "{}") sets "server_role" but has no backend credential ("server_password" or a non-password "server_auth"), PgDog cannot connect to the server to impersonate it"#,
+                    user.name, user.database
+                );
+            }
+
             if user.vault_path.is_some() && config.vault.is_none() {
                 warn!(
                     r#"user "{}" (database "{}") uses Vault client auth but the [vault] section is missing from pgdog.toml"#,
@@ -326,6 +340,19 @@ pub struct User {
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#server_password>
     pub server_password: Option<String>,
+    /// PostgreSQL role this user's backend connections assume. PgDog connects
+    /// as `server_user` and passes `role` in the startup packet, which makes
+    /// it the session's reset value: `RESET ROLE` and `DISCARD ALL` fall back
+    /// to it and `RESET ALL` leaves it untouched, so connection cleanup never
+    /// clears it.
+    ///
+    /// This is impersonation, not an authorization boundary: what the client
+    /// can reach is limited by which roles `server_user` is a member of.
+    ///
+    /// **Note:** `server_user` needs a working backend credential of its own
+    /// (`server_password` or a non-password `server_auth`) and must be a
+    /// member of `server_role`.
+    pub server_role: Option<String>,
     /// Backend auth mode for server connections.
     #[serde(default)]
     pub server_auth: ServerAuth,
@@ -868,6 +895,40 @@ vault_refresh_percent = 60
                 .any(|p| matches!(p, PasswordKind::Plain(s) if s == "fallback"))
         );
         assert!(passwords.iter().any(|p| matches!(p, PasswordKind::VaultStaticRole(s) if s == "database/static-creds/alice-role")));
+    }
+
+    #[test]
+    fn test_user_server_role_defaults_to_none() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+password = "secret"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert!(user.server_role.is_none());
+    }
+
+    #[test]
+    fn test_user_server_role_round_trip() {
+        let source = r#"
+[[users]]
+name = "alice"
+database = "db"
+server_role = "analytics"
+server_user = "svc"
+server_password = "svc_secret"
+"#;
+
+        let users: Users = toml::from_str(source).unwrap();
+        let user = users.users.first().unwrap();
+        assert_eq!(user.server_role.as_deref(), Some("analytics"));
+
+        let serialized = toml::to_string(users.users.first().unwrap()).unwrap();
+        let reparsed: User = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.server_role.as_deref(), Some("analytics"));
     }
 
     #[test]

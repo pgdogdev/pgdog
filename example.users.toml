@@ -48,3 +48,21 @@ password = "pgdog"
 # a client certificate, while mTLS users share the same listener. Defaults to true.
 # Only applies when `tls_client_ca_certificate` is set in pgdog.toml.
 # tls_client_certificate_required = false
+
+# Example: role impersonation. Backend connections for this user log in as
+# `server_user` and assume `server_role` through the `role` startup parameter,
+# which makes it the session's reset value: `RESET ROLE` / `DISCARD ALL` fall
+# back to it and `RESET ALL` leaves it untouched.
+# `SET ROLE`, `RESET ROLE` and `SET SESSION AUTHORIZATION` (including the
+# `set_config(...)` spellings) are rejected on this pool with a permission error.
+#
+# `server_user` must be a member of `server_role` and needs its own backend
+# credential (`server_password` or a non-password `server_auth`); PgDog warns
+# at config load if none is configured.
+# [[users]]
+# name = "analytics"
+# database = "pgdog"
+# password = "analytics"
+# server_role = "analytics_ro"
+# server_user = "pgdog"
+# server_password = "pgdog"

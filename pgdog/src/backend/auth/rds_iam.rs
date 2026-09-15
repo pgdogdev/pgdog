@@ -157,6 +157,7 @@ mod tests {
             passwords: vec![],
             database_number: 0,
             server_auth: ServerAuth::RdsIam,
+            server_role: None,
             server_iam_region: Some("us-east-1".into()),
             server_iam_assume_role: None,
             vault_path: Default::default(),

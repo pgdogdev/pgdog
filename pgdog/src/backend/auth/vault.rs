@@ -185,6 +185,7 @@ mod tests {
             user: "testuser".into(),
             passwords: vec![],
             server_auth: Default::default(),
+            server_role: None,
             server_iam_region: None,
             server_iam_assume_role: None,
             vault_path: vault_path.map(Into::into),
