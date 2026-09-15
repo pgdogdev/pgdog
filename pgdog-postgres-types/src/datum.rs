@@ -343,6 +343,15 @@ mod tests {
     use super::*;
     use bytes::{BufMut, BytesMut};
     use std::assert_matches;
+    use std::collections::HashSet;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn hash_of(datum: &Datum) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        datum.hash(&mut hasher);
+        hasher.finish()
+    }
 
     #[test]
     fn test_multidimensional_text_array_falls_back_to_unknown() {
@@ -377,5 +386,31 @@ mod tests {
 
         assert_matches!(datum, Datum::Unknown(_));
         assert_eq!(datum.encode(Format::Binary).unwrap(), input);
+    }
+
+    #[test]
+    fn test_negative_zero_datums_hash_like_zero() {
+        // Datum derives both Hash and PartialEq, and cross-shard GROUP BY
+        // keys a HashMap on the grouped Datums, so every float-carrying
+        // shape has to agree that -0.0 and 0.0 belong in one bucket.
+        let pairs = [
+            (Datum::Float(Float(0.0)), Datum::Float(Float(-0.0))),
+            (Datum::Double(Double(0.0)), Datum::Double(Double(-0.0))),
+            (
+                Datum::Vector(Vector::from(vec![0.0_f32, 1.0])),
+                Datum::Vector(Vector::from(vec![-0.0_f32, 1.0])),
+            ),
+        ];
+
+        for (zero, neg_zero) in pairs {
+            assert_eq!(zero, neg_zero);
+            assert_eq!(hash_of(&zero), hash_of(&neg_zero));
+
+            let mut set = HashSet::new();
+            set.insert(zero.clone());
+            set.insert(neg_zero);
+            assert_eq!(set.len(), 1);
+            assert!(set.contains(&zero));
+        }
     }
 }
