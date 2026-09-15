@@ -293,6 +293,21 @@ impl<'a> SearchContext<'a> {
     fn resolve_table(&self, name: &str) -> Option<Table<'a>> {
         self.aliases.get(name).copied()
     }
+
+    /// Qualify a column with the actual table its table alias refers to.
+    fn resolve_column(&self, column: Column<'a>) -> Column<'a> {
+        match column
+            .table()
+            .and_then(|table| self.resolve_table(table.name))
+        {
+            Some(resolved) => Column {
+                name: column.name,
+                table: Some(resolved.name),
+                schema: resolved.schema,
+            },
+            None => column,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -506,12 +521,18 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         let sharded_tables = self.schema.tables.tables();
+        let omnishards = self.schema.tables.omnishards();
 
         // Separate configs with explicit table names from those without
         let (named, nameless): (Vec<_>, Vec<_>) =
             sharded_tables.iter().partition(|t| t.name.is_some());
 
         for table in self.tables() {
+            // Omnisharded config takes priority over sharded tables.
+            if omnishards.contains_key(table.name) {
+                continue;
+            }
+
             // Check named sharded table configs (fast path, no schema lookup needed)
             for config in &named {
                 if let Some(ref name) = config.name
@@ -664,6 +685,12 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         table_name: Option<&str>,
         schema: Option<&str>,
     ) -> Option<&'b ShardedTable> {
+        // Omnisharded config takes priority over sharded tables:
+        // a sharding key on an omnisharded table doesn't route.
+        if table_name.is_some_and(|name| self.schema.tables.omnishards().contains_key(name)) {
+            return None;
+        }
+
         // Try named table configs first
         if let Some(table_name) = table_name {
             let column = Column {
@@ -880,7 +907,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                     // For ANY expressions with sharding columns, we can't reliably
                     // parse array literals or parameters, so route to all shards.
                     (SearchResult::Column(column), _, true)
-                        if self.get_sharded_table(column).is_some() =>
+                        if self.get_sharded_table(ctx.resolve_column(column)).is_some() =>
                     {
                         ControlFlow::Break(Ok(Shard::All))
                     }
@@ -981,20 +1008,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         value: Value<'a>,
         ctx: &SearchContext<'a>,
     ) -> Result<Option<Shard>, Error> {
-        // Resolve table alias if present
-        let resolved_column = if let Some(table_ref) = column.table() {
-            if let Some(resolved) = ctx.resolve_table(table_ref.name) {
-                Column {
-                    name: column.name,
-                    table: Some(resolved.name),
-                    schema: resolved.schema,
-                }
-            } else {
-                column
-            }
-        } else {
-            column
-        };
+        let resolved_column = ctx.resolve_column(column);
 
         let shard = self.compute_shard(resolved_column, value.clone())?;
         if let Some(ref shard) = shard {
@@ -2541,6 +2555,24 @@ mod test {
         // "orders" table (NOT omnisharded)
         relations.insert(("public".into(), "orders".into()), make_table("orders"));
 
+        // "comments" table (NOT omnisharded, no tenant_id column)
+        let mut columns = IndexMap::new();
+        columns.insert(
+            "id".to_string(),
+            SchemaColumn {
+                table_name: "comments".into(),
+                column_name: "id".into(),
+                ordinal_position: 1,
+                is_primary_key: true,
+                ..Default::default()
+            }
+            .into(),
+        );
+        relations.insert(
+            ("public".into(), "comments".into()),
+            Relation::test_table("public", "comments", columns),
+        );
+
         Schema::from_parts(vec!["public".into()], relations)
     }
 
@@ -2583,6 +2615,48 @@ mod test {
         assert!(
             result,
             "Query with mixed omnisharded and regular tables should be sharded"
+        );
+    }
+
+    #[test]
+    fn test_omnisharded_joined_to_table_without_sharding_column_is_not_sharded() {
+        // "users" is omnisharded and has tenant_id; "comments" is not
+        // omnisharded and has no tenant_id, so it defaults to omnisharded.
+        let result =
+            run_is_sharded_test("SELECT * FROM users u JOIN comments c ON c.user_id = u.id");
+        assert!(
+            !result,
+            "Omnisharded table with sharding column shouldn't make the join sharded"
+        );
+    }
+
+    fn run_shard_test(stmt: &str) -> Option<Shard> {
+        let schema = make_omnisharded_sharding_schema();
+        let raw = pg_raw_parse::parse(stmt).unwrap();
+        let stmt = raw.stmts().next().unwrap();
+        let mut parser = StatementParser::new(stmt, None, &schema, None);
+        parser.shard().unwrap()
+    }
+
+    #[test]
+    fn test_omnisharded_table_sharding_key_is_ignored_in_join() {
+        let shard = run_shard_test(
+            "SELECT * FROM users u JOIN comments c ON c.user_id = u.id WHERE u.tenant_id = 1",
+        );
+        assert_eq!(
+            shard, None,
+            "Sharding key on an omnisharded table shouldn't route"
+        );
+    }
+
+    #[test]
+    fn test_sharded_table_sharding_key_routes_in_join_with_omnisharded() {
+        let shard = run_shard_test(
+            "SELECT * FROM users u JOIN orders o ON o.user_id = u.id WHERE o.tenant_id = 1",
+        );
+        assert!(
+            matches!(shard, Some(Shard::Direct(_))),
+            "Sharding key on a sharded table should still route"
         );
     }
 
