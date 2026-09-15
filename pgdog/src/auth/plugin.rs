@@ -4,9 +4,9 @@
 //! for a cleartext password) and hands the credential to the loaded plugins.
 //! Each plugin answers with an [`AuthDecision`](pgdog_plugin::AuthDecision); the
 //! first plugin that does not [`Skip`](pgdog_plugin::AuthDecision::Skip) wins.
-//! If every plugin skips, PgDog denies the client: `auth_type = "plugin"` is
-//! explicit and there is no fallback to password verification (maintainer
-//! decision).
+//! If every plugin skips, the frontend falls back to the user's configured
+//! password or to passthrough authentication (`Client::plugin_fallback`); an
+//! explicit Deny and a plugin failure are terminal.
 //!
 //! Plugins run inside a single [`tokio::task::spawn_blocking`] call (they may
 //! block on I/O). Concurrency is bounded by the runtime's blocking pool, whose
@@ -25,7 +25,9 @@ use crate::plugin::plugins;
 /// Outcome of running the authentication plugins for a single client.
 #[derive(Debug)]
 pub(crate) struct PluginAuthOutcome {
-    /// Overall result: [`AuthResult::Ok`] on Allow, otherwise a plugin denial.
+    /// Overall result: [`AuthResult::Ok`] on Allow,
+    /// [`AuthResult::PluginNoDecision`] when every plugin skipped, otherwise a
+    /// plugin denial.
     pub(crate) result: AuthResult,
     /// Grant returned by the accepting plugin (only set on Allow).
     pub(crate) grant: Option<AuthGrant>,
@@ -90,7 +92,7 @@ pub(crate) async fn authenticate(
         Ok(outcome) => outcome,
         Err(err) => {
             warn!("authentication plugin task failed: {}", err);
-            PluginAuthOutcome::no_decision()
+            PluginAuthOutcome::denied()
         }
     }
 }
@@ -193,7 +195,8 @@ fn run(
         }
     }
 
-    // Every plugin skipped (or there were none). Deny: no password fallback.
+    // Every plugin skipped (or there were none). Let the frontend apply its
+    // configured authentication fallback.
     PluginAuthOutcome::no_decision()
 }
 
@@ -255,7 +258,8 @@ mod test {
 
     #[tokio::test]
     async fn test_all_skip_is_no_decision() {
-        // With no plugins loaded, the driver denies via PluginNoDecision.
+        // With no plugins loaded, the frontend receives PluginNoDecision and
+        // applies its configured authentication fallback.
         let outcome = authenticate(
             "alice".into(),
             "pgdog".into(),
@@ -272,7 +276,7 @@ mod test {
     }
 
     #[test]
-    fn test_run_no_plugins_denies() {
+    fn test_run_no_plugins_returns_no_decision() {
         let outcome = run("bob", "pgdog", "secret", "127.0.0.1:5432", None, false);
         assert_eq!(outcome.result, AuthResult::PluginNoDecision);
     }
