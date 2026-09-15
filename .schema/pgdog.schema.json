@@ -85,6 +85,7 @@
         "pooler_mode": "transaction",
         "port": 6432,
         "prepared_statements": "extended",
+        "prepared_statements_eviction": "lru",
         "prepared_statements_limit": 9223372036854775807,
         "prepared_statements_ttl": null,
         "prepared_statements_ttl_jitter": 30000,
@@ -1079,8 +1080,13 @@
           "$ref": "#/$defs/PreparedStatementsLevel",
           "default": "extended"
         },
+        "prepared_statements_eviction": {
+          "description": "Which statement is closed when a server connection reaches `prepared_statements_limit`.\n\n_Default:_ `lru`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_eviction>",
+          "$ref": "#/$defs/PreparedStatementsEviction",
+          "default": "lru"
+        },
         "prepared_statements_limit": {
-          "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>",
+          "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the statement chosen by `prepared_statements_eviction`\nis closed and replaced with the newest one. Additionally, any unused statements in the\nglobal cache above this limit will be removed.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>",
           "type": "integer",
           "format": "uint",
           "default": 9223372036854775807,
@@ -1750,6 +1756,21 @@
           "description": "Server connections are checked out only for a single statement.",
           "type": "string",
           "const": "statement"
+        }
+      ]
+    },
+    "PreparedStatementsEviction": {
+      "description": "Eviction policy for a server connection's prepared statement cache.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_eviction>",
+      "oneOf": [
+        {
+          "description": "Closes the statement that has gone unused the longest (default).",
+          "type": "string",
+          "const": "lru"
+        },
+        {
+          "description": "Closes the statement used the fewest times, breaking ties by closing the least recent.",
+          "type": "string",
+          "const": "lfu"
         }
       ]
     },

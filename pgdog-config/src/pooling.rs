@@ -2,6 +2,33 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Eviction policy for a server connection's prepared statement cache.
+///
+/// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_eviction>
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
+pub enum PreparedStatementsEviction {
+    /// Closes the statement that has gone unused the longest (default).
+    #[default]
+    #[serde(rename = "lru")]
+    LeastRecentlyUsed,
+
+    /// Closes the statement used the fewest times, breaking ties by closing the least recent.
+    #[serde(rename = "lfu")]
+    LeastFrequentlyUsed,
+}
+
+impl FromStr for PreparedStatementsEviction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "lru" => Ok(Self::LeastRecentlyUsed),
+            "lfu" => Ok(Self::LeastFrequentlyUsed),
+            _ => Err(format!("Invalid prepared statements eviction: {}", s)),
+        }
+    }
+}
+
 /// prepared statement support mode.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>

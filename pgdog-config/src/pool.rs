@@ -216,6 +216,7 @@ impl PoolConfig {
             prepared_statements: PreparedStatementsConfig {
                 level: general.prepared_statements,
                 limit: general.prepared_statements_limit,
+                eviction: general.prepared_statements_eviction,
                 ttl: general.prepared_statements_ttl(),
                 ttl_jitter: general.prepared_statements_ttl_jitter(),
             },

@@ -18,7 +18,7 @@ use crate::{
 use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
 use super::networking::TlsVerifyMode;
-use super::pooling::{PoolerMode, PreparedStatementsLevel};
+use super::pooling::{PoolerMode, PreparedStatementsEviction, PreparedStatementsLevel};
 
 /// Format to use for PgDog application logs.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash, Default, JsonSchema)]
@@ -411,11 +411,21 @@ pub struct General {
 
     /// Number of prepared statements that will be allowed for each server connection.
     ///
-    /// **Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.
+    /// **Note:** If this limit is reached, the statement chosen by `prepared_statements_eviction`
+    /// is closed and replaced with the newest one. Additionally, any unused statements in the
+    /// global cache above this limit will be removed.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>
     #[serde(default = "General::prepared_statements_limit")]
     pub prepared_statements_limit: usize,
+
+    /// Which statement is closed when a server connection reaches `prepared_statements_limit`.
+    ///
+    /// _Default:_ `lru`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_eviction>
+    #[serde(default = "General::prepared_statements_eviction")]
+    pub prepared_statements_eviction: PreparedStatementsEviction,
 
     /// How long a prepared statement is allowed to stay prepared on a server connection, in milliseconds.
     ///
@@ -950,6 +960,7 @@ impl Default for General {
             regex_parser_limit: Self::regex_parser_limit(),
             query_parser_engine: QueryParserEngine::default(),
             prepared_statements_limit: Self::prepared_statements_limit(),
+            prepared_statements_eviction: Self::prepared_statements_eviction(),
             prepared_statements_ttl: Self::default_prepared_statements_ttl(),
             prepared_statements_ttl_jitter: Self::default_prepared_statements_ttl_jitter(),
             query_cache_limit: Self::query_cache_limit(),
@@ -1484,6 +1495,10 @@ impl General {
         Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
     }
 
+    fn prepared_statements_eviction() -> PreparedStatementsEviction {
+        Self::env_enum_or_default("PGDOG_PREPARED_STATEMENTS_EVICTION")
+    }
+
     fn default_prepared_statements_ttl() -> Option<u64> {
         Self::env_option("PGDOG_PREPARED_STATEMENTS_TTL")
     }
@@ -1916,6 +1931,17 @@ mod tests {
         assert_eq!(
             General::prepared_statements(),
             PreparedStatementsLevel::Extended
+        );
+
+        let _guard = set_env_var("PGDOG_PREPARED_STATEMENTS_EVICTION", "lfu");
+        assert_eq!(
+            General::prepared_statements_eviction(),
+            PreparedStatementsEviction::LeastFrequentlyUsed
+        );
+        let _guard = remove_env_var("PGDOG_PREPARED_STATEMENTS_EVICTION");
+        assert_eq!(
+            General::prepared_statements_eviction(),
+            PreparedStatementsEviction::LeastRecentlyUsed
         );
 
         // Test auth type
