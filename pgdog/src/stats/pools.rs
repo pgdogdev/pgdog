@@ -98,6 +98,9 @@ impl Pools {
         let mut avg_rows_updated = vec![];
         let mut total_rows_deleted = vec![];
         let mut avg_rows_deleted = vec![];
+        let mut total_cancels = vec![];
+        let mut avg_cancels = vec![];
+        let mut cancels_in_flight = vec![];
 
         let general = &crate::config::config().config.general;
 
@@ -386,6 +389,21 @@ impl Pools {
                     avg_rows_deleted.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rows_deleted.into(),
+                    });
+
+                    total_cancels.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.cancels.into(),
+                    });
+
+                    avg_cancels.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.cancels.into(),
+                    });
+
+                    cancels_in_flight.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: state.cancels_in_flight.into(),
                     });
                 }
             }
@@ -852,6 +870,33 @@ impl Pools {
             name: "avg_rows_deleted".into(),
             measurements: avg_rows_deleted,
             help: "Average rows deleted per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_cancels".into(),
+            measurements: total_cancels,
+            help: "Total number of CancelRequests dispatched to Postgres.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_cancels".into(),
+            measurements: avg_cancels,
+            help: "Average number of CancelRequests dispatched per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "cancels_in_flight".into(),
+            measurements: cancels_in_flight,
+            help: "CancelRequests currently in flight against this pool's backends. \
+                   Non-zero means at least one backend is pinned while its cancel \
+                   is being processed by Postgres."
+                .into(),
             unit: None,
             metric_type: None,
         }));

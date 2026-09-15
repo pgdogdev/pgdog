@@ -66,6 +66,7 @@ impl Add<Counts> for PoolCounts {
             rows_inserted: self.rows_inserted + rhs.rows_inserted,
             rows_updated: self.rows_updated + rhs.rows_updated,
             rows_deleted: self.rows_deleted + rhs.rows_deleted,
+            cancels: self.cancels,
         }
     }
 }

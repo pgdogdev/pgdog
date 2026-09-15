@@ -176,6 +176,17 @@ impl Taken {
         !self.backend_cancels_in_flight.is_empty()
     }
 
+    /// Total number of cancel leases currently outstanding, summed across
+    /// every backend in the pool. Surfaced via `State::cancels_in_flight`
+    /// as a live gauge.
+    #[inline]
+    pub(super) fn cancels_in_flight_total(&self) -> usize {
+        self.backend_cancels_in_flight
+            .values()
+            .map(|s| s.count as usize)
+            .sum()
+    }
+
     /// Mark or unmark a checked-out backend as pinned to its client. Called by
     /// the frontend when it takes/releases an advisory lock or manual pin.
     #[inline]

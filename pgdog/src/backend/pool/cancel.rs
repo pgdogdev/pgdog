@@ -30,8 +30,15 @@ pub struct CancelLease {
 impl CancelLease {
     /// Acquire a lease against the backend `client` currently holds.
     /// Returns `None` if `client` has no checkout.
+    ///
+    /// Bumps the pool's cumulative `cancels` counter for every lease that
+    /// actually gets issued, so downstream metrics (SHOW POOLS, Prometheus)
+    /// can report how many CancelRequests this pool has dispatched.
     pub fn acquire(pool: &Pool, client: FrontendPid) -> Option<Self> {
-        pool.lock().begin_cancel(client, pool)
+        let mut inner = pool.lock();
+        let lease = inner.begin_cancel(client, pool)?;
+        inner.stats.counts.cancels += 1;
+        Some(lease)
     }
 
     pub(super) fn new(pool: Pool, backend: BackendPid, key: BackendKeyData) -> Self {

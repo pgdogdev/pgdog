@@ -58,6 +58,7 @@ impl State {
                 replica_lag: guard.replica_lag,
                 force_close: guard.force_close,
                 lsn_stats: *lsn_stats,
+                cancels_in_flight: guard.taken.cancels_in_flight_total(),
             },
         }
     }
