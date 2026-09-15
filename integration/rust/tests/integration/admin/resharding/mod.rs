@@ -1,5 +1,6 @@
 pub mod copy_data;
 pub mod replication;
+pub mod replication_slots;
 #[allow(clippy::module_inception)]
 pub mod resharding;
 pub mod schema_sync;

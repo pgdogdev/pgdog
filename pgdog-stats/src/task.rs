@@ -57,9 +57,9 @@ pub enum TaskStatus {
     // v1, in use
     SchemaSync(SchemaSyncStatus),
     SchemaShard(SchemaShardStatus),
-    // in progress, not used
     TableCopy(TableCopyStatus),
     CopyData(CopyDataStatus),
+    // in progress, not used
     Replication(ReplicationStatus),
     ReplicationSlot(ReplicationSlotStatus),
     Reshard(ReshardStatus),
@@ -343,9 +343,9 @@ pub enum TaskDefinitionKind {
     // v1, in use
     SchemaSync(SchemaSyncDefinition),
     SchemaShard(SchemaShardDefinition),
-    // In progress, not used yet
     CopyData(CopyDataDefinition),
     TableCopy(TableCopyDefinition),
+    // In progress, not used yet
     Replication(ReplicationDefinition),
     ReplicationSlot(ReplicationSlotDefinition),
     Reshard(ReshardDefinition),
