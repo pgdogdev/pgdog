@@ -1941,6 +1941,7 @@
           "default": false
         },
         "omni_non_deterministic_functions": {
+          "description": "Behavior when an `INSERT` is headed to an omnisharded table using a function (such as date-time functions)\nthat will not be consistent when performing the functions separately on each shard.\nThus, it re-writes all such functions before performing the `INSERT` with constant values to maintain consistency.\n\nExample: `NOW()` is re-written to `2026-09-15 18:14:09.123456-05` (or whatever the current time is)\nbefore performing the individual `INSERT` operations.\n\nThis applies to both `DEFAULT` table schema and functions called within a VALUES list of an `INSERT`.\n\n`ignore` allows the `INSERT` without modification.\n\n_Default:_ `ignore`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#omni_non_deterministic_functions>",
           "$ref": "#/$defs/RewriteMode",
           "default": "ignore"
         },
