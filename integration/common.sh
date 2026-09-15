@@ -63,10 +63,12 @@ function run_pgdog() {
                 --users ${config_path}/users.toml \
             > ${COMMON_DIR}/log.txt 2>&1 &
     else
+        # Capture stdout AND stderr: PgDog's tracing logs go to stderr, and the
+        # plugins auth suite asserts on log lines via integration/log.txt.
         "${binary}" \
             --config ${config_path}/pgdog.toml \
             --users ${config_path}/users.toml \
-            > ${COMMON_DIR}/log.txt &
+            > ${COMMON_DIR}/log.txt 2>&1 &
     fi
     echo $! > "${pid_file}"
     printf '%s\n' "${config_path}" > "${config_file}"
