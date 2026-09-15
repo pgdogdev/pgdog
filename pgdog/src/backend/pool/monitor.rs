@@ -461,6 +461,7 @@ impl Monitor {
                         guard.stats.counts.connect_count += 1;
                         guard.stats.counts.connect_time += elapsed;
                         guard.stats.counts.auth_attempts += conn.password_attempts();
+                        guard.server_auth_ok();
                         conn.set_credentials_generation(guard.credentials_generation());
                     }
                     conn.apply_lifetime_jitter(max_age, max_age_jitter);
@@ -470,7 +471,9 @@ impl Monitor {
                 Ok(Err(err)) => {
                     // We tried all passwords and they were all wrong.
                     if err.is_auth() {
-                        pool.lock().stats.counts.auth_attempts += pool.addr().passwords.len();
+                        let mut guard = pool.lock();
+                        guard.stats.counts.auth_attempts += pool.addr().passwords.len();
+                        guard.server_auth_failed();
                     }
                     error!(
                         "{}error connecting to server: {} [{}]",

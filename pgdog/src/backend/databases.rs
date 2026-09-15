@@ -1,7 +1,7 @@
 //! Databases behind pgDog.
 
 use arc_swap::ArcSwap;
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
 use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use parking_lot::lock_api::MutexGuard;
@@ -16,9 +16,12 @@ use pgdog_config::{
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::spawn;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
+use crate::backend::passthrough::{Attempt, throttle};
 use crate::backend::replication::ShardedSchemas;
 use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
@@ -28,12 +31,16 @@ use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
-    config::{ConfigAndUsers, ShardedMappingDeprecated, User as ConfigUser, config, load, set},
+    config::{
+        ConfigAndUsers, Database as ConfigDatabase, Role, ShardedMappingDeprecated,
+        User as ConfigUser, config, load, set,
+    },
     net::{messages::FrontendPid, tls},
+    util::safe_timeout,
 };
 
 use super::{
-    Cluster, ClusterShardConfig, Error, ShardedTables,
+    Cluster, ClusterShardConfig, ConnectReason, Error, Server, ServerOptions, ShardedTables,
     pool::{Address, ClusterConfig},
     reload_notify,
 };
@@ -175,6 +182,223 @@ pub(crate) fn reload(force: bool) -> Result<(), Error> {
     Ok(())
 }
 
+/// What passthrough authentication should do with a client-supplied credential.
+#[derive(Debug, PartialEq)]
+enum PassthroughAction {
+    /// Credential matches the stored password; the client is authenticated.
+    Match,
+    /// Credential must be stored: the user is new, has no password yet, or a
+    /// password change is permitted by the configuration.
+    Store,
+    /// Credential is rejected.
+    Deny(AuthResult),
+}
+
+fn passthrough_action(user: &ConfigUser, config: &ConfigAndUsers) -> PassthroughAction {
+    let Some(existing) = config.users.find(user) else {
+        return PassthroughAction::Store;
+    };
+
+    if existing.password.is_none() {
+        PassthroughAction::Store
+    } else if existing
+        .password
+        .as_deref()
+        .zip(user.password.as_deref())
+        .is_some_and(|(stored, provided)| {
+            crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
+        })
+    {
+        PassthroughAction::Match
+    } else if config.config.general.passthrough_auth.allows_change() {
+        PassthroughAction::Store
+    } else {
+        PassthroughAction::Deny(AuthResult::NoPassthroughPasswordChange)
+    }
+}
+
+/// The entry passthrough authentication stores for a client credential.
+///
+/// A user configured in `users.toml` keeps its settings (pool size, server
+/// credentials, ...) and only learns the password; an unknown user is stored
+/// as discovered. Both are marked so the credential can be evicted if the
+/// server rejects it.
+fn passthrough_entry(user: ConfigUser, config: &ConfigAndUsers) -> ConfigUser {
+    match config.users.find(&user) {
+        Some(mut existing) => {
+            existing.password = user.password;
+            existing.password_from_passthrough = true;
+            existing
+        }
+        None => ConfigUser {
+            password_from_passthrough: true,
+            created_by_passthrough: true,
+            ..user
+        },
+    }
+}
+
+/// Result of verifying a passthrough credential against the server.
+enum Verification {
+    Ok,
+    BadPassword,
+    NoDatabase,
+    Failed,
+}
+
+/// One database entry per shard to verify a credential against: the shard's
+/// primary, or its first entry when no primary is configured.
+fn verification_targets<'a>(
+    entry: &ConfigUser,
+    config: &'a ConfigAndUsers,
+) -> Vec<(usize, &'a ConfigDatabase)> {
+    let mut targets: Vec<(usize, &ConfigDatabase)> = Vec::new();
+
+    for (number, database) in config.config.databases.iter().enumerate() {
+        if database.name != entry.database {
+            continue;
+        }
+
+        match targets
+            .iter_mut()
+            .find(|(_, existing)| existing.shard == database.shard)
+        {
+            // A primary replaces whatever was picked for the shard first.
+            Some(target) if target.1.role != Role::Primary => {
+                if database.role == Role::Primary {
+                    *target = (number, database);
+                }
+            }
+            Some(_) => (),
+            None => targets.push((number, database)),
+        }
+    }
+
+    targets
+}
+
+/// Verify a client-supplied passthrough credential against the actual
+/// PostgreSQL server before it is stored.
+///
+/// `entry` is the user entry that would be stored (see [`passthrough_entry`]),
+/// so the check uses the same server user, password and auth mode the pool
+/// would. When the pool would not use the client password as a server
+/// credential (a `server_password` or database-level password is configured,
+/// or an external identity provider is used), there is nothing to verify and
+/// the credential is accepted as before.
+///
+/// Every shard of the database is checked, concurrently, because a credential
+/// stored for the user poisons all of them. The results are combined
+/// asymmetrically on purpose: a rejection from any shard rejects the login,
+/// while a shard PgDog cannot reach at all does not, as long as another shard
+/// accepted the credential. Requiring every shard to answer would mean one
+/// unavailable shard blocks every new login, and a credential that turns out to
+/// be wrong on a shard that was down is still evicted later by
+/// [`passthrough_password_rejected`].
+async fn verify_passthrough_credential(
+    entry: &ConfigUser,
+    config: &ConfigAndUsers,
+) -> Verification {
+    let Some(password) = entry.password.as_deref() else {
+        return Verification::Failed;
+    };
+
+    let targets = verification_targets(entry, config);
+    if targets.is_empty() {
+        return Verification::NoDatabase;
+    }
+
+    let connect_timeout = Duration::from_millis(config.config.general.connect_timeout);
+    let checks = targets.into_iter().map(|(number, database)| {
+        let address = Address::new(database, entry, number);
+        async move {
+            // The pool would not use the client's password here, so there is
+            // nothing this login could poison.
+            if !address.passwords.iter().any(|p| p.as_str() == password) {
+                return Verification::Ok;
+            }
+
+            match safe_timeout(
+                connect_timeout,
+                Box::pin(Server::connect(
+                    &address,
+                    ServerOptions::default(),
+                    ConnectReason::PassthroughVerify,
+                    Default::default(),
+                )),
+            )
+            .await
+            {
+                Ok(Ok(_)) => Verification::Ok,
+                Ok(Err(err)) if err.is_auth() => Verification::BadPassword,
+                Ok(Err(_)) | Err(_) => Verification::Failed,
+            }
+        }
+    });
+
+    let results = join_all(checks).await;
+    if results
+        .iter()
+        .any(|result| matches!(result, Verification::BadPassword))
+    {
+        Verification::BadPassword
+    } else if results
+        .iter()
+        .any(|result| matches!(result, Verification::Ok))
+    {
+        Verification::Ok
+    } else {
+        Verification::Failed
+    }
+}
+
+/// Authenticate a client through passthrough authentication.
+///
+/// Unlike [`add`], the credential is verified against the server before it is
+/// stored: a mistyped client password gets a clean authentication error
+/// instead of becoming the pool's server credential and poisoning every
+/// connection attempt until it is replaced.
+///
+/// Each verification costs a server connection and the client decides when one
+/// happens, so [`crate::backend::passthrough`] caps how many run at once and
+/// answers a credential the server just rejected without asking again.
+pub(crate) async fn add_passthrough(user: ConfigUser) -> Result<AuthResult, Error> {
+    let config = config();
+    match passthrough_action(&user, &config) {
+        PassthroughAction::Match => Ok(AuthResult::Ok),
+        PassthroughAction::Deny(result) => Ok(result),
+        PassthroughAction::Store => {
+            // Verification opens a server connection, and the client chooses
+            // when that happens, so the same credential is not re-verified
+            // while a rejection is fresh and only so many checks run at once.
+            let attempt = Attempt::new(
+                &user.name,
+                &user.database,
+                user.password.as_deref().unwrap_or_default(),
+            );
+            if throttle().rejected(&attempt) {
+                debug!(
+                    r#"passthrough credential for user "{}" on database "{}" was just rejected by the server"#,
+                    user.name, user.database
+                );
+                return Ok(AuthResult::NoPasswordMatch);
+            }
+
+            let entry = passthrough_entry(user.clone(), &config);
+            let _slot = throttle().slot().await;
+            match verify_passthrough_credential(&entry, &config).await {
+                Verification::Ok => add(user),
+                Verification::BadPassword => {
+                    throttle().reject(attempt);
+                    Ok(AuthResult::NoPasswordMatch)
+                }
+                Verification::NoDatabase => Ok(AuthResult::NoUserOrDatabase),
+                Verification::Failed => Ok(AuthResult::PassthroughVerificationFailed),
+            }
+        }
+    }
+}
+
 /// Add new user to pool via passthrough authentication.
 ///
 /// Return true if user can login, false otherwise.
@@ -195,39 +419,97 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 
     let config = config();
-    let existing = config.users.find(&user);
-
-    // User already exists in users.toml.
-    if let Some(mut existing) = existing {
-        // Password hasn't been set yet.
-        if existing.password.is_none() {
-            existing.password = user.password.clone();
-            add_user(existing)?;
+    match passthrough_action(&user, &config) {
+        PassthroughAction::Match => Ok(AuthResult::Ok),
+        PassthroughAction::Deny(result) => Ok(result),
+        PassthroughAction::Store => {
+            add_user(passthrough_entry(user, &config))?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
-        } else if existing
-            .password
-            .as_deref()
-            .zip(user.password.as_deref())
-            .is_some_and(|(stored, provided)| {
-                crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
-            })
-        {
-            // Passwords match.
-            Ok(AuthResult::Ok)
-        } else if config.config.general.passthrough_auth.allows_change() {
-            // Passwords don't match but we can change it.
-            existing.password = user.password.clone();
-            add_user(user)?;
-            reload_from_existing()?;
-            Ok(AuthResult::Ok)
-        } else {
-            Ok(AuthResult::NoPassthroughPasswordChange)
         }
-    } else {
-        add_user(user)?;
-        reload_from_existing()?;
-        Ok(AuthResult::Ok)
+    }
+}
+
+/// Evict a passthrough-learned password the server has rejected.
+///
+/// Called when a server connection fails authentication with a credential
+/// learned through passthrough authentication (e.g. the server-side password
+/// rotated after the credential was stored). Eviction stops the pool from
+/// retrying a password that can never work and lets the next client login
+/// store the current one. Passwords configured in `users.toml` are never
+/// touched.
+pub(crate) fn passthrough_password_rejected(user_name: &str, database: &str, rejected: &str) {
+    // Called from `Server::connect`, which runs on a client's critical path or
+    // in the pool maintenance loop, while evicting rebuilds every pool
+    // (`set` reruns configuration checks and reloads sharding centroids from
+    // disk). Nothing waits on the result, and the eviction is idempotent -- it
+    // re-reads the configuration and bails unless that exact credential is
+    // still stored -- so hand it to a task of its own.
+    let (user_name, database, rejected) = (
+        user_name.to_owned(),
+        database.to_owned(),
+        rejected.to_owned(),
+    );
+
+    spawn(async move {
+        evict_passthrough_password(&user_name, &database, &rejected);
+    });
+}
+
+/// Evict a rejected passthrough credential. See
+/// [`passthrough_password_rejected`], which is how callers reach this.
+fn evict_passthrough_password(user_name: &str, database: &str, rejected: &str) {
+    let evicted = {
+        let _lock = lock();
+        let config_now = config();
+        let Some(user) = config_now
+            .users
+            .users
+            .iter()
+            .find(|user| user.name == user_name && user.database == database)
+        else {
+            return;
+        };
+
+        if !user.password_from_passthrough || user.password.as_deref() != Some(rejected) {
+            return;
+        }
+
+        let mut config = (*config_now).clone();
+        if user.created_by_passthrough {
+            // The whole entry was discovered through passthrough
+            // authentication: remove it, restoring the pre-discovery state.
+            config
+                .users
+                .users
+                .retain(|user| !(user.name == user_name && user.database == database));
+        } else {
+            let mut updated = user.clone();
+            updated.password = None;
+            updated.password_from_passthrough = false;
+            config.users.add_or_replace(updated);
+        }
+
+        match set(config) {
+            Ok(_) => true,
+            Err(err) => {
+                error!("error evicting rejected passthrough password: {}", err);
+                false
+            }
+        }
+    };
+
+    if evicted {
+        warn!(
+            r#"evicted passthrough password for user "{}" on database "{}": the server rejected it"#,
+            user_name, database
+        );
+        if let Err(err) = reload_from_existing() {
+            error!(
+                "error reloading after passthrough password eviction: {}",
+                err
+            );
+        }
     }
 }
 
@@ -772,6 +1054,8 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
 mod tests {
     use pgdog_config::{General, Mirroring, PassthroughAuth};
 
+    use tokio::time::sleep;
+
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
 
@@ -884,6 +1168,398 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_marks_passthrough_credentials() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![make_user("bob", None)]);
+
+        // Discovered user: whole entry is removable on rejection.
+        add(make_user("new_user", Some("secret"))).expect("add");
+        let found = crate::config::config()
+            .users
+            .find(&make_user("new_user", None))
+            .expect("user added");
+        assert!(found.password_from_passthrough);
+        assert!(found.created_by_passthrough);
+
+        // Configured user with no password: only the password is learned.
+        add(make_user("bob", Some("secret"))).expect("add");
+        let found = crate::config::config()
+            .users
+            .find(&make_user("bob", None))
+            .expect("user exists");
+        assert!(found.password_from_passthrough);
+        assert!(!found.created_by_passthrough);
+    }
+
+    #[tokio::test]
+    async fn test_add_password_change_keeps_configured_settings() {
+        let mut dave = make_user("dave", Some("old_pass"));
+        dave.pool_size = Some(7);
+        setup_config(PassthroughAuth::EnabledPlainAllowChange, vec![dave]);
+
+        add(make_user("dave", Some("new_pass"))).expect("add");
+
+        let found = crate::config::config()
+            .users
+            .find(&make_user("dave", None))
+            .expect("user exists");
+        assert_eq!(found.password, Some("new_pass".to_string()));
+        assert_eq!(found.pool_size, Some(7));
+        assert!(found.password_from_passthrough);
+        assert!(!found.created_by_passthrough);
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_rejected_removes_discovered_user() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
+
+        add(make_user("eve", Some("stale"))).expect("add");
+        evict_passthrough_password("eve", "db1", "stale");
+
+        let config = crate::config::config();
+        assert!(config.users.find(&make_user("eve", None)).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_rejected_clears_learned_password() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![make_user("bob", None)]);
+
+        add(make_user("bob", Some("stale"))).expect("add");
+        evict_passthrough_password("bob", "db1", "stale");
+
+        let found = crate::config::config()
+            .users
+            .find(&make_user("bob", None))
+            .expect("configured entry kept");
+        assert_eq!(found.password, None);
+        assert!(!found.password_from_passthrough);
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_rejected_ignores_configured_password() {
+        setup_config(
+            PassthroughAuth::EnabledPlain,
+            vec![make_user("alice", Some("configured"))],
+        );
+
+        evict_passthrough_password("alice", "db1", "configured");
+
+        let found = crate::config::config()
+            .users
+            .find(&make_user("alice", None))
+            .expect("user exists");
+        assert_eq!(found.password, Some("configured".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_passthrough_rejected_ignores_stale_password() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
+
+        add(make_user("eve", Some("current"))).expect("add");
+        evict_passthrough_password("eve", "db1", "previous");
+
+        let found = crate::config::config()
+            .users
+            .find(&make_user("eve", None))
+            .expect("user kept");
+        assert_eq!(found.password, Some("current".to_string()));
+    }
+
+    /// `Server::connect` only hands the eviction off, so it happens in a task
+    /// of its own rather than on the connection's critical path.
+    #[tokio::test]
+    async fn test_passthrough_rejected_evicts_in_the_background() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
+
+        add(make_user("eve", Some("stale"))).expect("add");
+        passthrough_password_rejected("eve", "db1", "stale");
+
+        for _ in 0..100 {
+            if crate::config::config()
+                .users
+                .find(&make_user("eve", None))
+                .is_none()
+            {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        panic!("rejected passthrough password was never evicted");
+    }
+
+    /// Config pointing at a closed port: any verification attempt fails, so
+    /// these tests can tell whether one was made.
+    fn setup_unreachable_config(users: Vec<ConfigUser>) {
+        let _lock = lock();
+        let config = Config {
+            databases: vec![Database {
+                name: "db1".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: 1,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            general: General {
+                passthrough_auth: PassthroughAuth::EnabledPlain,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cu = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::config::set(cu).expect("set config");
+        replace_databases(from_config(&crate::config::config()), false).expect("replace");
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_unreachable_server_stores_nothing() {
+        // Port 1 is closed: verification can't run, so the credential must
+        // not be stored and the client gets a verification error.
+        setup_unreachable_config(vec![]);
+
+        let result = add_passthrough(make_user("new_user", Some("secret")))
+            .await
+            .expect("add_passthrough");
+        assert_eq!(result, AuthResult::PassthroughVerificationFailed);
+        assert!(
+            crate::config::config()
+                .users
+                .find(&make_user("new_user", None))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_skips_verification_with_server_password() {
+        // The configured entry logs into the server with `server_password`,
+        // so the client password is never a server credential: it is stored
+        // without contacting the (unreachable) server.
+        let mut alice = make_user("alice", None);
+        alice.server_password = Some("service".to_string());
+        setup_unreachable_config(vec![alice]);
+
+        let result = add_passthrough(make_user("alice", Some("client_pw")))
+            .await
+            .expect("add_passthrough");
+        assert_eq!(result, AuthResult::Ok);
+        let found = crate::config::config()
+            .users
+            .find(&make_user("alice", None))
+            .expect("user exists");
+        assert_eq!(found.password, Some("client_pw".to_string()));
+        assert_eq!(found.server_password, Some("service".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_no_database_stores_nothing() {
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
+
+        let mut user = make_user("new_user", Some("secret"));
+        user.database = "does_not_exist".to_string();
+        let result = add_passthrough(user).await.expect("add_passthrough");
+        assert_eq!(result, AuthResult::NoUserOrDatabase);
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_denies_password_change() {
+        setup_config(
+            PassthroughAuth::EnabledPlain,
+            vec![make_user("alice", Some("configured"))],
+        );
+
+        // No server connection needed: rejected before verification.
+        let result = add_passthrough(make_user("alice", Some("other")))
+            .await
+            .expect("add_passthrough");
+        assert_eq!(result, AuthResult::NoPassthroughPasswordChange);
+    }
+
+    fn setup_live_config(users: Vec<ConfigUser>) {
+        let _lock = lock();
+        let config = Config {
+            databases: vec![Database {
+                name: "pgdog".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: 5432,
+                role: Role::Primary,
+                ..Default::default()
+            }],
+            general: General {
+                passthrough_auth: PassthroughAuth::EnabledPlain,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cu = ConfigAndUsers {
+            config,
+            users: crate::config::Users {
+                users,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        crate::config::set(cu).expect("set config");
+        replace_databases(from_config(&crate::config::config()), false).expect("replace");
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_verifies_against_server() {
+        setup_live_config(vec![]);
+
+        // Wrong password: rejected by the server, nothing stored.
+        let mut user = make_user("pgdog", Some("wrong_password"));
+        user.database = "pgdog".to_string();
+        let result = add_passthrough(user).await.expect("add_passthrough");
+        assert_eq!(result, AuthResult::NoPasswordMatch);
+        let mut lookup = make_user("pgdog", None);
+        lookup.database = "pgdog".to_string();
+        assert!(crate::config::config().users.find(&lookup).is_none());
+
+        // Correct password: verified and stored.
+        let mut user = make_user("pgdog", Some("pgdog"));
+        user.database = "pgdog".to_string();
+        let result = add_passthrough(user).await.expect("add_passthrough");
+        assert_eq!(result, AuthResult::Ok);
+        let found = crate::config::config()
+            .users
+            .find(&lookup)
+            .expect("user stored");
+        assert!(found.password_from_passthrough);
+        assert_eq!(found.password, Some("pgdog".to_string()));
+    }
+
+    /// A credential the server just rejected is refused without asking the
+    /// server again, so a client reconnecting in a loop with a wrong password
+    /// costs one connection, not one per attempt.
+    #[tokio::test]
+    async fn test_add_passthrough_does_not_reverify_a_rejected_credential() {
+        setup_live_config(vec![]);
+
+        // A credential no other test uses, since the throttle is process-wide.
+        let credential = "rejected_then_throttled";
+        let mut user = make_user("pgdog", Some(credential));
+        user.database = "pgdog".to_string();
+
+        let result = add_passthrough(user.clone()).await.expect("first attempt");
+        assert_eq!(result, AuthResult::NoPasswordMatch);
+
+        // Point the configuration at a database that does not exist. Reaching
+        // verification now would answer NoUserOrDatabase, so answering
+        // NoPasswordMatch again shows the attempt never got that far.
+        setup_config(PassthroughAuth::EnabledPlain, vec![]);
+        let result = add_passthrough(user).await.expect("second attempt");
+        assert_eq!(result, AuthResult::NoPasswordMatch);
+    }
+
+    /// Two shards, one of them unreachable. A shard that cannot be reached
+    /// must not block a login, but a password the reachable shard rejects
+    /// must still be refused.
+    fn setup_sharded_config() {
+        let _lock = lock();
+        let shard = |shard: usize, port: u16| Database {
+            name: "pgdog".to_string(),
+            host: "127.0.0.1".to_string(),
+            port,
+            shard,
+            role: Role::Primary,
+            ..Default::default()
+        };
+        let config = Config {
+            databases: vec![shard(0, 5432), shard(1, 1)],
+            general: General {
+                passthrough_auth: PassthroughAuth::EnabledPlain,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cu = ConfigAndUsers {
+            config,
+            users: crate::config::Users::default(),
+            ..Default::default()
+        };
+        crate::config::set(cu).expect("set config");
+    }
+
+    #[tokio::test]
+    async fn test_add_passthrough_verifies_every_shard() {
+        setup_sharded_config();
+
+        let mut user = make_user("pgdog", Some("pgdog"));
+        user.database = "pgdog".to_string();
+        let entry = passthrough_entry(user.clone(), &crate::config::config());
+
+        // One target per shard, each the shard's primary.
+        let config = crate::config::config();
+        let targets = verification_targets(&entry, &config);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].1.shard, 0);
+        assert_eq!(targets[1].1.shard, 1);
+
+        // Shard 1 is unreachable, shard 0 accepts: the login goes through
+        // rather than being held up by the shard that is down.
+        assert!(matches!(
+            verify_passthrough_credential(&entry, &config).await,
+            Verification::Ok
+        ));
+
+        // The reachable shard rejecting the password is authoritative.
+        let mut wrong = make_user("pgdog", Some("wrong_password"));
+        wrong.database = "pgdog".to_string();
+        let wrong = passthrough_entry(wrong, &config);
+        assert!(matches!(
+            verify_passthrough_credential(&wrong, &config).await,
+            Verification::BadPassword
+        ));
+    }
+
+    /// A shard with a replica entry as well: the primary is the one verified
+    /// against, whatever order the entries appear in.
+    #[tokio::test]
+    async fn test_verification_targets_prefer_the_primary() {
+        let entry = ConfigUser {
+            name: "pgdog".to_string(),
+            database: "pgdog".to_string(),
+            ..Default::default()
+        };
+        let database = |shard: usize, port: u16, role: Role| Database {
+            name: "pgdog".to_string(),
+            host: "127.0.0.1".to_string(),
+            port,
+            shard,
+            role,
+            ..Default::default()
+        };
+
+        let config = ConfigAndUsers {
+            config: Config {
+                databases: vec![
+                    database(0, 5001, Role::Replica),
+                    database(0, 5000, Role::Primary),
+                    database(1, 5002, Role::Replica),
+                    Database {
+                        name: "other".to_string(),
+                        ..database(0, 5003, Role::Primary)
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let targets = verification_targets(&entry, &config);
+        assert_eq!(targets.len(), 2);
+        // Shard 0 resolves to the primary, shard 1 has only a replica.
+        assert_eq!(targets[0].1.port, 5000);
+        assert_eq!(targets[1].1.port, 5002);
     }
 
     #[test]

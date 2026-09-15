@@ -15,6 +15,13 @@ use tokio::time::Instant;
 
 use super::{Config, Error, Pool, Request, Stats, Taken, Waiter, lsn_monitor::ReplicaLag};
 
+/// How long the pool refrains from replenishing `min_pool_size` connections
+/// after the server rejected its credentials. An auth failure is
+/// deterministic, so retrying every maintenance tick only storms the server.
+/// Client-driven requests and healthchecks still attempt connections and
+/// clear the backoff on success.
+const AUTH_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+
 /// Pool internals protected by a mutex.
 #[derive(Default)]
 pub(super) struct Inner {
@@ -54,6 +61,9 @@ pub(super) struct Inner {
     pub(super) credentials_generation: u64,
     /// Pool role.
     pub(super) role: Role,
+    /// Set when the server rejected our credentials. While recent, the pool
+    /// does not replenish `min_pool_size` connections.
+    pub(super) auth_failed_at: Option<Instant>,
 }
 
 impl std::fmt::Debug for Inner {
@@ -88,6 +98,7 @@ impl Inner {
             replica_lag: ReplicaLag::default(),
             credentials_generation: 0,
             role: Role::Auto,
+            auth_failed_at: None,
         }
     }
     /// Total number of connections managed by the pool.
@@ -187,12 +198,36 @@ impl Inner {
         .value(self.role)
     }
 
+    /// Server rejected our credentials; pause `min_pool_size` replenishment.
+    #[inline]
+    pub(super) fn server_auth_failed(&mut self) {
+        self.auth_failed_at = Some(Instant::now());
+    }
+
+    /// Server accepted our credentials; resume normal replenishment.
+    #[inline]
+    pub(super) fn server_auth_ok(&mut self) {
+        self.auth_failed_at = None;
+    }
+
+    /// The server recently rejected our credentials.
+    #[inline]
+    fn auth_backoff(&self) -> bool {
+        self.auth_failed_at
+            .map(|at| at.elapsed() < AUTH_FAILURE_BACKOFF)
+            .unwrap_or(false)
+    }
+
     /// The pool should create more connections now.
     #[inline]
     pub(super) fn should_create(&self) -> ShouldCreate {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
-        let maintain_min = below_min && below_max;
+        // Don't replenish min connections while the server rejects our
+        // credentials: retrying the same password every maintenance tick
+        // can't succeed and storms the server. Waiting clients still get
+        // connection attempts, which clear the backoff on success.
+        let maintain_min = below_min && below_max && !self.auth_backoff();
         let client_needs =
             below_max && !self.waiting.is_empty() && self.idle_connections.is_empty();
         let maintenance_on = self.online && !self.paused;
@@ -694,6 +729,53 @@ mod test {
                 idle: 0,
                 taken: 0,
                 waiting: 0,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_should_create_auth_backoff() {
+        let mut inner = Inner {
+            online: true,
+            ..Default::default()
+        };
+        inner.config.min = 2;
+        inner.config.max = 5;
+
+        // Below min: replenishment wanted.
+        assert!(matches!(
+            inner.should_create(),
+            ShouldCreate::Yes {
+                reason: ConnectReason::BelowMin,
+                ..
+            }
+        ));
+
+        // Server rejected our credentials: pause min replenishment.
+        inner.server_auth_failed();
+        assert_eq!(inner.should_create(), ShouldCreate::No);
+
+        // A waiting client still triggers a connection attempt.
+        inner.waiting.push_back(Waiter {
+            request: Request::default(),
+            tx: channel().0,
+        });
+        assert!(matches!(
+            inner.should_create(),
+            ShouldCreate::Yes {
+                reason: ConnectReason::ClientWaiting,
+                ..
+            }
+        ));
+        inner.waiting.clear();
+
+        // A successful connection clears the backoff.
+        inner.server_auth_ok();
+        assert!(matches!(
+            inner.should_create(),
+            ShouldCreate::Yes {
+                reason: ConnectReason::BelowMin,
+                ..
             }
         ));
     }

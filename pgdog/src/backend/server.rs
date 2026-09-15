@@ -14,7 +14,8 @@ use tracing::{debug, error, info, trace, warn};
 
 use super::{
     ConnectReason, DisconnectReason, Error, Oids, PreparedStatements, ServerOptions, Stats,
-    pool::Address,
+    databases,
+    pool::{Address, password::PasswordSource},
     prepared_statements::{HandleResult, Prepare},
 };
 use crate::{
@@ -213,6 +214,18 @@ impl Server {
                             addr
                         );
                         auth_secret.valid(false);
+                        // A passthrough-learned credential the server rejects
+                        // can never work again (e.g. the server-side password
+                        // rotated): evict it so the pool stops retrying it and
+                        // the next client login can store the current one.
+                        if let PasswordSource::Passthrough { user, database } = &auth_secret.source
+                        {
+                            databases::passthrough_password_rejected(
+                                user,
+                                database,
+                                &auth_secret.password,
+                            );
+                        }
                         continue;
                     } else {
                         return Err(Error::ConnectionError(error));
