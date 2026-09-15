@@ -417,25 +417,19 @@ async fn run_test<F>(perform_insert: F)
 where
     F: AsyncFn(&mut PgTransaction),
 {
-    for conn in [
-        connection_sqlx_direct_db("shard_0").await,
-        connection_sqlx_direct_db("shard_1").await,
-    ] {
-        conn.execute("DROP TABLE IF EXISTS public.test_omni_ts")
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE IF NOT EXISTS public.test_omni_ts(id BIGSERIAL PRIMARY KEY, created_at TIMESTAMP, created_at_tz TIMESTAMPTZ, created_at_default TIMESTAMP DEFAULT CURRENT_TIMESTAMP, created_at_tz_default TIMESTAMPTZ DEFAULT TRANSACTION_TIMESTAMP())").await.unwrap();
-    }
-
     let conn = connections_sqlx().await;
-    let db = conn.get(1).unwrap();
+    let conn = conn.get(1).unwrap();
+    conn.execute("DROP TABLE IF EXISTS public.test_omni_ts")
+        .await
+        .unwrap();
+    conn.execute("CREATE TABLE IF NOT EXISTS public.test_omni_ts(id BIGSERIAL PRIMARY KEY, created_at TIMESTAMP, created_at_tz TIMESTAMPTZ, created_at_default TIMESTAMP DEFAULT CURRENT_TIMESTAMP, created_at_tz_default TIMESTAMPTZ DEFAULT TRANSACTION_TIMESTAMP())").await.unwrap();
 
     for (insertion_tz, fetch_tz) in [
         ("America/Los_Angeles", "America/New_York"),
         ("America/New_York", "America/Los_Angeles"),
         // TODO: could also check equal
     ] {
-        let mut sesh = db.begin().await.unwrap();
+        let mut sesh = conn.begin().await.unwrap();
 
         sesh.execute(format!("SET TIME ZONE '{insertion_tz}'").as_str())
             .await
@@ -446,6 +440,10 @@ where
 
         sesh.rollback().await.unwrap();
     }
+
+    conn.execute("DROP TABLE public.test_omni_ts")
+        .await
+        .unwrap();
 }
 
 /// Simple protocol case (see `run_test` for details)

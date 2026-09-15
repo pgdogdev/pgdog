@@ -427,7 +427,7 @@ impl StatementRewrite<'_> {
         let cols = insert_stmt.cols();
 
         // Find the columns that the insert does NOT cover.
-        let not_covered_cols: Vec<String> = {
+        let not_covered_cols: Vec<String> = if !cols.is_empty() {
             let subset: Vec<&str> = cols
                 .iter()
                 .filter_map(|col| match col {
@@ -442,6 +442,8 @@ impl StatementRewrite<'_> {
                 .filter(|name| !subset.contains(name))
                 .map(|name| name.to_string())
                 .collect()
+        } else {
+            vec![]
         };
 
         Some((relation.clone(), mem.make_unique(cols), not_covered_cols))
@@ -483,15 +485,20 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                         if let Some(time_function_type) = TimeFunctionType::from_node(value) {
                             self.rewrite.rewritten = true;
 
-                            // TODO: replace unwrap()
-                            let Node::ResTarget(target) = self.cols.get(i).unwrap() else {
-                                unreachable!("not cool");
+                            let col_relation = if self.cols.is_empty() {
+                                self.relation.columns.get_index(i).map(|(_, column)| column)
+                            } else {
+                                match self.cols.get(i) {
+                                    Some(Node::ResTarget(target)) => target
+                                        .name()
+                                        .and_then(|name| self.relation.columns.get(name)),
+                                    _ => None,
+                                }
                             };
 
-                            // Get the column name, and with that, its datatype.
-                            // TODO: replace unwrap()
-                            let col_name = target.name().unwrap();
-                            let col_relation = self.relation.columns.get(col_name).unwrap();
+                            let Some(col_relation) = col_relation else {
+                                continue;
+                            };
 
                             let time_function = TimeFunction {
                                 time_function_type,
@@ -533,17 +540,6 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
         };
 
         for col in not_covered_cols {
-            insert_stmt.cols_mut().push(
-                self.mem,
-                self.mem
-                    .make_res_target(Some(col), self.mem.empty(), self.mem.none())
-                    .uncast(),
-            );
-
-            let NodeMut::SelectStmt(select_stmt) = &mut insert_stmt.select_stmt_mut() else {
-                return;
-            };
-
             let col_relation = self.relation.columns.get(col.as_str()).unwrap();
             let Ok(time_function_type) = col_relation.column_default.parse::<TimeFunctionType>()
             else {
@@ -555,7 +551,19 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                 column_type: col_relation.data_type.clone(),
             };
 
-            // Have to add the now() to every single select now.
+            // Add to the list of cols in the INSERT.
+            insert_stmt.cols_mut().push(
+                self.mem,
+                self.mem
+                    .make_res_target(Some(col), self.mem.empty(), self.mem.none())
+                    .uncast(),
+            );
+
+            let NodeMut::SelectStmt(select_stmt) = &mut insert_stmt.select_stmt_mut() else {
+                return;
+            };
+
+            // Have to add the now() to every single select VALUES list now.
             // VALUES (...), (....)
             for values_list in select_stmt.values_lists_mut() {
                 let mut node_list_mut = values_list.expect_node_list();

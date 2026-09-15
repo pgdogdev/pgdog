@@ -70,6 +70,7 @@ impl GlobalCache {
             stmt: StatementType::Parse {
                 parse,
                 rewrite: None,
+                client_params: None,
             },
             cache_key: cache_key.clone(),
             row_description: None,
@@ -133,10 +134,16 @@ impl GlobalCache {
     }
 
     /// Rewrite prepared statement in the global cache.
-    pub(crate) fn rewrite(&mut self, parse: &Parse) {
+    pub(crate) fn rewrite(&mut self, parse: &Parse, client_params: u16) {
         if let Some(stmt) = self.names.get_mut(parse.name()) {
-            stmt.set_rewrite(parse);
+            stmt.set_rewrite(parse, client_params);
         }
+    }
+
+    /// Number of parameters the client's original statement has
+    /// (if we re-write, we must catch and not send back the extra cols ParameterDescriptions)
+    pub(crate) fn client_params(&self, name: &str) -> Option<u16> {
+        self.names.get(name).and_then(|stmt| stmt.client_params())
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.

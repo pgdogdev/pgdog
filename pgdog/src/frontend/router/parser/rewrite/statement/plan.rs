@@ -160,9 +160,13 @@ impl RewritePlan {
     /// Apply the rewrite plan to a Parse message by updating the SQL.
     fn apply_parse(&self, parse: &mut Parse) {
         if let Some(ref stmt) = self.stmt {
+            let client_params = self.params.max(parse.num_data_types());
+
             parse.set_query(stmt);
             if !parse.anonymous() {
-                PreparedStatements::global().write().rewrite(parse);
+                PreparedStatements::global()
+                    .write()
+                    .rewrite(parse, client_params);
             }
         }
     }

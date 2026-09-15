@@ -26,6 +26,7 @@ pub(crate) enum StatementType {
     Parse {
         parse: Parse,
         rewrite: Option<Parse>,
+        client_params: Option<u16>,
     },
 
     Prepare {
@@ -50,7 +51,7 @@ impl MemoryUsage for StatementType {
     fn memory_usage(&self) -> usize {
         match self {
             Self::Prepare { prepare, .. } => prepare.len(),
-            Self::Parse { parse, rewrite } => {
+            Self::Parse { parse, rewrite, .. } => {
                 parse.len()
                     + rewrite
                         .as_ref()
@@ -112,12 +113,22 @@ impl Statement {
         &self.cache_key
     }
 
-    pub(super) fn set_rewrite(&mut self, parse: &Parse) {
+    pub(crate) fn client_params(&self) -> Option<u16> {
+        match self.stmt {
+            StatementType::Parse { client_params, .. } => client_params,
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_rewrite(&mut self, parse: &Parse, params: u16) {
         if let StatementType::Parse {
-            ref mut rewrite, ..
+            ref mut rewrite,
+            ref mut client_params,
+            ..
         } = self.stmt
         {
-            *rewrite = Some(parse.clone())
+            *rewrite = Some(parse.clone());
+            *client_params = Some(params);
         }
     }
 }
