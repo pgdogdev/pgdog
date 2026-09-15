@@ -3214,6 +3214,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgdog-google-auth"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "parking_lot",
+ "pgdog-plugin",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "pgdog-jsonschema"
 version = "0.1.0"
 dependencies = [
@@ -3764,6 +3781,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -3784,6 +3802,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

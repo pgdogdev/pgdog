@@ -4,6 +4,15 @@ This directory contains plugins that ship with PgDog and are built by original a
 
 ## Plugins
 
+### `pgdog-google-auth`
+
+Authenticates PostgreSQL clients with Google OAuth 2.0 access tokens, including
+tokens printed by `gcloud auth print-access-token`. The plugin validates tokens
+with Google's `tokeninfo` endpoint and can restrict access by Google account,
+domain, OAuth audience, and scope.
+
+See the [`pgdog-google-auth` documentation](pgdog-google-auth/README.md).
+
 ### `pgdog-example-plugin`
 
 Example plugin that can be used as reference by the community. It currently records
