@@ -4,18 +4,45 @@ use crate::frontend::router::parser::OrderBy;
 
 use super::projection::{OrderByHelper, ProjectionRewritePlan};
 
-fn projects_star(select: &nodes::SelectStmtMut<'_, '_>) -> bool {
-    select.target_list().iter().any(|target| {
-        matches!(target.val(), Node::ColumnRef(column)
-            if column.fields().into_iter().any(|field| matches!(field, Node::A_Star(_))))
-    })
+fn same_column(left: &nodes::ColumnRef, right: &nodes::ColumnRef) -> bool {
+    left.fields()
+        .into_iter()
+        .map(Node::as_str)
+        .eq(right.fields().into_iter().map(Node::as_str))
 }
 
-fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, name: &str) -> bool {
+fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
+    let star_fields = star.fields();
+    let column_fields = column.fields();
+    let star_len = star_fields.len();
+
+    matches!(star_fields.into_iter().next_back(), Some(Node::A_Star(_)))
+        && (star_len == 1
+            || (star_len == column_fields.len()
+                && star
+                    .fields()
+                    .into_iter()
+                    .take(star_len - 1)
+                    .map(Node::as_str)
+                    .eq(column_fields
+                        .into_iter()
+                        .take(star_len - 1)
+                        .map(Node::as_str))))
+}
+
+fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, column: &nodes::ColumnRef) -> bool {
+    let fields = column.fields();
+    let unqualified = fields.len() == 1;
+    let name = fields.into_iter().next_back().and_then(Node::as_str);
+
     select.target_list().iter().any(|target| {
-        target.name() == Some(name)
+        (unqualified && target.name() == name)
             || matches!(target.val(), Node::ColumnRef(projected)
-                if projected.fields().into_iter().next_back().and_then(Node::as_str) == Some(name))
+                if star_covers(projected, column)
+                    || same_column(projected, column)
+                    || (unqualified
+                        && projected.fields().into_iter().next_back().and_then(Node::as_str)
+                            == name))
     })
 }
 
@@ -25,10 +52,6 @@ pub(super) fn rewrite_select<'a>(
     order_by: &[OrderBy],
     plan: &mut ProjectionRewritePlan,
 ) {
-    if projects_star(select) {
-        return;
-    }
-
     let mut helpers = Vec::new();
     let mut sort_position = 0;
     for sort in select.sort_clause() {
@@ -53,15 +76,7 @@ pub(super) fn rewrite_select<'a>(
         sort_position += 1;
 
         let needs_helper = match node {
-            Node::ColumnRef(column) => match column
-                .fields()
-                .into_iter()
-                .next_back()
-                .and_then(Node::as_str)
-            {
-                Some(name) => !projects_column(select, name),
-                None => false,
-            },
+            Node::ColumnRef(column) => !projects_column(select, column),
             Node::A_Expr(_) => matches!(order, OrderBy::AscVectorL2Column(_, _)),
             _ => false,
         };
@@ -157,5 +172,27 @@ mod tests {
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn projects_column_not_covered_by_qualified_star() {
+        let (sql, plan) = rewrite(
+            "SELECT a.* FROM a JOIN b ON a.id = b.a_id ORDER BY b.score",
+            vec![OrderBy::AscColumn("score".into())],
+        );
+
+        assert!(sql.contains("b.score AS __pgdog_order_col0"));
+        assert_eq!(plan.order_by_helpers().len(), 1);
+    }
+
+    #[test]
+    fn distinguishes_same_named_columns_from_different_relations() {
+        let (sql, plan) = rewrite(
+            "SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price",
+            vec![OrderBy::AscColumn("price".into())],
+        );
+
+        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert_eq!(plan.order_by_helpers().len(), 1);
     }
 }

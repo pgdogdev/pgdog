@@ -269,6 +269,8 @@ impl MultiShard {
                     .map_err(Error::from)?;
 
                 self.buffer.sort(self.route.order_by(), &self.decoder);
+                self.buffer
+                    .drop_helper_columns(self.route.projection_rewrite_plan());
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
                 self.buffer.limit(self.route.limit());
             }

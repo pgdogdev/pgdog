@@ -1,5 +1,8 @@
 use crate::{
-    frontend::router::parser::{DistinctBy, Shard, ShardWithPriority},
+    frontend::router::parser::{
+        DistinctBy, OrderBy, Shard, ShardWithPriority,
+        rewrite::statement::projection::{OrderByHelper, ProjectionRewritePlan},
+    },
     net::{BindComplete, DataRow, Field, Format},
 };
 
@@ -57,6 +60,63 @@ fn test_inconsistent_data_rows() {
         let error_str = format!("{}", error);
         assert!(error_str.contains("inconsistent column count in data rows"));
         assert!(error_str.contains("expected 2 columns, got 1 columns"));
+    }
+}
+
+#[test]
+fn test_order_by_helper_is_dropped_after_sorting() {
+    let mut plan = ProjectionRewritePlan::default();
+    plan.add_order_by_helper(OrderByHelper {
+        sort_position: 0,
+        projected_column: 1,
+    });
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![OrderBy::Asc(2)],
+        Default::default(),
+        Default::default(),
+        None,
+    );
+    route.set_projection_rewrite_plan(plan);
+    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+
+    let row_description =
+        RowDescription::new(&[Field::bigint("id"), Field::bigint("__pgdog_order_col0")]);
+    assert!(
+        multi_shard
+            .handle_server_message(row_description.message())
+            .unwrap()
+            .is_none()
+    );
+    let client_description = multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        RowDescription::from_bytes(client_description.to_bytes())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut first = DataRow::new();
+    first.add(1_i64).add(20_i64);
+    let mut second = DataRow::new();
+    second.add(2_i64).add(10_i64);
+    multi_shard.handle_server_message(first.message()).unwrap();
+    multi_shard.handle_server_message(second.message()).unwrap();
+
+    for _ in 0..2 {
+        multi_shard
+            .handle_server_message(CommandComplete::from_str("SELECT 1").message())
+            .unwrap();
+    }
+
+    for expected in [2_i64, 1_i64] {
+        let message = multi_shard.get_server_message().unwrap();
+        let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(row.len(), 1);
+        assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), expected);
     }
 }
 
