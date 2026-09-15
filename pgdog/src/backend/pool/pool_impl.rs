@@ -201,6 +201,13 @@ impl Pool {
         self.inner.params.get()
     }
 
+    /// Record the server parameters of a newly created connection
+    pub(super) fn cache_params(&self, params: &Parameters) {
+        if self.inner.params.get().is_none() {
+            let _ = self.inner.params.set(params.clone());
+        }
+    }
+
     /// Get server parameters, fetch them if necessary.
     pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         if let Some(params) = self.inner.params.get() {

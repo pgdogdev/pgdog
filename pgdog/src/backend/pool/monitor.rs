@@ -464,6 +464,7 @@ impl Monitor {
                         conn.set_credentials_generation(guard.credentials_generation());
                     }
                     conn.apply_lifetime_jitter(max_age, max_age_jitter);
+                    pool.cache_params(conn.params());
                     return Ok(conn);
                 }
 

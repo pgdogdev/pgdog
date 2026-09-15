@@ -46,8 +46,6 @@ impl TimeFunction {
         timestamps: &QueryTimestamps,
         timezone_param: Option<&ParameterValue>,
     ) -> Result<(String, Vec<u8>), Error> {
-        let tz = session_time_zone(timezone_param)?;
-
         let timestamp = self.column_type.eq("timestamp without time zone");
 
         let reference_time = match self.time_function_type.time_reference() {
@@ -64,6 +62,12 @@ impl TimeFunction {
         }
 
         let precision = self.time_function_type.precision();
+
+        let tz = match session_time_zone(timezone_param) {
+            Ok(tz) => tz,
+            Err(_) if time_output == TimeFunctionOutput::TimestampWithTimeZone => Tz::UTC,
+            Err(err) => return Err(err),
+        };
 
         let formatted_string = time_output.format(&reference_time, &tz, precision);
         let binary = formatted_string.as_bytes().to_vec();

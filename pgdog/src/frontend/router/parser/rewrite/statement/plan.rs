@@ -165,7 +165,9 @@ impl RewritePlan {
     }
 
     /// Apply the rewrite plan to a Parse message by updating the SQL.
-    fn apply_parse(&self, parse: &mut Parse) {
+    ///
+    /// Returns the client's parameter count for an unnamed statement
+    fn apply_parse(&self, parse: &mut Parse) -> Option<u16> {
         if let Some(ref stmt) = self.stmt {
             let client_params = self.params.max(parse.num_data_types());
 
@@ -174,8 +176,12 @@ impl RewritePlan {
                 PreparedStatements::global()
                     .write()
                     .rewrite(parse, client_params);
+            } else {
+                return Some(client_params);
             }
         }
+
+        None
     }
 
     /// Apply the rewrite plan to a Query message by updating the SQL.
@@ -219,14 +225,20 @@ impl RewritePlan {
                 });
         }
 
+        let mut anonymous_client_params = None;
+
         for message in request.messages.iter_mut() {
             match message {
-                ProtocolMessage::Parse(parse) => self.apply_parse(parse),
+                ProtocolMessage::Parse(parse) => {
+                    anonymous_client_params = self.apply_parse(parse);
+                }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
                 ProtocolMessage::Bind(bind) => self.apply_bind(bind, timezone, timestamps).await?,
                 _ => {}
             }
         }
+
+        request.anonymous_client_params = anonymous_client_params;
 
         self.apply_after_messages(request)
     }

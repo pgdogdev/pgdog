@@ -470,6 +470,9 @@ impl Server {
             self.in_transaction = true;
         }
 
+        self.prepared_statements
+            .set_anonymous_client_params(client_request.anonymous_client_params);
+
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }

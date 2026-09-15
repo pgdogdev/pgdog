@@ -110,6 +110,8 @@ pub(crate) struct PreparedStatements {
     memory_used: usize,
     oids: Arc<Oids>,
     server_state: State,
+    // Client parameter count of the unnamed statement being rewritten
+    anonymous_client_params: Option<u16>,
 }
 
 #[cfg(test)]
@@ -133,6 +135,7 @@ impl PreparedStatements {
             memory_used: 0,
             oids,
             server_state: State::Idle,
+            anonymous_client_params: None,
         }
     }
 
@@ -140,6 +143,11 @@ impl PreparedStatements {
     #[inline]
     pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+    }
+
+    /// Number of parameters the client wrote in the unnamed statement this request rewrites.
+    pub(crate) fn set_anonymous_client_params(&mut self, params: Option<u16>) {
+        self.anonymous_client_params = params;
     }
 
     pub(super) fn set_server_state(&mut self, state: State) {
@@ -677,9 +685,10 @@ impl PreparedStatements {
             .get()
             .map(|mappings| &mappings.shard_to_canonical)
             .filter(|mappings| !mappings.is_empty());
-        let client_params = statement
-            .filter(|name| !name.is_empty())
-            .and_then(|name| self.global_cache.read().client_params(name));
+        let client_params = match statement.filter(|name| !name.is_empty()) {
+            Some(name) => self.global_cache.read().client_params(name),
+            None => self.anonymous_client_params,
+        };
 
         if mappings.is_none() && client_params.is_none() {
             return Ok(());
