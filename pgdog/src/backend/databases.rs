@@ -533,8 +533,17 @@ impl Databases {
         }
 
         // Launch all clusters
+        let plugin_auth = config().config.general.auth_type.plugin();
         for cluster in self.all().values() {
-            if cluster.passwords().is_empty() && cluster.identity().is_none() {
+            // A cluster needs a way for clients to authenticate to it and a way
+            // for it to authenticate to Postgres. Without a client password or
+            // an mTLS identity nobody can log in, unless plugin authentication
+            // is on: then a plugin vouches for every login and the pool only
+            // needs its own backend credentials (a server password or an
+            // external identity). A pool with neither stays disabled until a
+            // plugin Allow supplies credentials through `add_authenticated`.
+            let plugin_pool = plugin_auth && cluster.has_backend_credentials();
+            if cluster.passwords().is_empty() && cluster.identity().is_none() && !plugin_pool {
                 warn!(
                     r#"disabling pool for user "{}" and database "{}", password not set"#,
                     cluster.user(),

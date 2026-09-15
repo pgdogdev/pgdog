@@ -511,6 +511,16 @@ impl Cluster {
         self.server_role.as_deref()
     }
 
+    /// Whether this cluster's pools can authenticate to PostgreSQL on their
+    /// own: a backend password on any pool, or an external identity
+    /// (IAM, Vault, ...) as `server_auth`.
+    pub(crate) fn has_backend_credentials(&self) -> bool {
+        self.shards.iter().flat_map(Shard::pools).any(|pool| {
+            let addr = pool.addr();
+            !addr.passwords.is_empty() || addr.server_auth.is_external_identity()
+        })
+    }
+
     /// This user must present a client TLS certificate when connecting over TLS.
     pub(crate) fn tls_client_certificate_required(&self) -> bool {
         self.tls_client_certificate_required
