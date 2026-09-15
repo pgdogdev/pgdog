@@ -217,6 +217,18 @@ impl Parameters {
         result
     }
 
+    /// Remove a parameter for good (unlike [`Self::reset`], which is
+    /// transactional), returning its value.
+    pub(crate) fn remove(&mut self, name: &str) -> Option<ParameterValue> {
+        let result = self.params.remove(&name.to_lowercase());
+
+        if result.is_some() {
+            self.hash = Self::compute_hash(&self.params);
+        }
+
+        result
+    }
+
     /// Recompute hash when params are cleared.
     pub(crate) fn clear(&mut self) {
         self.params.clear();
@@ -1050,6 +1062,26 @@ mod test {
         assert_eq!(
             params.get("database"),
             Some(&ParameterValue::String("mydb".into()))
+        );
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut params = Parameters::default();
+        params.insert("role", "postgres");
+        params.insert("search_path", "public");
+        let before = params.hash;
+
+        assert_eq!(
+            params.remove("ROLE"),
+            Some(ParameterValue::String("postgres".into()))
+        );
+        assert_eq!(params.get("role"), None);
+        assert_ne!(params.hash, before);
+        assert_eq!(params.remove("role"), None);
+        assert_eq!(
+            params.get("search_path"),
+            Some(&ParameterValue::String("public".into()))
         );
     }
 

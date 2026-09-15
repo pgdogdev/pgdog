@@ -243,10 +243,38 @@ impl Client {
         Ok(result)
     }
 
+    /// Drop the `role` startup parameter (`role=...` or `options=-c role=...`)
+    /// for pools that impersonate a fixed `server_role`. Left in place, it
+    /// would be synced to the server as `SET "role"` on every checkout and
+    /// bypass the query-level guard.
+    fn strip_startup_role(params: &mut Parameters, addr: SocketAddr) {
+        if params.get("role").is_none() {
+            return;
+        }
+
+        let (user, database) = user_database_from_params(params);
+        let fixed_role = databases::databases()
+            .cluster((user, database))
+            .map(|cluster| cluster.server_role().is_some())
+            .unwrap_or(false);
+
+        if !fixed_role {
+            return;
+        }
+
+        let (user, database) = (user.to_owned(), database.to_owned());
+        if let Some(role) = params.remove("role") {
+            warn!(
+                r#"user "{}" on database "{}" requested startup role {} on a pool with a fixed server_role, ignoring [{}]"#,
+                user, database, role, addr
+            );
+        }
+    }
+
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
-        params: Parameters,
+        mut params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
@@ -256,6 +284,8 @@ impl Client {
             stream.fatal(ErrorResponse::tls_required()).await?;
             return Ok(None);
         }
+
+        Self::strip_startup_role(&mut params, addr);
 
         let (user, database) = user_database_from_params(&params);
         let admin = database == config.config.admin.name && config.config.admin.user == user;
