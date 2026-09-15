@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use tokio::select;
@@ -19,6 +19,8 @@ use crate::util::{safe_interval, safe_sleep};
 pub(crate) struct ReplicationInfo {
     pub(crate) replication_lag: Option<i64>,
     pub(crate) last_transaction: Option<Instant>,
+    pub(crate) last_transaction_ms: Option<i64>,
+    pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
 }
 
@@ -51,8 +53,11 @@ impl Replication {
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest, tables);
         stream.set_current_lsn(slot.lsn().lsn);
+        self.info.lock().applied_lsn = Some(slot.lsn());
         let result = self.replicate(&mut slot, &mut stream, stop).await;
-        self.info.lock().missed_rows.merge(stream.missed_rows());
+        let mut info = self.info.lock();
+        info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
+        info.missed_rows.merge(stream.missed_rows());
         result
     }
 
@@ -67,6 +72,7 @@ impl Replication {
         {
             let mut info = self.info.lock();
             info.replication_lag = Some(lag);
+            info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
             info.missed_rows.merge(missed);
         }
         if missed.non_zero() {
@@ -146,7 +152,13 @@ impl Replication {
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
                                         slot.status_update(su).await?;
-                                        self.info.lock().last_transaction = Some(Instant::now());
+                                        let mut info = self.info.lock();
+                                        info.last_transaction = Some(Instant::now());
+                                        info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
+                                        info.last_transaction_ms = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .ok()
+                                            .and_then(|elapsed| elapsed.as_millis().try_into().ok());
                                     }
                                     attempt = 0;
                                     progress.update(stream.bytes_sharded(), stream.lsn());
@@ -458,11 +470,14 @@ mod tests {
     }
 
     async fn missed_rows_kill_walsender(fixture: &mut Fixture) -> TestResult {
-        let killed: Vec<String> = fixture.server.fetch_all(format!(
-            "SELECT pg_terminate_backend(active_pid)::text FROM pg_replication_slots \
+        let killed: Vec<String> = fixture
+            .server
+            .fetch_all(format!(
+                "SELECT pg_terminate_backend(active_pid)::text FROM pg_replication_slots \
              WHERE slot_name = '{}_0' AND active_pid IS NOT NULL",
-            fixture.slot_base
-        )).await?;
+                fixture.slot_base
+            ))
+            .await?;
         if killed != ["true"] {
             return Err("replication connection was not terminated".into());
         }
@@ -474,12 +489,15 @@ mod tests {
         id: i64,
         sentinel_id: i64,
     ) -> TestResult {
-        fixture.server.execute_checked(format!(
-            "DELETE FROM {} WHERE id = {id}; \
+        fixture
+            .server
+            .execute_checked(format!(
+                "DELETE FROM {} WHERE id = {id}; \
              UPDATE {} SET val = 'miss' WHERE id = {id}; \
              INSERT INTO {} VALUES ({sentinel_id}, 'sentinel')",
-            fixture.destination_table, fixture.source_table, fixture.source_table
-        )).await?;
+                fixture.destination_table, fixture.source_table, fixture.source_table
+            ))
+            .await?;
         let dest_query = format!(
             "SELECT id::text FROM {} ORDER BY id",
             fixture.destination_table
@@ -492,45 +510,47 @@ mod tests {
     #[tokio::test]
     async fn replication_missed_rows_survive_reconnect_and_accumulate() -> TestResult {
         with_fixture(async |fixture| {
-        fixture
-            .server
-            .execute_checked(format!(
-                "INSERT INTO {} VALUES (1, 'row')",
-                fixture.source_table
-            ))
-            .await?;
-        let dest_query =
-            format!("SELECT id::text FROM {} ORDER BY id", fixture.destination_table);
-        fixture
-            .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "1"))
-            .await?;
+            fixture
+                .server
+                .execute_checked(format!(
+                    "INSERT INTO {} VALUES (1, 'row')",
+                    fixture.source_table
+                ))
+                .await?;
+            let dest_query = format!(
+                "SELECT id::text FROM {} ORDER BY id",
+                fixture.destination_table
+            );
+            fixture
+                .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "1"))
+                .await?;
 
-        missed_rows_cause_missed_update(fixture, 1, 2).await?;
-        missed_rows_kill_walsender(fixture).await?;
+            missed_rows_cause_missed_update(fixture, 1, 2).await?;
+            missed_rows_kill_walsender(fixture).await?;
 
-        fixture
-            .server
-            .execute_checked(format!(
-                "INSERT INTO {} VALUES (3, 'post_reconnect')",
-                fixture.source_table
-            ))
-            .await?;
-        fixture
-            .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "3"))
-            .await?;
+            fixture
+                .server
+                .execute_checked(format!(
+                    "INSERT INTO {} VALUES (3, 'post_reconnect')",
+                    fixture.source_table
+                ))
+                .await?;
+            fixture
+                .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "3"))
+                .await?;
 
-        if fixture.replication.info().missed_rows.counts().1 == 0 {
-            return Err("missed update count was lost during reconnect".into());
-        }
+            if fixture.replication.info().missed_rows.counts().1 == 0 {
+                return Err("missed update count was lost during reconnect".into());
+            }
 
-        missed_rows_cause_missed_update(fixture, 3, 4).await?;
+            missed_rows_cause_missed_update(fixture, 3, 4).await?;
 
-        fixture.stop().await?;
-        if fixture.replication.info().missed_rows.counts().1 < 2 {
-            return Err("missed updates did not accumulate across reconnect".into());
-        }
-        Ok(())
-    })
-    .await
+            fixture.stop().await?;
+            if fixture.replication.info().missed_rows.counts().1 < 2 {
+                return Err("missed updates did not accumulate across reconnect".into());
+            }
+            Ok(())
+        })
+        .await
     }
 }

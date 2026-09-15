@@ -123,14 +123,9 @@ impl Task for ReshardTask {
                 // reloaded. Re-fetch live cluster refs before replicating.
                 orchestrator.refresh()?;
 
-                // `auto_cutover` (reshard) cuts over on its own; otherwise the
-                // task runs until an operator `CUTOVER`/`STOP_TASK`. Both of
-                // those resolve to `Ok`, so awaiting surfaces only a genuine
-                // replication failure.
-                let waiter = orchestrator.replicate().await?;
                 ctx.run(
                     ReplicationTask::builder()
-                        .waiter(waiter)
+                        .orchestrator(orchestrator.clone())
                         .auto_cutover(self.auto_cutover)
                         .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Cutover).build())
                         .build(),

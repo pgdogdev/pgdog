@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
 #[cfg(test)]
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -14,7 +13,6 @@ use super::ReplicationSlot;
 use super::replicate::Replication;
 use crate::backend::replication::tables_sync::tables_sync;
 use crate::backend::{Cluster, pool::Request};
-use crate::tasks;
 
 #[derive(Debug, Default)]
 pub(crate) struct Publisher {
@@ -105,54 +103,44 @@ impl Publisher {
         Ok(())
     }
 
-    /// Replicate and fan-out data from a shard to N shards.
-    ///
-    /// This uses a dedicated replication slot which will survive crashes and reboots.
-    /// N.B.: The slot needs to be manually dropped!
-    pub(crate) async fn replicate(
+    pub(crate) async fn prepare_replication(
         &mut self,
         source: &Cluster,
-        dest: &Cluster,
-    ) -> Result<Waiter, Error> {
-        // Replicate shards in parallel.
-        let mut streams = vec![];
-
-        let stop = CancellationToken::new();
-
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ReplicationStream>, Error> {
         // Synchronize tables from publication.
         self.sync_tables(false, source).await?;
 
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
-            Box::pin(self.create_slots(source, &stop)).await?;
+            Box::pin(self.create_slots(source, cancel)).await?;
         }
 
+        for (number, _) in source.shards().iter().enumerate() {
+            if !self.slots.contains_key(&number) {
+                return Err(Error::NoReplicationSlot(number));
+            }
+        }
+
+        let mut streams = Vec::with_capacity(source.shards().len());
         for (number, _) in source.shards().iter().enumerate() {
             // Use table offsets from data sync
             // or from loading them above.
             let tables = self.tables.remove(&number).unwrap_or_default();
-
             // Take ownership of the slot for replication.
-            let slot = self
-                .slots
-                .remove(&number)
-                .ok_or(Error::NoReplicationSlot(number))?;
-
-            let replication = Arc::new(Replication::new(source, dest));
-            self.replications
-                .get_mut()
-                .insert(number, Arc::clone(&replication));
-            let stop = stop.clone();
-
-            // Replicate in parallel.
-            let handle = tasks::spawn("replication", async move {
-                Box::pin(replication.run(slot, tables, &stop)).await
+            let slot = self.slots.remove(&number).expect("slot was validated");
+            streams.push(ReplicationStream {
+                source_shard: number,
+                slot,
+                tables,
             });
-
-            streams.push(handle);
         }
 
-        Ok(Waiter { streams, stop })
+        Ok(streams)
+    }
+
+    pub(crate) fn track_replication(&mut self, shard: usize, replication: Arc<Replication>) {
+        self.replications.get_mut().insert(shard, replication);
     }
 
     /// Get current replication lag.
@@ -218,33 +206,10 @@ impl Publisher {
 }
 
 #[derive(Debug)]
-pub(crate) struct Waiter {
-    streams: Vec<JoinHandle<Result<(), Error>>>,
-    stop: CancellationToken,
-}
-
-impl Waiter {
-    pub(crate) fn stop(&self) {
-        self.stop.cancel();
-    }
-
-    pub(crate) async fn wait(&mut self) -> Result<(), Error> {
-        for stream in &mut self.streams {
-            stream.await??;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Waiter {
-    pub(crate) fn new_test() -> Self {
-        Self {
-            streams: vec![],
-            stop: CancellationToken::new(),
-        }
-    }
+pub(crate) struct ReplicationStream {
+    pub(crate) source_shard: usize,
+    pub(crate) slot: ReplicationSlot,
+    pub(crate) tables: Vec<Table>,
 }
 
 #[cfg(test)]

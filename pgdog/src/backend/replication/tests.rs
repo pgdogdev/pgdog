@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
 use crate::{
     api::{
+        replication::ReplicationSlotTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
         task::TaskError,
@@ -70,26 +71,35 @@ async fn replicate_until_caught_up(
          WHERE slot_name = '{slot_name}_0' \
          AND confirmed_flush_lsn >= '{target}'::pg_lsn"
     );
-    let mut waiter = publisher.replicate(source, destination).await?;
-    let caught_up = tokio::select! {
-        result = waiter.wait() => {
-            result?;
-            return Err(Error::MissingData.into());
-        }
-        result = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let caught_up: Vec<i64> = server.fetch_all(&query).await?;
-                if caught_up == [1] {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+    let stop = CancellationToken::new();
+    let streams = publisher.prepare_replication(source, &stop).await?;
+    let handles: Vec<_> = streams
+        .into_iter()
+        .map(|stream| {
+            let task = ReplicationSlotTask::new(stream, source, destination, stop.clone());
+            publisher.track_replication(task.source_shard, task.replication.clone());
+            run_task(task)
+        })
+        .collect();
+
+    let caught_up = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let rows: Vec<i64> = server.fetch_all(&query).await?;
+            if rows == [1] {
+                return Ok::<_, Box<dyn std::error::Error>>(());
             }
-            Ok::<_, Box<dyn std::error::Error>>(())
-        }) => result,
-    };
-    waiter.stop();
-    waiter.wait().await?;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    stop.cancel();
+    let mut drained = Ok(());
+    for handle in handles {
+        drained = drained.and(handle.await);
+    }
     caught_up??;
+    drained?;
     Ok(())
 }
 

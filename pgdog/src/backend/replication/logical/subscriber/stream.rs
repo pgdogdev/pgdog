@@ -128,6 +128,8 @@ pub(crate) struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
+
+    missed_rows: MissedRows,
 }
 
 impl StreamSubscriber {
@@ -158,6 +160,7 @@ impl StreamSubscriber {
             lsn_changed: true,
             in_transaction: false,
             keys: HashMap::default(),
+            missed_rows: MissedRows::default(),
         }
     }
 
@@ -804,6 +807,12 @@ impl StreamSubscriber {
         self.connections.clear();
     }
 
+    fn capture_missed_rows(&mut self) {
+        for conn in &self.connections {
+            self.missed_rows.merge(conn.take_missed_rows());
+        }
+    }
+
     /// `docs/REPLICATION.md` → "Error rollback".
     pub(crate) async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {
@@ -840,6 +849,7 @@ impl StreamSubscriber {
                 XLogPayload::Delete(delete) => self.delete(delete).await?,
                 XLogPayload::Commit(commit) => {
                     self.commit(commit).await?;
+                    self.capture_missed_rows();
                     status_update = Some(self.status_update());
                     self.in_transaction = false;
                 }
@@ -897,13 +907,11 @@ impl StreamSubscriber {
         self.in_transaction
     }
 
-    /// Aggregate and reset the missed-row counters across all shard connections.
+    /// Missed rows of all transactions committed so far. Resets on read.
+    /// Rows of a transaction that failed are never counted, because the
+    /// source sends that transaction again after a reconnect.
     pub(crate) fn missed_rows(&mut self) -> MissedRows {
-        let mut total = MissedRows::default();
-        for conn in &self.connections {
-            total.merge(conn.take_missed_rows());
-        }
-        total
+        std::mem::take(&mut self.missed_rows)
     }
 
     /// Verify every destination shard has a qualifying unique index for all `tables`.

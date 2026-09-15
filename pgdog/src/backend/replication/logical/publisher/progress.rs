@@ -23,6 +23,7 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
+    // W: do we need this?
     pub(crate) fn new_stream() -> Self {
         let inner = Arc::new(Inner {
             bytes_sharded: AtomicUsize::new(0),

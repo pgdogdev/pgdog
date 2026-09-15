@@ -27,7 +27,10 @@ pub(super) async fn start_replication(admin: &Pool<Postgres>, slot: Option<&str>
         None => format!("REPLICATE pgdog pgdog_sharded {TEST_PUB}"),
     };
     let task_id = run_task_command(admin, &command).await;
-    wait_for_task_status(admin, task_id, TaskProgress::Running).await;
+    wait_for_task(admin, "replication ready", |task| {
+        task.id == Some(task_id) && task.inner_status == "replicating"
+    })
+    .await;
 
     task_id
 }

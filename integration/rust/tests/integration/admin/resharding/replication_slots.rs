@@ -12,6 +12,7 @@ const SLOT_PREFIX: &str = "__pgdog_repl_admin_slots";
 const SLOT_NAME: &str = "__pgdog_repl_admin_slots_0";
 
 const SHOW_REPLICATION_SLOTS_LAYOUT: &[(&str, &str)] = &[
+    ("task_id", "INT8"),
     ("host", "TEXT"),
     ("port", "INT8"),
     ("database_name", "TEXT"),
@@ -19,9 +20,10 @@ const SHOW_REPLICATION_SLOTS_LAYOUT: &[(&str, &str)] = &[
     ("lsn", "TEXT"),
     ("lag", "TEXT"),
     ("lag_bytes", "INT8"),
-    ("copy_data", "BOOL"),
+    ("source_shard", "INT8"),
     ("last_transaction", "TEXT"),
     ("last_transaction_ms", "INT8"),
+    ("missed_rows", "INT8"),
 ];
 
 async fn slot_row(admin: &Pool<Postgres>) -> Option<PgRow> {
@@ -52,7 +54,8 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
     assert_eq!(row.get::<String, _>("host"), "127.0.0.1");
     assert_eq!(row.get::<i64, _>("port"), 5432);
     assert_eq!(row.get::<String, _>("database_name"), "pgdog");
-    assert!(!row.get::<bool, _>("copy_data"));
+    assert_eq!(row.get::<i64, _>("task_id"), task_id);
+    assert_eq!(row.get::<i64, _>("source_shard"), 0);
 
     let before: String = sqlx::query_scalar("SELECT pg_current_wal_lsn()::text")
         .fetch_one(&direct)
@@ -68,7 +71,7 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
             .get::<String, _>("lsn")
             .parse()
             .expect("displayed WAL position must be valid");
-        (lsn.lsn > before.lsn).then_some(row)
+        (lsn.lsn > before.lsn && row.get::<Option<i64>, _>("lag_bytes").is_some()).then_some(row)
     })
     .await;
     assert!(row.get::<i64, _>("lag_bytes") >= 0);
@@ -77,6 +80,7 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
         row.get::<Option<i64>, _>("last_transaction_ms")
             .is_some_and(|age| age >= 0)
     );
+    assert_eq!(row.get::<i64, _>("missed_rows"), 0);
 
     admin
         .execute(format!("STOP_TASK {task_id}").as_str())

@@ -600,6 +600,8 @@ impl fmt::Display for SchemaShardStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ReplicationStatus {
+    #[display("creating slots")]
+    CreatingSlots,
     /// Streaming changes to catch the destination up.
     #[display("replicating")]
     Replicating,
@@ -626,20 +628,34 @@ pub struct ReplicationSlotDefinition {
     pub host: String,
     pub port: u16,
     pub database_name: String,
-    /// Temporary slot taken for an initial data copy, rather than a persistent
-    /// streaming slot.
-    pub copy_data: bool,
+    pub source_shard: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReplicationMissedRows {
+    pub inserts: usize,
+    pub updates: usize,
+    pub deletes: usize,
 }
 
 /// How far one replication slot has streamed.
-#[derive(Debug, Clone, Copy, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("lag {lag_bytes} bytes at {lsn}")]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationSlotStatus {
     pub lsn: Lsn,
     /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
-    pub lag_bytes: i64,
+    pub lag_bytes: Option<i64>,
     /// Epoch millis of the last transaction applied through this slot.
     pub last_transaction: Option<i64>,
+    pub missed_rows: ReplicationMissedRows,
+}
+
+impl fmt::Display for ReplicationSlotStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.lag_bytes {
+            Some(b) => write!(f, "lag {} bytes at {}", b, self.lsn),
+            None => write!(f, "lag unknown at {}", self.lsn),
+        }
+    }
 }
 
 /// The table one copy subtask is copying.
@@ -747,7 +763,7 @@ mod test {
                 host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "prod".into(),
-                copy_data: false,
+                source_shard: 0,
             }
             .into(),
             SchemaShardDefinition {
@@ -950,8 +966,13 @@ mod test {
                     low: 16,
                     lsn: 16,
                 },
-                lag_bytes: 4096,
+                lag_bytes: Some(4096),
                 last_transaction: Some(1_700_000_000_000),
+                missed_rows: ReplicationMissedRows {
+                    inserts: 1,
+                    updates: 2,
+                    deletes: 3,
+                },
             }),
             TaskStatus::Other,
         ];
@@ -1127,7 +1148,7 @@ mod test {
                 host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "prod".into(),
-                copy_data: false,
+                source_shard: 0,
             })
             .to_string(),
             "pgdog_0 on 127.0.0.1:5432/prod"

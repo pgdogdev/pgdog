@@ -415,6 +415,14 @@ impl ReplicationSlot {
     pub(crate) fn lsn(&self) -> Lsn {
         self.lsn
     }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn addr(&self) -> &Address {
+        &self.address
+    }
 }
 
 #[derive(Debug, Clone)]
