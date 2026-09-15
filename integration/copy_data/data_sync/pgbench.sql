@@ -1,6 +1,22 @@
 \set tenant_id random(1, 20)
 \set order_amount random(1, 50000) / 100.0
 
+BEGIN;
+SELECT -txid_current()::bigint AS fk_id \gset
+INSERT INTO copy_data.users (id, tenant_id, email)
+VALUES (:fk_id, :tenant_id, 'fk_' || :fk_id || '@example.com');
+INSERT INTO copy_data.log_actions (id, tenant_id, user_id, action)
+VALUES (:fk_id, :tenant_id, :fk_id, 'fk_linked');
+COMMIT;
+
+BEGIN;
+UPDATE copy_data.log_actions
+SET user_id = NULL, action = 'fk_released'
+WHERE id = :fk_id AND tenant_id = :tenant_id;
+DELETE FROM copy_data.users
+WHERE id = :fk_id AND tenant_id = :tenant_id;
+COMMIT;
+
 -- Upsert a persistent user for this transaction. txid_current() is stable
 -- within the transaction and unique enough across the benchmark run.
 INSERT INTO copy_data.users (id, tenant_id, email, settings)

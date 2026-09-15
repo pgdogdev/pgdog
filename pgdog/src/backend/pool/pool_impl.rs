@@ -435,61 +435,45 @@ impl Pool {
         &self.inner.config
     }
 
+    pub(crate) fn oids(&self) -> &Arc<Oids> {
+        &self.inner.oids
+    }
+
     /// Get startup parameters for new server connections.
-    pub(super) fn server_options(&self, reason: ConnectReason) -> ServerOptions {
-        let mut params = vec![
-            Parameter {
-                name: "application_name".into(),
-                value: "PgDog".into(),
-            },
-            Parameter {
-                name: "client_encoding".into(),
-                value: "utf-8".into(),
-            },
-        ];
+    pub(super) fn server_options(&self) -> ServerOptions {
+        let mut options = ServerOptions::default();
 
         let config = self.inner.config;
 
-        let lock_timeout = config
-            .lock_timeout
-            // Enforce some lock_timeout during resharding to prevent possible deadlocks.
-            // This should be mostly avoided by pgdog, but in case some invariants are not met,
-            // the resharding could deadlock and with timeout we'll probably retry the update
-            // and either succeed or fail explicitly.
-            .or(matches!(reason, ConnectReason::Resharding).then_some(Duration::from_secs(5)));
-
         if let Some(statement_timeout) = config.statement_timeout {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "statement_timeout".into(),
                 value: statement_timeout.as_millis().to_string().into(),
             });
         }
 
-        if let Some(lock_timeout) = lock_timeout {
-            params.push(Parameter {
+        if let Some(lock_timeout) = config.lock_timeout {
+            options.add(Parameter {
                 name: "lock_timeout".into(),
                 value: lock_timeout.as_millis().to_string().into(),
             });
         }
 
         if config.replication_mode {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "replication".into(),
                 value: "database".into(),
             });
         }
 
         if config.read_only {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "default_transaction_read_only".into(),
                 value: "on".into(),
             });
         }
 
-        ServerOptions {
-            params,
-            pool_id: self.id(),
-        }
+        options
     }
 
     /// Pool state.

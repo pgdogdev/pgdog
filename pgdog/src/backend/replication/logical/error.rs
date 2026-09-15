@@ -72,6 +72,18 @@ pub(crate) enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
+    #[error(
+        "Resharding connection denied for user \"{user}\" on database \"{database}\": {source}.
+    Check and update user permissions:
+    Resharding requires SET ON PARAMETER session_replication_role, or a superuser."
+    )]
+    ReshardingPermissionDenied {
+        user: String,
+        database: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
     #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 

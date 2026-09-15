@@ -18,13 +18,12 @@ use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_
 use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
-use super::PipelinedConnection;
 use super::StreamContext;
+use super::{PipelinedConnection, connect_primary};
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
-    backend::{Cluster, ConnectReason, Server},
-    config::Role,
+    backend::{Cluster, Server},
     frontend::router::parser::Shard,
     net::{
         Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
@@ -172,15 +171,7 @@ impl StreamSubscriber {
         let mut conns: Vec<Server> = vec![];
 
         for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(r, _)| r == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Resharding)
-                .await?;
-            conns.push(primary);
+            conns.push(connect_primary(shard).await?);
         }
 
         // Transaction control statements.

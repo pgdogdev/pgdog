@@ -434,7 +434,7 @@ impl Monitor {
         let connect_timeout = pool.config().connect_timeout;
         let connect_attempts = pool.config().connect_attempts;
         let connect_attempt_delay = pool.config().connect_attempt_delay;
-        let options = pool.server_options(reason);
+        let options = pool.server_options();
 
         let mut error = Error::ServerError;
         let now = Instant::now();
@@ -455,6 +455,7 @@ impl Monitor {
             .await
             {
                 Ok(Ok(mut conn)) => {
+                    conn.stats_mut().set_pool_id(pool.id());
                     let elapsed = now.elapsed();
                     {
                         let mut guard = pool.lock();

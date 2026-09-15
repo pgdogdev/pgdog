@@ -12,8 +12,7 @@ use crate::frontend::client::query_engine::two_pc::{
 
 use crate::frontend::router::parser::Error as ParseError;
 use crate::{
-    backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
-    config::Role,
+    backend::{Cluster, replication::subscriber::ParallelConnection},
     frontend::router::parser::{CopyParser, Shard},
     net::{
         CopyData, CopyDone, ErrorResponse, FromBytes, Message, Protocol, ProtocolMessage, Query,
@@ -22,6 +21,7 @@ use crate::{
 };
 
 use super::super::{CopyStatement, Error};
+use super::connect_primary;
 
 // Not really needed, but we're currently
 // sharding 3 CopyData messages at a time.
@@ -73,15 +73,8 @@ impl CopySubscriber {
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
         for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(role, _)| role == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Resharding)
-                .await?;
-            servers.push(ParallelConnection::new(primary)?);
+            let server = connect_primary(shard).await?;
+            servers.push(ParallelConnection::new(server)?);
         }
 
         self.connections = servers;
