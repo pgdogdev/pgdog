@@ -1,11 +1,14 @@
+use std::time::Duration;
+
 use super::{test_client, test_sharded_client};
 use crate::{
     expect_message,
     net::{
         BindComplete, CommandComplete, DataRow, Describe, ErrorResponse, Parameters, ParseComplete,
-        ReadyForQuery,
+        ReadyForQuery, RowDescription,
     },
 };
+use tokio::time::timeout;
 
 use super::prelude::*;
 
@@ -122,6 +125,41 @@ async fn test_spliced_pipelined_executes() {
 
     assert!(!client.backend_connected());
     expect_message!(client.read().await, ReadyForQuery);
+}
+
+#[tokio::test]
+async fn test_spliced_pipeline_flushes_trailing_portal_describe() {
+    let mut client = TestClient::new_replicas(Parameters::default()).await;
+
+    client.send(Parse::new_anonymous("SELECT 1")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+    client.send(Parse::new_anonymous("SELECT 2")).await;
+    client.send(Bind::new_statement("")).await;
+    client.send(Execute::new()).await;
+    client.send(Describe::new_portal("")).await;
+    client.send(Sync).await;
+
+    timeout(Duration::from_secs(10), client.try_process())
+        .await
+        .expect("pipeline stalled waiting for the trailing Describe response")
+        .unwrap();
+
+    expect_message!(client.read().await, ParseComplete);
+    expect_message!(client.read().await, BindComplete);
+    let row = expect_message!(client.read().await, DataRow);
+    assert_eq!(row.get_int(0, true), Some(1));
+    expect_message!(client.read().await, CommandComplete);
+
+    expect_message!(client.read().await, ParseComplete);
+    expect_message!(client.read().await, BindComplete);
+    let row = expect_message!(client.read().await, DataRow);
+    assert_eq!(row.get_int(0, true), Some(2));
+    expect_message!(client.read().await, CommandComplete);
+
+    expect_message!(client.read().await, RowDescription);
+    expect_message!(client.read().await, ReadyForQuery);
+    assert!(!client.backend_connected());
 }
 
 #[tokio::test]
