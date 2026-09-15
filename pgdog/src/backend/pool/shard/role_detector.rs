@@ -2,17 +2,20 @@ use super::Shard;
 
 pub(super) struct RoleDetector {
     enabled: bool,
+    primary_id: Option<u64>,
     shard: Shard,
 }
 
 impl RoleDetector {
     /// Create new role change detector.
     pub(super) fn new(shard: &Shard) -> Self {
+        let primary_id = shard.lb.primary().map(|pool| pool.id());
         Self {
             enabled: shard
                 .pools()
                 .iter()
                 .all(|pool| pool.config().role_detection),
+            primary_id,
             shard: shard.clone(),
         }
     }
@@ -20,11 +23,14 @@ impl RoleDetector {
     /// Detect role change in the shard.
     pub(super) fn changed(&mut self) -> bool {
         if self.enabled() {
-            let changed = self.shard.redetect_roles();
+            let lb_changed = self.shard.redetect_roles();
+            let primary_id = self.shard.lb.primary().map(|pool| pool.id());
+            let changed = lb_changed || primary_id != self.primary_id;
             if changed {
                 // Re-initialize pub/sub channel.
                 self.shard.init_pub_sub();
             }
+            self.primary_id = primary_id;
             changed
         } else {
             false
@@ -102,7 +108,7 @@ mod test {
     }
 
     #[test]
-    fn test_changed_returns_false_when_lsn_stats_invalid() {
+    fn test_changed_revokes_primary_when_lsn_stats_invalid() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(primary.as_ref(), &replicas);
@@ -110,6 +116,7 @@ mod test {
         let mut detector = RoleDetector::new(&shard);
 
         assert!(detector.enabled());
+        assert!(detector.changed());
         assert!(!detector.changed());
     }
 
@@ -129,7 +136,7 @@ mod test {
     }
 
     #[test]
-    fn test_changed_returns_true_on_failover() {
+    fn test_changed_returns_true_after_external_failover_detection() {
         let primary = Some(create_test_pool_config("127.0.0.1", 5432, true));
         let replicas = [create_test_pool_config("localhost", 5432, true)];
         let shard = create_test_shard(primary.as_ref(), &replicas);
@@ -145,6 +152,7 @@ mod test {
         set_lsn_stats(&shard, 0, false, 300);
         set_lsn_stats(&shard, 1, true, 200);
 
+        assert!(shard.redetect_roles());
         assert!(detector.changed());
     }
 
