@@ -231,6 +231,82 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 }
 
+/// Provision or complete a user during plugin authentication.
+///
+/// Unlike [`add`], this does not compare a client password: the plugin has
+/// already authenticated the client, and the credential (e.g. a JWT) differs
+/// on every login. A configured `users.toml` entry is never overwritten,
+/// only missing backend credentials are filled in.
+///
+/// The entry, including any `server_password` the plugin supplied, is stored in
+/// the in-memory configuration only: `users.toml` on disk is never written, and
+/// a configuration reload drops whatever was provisioned here, exactly like the
+/// passthrough path in [`add`]. Names in the grant are validated by
+/// [`crate::auth::plugin`] before they reach this function.
+pub(crate) fn add_authenticated(user: ConfigUser) -> Result<AuthResult, Error> {
+    fn store(user: ConfigUser) -> Result<(), Error> {
+        let _lock = lock();
+        let mut config = (*config()).clone();
+        config.users.add_or_replace(user);
+        set(config)?;
+        Ok(())
+    }
+
+    let config = config();
+    let existing = config.users.find(&user);
+
+    if let Some(mut existing) = existing {
+        // Never overwrite a configured entry; only fill gaps so a partially
+        // configured user still gets usable backend credentials.
+        let mut changed = false;
+        if existing.server_user.is_none() && user.server_user.is_some() {
+            existing.server_user = user.server_user.clone();
+            changed = true;
+        }
+        if existing.server_password.is_none() && user.server_password.is_some() {
+            existing.server_password = user.server_password.clone();
+            changed = true;
+        }
+        if existing.server_role.is_none() && user.server_role.is_some() {
+            existing.server_role = user.server_role.clone();
+            changed = true;
+        } else if let (Some(configured), Some(granted)) = (&existing.server_role, &user.server_role)
+            && configured != granted
+        {
+            // The plugin asked to impersonate a different role than the one
+            // configured; the configured value wins, so queries will not run
+            // as the authenticated identity.
+            warn!(
+                r#"user "{}" on database "{}": configured server_role "{}" overrides plugin-granted server_role "{}""#,
+                existing.name, existing.database, configured, granted
+            );
+        }
+        if existing.read_only.is_none() && user.read_only.is_some() {
+            existing.read_only = user.read_only;
+            changed = true;
+        }
+
+        if changed {
+            debug!(
+                r#"filling backend-credential gaps for user "{}" on database "{}""#,
+                existing.name, existing.database
+            );
+            store(existing)?;
+            reload_from_existing()?;
+        }
+
+        Ok(AuthResult::Ok)
+    } else {
+        debug!(
+            r#"provisioning user "{}" on database "{}" via plugin authentication"#,
+            user.name, user.database
+        );
+        store(user)?;
+        reload_from_existing()?;
+        Ok(AuthResult::Ok)
+    }
+}
+
 /// Swap database configs between source and destination.
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.
@@ -858,6 +934,79 @@ mod tests {
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
     }
 
+    #[tokio::test]
+    async fn test_add_authenticated_fills_server_role_gap() {
+        setup_config(
+            PassthroughAuth::Disabled,
+            vec![ConfigUser {
+                name: "alice@example.com".to_string(),
+                database: "db1".to_string(),
+                server_user: Some("service".to_string()),
+                server_password: Some("secret".to_string()),
+                ..Default::default()
+            }],
+        );
+
+        let granted = ConfigUser {
+            name: "alice@example.com".to_string(),
+            database: "db1".to_string(),
+            server_role: Some("alice@example.com".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            add_authenticated(granted)
+                .expect("add_authenticated")
+                .is_ok()
+        );
+
+        let config = crate::config::config();
+        let found = config
+            .users
+            .find(&make_user("alice@example.com", None))
+            .expect("user exists");
+        // The grant filled the missing role; configured credentials stayed.
+        assert_eq!(found.server_role.as_deref(), Some("alice@example.com"));
+        assert_eq!(found.server_user.as_deref(), Some("service"));
+        assert_eq!(found.server_password.as_deref(), Some("secret"));
+
+        // The rebuilt pool impersonates the role via the startup packet.
+        let cluster = databases()
+            .cluster(("alice@example.com", "db1"))
+            .expect("cluster exists");
+        assert_eq!(cluster.server_role(), Some("alice@example.com"));
+    }
+
+    #[tokio::test]
+    async fn test_add_authenticated_keeps_configured_server_role() {
+        setup_config(
+            PassthroughAuth::Disabled,
+            vec![ConfigUser {
+                name: "bob".to_string(),
+                database: "db1".to_string(),
+                server_role: Some("analytics".to_string()),
+                ..Default::default()
+            }],
+        );
+
+        let granted = ConfigUser {
+            name: "bob".to_string(),
+            database: "db1".to_string(),
+            server_role: Some("bob".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            add_authenticated(granted)
+                .expect("add_authenticated")
+                .is_ok()
+        );
+
+        let config = crate::config::config();
+        let found = config
+            .users
+            .find(&make_user("bob", None))
+            .expect("user exists");
+        assert_eq!(found.server_role.as_deref(), Some("analytics"));
+    }
     #[tokio::test]
     async fn test_add_existing_user_wrong_password_no_change_allowed() {
         setup_config(

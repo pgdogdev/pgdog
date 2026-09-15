@@ -52,7 +52,13 @@ impl Users {
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.passwords().is_empty() {
-                if !config.general.passthrough_auth() && user.identity.is_none() {
+                // Under `auth_type = "plugin"` a user without a password is
+                // the normal case: the plugin authenticates the client and
+                // PgDog never compares a configured password.
+                if !config.general.passthrough_auth()
+                    && !config.general.auth_type.plugin()
+                    && user.identity.is_none()
+                {
                     warn!(
                         r#"user "{}" (database "{}") doesn't have a password, passthrough auth and mTLS are disabled"#,
                         user.name, user.database,

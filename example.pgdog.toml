@@ -291,6 +291,16 @@ mirror_queue = 128
 # - scram
 # - md5
 # - trust
+# - plain
+# - plugin: delegate client authentication to the loaded plugins that implement
+#   the authenticate hook (see the [[plugins]] section). PgDog asks the client
+#   for a plaintext credential (so use TLS) and consults the plugins in
+#   [[plugins]] order; the first one that does not skip decides. When every
+#   plugin skips, the login is denied: there is no password fallback, so a
+#   capable plugin must be loaded. Plugin calls run on the Tokio blocking pool,
+#   whose size is bounded by `background_workers`; with the default of 0 that
+#   pool has a single thread and plugin calls run one at a time.
+# auth_type = "plugin"
 auth_type = "scram"
 # Disable cross-shard queries.
 #

@@ -3,6 +3,7 @@
 pub(crate) mod auth_result;
 pub(crate) mod error;
 pub(crate) mod md5;
+pub(crate) mod plugin;
 pub(crate) mod scram;
 pub(crate) mod vault;
 

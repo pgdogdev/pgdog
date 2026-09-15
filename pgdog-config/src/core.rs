@@ -579,6 +579,31 @@ impl Config {
             _ => (),
         }
 
+        // Plugin authentication reads the client's credential in plaintext
+        // from the wire; only TLS protects it on the network.
+        if self.general.auth_type.plugin() {
+            if !self.general.tls_client_required {
+                warn!(
+                    "consider setting \"tls_client_required\" while \"auth_type\" is \"plugin\": the client's credential travels in plaintext and only TLS protects it"
+                );
+            }
+
+            if self.plugins.is_empty() {
+                warn!(
+                    "\"auth_type\" is \"plugin\" but no [[plugins]] are configured; every login will be denied"
+                );
+            }
+
+            // Plugins authenticate on the blocking pool, which is one single
+            // thread unless `background_workers` says otherwise, and DNS
+            // lookups for new server connections share it.
+            if self.general.background_workers == 0 {
+                warn!(
+                    "\"auth_type\" is \"plugin\" and \"background_workers\" is 0, so PgDog runs one blocking thread: plugin logins run one at a time and a slow plugin also delays backend DNS lookups; raise \"background_workers\" to the number of concurrent logins you expect"
+                );
+            }
+        }
+
         if !self.general.two_phase_commit && self.rewrite.enabled {
             if self.rewrite.shard_key == RewriteMode::Rewrite {
                 warn!(

@@ -15,7 +15,7 @@ use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::AuthResult;
-use crate::auth::{md5, scram::Server};
+use crate::auth::{md5, plugin, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
@@ -218,7 +218,10 @@ impl Client {
                 }
             }
 
-            AuthType::Plain => {
+            // `Plugin` only reaches here on the admin path (plugin auth is
+            // driven separately in `login`), where it behaves like `Plain`:
+            // compare against the configured admin password.
+            AuthType::Plain | AuthType::Plugin => {
                 stream
                     .send_flush(&Authentication::ClearTextPassword)
                     .await?;
@@ -247,12 +250,11 @@ impl Client {
     /// for pools that impersonate a fixed `server_role`. Left in place, it
     /// would be synced to the server as `SET "role"` on every checkout and
     /// bypass the query-level guard.
-    fn strip_startup_role(params: &mut Parameters, addr: SocketAddr) {
+    fn strip_startup_role(params: &mut Parameters, user: &str, database: &str, addr: SocketAddr) {
         if params.get("role").is_none() {
             return;
         }
 
-        let (user, database) = user_database_from_params(params);
         let fixed_role = databases::databases()
             .cluster((user, database))
             .map(|cluster| cluster.server_role().is_some())
@@ -262,7 +264,6 @@ impl Client {
             return;
         }
 
-        let (user, database) = (user.to_owned(), database.to_owned());
         if let Some(role) = params.remove("role") {
             warn!(
                 r#"user "{}" on database "{}" requested startup role {} on a pool with a fixed server_role, ignoring [{}]"#,
@@ -285,9 +286,14 @@ impl Client {
             return Ok(None);
         }
 
-        Self::strip_startup_role(&mut params, addr);
-
         let (user, database) = user_database_from_params(&params);
+        // Owned copies: `params` is edited below (startup `role` stripping)
+        // while these names stay in use.
+        let (user, database) = (user.to_owned(), database.to_owned());
+        let (user, database) = (user.as_str(), database.as_str());
+
+        Self::strip_startup_role(&mut params, user, database, addr);
+
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
@@ -300,6 +306,10 @@ impl Client {
         // could never be satisfied.
         let client_ca_configured = config.config.general.tls_client_ca_certificate.is_some();
 
+        // Username a plugin derived for the client (e.g. impersonation). When
+        // set, it replaces `user` for all backend operations.
+        let mut derived_user: Option<String> = None;
+
         // Check if we need to ask the client for its password in plaintext
         // because we don't actually have it configured.
         //
@@ -310,6 +320,62 @@ impl Client {
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
             Self::check_password(&mut stream, user, auth_type, &passwords).await?
+        } else if auth_type.plugin() {
+            // Plugin authentication: request a cleartext credential from the
+            // client (same wire flow as passthrough), then hand it to the
+            // authentication plugins. Allow can derive a user and provision a
+            // pool; Deny/all-Skip reject the client without a password fallback.
+            stream
+                .send_flush(&Authentication::ClearTextPassword)
+                .await?;
+            let password = stream.read().await?;
+            let password = Password::from_bytes(password.to_bytes())?;
+            if let Some(credential) = password.password() {
+                let tls_identity = stream.tls_identity().map(|id| id.to_string());
+                let outcome = plugin::authenticate(
+                    user.to_string(),
+                    database.to_string(),
+                    credential.to_string(),
+                    addr.to_string(),
+                    tls_identity,
+                    stream.is_tls(),
+                )
+                .await;
+
+                if outcome.result.is_ok() {
+                    if let Some(grant) = outcome.grant {
+                        derived_user = grant.derived_user.clone();
+                        let effective = derived_user.as_deref().unwrap_or(user);
+
+                        // Reconcile the grant with the derived user's pool:
+                        // fill backend-credential gaps (e.g. `server_role`
+                        // for impersonation) on an existing entry, or
+                        // provision a new pool when the plugin asked for
+                        // it. Without a pool and without `provision`,
+                        // `Connection::new` below fails the login.
+                        let exists = databases::databases()
+                            .cluster((effective, database))
+                            .is_ok();
+                        if exists || grant.provision {
+                            let granted = config::User {
+                                name: effective.to_string(),
+                                database: database.to_string(),
+                                server_user: grant.server_user.clone(),
+                                server_password: grant.server_password.clone(),
+                                server_role: grant.server_role.clone(),
+                                read_only: grant.read_only,
+                                ..Default::default()
+                            };
+                            databases::add_authenticated(granted)?;
+                        }
+                    }
+                    AuthResult::Ok
+                } else {
+                    outcome.result
+                }
+            } else {
+                AuthResult::NoPasswordMessage
+            }
         } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
@@ -363,17 +429,32 @@ impl Client {
             }
         };
 
+        // When a plugin derived a user, use that name for `Connection::new`,
+        // error responses, and log lines; otherwise use the startup username.
+        // Note that comms and stats keep using the startup-packet parameters
+        // (and thus the original startup user).
+        let effective_user = derived_user.as_deref().unwrap_or(user);
+
         if !auth_result.is_ok() {
             if log_connections {
                 warn!(
                     r#"user "{}" and database "{}" auth error: {}"#,
-                    user, database, auth_result
+                    effective_user, database, auth_result
                 );
             }
-            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            stream
+                .fatal(ErrorResponse::auth(effective_user, database))
+                .await?;
             return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
+        }
+
+        // A plugin Allow may have derived another user or given the pool a
+        // `server_role` just now; the startup `role` check above ran against
+        // the original user, so repeat it against the pool actually used.
+        if auth_type.plugin() && !admin {
+            Self::strip_startup_role(&mut params, effective_user, database, addr);
         }
 
         // Check if the pooler is shutting down.
@@ -387,11 +468,13 @@ impl Client {
             return Ok(None);
         }
 
-        let mut conn = match Connection::new(user, database, admin) {
+        let mut conn = match Connection::new(effective_user, database, admin) {
             Ok(conn) => conn,
             Err(err) => {
                 debug!("connection error: {}", err);
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                stream
+                    .fatal(ErrorResponse::auth(effective_user, database))
+                    .await?;
                 return Ok(None);
             }
         };
@@ -407,7 +490,7 @@ impl Client {
                         addr
                     );
                     stream
-                        .fatal(ErrorResponse::connection(user, database))
+                        .fatal(ErrorResponse::connection(effective_user, database))
                         .await?;
                     return Ok(None);
                 } else {
@@ -430,7 +513,11 @@ impl Client {
                 user,
                 database,
                 addr,
-                if passthrough {
+                // `auth_type = "plugin"` is what authenticated this client
+                // even when passthrough is also enabled for other users.
+                if auth_type.plugin() && !admin {
+                    "plugin".into()
+                } else if passthrough {
                     "passthrough".into()
                 } else {
                     auth_type.to_string()

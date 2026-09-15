@@ -21,6 +21,14 @@ pub(crate) enum AuthResult {
     NoUserOrDatabase,
     /// Client didn't provide password message.
     NoPasswordMessage,
+    /// An authentication plugin explicitly denied the client.
+    PluginDenied,
+    /// No authentication plugin made a decision (all skipped). Treated as a
+    /// denial: `auth_type = "plugin"` is explicit, there is no password fallback.
+    PluginNoDecision,
+    /// A plugin accepted the client but returned a grant PgDog cannot use,
+    /// e.g. an empty or over-long user name.
+    PluginInvalidGrant,
 }
 
 impl AuthResult {
@@ -54,6 +62,11 @@ impl Display for AuthResult {
             }
             Self::NoUserOrDatabase => write!(f, "no user or database in config"),
             Self::NoPasswordMessage => write!(f, "client did not send password message"),
+            Self::PluginDenied => write!(f, "authentication plugin denied the client"),
+            Self::PluginNoDecision => write!(f, "no authentication plugin accepted the client"),
+            Self::PluginInvalidGrant => {
+                write!(f, "authentication plugin returned an unusable grant")
+            }
         }
     }
 }

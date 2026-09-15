@@ -323,6 +323,11 @@
           "description": "Plaintext password.",
           "type": "string",
           "const": "plain"
+        },
+        {
+          "description": "Delegate client authentication to the loaded plugins through the\nauthenticate hook. The client sends its credential in plaintext and the\nfirst plugin that does not skip decides; when every plugin skips, the\nlogin is denied (there is no password fallback).",
+          "type": "string",
+          "const": "plugin"
         }
       ]
     },
