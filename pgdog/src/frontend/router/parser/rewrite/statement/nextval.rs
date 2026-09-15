@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use pg_raw_parse::{ConstValue, Node, make, transform, walk};
 
 use crate::frontend::router::parser::rewrite::ee;
+use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
 
 use super::plan::GeneratedId;
 use super::{Error, RewritePlan, StatementRewrite};
@@ -118,8 +119,10 @@ impl StatementRewrite<'_> {
         let sequence = sequence_call(node)?;
         let param = *next_param;
         *next_param += 1;
-        plan.generated_ids
-            .push((param as u16, GeneratedId::Sequence(sequence)));
+        plan.generated_params.push(GeneratedParam {
+            generated_id: GeneratedId::Sequence(sequence),
+            param_num: param as u16,
+        });
         // Retain simple-protocol SQL even when a sequence call is the only rewrite.
         self.rewritten = true;
         self.extended.then(|| {
@@ -204,9 +207,11 @@ mod tests {
     use crate::backend::{ShardingSchema, schema::Schema};
     use crate::frontend::ClientRequest;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
     use crate::net::messages::bind::{Format, Parameter};
-    use crate::net::{Bind, Parameters, Parse, ProtocolMessage, Query};
+    use crate::net::{Bind, Parse, ProtocolMessage, Query};
     use pgdog_config::Rewrite;
 
     use super::*;
@@ -230,16 +235,13 @@ mod tests {
             user: "test",
             search_path: None,
             timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = RewritePlan::default();
         let ast = make::owned(|mem| {
             let mut ast = mem.parse(sql).expect("valid SQL");
             plan = rewriter
-                .maybe_rewrite(
-                    ast.as_mut().into_iter().next().expect("statement"),
-                    mem,
-                    crate::frontend::client::QueryTimestamps::now(),
-                )
+                .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
                 .expect("rewrite succeeds");
             ast
         });
@@ -260,25 +262,32 @@ mod tests {
         assert_eq!(plan.params, 1);
         assert_eq!(plan.unique_ids, 1);
         assert_eq!(
-            plan.generated_ids,
+            plan.generated_params,
             vec![
-                (
-                    2,
-                    GeneratedId::Sequence(SequenceCall::Nextval("sequence.name".to_owned()))
-                ),
-                (3, GeneratedId::UniqueId),
-                (
-                    4,
-                    GeneratedId::Sequence(SequenceCall::Currval("other.seq".to_owned()))
-                ),
-                (
-                    5,
-                    GeneratedId::Sequence(SequenceCall::Setval {
+                GeneratedParam {
+                    param_num: 2,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                        "sequence.name".to_owned()
+                    ))
+                },
+                GeneratedParam {
+                    param_num: 3,
+                    generated_id: GeneratedId::UniqueId
+                },
+                GeneratedParam {
+                    param_num: 4,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Currval(
+                        "other.seq".to_owned()
+                    ))
+                },
+                GeneratedParam {
+                    param_num: 5,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Setval {
                         name: "sequence.name".to_owned(),
                         value: 42,
                         is_called: false,
                     })
-                ),
+                }
             ]
         );
         assert_eq!(plan.stmt.as_deref(), Some(sql.as_str()));
@@ -291,16 +300,20 @@ mod tests {
         let (sql, plan) = rewrite(original, false);
         assert_eq!(sql, original);
         assert_eq!(
-            plan.generated_ids,
+            plan.generated_params,
             vec![
-                (
-                    1,
-                    GeneratedId::Sequence(SequenceCall::Nextval("sequence.name".to_owned()))
-                ),
-                (
-                    2,
-                    GeneratedId::Sequence(SequenceCall::Nextval("sequence.name".to_owned()))
-                ),
+                GeneratedParam {
+                    param_num: 1,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                        "sequence.name".to_owned()
+                    ))
+                },
+                GeneratedParam {
+                    param_num: 2,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                        "sequence.name".to_owned()
+                    ))
+                },
             ]
         );
         assert_eq!(plan.unique_ids, 0);
@@ -318,18 +331,20 @@ mod tests {
         );
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
         assert_eq!(
-            plan.generated_ids,
+            plan.generated_params,
             vec![
-                (
-                    1,
-                    GeneratedId::Sequence(SequenceCall::Nextval(
+                GeneratedParam {
+                    param_num: 1,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
                         "\"My Schema\".\"My Sequence\"".to_owned()
                     ))
-                ),
-                (
-                    2,
-                    GeneratedId::Sequence(SequenceCall::Nextval("other.seq".to_owned()))
-                ),
+                },
+                GeneratedParam {
+                    param_num: 2,
+                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                        "other.seq".to_owned()
+                    ))
+                },
             ]
         );
     }
@@ -470,7 +485,7 @@ mod tests {
             let mut value = -2i64;
             plan.apply_generated_ids(
                 &mut bind,
-                &mut Parameters::default(),
+                None,
                 crate::frontend::client::QueryTimestamps::now(),
                 async |call: &SequenceCall| {
                     let SequenceCall::Nextval(name) = call else {
@@ -544,7 +559,7 @@ mod tests {
             let mut bind = Bind::default();
             plan.apply_generated_ids(
                 &mut bind,
-                &mut Parameters::default(),
+                None,
                 crate::frontend::client::QueryTimestamps::now(),
                 &mut nextval,
             )
@@ -573,7 +588,7 @@ mod tests {
             let error = plan
                 .apply(
                     &mut request,
-                    &mut Parameters::default(),
+                    None,
                     crate::frontend::client::QueryTimestamps::now(),
                 )
                 .await
@@ -598,7 +613,7 @@ mod tests {
             extended_plan
                 .apply(
                     &mut request,
-                    &mut Parameters::default(),
+                    None,
                     crate::frontend::client::QueryTimestamps::now(),
                 )
                 .await
@@ -610,7 +625,7 @@ mod tests {
             let error = simple_plan
                 .apply(
                     &mut request,
-                    &mut Parameters::default(),
+                    None,
                     crate::frontend::client::QueryTimestamps::now(),
                 )
                 .await
@@ -658,8 +673,11 @@ mod tests {
                     let original = format!("SELECT {call}");
                     let (sql, plan) = rewrite(&original, extended);
                     assert_eq!(
-                        plan.generated_ids,
-                        [(1, GeneratedId::Sequence(expected.clone()))],
+                        plan.generated_params,
+                        [GeneratedParam {
+                            param_num: 1,
+                            generated_id: GeneratedId::Sequence(expected.clone()),
+                        }],
                         "{call}"
                     );
                     let canonical = original.replace(
@@ -740,7 +758,7 @@ mod tests {
                     let mut bind = Bind::default();
                     plan.apply_generated_ids(
                         &mut bind,
-                        &mut Parameters::default(),
+                        None,
                         crate::frontend::client::QueryTimestamps::now(),
                         &mut execute,
                     )
@@ -815,7 +833,7 @@ mod tests {
         ] {
             for extended in [false, true] {
                 let (_, plan) = rewrite(&format!("SELECT {call}"), extended);
-                assert!(plan.generated_ids.is_empty(), "{call}");
+                assert!(plan.generated_params.is_empty(), "{call}");
                 assert!(plan.is_empty(), "{call}");
             }
         }
@@ -866,7 +884,7 @@ mod tests {
                 "{call}"
             );
             let (_, plan) = rewrite(&format!("SELECT {call}"), true);
-            assert!(plan.generated_ids.is_empty(), "{call}");
+            assert!(plan.generated_params.is_empty(), "{call}");
             assert!(plan.is_empty(), "{call}");
         }
     }

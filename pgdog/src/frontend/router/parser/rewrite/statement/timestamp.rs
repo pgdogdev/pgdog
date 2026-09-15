@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-use chrono::{DateTime, Local, Offset, SubsecRound, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Offset, SubsecRound, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use pg_raw_parse::{
     ConstValue, Node, NodeMut,
@@ -10,7 +10,7 @@ use pg_raw_parse::{
     raw::SQLValueFunctionOp,
     transform::{TransformClosure, transform_node},
 };
-use pgdog_stats::Relation;
+use pgdog_stats::{Column, Relation};
 use std::str::FromStr;
 
 use crate::{
@@ -19,7 +19,10 @@ use crate::{
         client::QueryTimestamps,
         router::parser::{
             StatementParser, StatementRewrite, Table,
-            rewrite::statement::{Error, plan::GeneratedId},
+            rewrite::statement::{
+                Error,
+                plan::{GeneratedId, GeneratedParam},
+            },
         },
     },
     net::parameter::ParameterValue,
@@ -42,9 +45,8 @@ impl TimeFunction {
         &self,
         timestamps: &QueryTimestamps,
         timezone_param: Option<&ParameterValue>,
-    ) -> (String, Vec<u8>) {
-        // TODO: Get rid of unwrap()
-        let tz = timezone_param.map(|tz_str| tz_str.as_str().unwrap().parse::<Tz>().unwrap());
+    ) -> Result<(String, Vec<u8>), Error> {
+        let tz = session_time_zone(timezone_param)?;
 
         let timestamp = self.column_type.eq("timestamp without time zone");
 
@@ -63,13 +65,10 @@ impl TimeFunction {
 
         let precision = self.time_function_type.precision();
 
-        let formatted_string = match tz {
-            Some(tz) => time_output.format(&reference_time, &tz, precision),
-            None => time_output.format(&reference_time, &Local, precision),
-        };
+        let formatted_string = time_output.format(&reference_time, &tz, precision);
         let binary = formatted_string.as_bytes().to_vec();
 
-        (formatted_string, binary)
+        Ok((formatted_string, binary))
     }
 
     /// Some data types we get aren't compatible as-is with the pg_catalog type
@@ -90,6 +89,17 @@ impl TimeFunction {
             string => string,
         }
     }
+}
+
+/// The session's `TimeZone` as an IANA name, e.g. `UTC` or `America/New_York`.
+///
+/// Offsets like `+00:00` or `<-08>+08` are future work.
+fn session_time_zone(timezone: Option<&ParameterValue>) -> Result<Tz, Error> {
+    let timezone = timezone.ok_or(Error::UnknownTimeZone)?;
+    timezone
+        .as_str()
+        .and_then(|value| value.parse::<Tz>().ok())
+        .ok_or_else(|| Error::UnsupportedTimeZone(timezone.to_string()))
 }
 
 /// Postgres trims trailing zeros from fractional seconds
@@ -141,7 +151,7 @@ pub(crate) enum TimeFunctionType {
     TransactionTimestamp,
 }
 
-/// TODO: Docs.
+/// Represents what Postgres type the `TimeFunction` would normally output.
 #[derive(PartialEq)]
 enum TimeFunctionOutput {
     Date,
@@ -268,21 +278,32 @@ impl TimeFunctionType {
     /// Parse both `FuncCall`s and `SQLValueFunction`s here.
     /// `now()` = `FuncCall`,
     /// `CURRENT_TIMESTAMP`, `LOCALTIME` = `SQLValueFunction`,
-    fn from_node(node: Node) -> Option<Self> {
+    fn from_node(node: Node, column_relation: Option<&Column>) -> Option<Self> {
         match node {
             Node::FuncCall(func) => {
-                // TODO: Look into parsing out parameters
                 let Node::String(str) = func.funcname().first()? else {
                     return None;
                 };
                 str.sval()?.parse().ok()
             }
             Node::SQLValueFunction(func) => Self::from_sql_value_function(func.op, func.typmod),
+
+            Node::SetToDefault(_) => {
+                // If DEFAULT is in a VALUES list; fetch the column based on index.
+                if let Some(column) = column_relation
+                    && let Ok(time_function_type) =
+                        column.column_default.parse::<TimeFunctionType>()
+                {
+                    return Some(time_function_type);
+                }
+
+                None
+            }
             _ => None,
         }
     }
 
-    /// TODO: Doc comment.
+    /// Convert `SQLValueFunctionOp` (e.g. current_date, current_time... non ()) to `TimeFunctionType`
     fn from_sql_value_function(op: SQLValueFunctionOp::Type, typmod: i32) -> Option<Self> {
         use SQLValueFunctionOp::*;
 
@@ -374,20 +395,19 @@ impl StatementRewrite<'_> {
         // TODO: Replace `next_param` with plan.param directly
         next_param: &mut i32,
         plan: &mut RewritePlan,
-        timestamps: QueryTimestamps,
-    ) {
+    ) -> Result<(), Error> {
         let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema, None);
         let is_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);
 
         // not sharded = omni
         if is_sharded {
-            return;
+            return Ok(());
         }
 
         //
         let Some((relation, cols, not_covered_cols)) = self.find_not_used_cols(&mut stmt, mem)
         else {
-            return;
+            return Ok(());
         };
 
         let mut timestamp_rewrite = TimestampRewrite {
@@ -397,7 +417,7 @@ impl StatementRewrite<'_> {
             mem,
             relation,
             cols,
-            timestamps,
+            error: None,
         };
 
         // 1. iterates through Schema to find DEFAULT columns
@@ -406,11 +426,12 @@ impl StatementRewrite<'_> {
 
         // Replaces all time function calls (ParamRef or String)
         timestamp_rewrite.transform_func_calls(stmt);
+
+        timestamp_rewrite.error.map_or(Ok(()), Err)
     }
 
     /// Fetch the table Relation, so that we can get the relevant Schema for each column.
     /// Fetch the list of columns that are DEFAULT (and not already covered)
-    /// TODO: cols?
     fn find_not_used_cols<'mem, 'mutref>(
         &self,
         stmt: &mut NodeMut<'mem, 'mutref>,
@@ -423,7 +444,7 @@ impl StatementRewrite<'_> {
         let relation = insert_stmt.relation().expect("INSERT always has table");
         let table = Table::from(relation);
 
-        let relation = self.db_schema.table(table, self.user, None)?;
+        let relation = self.db_schema.table(table, self.user, self.search_path)?;
         let cols = insert_stmt.cols();
 
         // Find the columns that the insert does NOT cover.
@@ -431,8 +452,7 @@ impl StatementRewrite<'_> {
             let subset: Vec<&str> = cols
                 .iter()
                 .filter_map(|col| match col {
-                    // TODO: Replace unwrap() with an Error / None match.
-                    Node::ResTarget(target) => Some(target.name().unwrap()),
+                    Node::ResTarget(target) => target.name(),
                     _ => None,
                 })
                 .collect();
@@ -450,7 +470,6 @@ impl StatementRewrite<'_> {
     }
 }
 
-/// TODO: Doc comment
 struct TimestampRewrite<'mem, 'a, 's> {
     rewrite: &'a mut StatementRewrite<'s>,
     plan: &'a mut RewritePlan,
@@ -460,7 +479,9 @@ struct TimestampRewrite<'mem, 'a, 's> {
     mem: MemoryToken<'mem>,
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
-    timestamps: QueryTimestamps,
+
+    // Error from formatting a time.
+    error: Option<Error>,
 }
 
 impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
@@ -482,20 +503,20 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                     // FuncCalls is that we must know where we are within a VALUES, as that
                     // allows us to know the present column's data type (for potential later coersion)
                     for (i, value) in list_of_values.iter().enumerate() {
-                        if let Some(time_function_type) = TimeFunctionType::from_node(value) {
-                            self.rewrite.rewritten = true;
+                        let col_relation = if self.cols.is_empty() {
+                            self.relation.columns.get_index(i).map(|(_, column)| column)
+                        } else {
+                            match self.cols.get(i) {
+                                Some(Node::ResTarget(target)) => target
+                                    .name()
+                                    .and_then(|name| self.relation.columns.get(name)),
+                                _ => None,
+                            }
+                        };
 
-                            let col_relation = if self.cols.is_empty() {
-                                self.relation.columns.get_index(i).map(|(_, column)| column)
-                            } else {
-                                match self.cols.get(i) {
-                                    Some(Node::ResTarget(target)) => target
-                                        .name()
-                                        .and_then(|name| self.relation.columns.get(name)),
-                                    _ => None,
-                                }
-                            };
-
+                        if let Some(time_function_type) =
+                            TimeFunctionType::from_node(value, col_relation)
+                        {
                             let Some(col_relation) = col_relation else {
                                 continue;
                             };
@@ -568,7 +589,6 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
             for values_list in select_stmt.values_lists_mut() {
                 let mut node_list_mut = values_list.expect_node_list();
 
-                self.rewrite.rewritten = true;
                 node_list_mut.push(self.mem, self.make_node(&time_function));
             }
         }
@@ -577,20 +597,31 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
     /// If simple protocol, make an A_Const node with the String constant of the formatted time.
     /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted time later.
     fn make_node(&mut self, time_function: &TimeFunction) -> Unique<'mem, Node<'mem>> {
-        if !self.rewrite.extended || !self.rewrite.prepared {
-            let source = time_function.formatted_time(&self.timestamps, self.rewrite.timezone);
+        self.rewrite.rewritten = true;
+
+        if !self.rewrite.extended && !self.rewrite.prepared {
+            let text = match time_function
+                .formatted_time(&self.rewrite.query_timestamps, self.rewrite.timezone)
+            {
+                Ok((text, _)) => text,
+                // The statement is discarded when the error is returned (thus, value doesn't matter)
+                Err(err) => {
+                    self.error.get_or_insert(err);
+                    String::new()
+                }
+            };
             self.mem
-                .make_a_const(ConstValue::String(source.0.as_str()))
+                .make_a_const(ConstValue::String(text.as_str()))
                 .uncast()
         } else {
             let param_ref = self.mem.make_param_ref(*self.next_param);
             *self.next_param += 1;
 
             // TODO: add a method to plan() for this...
-            self.plan.generated_ids.push((
-                (*self.next_param - 1) as u16,
-                GeneratedId::ProxyTime(time_function.clone()),
-            ));
+            self.plan.generated_params.push(GeneratedParam {
+                param_num: (*self.next_param - 1) as u16,
+                generated_id: GeneratedId::ProxyTime(time_function.clone()),
+            });
 
             // Example: CAST($1::pg_catalog.text AS timetz)
             // This is 30x less code at the expense of query verbosity;

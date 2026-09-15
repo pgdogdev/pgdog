@@ -2,6 +2,7 @@
 
 use crate::{
     config::config,
+    frontend::client::QueryTimestamps,
     net::{
         Close, Format, Parameters, Sync,
         messages::{bind::Parameter, parse::Parse},
@@ -48,14 +49,9 @@ fn parse_query(query: &str) -> Command {
     let cluster = Cluster::new_test(&config());
     let buffered = BufferedQuery::Query(Query::new(query));
     let params = Parameters::default();
-    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
-        .query(
-            &buffered,
-            &ctx,
-            &mut PreparedStatements::default(),
-            crate::frontend::client::QueryTimestamps::now(),
-        )
+        .query(&buffered, &ctx, &mut PreparedStatements::default())
         .unwrap();
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
     client_request.ast = Some(ast);
@@ -75,14 +71,13 @@ macro_rules! command {
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Query(Query::new($query));
         let params = Parameters::default();
-        let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
+        let ctx = crate::frontend::router::parser::AstContext::from_cluster(
+            &cluster,
+            &params,
+            QueryTimestamps::default(),
+        );
         let ast = crate::frontend::router::parser::Cache::get()
-            .query(
-                &buffered,
-                &ctx,
-                &mut PreparedStatements::default(),
-                crate::frontend::client::QueryTimestamps::now(),
-            )
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
         client_request.ast = Some(ast);
@@ -132,15 +127,14 @@ macro_rules! query_parser {
 
         let mut prep_stmts = PreparedStatements::default();
         let params = Parameters::default();
-        let ctx = crate::frontend::router::parser::AstContext::from_cluster(&cluster, &params);
+        let ctx = crate::frontend::router::parser::AstContext::from_cluster(
+            &cluster,
+            &params,
+            QueryTimestamps::default(),
+        );
 
         let mut ast = crate::frontend::router::parser::Cache::get()
-            .query(
-                &buffered_query,
-                &ctx,
-                &mut prep_stmts,
-                crate::frontend::client::QueryTimestamps::now(),
-            )
+            .query(&buffered_query, &ctx, &mut prep_stmts)
             .unwrap();
         ast.cached = false; // Dry run test needs this.
         client_request.ast = Some(ast);
@@ -191,15 +185,13 @@ macro_rules! parse {
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous($query));
         let client_params = Parameters::default();
-        let ctx =
-            crate::frontend::router::parser::AstContext::from_cluster(&cluster, &client_params);
+        let ctx = crate::frontend::router::parser::AstContext::from_cluster(
+            &cluster,
+            &client_params,
+            QueryTimestamps::default(),
+        );
         let ast = crate::frontend::router::parser::Cache::get()
-            .query(
-                &buffered,
-                &ctx,
-                &mut PreparedStatements::default(),
-                crate::frontend::client::QueryTimestamps::now(),
-            )
+            .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
         client_request.ast = Some(ast);
@@ -482,14 +474,9 @@ fn test_set() {
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
     let params = Parameters::default();
-    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
-        .query(
-            &buffered_query,
-            &ctx,
-            &mut prep_stmts,
-            crate::frontend::client::QueryTimestamps::now(),
-        )
+        .query(&buffered_query, &ctx, &mut prep_stmts)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);
@@ -632,14 +619,9 @@ WHERE t2.account = (
 	";
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
     let params = Parameters::default();
-    let ctx = AstContext::from_cluster(&cluster, &params);
+    let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::now());
     let ast = Cache::get()
-        .query(
-            &buffered_query,
-            &ctx,
-            &mut prep_stmts,
-            crate::frontend::client::QueryTimestamps::now(),
-        )
+        .query(&buffered_query, &ctx, &mut prep_stmts)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
     buffer.ast = Some(ast);

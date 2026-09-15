@@ -4,6 +4,7 @@ use crate::backend::schema::Schema;
 use crate::config::config;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::AstContext;
+use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
 use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
@@ -49,6 +50,8 @@ pub(crate) struct StatementRewriteContext<'a> {
     pub(crate) search_path: Option<&'a ParameterValue>,
     /// Timezone for now() time generation for TIMEZONE columns.
     pub(crate) timezone: Option<&'a ParameterValue>,
+    /// Statement, and transaction DateTime<Utc> relevant to the current Query (if not being cached)
+    pub(crate) query_timestamps: QueryTimestamps,
 }
 
 #[derive(Debug)]
@@ -74,6 +77,8 @@ pub(crate) struct StatementRewrite<'a> {
     search_path: Option<&'a ParameterValue>,
     /// Timezone for now() time generation for TIMEZONE columns.
     timezone: Option<&'a ParameterValue>,
+    /// Statement, and transaction DateTime<Utc> relevant to the current Query (if not being cached)
+    query_timestamps: QueryTimestamps,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -92,6 +97,7 @@ impl<'a> StatementRewrite<'a> {
             user: ctx.user,
             search_path: ctx.search_path,
             timezone: ctx.timezone,
+            query_timestamps: ctx.query_timestamps,
         }
     }
 
@@ -103,6 +109,7 @@ impl<'a> StatementRewrite<'a> {
             user: self.user,
             search_path: self.search_path,
             timezone: self.timezone,
+            query_timestamps: self.query_timestamps,
         }
     }
 
@@ -112,7 +119,6 @@ impl<'a> StatementRewrite<'a> {
         &mut self,
         mut stmt: nodes::RawStmtMut<'mem, '_>,
         mem: make::MemoryToken<'mem>,
-        timestamps: QueryTimestamps,
     ) -> Result<RewritePlan, Error> {
         let mut plan = RewritePlan::default();
 
@@ -165,8 +171,10 @@ impl<'a> StatementRewrite<'a> {
                     Ok(Some(replacement)) => {
                         plan.unique_ids += 1;
                         if self.extended {
-                            plan.generated_ids
-                                .push(((next_param - 1) as u16, GeneratedId::UniqueId));
+                            plan.generated_params.push(GeneratedParam {
+                                param_num: (next_param - 1) as u16,
+                                generated_id: GeneratedId::UniqueId,
+                            });
                         }
                         self.rewritten = true;
                         node.replace(replacement);
@@ -198,9 +206,9 @@ impl<'a> StatementRewrite<'a> {
             self.limit_offset(&select, &mut plan);
         }
 
-        let timestamp_rewrite = matches!(
-            config().config.rewrite.omni_database_defaults,
-            RewriteMode::Rewrite | RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
+        let timestamp_rewrite = !matches!(
+            config().config.rewrite.omni_non_deterministic_functions,
+            RewriteMode::Ignore
         );
 
         if timestamp_rewrite {
@@ -211,8 +219,7 @@ impl<'a> StatementRewrite<'a> {
                         mem,
                         &mut next_param,
                         &mut plan,
-                        timestamps,
-                    );
+                    )?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
@@ -221,8 +228,7 @@ impl<'a> StatementRewrite<'a> {
                             mem,
                             &mut next_param,
                             &mut plan,
-                            timestamps,
-                        );
+                        )?;
                     }
                 }
                 _ => {}
@@ -230,13 +236,8 @@ impl<'a> StatementRewrite<'a> {
         }
 
         // Handle top-level PREPARE/EXECUTE statements.
-        let prepared_result = self.rewrite_simple_prepared(
-            stmt.stmt_mut(),
-            mem,
-            &mut plan,
-            timestamps,
-            timestamp_rewrite,
-        )?;
+        let prepared_result =
+            self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan, timestamp_rewrite)?;
         if prepared_result.rewritten {
             self.rewritten = true;
             plan.prepare_rewrites = prepared_result.rewrites;
@@ -247,7 +248,7 @@ impl<'a> StatementRewrite<'a> {
         }
 
         if let Node::InsertStmt(insert) = stmt.stmt() {
-            self.split_insert(insert, &mut plan, timestamps)?;
+            self.split_insert(insert, &mut plan)?;
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {

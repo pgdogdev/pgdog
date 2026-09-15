@@ -94,8 +94,8 @@ pub struct Rewrite {
     pub primary_key: RewriteMode,
 
     // TODO: docs repo
-    #[serde(default = "Rewrite::default_omni_database_defaults")]
-    pub omni_database_defaults: RewriteMode,
+    #[serde(default = "Rewrite::default_omni_non_deterministic_functions")]
+    pub omni_non_deterministic_functions: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -105,7 +105,7 @@ impl Default for Rewrite {
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
-            omni_database_defaults: Self::default_omni_database_defaults(),
+            omni_non_deterministic_functions: Self::default_omni_non_deterministic_functions(),
         }
     }
 }
@@ -123,7 +123,7 @@ impl Rewrite {
         RewriteMode::Ignore
     }
 
-    const fn default_omni_database_defaults() -> RewriteMode {
+    const fn default_omni_non_deterministic_functions() -> RewriteMode {
         RewriteMode::Ignore
     }
 }

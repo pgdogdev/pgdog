@@ -224,7 +224,7 @@
       "$ref": "#/$defs/Rewrite",
       "default": {
         "enabled": false,
-        "omni_database_defaults": "ignore",
+        "omni_non_deterministic_functions": "ignore",
         "primary_key": "ignore",
         "shard_key": "error",
         "split_inserts": "error"
@@ -1940,7 +1940,7 @@
           "type": "boolean",
           "default": false
         },
-        "omni_database_defaults": {
+        "omni_non_deterministic_functions": {
           "$ref": "#/$defs/RewriteMode",
           "default": "ignore"
         },

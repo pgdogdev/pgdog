@@ -1,5 +1,5 @@
 use crate::{
-    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedId},
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
     net::Prepare,
     stats::memory::MemoryUsage,
 };
@@ -16,9 +16,20 @@ pub(crate) struct Statement {
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedPlan {
     pub(crate) prepare: Prepare,
+
+    /// The number of calls to `pgdog.unique_id` which were previously
+    /// rewritten. If this value is greater than zero, it is expected
+    /// that the query in the [`Parse`] message referenced by
+    /// [`Self::prepare`] was previously rewritten to replace those calls
+    /// with bind parameter placeholder numbered after all others
     pub(crate) unique_ids: u16,
+
+    /// Used to keep track of LIMIT + OFFSET queries (stemming from Prepare),
+    /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
+    /// modify limit/offset values before execution if it ends up being cross-shard.
     pub(crate) offset_plan: Option<OffsetPlan>,
-    pub(crate) generated_ids: Vec<(u16, GeneratedId)>,
+
+    pub(crate) generated_params: Vec<GeneratedParam>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,28 +40,13 @@ pub(crate) enum StatementType {
         client_params: Option<u16>,
     },
 
-    Prepare {
-        prepare: Prepare,
-        /// The number of calls to `pgdog.unique_id` which were previously
-        /// rewritten. If this value is greater than zero, it is expected
-        /// that the query in the [`Parse`] message referenced by
-        /// [`Self::prepare`] was previously rewritten to replace those calls
-        /// with bind parameter placeholder numbered after all others
-        unique_ids: u16,
-
-        /// Used to keep track of LIMIT + OFFSET queries (stemming from Prepare),
-        /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
-        /// modify limit/offset values before execution if it ends up being cross-shard.
-        offset_plan: Option<OffsetPlan>,
-
-        generated_ids: Vec<(u16, GeneratedId)>,
-    },
+    Prepare(PreparedPlan),
 }
 
 impl MemoryUsage for StatementType {
     fn memory_usage(&self) -> usize {
         match self {
-            Self::Prepare { prepare, .. } => prepare.len(),
+            Self::Prepare(plan) => plan.prepare.len(),
             Self::Parse { parse, rewrite, .. } => {
                 parse.len()
                     + rewrite
@@ -83,21 +79,9 @@ impl Statement {
         }
     }
 
-    // TODO: Could consolidate the storage into `PreparedPlan` too.
-    // TODO: This should be renamed; "prepare_and_unique_ids" doesn't represent what it does now.
-    pub(super) fn prepare_and_unique_ids(&self) -> Option<PreparedPlan> {
+    pub(super) fn prepared_plan(&self) -> Option<PreparedPlan> {
         match &self.stmt {
-            StatementType::Prepare {
-                prepare,
-                unique_ids,
-                offset_plan,
-                generated_ids,
-            } => Some(PreparedPlan {
-                prepare: prepare.clone(),
-                unique_ids: *unique_ids,
-                offset_plan: offset_plan.clone(),
-                generated_ids: generated_ids.clone(),
-            }),
+            StatementType::Prepare(plan) => Some(plan.clone()),
             _ => None,
         }
     }
@@ -141,7 +125,7 @@ mod test {
         pub(crate) fn query(&self) -> &str {
             match self.stmt {
                 StatementType::Parse { ref parse, .. } => parse.query(),
-                StatementType::Prepare { ref prepare, .. } => prepare.query(),
+                StatementType::Prepare(ref plan) => plan.prepare.query(),
             }
         }
     }

@@ -7,7 +7,7 @@ use crate::{
     config::{self, ReadWriteStrategy, config},
     frontend::{
         ClientRequest, Command, PreparedStatements, RouterContext,
-        client::{Sticky, TransactionType, transaction_type::Transaction},
+        client::{QueryTimestamps, Sticky, TransactionType, transaction_type::Transaction},
         router::{
             QueryParser,
             parser::{AstContext, Cache, Error},
@@ -215,15 +215,14 @@ impl QueryParserTest {
         if use_parser {
             // Some requests (like Close) don't have a query
             if let Ok(Some(buffered_query)) = request.query() {
-                let ctx = AstContext::from_cluster(&self.cluster, &self.params);
+                let ctx = AstContext::from_cluster(
+                    &self.cluster,
+                    &self.params,
+                    QueryTimestamps::default(),
+                );
                 // The engine surfaces cache-time errors (e.g. a comment
                 // directive that fails to resolve) as client errors.
-                let ast = Cache::get().query(
-                    &buffered_query,
-                    &ctx,
-                    &mut self.prepared,
-                    crate::frontend::client::QueryTimestamps::now(),
-                )?;
+                let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared)?;
                 request.ast = Some(ast);
             }
         }

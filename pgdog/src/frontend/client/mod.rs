@@ -5,7 +5,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
@@ -653,9 +653,6 @@ impl Client {
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
-        // Only start timer once we receive the first message.
-        let mut timer = None;
-
         // Check config once per request.
         let config = config::config();
         // Configure prepared statements cache.
@@ -666,6 +663,7 @@ impl Client {
         self.stream_buffer
             .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
 
+        let mut has_set_time: bool = false;
         while !self.client_request.is_complete() {
             let idle_timeout = self
                 .timeouts
@@ -701,8 +699,8 @@ impl Client {
                 }
             };
 
-            if timer.is_none() {
-                timer = Some(Instant::now());
+            if !has_set_time {
+                has_set_time = true;
                 self.statement_start = Utc::now();
             }
 
@@ -715,10 +713,11 @@ impl Client {
             }
         }
 
+        let elapsed_time = Utc::now() - self.statement_start;
         if !enabled!(LogLevel::TRACE) {
             debug!(
                 "request buffered [{:.4}ms] {:?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request
                     .messages
                     .iter()
@@ -728,7 +727,7 @@ impl Client {
         } else {
             trace!(
                 "request buffered [{:.4}ms]\n{:#?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request,
             );
         }

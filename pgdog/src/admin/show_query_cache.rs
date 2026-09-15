@@ -81,7 +81,6 @@ mod test {
                     )),
                     &ctx,
                     &mut prepared_statements,
-                    crate::frontend::client::QueryTimestamps::now(),
                 )
                 .unwrap();
         }

@@ -689,6 +689,9 @@ impl PreparedStatements {
         if let Some(mappings) = mappings {
             parameter_description.rewrite_data_types(mappings);
         }
+
+        // Note: This relies on the invariant that the first X parameters are all client-provided
+        // params, while the ones we re-write are appended to the end.
         if let Some(client_params) = client_params {
             parameter_description.truncate(client_params as usize);
         }

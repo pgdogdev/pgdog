@@ -196,6 +196,11 @@ impl Pool {
         }
     }
 
+    /// Server parameters
+    pub(crate) fn cached_params(&self) -> Option<&Parameters> {
+        self.inner.params.get()
+    }
+
     /// Get server parameters, fetch them if necessary.
     pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
         if let Some(params) = self.inner.params.get() {

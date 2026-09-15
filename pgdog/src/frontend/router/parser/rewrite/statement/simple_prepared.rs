@@ -7,11 +7,13 @@ use pg_raw_parse::{
 
 use crate::{
     frontend::{
-        client::QueryTimestamps,
         prepared_statements::PreparedPlan,
         router::parser::{
             Limit,
-            rewrite::statement::{offset::OffsetPlan, plan::GeneratedId},
+            rewrite::statement::{
+                offset::OffsetPlan,
+                plan::{GeneratedId, GeneratedParam},
+            },
         },
     },
     net::{PREPARE_TEMPLATE_NAME, Prepare, parameter::ParameterValue},
@@ -67,7 +69,6 @@ impl StatementRewrite<'_> {
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
-        timestamps: QueryTimestamps,
         timestamp_rewrite: bool,
     ) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
@@ -76,7 +77,7 @@ impl StatementRewrite<'_> {
             return Ok(result);
         }
 
-        match self.rewrite_single_prepared(node, mem, plan, timestamps, timestamp_rewrite)? {
+        match self.rewrite_single_prepared(node, mem, plan, timestamp_rewrite)? {
             SimplePreparedRewrite::Prepared { prepare } => {
                 result.rewrites.push(PrepareExecute::Prepare(prepare));
                 result.rewritten = true;
@@ -97,7 +98,6 @@ impl StatementRewrite<'_> {
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
-        timestamps: QueryTimestamps,
         timestamp_rewrite: bool,
     ) -> Result<SimplePreparedRewrite, Error> {
         match node {
@@ -122,14 +122,14 @@ impl StatementRewrite<'_> {
                     })
                     .transpose()?;
 
-                let generated_ids = plan.generated_ids.clone();
+                let generated_params = plan.generated_params.clone();
                 let prepare = self.prepared_statements.insert_prepare(
                     &client_name,
                     original_query,
                     new_query,
                     plan,
                     offset_plan,
-                    generated_ids,
+                    generated_params,
                 );
 
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
@@ -144,8 +144,8 @@ impl StatementRewrite<'_> {
                     prepare,
                     unique_ids,
                     offset_plan,
-                    generated_ids,
-                }) = self.prepared_statements.prepare_and_unique_ids(stmt_name)
+                    generated_params,
+                }) = self.prepared_statements.prepared_plan(stmt_name)
                 {
                     if let Some(mut offset_plan) = offset_plan {
                         // Note: This needs to be ordered before the offset_val/limit_val adjustment.
@@ -158,14 +158,13 @@ impl StatementRewrite<'_> {
                     // TODO: Should we be setting this on Plan? Pros? Cons?
                     // TODO: Double check that this only runs on omnisharded (as well as Bind/Execute, etc)
                     if timestamp_rewrite {
-                        plan.generated_ids = generated_ids;
-                        insert_generated_ids(
+                        plan.generated_params = generated_params;
+                        self.insert_generated_ids(
                             &mut stmt,
                             mem,
-                            &plan.generated_ids,
+                            &plan.generated_params,
                             self.timezone,
-                            &timestamps,
-                        );
+                        )?;
                     }
 
                     // Rewrite EXECUTE statement to match the rewrite
@@ -182,26 +181,30 @@ impl StatementRewrite<'_> {
             _ => Ok(SimplePreparedRewrite::None),
         }
     }
-}
 
-fn insert_generated_ids<'a>(
-    stmt: &mut ExecuteStmtMut<'a, '_>,
-    mem: MemoryToken<'a>,
-    generated_ids: &Vec<(u16, GeneratedId)>,
-    timezone: Option<&ParameterValue>,
-    timestamps: &QueryTimestamps,
-) {
-    for (_, source) in generated_ids {
-        let (text, _) = match source {
-            GeneratedId::ProxyTime(time) => time.formatted_time(timestamps, timezone),
-            // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
-            _ => panic!("not supported yet!"),
-        };
+    fn insert_generated_ids<'a>(
+        &self,
+        stmt: &mut ExecuteStmtMut<'a, '_>,
+        mem: MemoryToken<'a>,
+        generated_params: &Vec<GeneratedParam>,
+        timezone: Option<&ParameterValue>,
+    ) -> Result<(), Error> {
+        for param in generated_params {
+            let (text, _) = match &param.generated_id {
+                GeneratedId::ProxyTime(time) => {
+                    time.formatted_time(&self.query_timestamps, timezone)?
+                }
+                // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
+                _ => continue,
+            };
 
-        stmt.params_mut().push(
-            mem,
-            mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
-        );
+            stmt.params_mut().push(
+                mem,
+                mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -429,6 +432,7 @@ mod tests {
     use crate::backend::schema::Schema;
     use crate::config::PreparedStatementsLevel;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::test_utils::set_env_var;
     use pg_raw_parse::Node;
     use pgdog_config::Rewrite;
@@ -469,15 +473,12 @@ mod tests {
                 user: "",
                 search_path: None,
                 timezone: None,
+                query_timestamps: QueryTimestamps::default(),
             });
             let mut plan = Default::default();
             let ast = pg_raw_parse::make::try_owned(|mem| {
                 let mut copy = mem.make_unique(&*stmt.into_inner());
-                plan = rewrite.maybe_rewrite(
-                    copy.as_mut().into_iter().next().unwrap(),
-                    mem,
-                    QueryTimestamps::now(),
-                )?;
+                plan = rewrite.maybe_rewrite(copy.as_mut().into_iter().next().unwrap(), mem)?;
                 Ok::<_, Error>(copy)
             })?;
             let sql = pg_raw_parse::deparse_stmts(&*ast)?;
@@ -596,7 +597,7 @@ mod tests {
             assert_eq!(ctx.ps.global.read().len(), 1);
 
             // Verify the OffsetPlan is correct from the PreparedStatement name used.
-            let fetched = ctx.ps.prepare_and_unique_ids("test_stmt").unwrap();
+            let fetched = ctx.ps.prepared_plan("test_stmt").unwrap();
             let fetched_prepare = fetched.prepare;
             let offset_plan = fetched.offset_plan.unwrap();
             assert_eq!(
@@ -655,7 +656,7 @@ mod tests {
             assert_eq!(ctx.ps.global.read().len(), 2);
 
             // Verify the OffsetPlan is correct using the PreparedStatement name used.
-            let fetched = ctx.ps.prepare_and_unique_ids("test_stmt2").unwrap();
+            let fetched = ctx.ps.prepared_plan("test_stmt2").unwrap();
             let fetched_prepare = fetched.prepare;
             let offset_plan = fetched.offset_plan.unwrap();
             assert_eq!(

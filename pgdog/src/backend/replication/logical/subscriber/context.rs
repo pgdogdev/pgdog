@@ -50,12 +50,11 @@ impl StreamContext {
         let parse = stmt.clone();
         let mut request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
 
-        let ast_context = AstContext::from_cluster(cluster, &PARAMS);
+        let ast_context = AstContext::from_cluster(cluster, &PARAMS, QueryTimestamps::now());
         let ast = Cache::get().query(
             &BufferedQuery::Prepared(parse),
             &ast_context,
             &mut PreparedStatements::default(),
-            QueryTimestamps::now(),
         )?;
         request.ast = Some(ast);
 

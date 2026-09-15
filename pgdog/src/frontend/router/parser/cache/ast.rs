@@ -12,7 +12,6 @@ use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
 use crate::config::Role;
 use crate::frontend::PreparedStatements;
-use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::sharding::ShardOrLookup;
@@ -67,11 +66,10 @@ impl Deref for Ast {
 
 impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub(super) fn with_context(
+    pub(super) fn new(
         query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        timestamps: QueryTimestamps,
     ) -> Result<Self, Error> {
         let now = Instant::now();
 
@@ -88,13 +86,14 @@ impl Ast {
             user: ctx.user,
             search_path: ctx.search_path,
             timezone: ctx.timezone,
+            query_timestamps: ctx.query_timestamps,
         });
         let mut rewrite_plan = Default::default();
         let ast = make::try_owned(|mem| {
             let mut ast = mem.parse(query.query_without_comment)?;
             // Parser should not receive multi-query requests.
             if let Ok(stmt) = ast.as_mut().into_iter().exactly_one() {
-                rewrite_plan = rewriter.maybe_rewrite(stmt, mem, timestamps)?;
+                rewrite_plan = rewriter.maybe_rewrite(stmt, mem)?;
             }
             Ok::<_, Error>(ast)
         })?;

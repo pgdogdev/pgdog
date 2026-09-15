@@ -329,6 +329,7 @@ mod tests {
             user: "test",
             search_path: None,
             timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = RewritePlan::default();
         rewrite.limit_offset(

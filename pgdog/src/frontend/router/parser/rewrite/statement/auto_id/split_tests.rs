@@ -3,10 +3,11 @@ use super::super::plan::RewriteResult;
 use super::tests::make_schema_with_bigint_pk;
 use super::*;
 use crate::backend::ShardingSchema;
+use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::StatementRewriteContext;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
-use crate::net::{Bind, Parameters, Parse, ProtocolMessage, Query};
+use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use pgdog_config::Rewrite;
 
 fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
@@ -31,16 +32,13 @@ fn split_plan(sql: &str, extended: bool, prepared: bool) -> RewritePlan {
         user: "",
         search_path: None,
         timezone: None,
+        query_timestamps: QueryTimestamps::default(),
     });
     let mut plan = RewritePlan::default();
     make::owned(|mem| {
         let mut ast = mem.parse(sql).expect("valid SQL");
         plan = rewriter
-            .maybe_rewrite(
-                ast.as_mut().into_iter().next().expect("statement"),
-                mem,
-                crate::frontend::client::QueryTimestamps::now(),
-            )
+            .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
             .expect("rewrite succeeds");
         ast
     });
@@ -135,7 +133,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                 let result = plan
                     .apply(
                         &mut prepare_request,
-                        &mut Parameters::default(),
+                        None,
                         crate::frontend::client::QueryTimestamps::now(),
                     )
                     .await
@@ -151,7 +149,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                     let mut value = 200;
                     plan.apply_generated_ids(
                         &mut bind,
-                        &mut Parameters::default(),
+                        None,
                         crate::frontend::client::QueryTimestamps::now(),
                         async |call: &SequenceCall| {
                             assert_eq!(call, &SequenceCall::Nextval("users_id_seq".into()));
@@ -202,7 +200,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                                 .as_ref()
                                 .expect("AST")
                                 .rewrite_plan
-                                .generated_ids
+                                .generated_params
                                 .is_empty()
                         );
                     }

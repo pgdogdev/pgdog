@@ -409,7 +409,7 @@ async fn reusable_func_test(
 /// - Before running, it resets everything (re-create table on each shard)
 /// - Tests with different timezones to ensure `timestamp` vs `timestamptz` works as intended;
 ///   more specifically, INSERT timezone is different from SELECT timezone.
-/// - Tests DEFAULT schema.
+/// - Tests DEFAULT schema (both implicit and explicit)
 /// - Tests functions within the VALUES list.
 /// - Tests multiple VALUES lists (...), (....)
 /// - Ensures time consistency across databases for the omnisharded column.
@@ -468,6 +468,13 @@ async fn omni_timestamp_rewrite_simple_protocol() {
         .execute(&mut **sesh)
         .await
         .unwrap();
+
+        sqlx::raw_sql(
+            "INSERT INTO test_omni_ts(id, created_at, created_at_tz, created_at_default, created_at_tz_default) VALUES (4, now(), now(), DEFAULT, DEFAULT)",
+        )
+        .execute(&mut **sesh)
+        .await
+        .unwrap();
     }).await;
 }
 
@@ -491,6 +498,14 @@ async fn omni_timestamp_rewrite_extended_protocol() {
         .execute(&mut **sesh)
         .await
         .unwrap();
+
+        sqlx::query(
+            "INSERT INTO test_omni_ts(id, created_at, created_at_tz, created_at_default, created_at_tz_default) VALUES ($1, now(), now(), DEFAULT, DEFAULT)",
+        )
+        .bind(4)
+        .execute(&mut **sesh)
+        .await
+        .unwrap();
     }).await;
 }
 
@@ -510,12 +525,22 @@ async fn omni_timestamp_rewrite_prepare_execute() {
             "PREPARE stmt2 AS INSERT INTO test_omni_ts(id, created_at, created_at_tz) VALUES ($1, now(), now())"
         ).execute(&mut **sesh).await.unwrap();
 
+        sqlx::raw_sql(
+            "PREPARE stmt3 AS INSERT INTO test_omni_ts(id, created_at, created_at_tz, created_at_default, created_at_tz_default) VALUES ($1, now(), now(), DEFAULT, DEFAULT)"
+        ).execute(&mut **sesh).await.unwrap();
+
         sqlx::raw_sql("EXECUTE stmt(1, 2)")
             .execute(&mut **sesh)
             .await
             .unwrap();
 
         sqlx::raw_sql("EXECUTE stmt2(3)")
+            .execute(&mut **sesh)
+            .await
+            .unwrap();
+
+
+        sqlx::raw_sql("EXECUTE stmt3(4)")
             .execute(&mut **sesh)
             .await
             .unwrap();
@@ -668,12 +693,12 @@ async fn fetch_rows_with_tz(
     // Force to route to the individual shards to ensure no divergence.
     (
         sesh.fetch_all(
-            "/* pgdog_shard: 0 */ SELECT * FROM public.test_omni_ts WHERE id IN (1, 2, 3)",
+            "/* pgdog_shard: 0 */ SELECT * FROM public.test_omni_ts WHERE id IN (1, 2, 3, 4)",
         )
         .await
         .unwrap(),
         sesh.fetch_all(
-            "/* pgdog_shard: 1 */ SELECT * FROM public.test_omni_ts WHERE id IN (1, 2, 3)",
+            "/* pgdog_shard: 1 */ SELECT * FROM public.test_omni_ts WHERE id IN (1, 2, 3, 4)",
         )
         .await
         .unwrap(),

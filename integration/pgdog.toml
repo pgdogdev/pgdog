@@ -44,9 +44,7 @@ enabled = false
 shard_key = "ignore"
 split_inserts = "error"
 # primary_key = "rewrite"
-#
-# TODO: This doesn't strictly affect DEFAULT; might want to re-name
-omni_database_defaults = "rewrite"
+omni_non_deterministic_functions = "rewrite"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

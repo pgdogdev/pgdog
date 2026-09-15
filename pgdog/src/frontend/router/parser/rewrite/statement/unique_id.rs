@@ -58,12 +58,12 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::router::parser::rewrite::statement::RewritePlan;
     use crate::test_utils::set_env_var;
+    use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
     use pg_raw_parse::{Owned, nodes};
 
     fn default_schema() -> ShardingSchema {
@@ -289,14 +289,13 @@ mod tests {
             user: "",
             search_path: None,
             timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = Default::default();
         let ast = make::owned(|mem| {
             let mut copy = mem.make_unique(&*stmt.into_inner());
             let stmt = copy.as_mut().into_iter().next().unwrap();
-            plan = rewrite
-                .maybe_rewrite(stmt, mem, crate::frontend::client::QueryTimestamps::now())
-                .unwrap();
+            plan = rewrite.maybe_rewrite(stmt, mem).unwrap();
             copy
         });
         let sql = pg_raw_parse::deparse_stmts(&*ast).unwrap();

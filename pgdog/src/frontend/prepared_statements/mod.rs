@@ -10,7 +10,7 @@ use crate::{
     config::PreparedStatementsLevel,
     frontend::{
         RewritePlan,
-        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedId},
+        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
     },
     net::{Parse, Prepare, ProtocolMessage},
 };
@@ -125,7 +125,7 @@ impl PreparedStatements {
         rewrite_plan: &RewritePlan,
         // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
         offset_plan: Option<OffsetPlan>,
-        generated_ids: Vec<(u16, GeneratedId)>,
+        generated_params: Vec<GeneratedParam>,
     ) -> Prepare {
         let (_new, prepare) = {
             self.global.write().insert_prepare(
@@ -133,7 +133,7 @@ impl PreparedStatements {
                 rewritten_query,
                 rewrite_plan,
                 offset_plan,
-                generated_ids,
+                generated_params,
             )
         };
 
@@ -148,11 +148,11 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
-    /// Get a globally unique [`Prepare`] message using the client name as key.
-    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<PreparedPlan> {
+    /// Get a globally unique `PreparedPlan` using the client name as key.
+    pub(crate) fn prepared_plan(&self, name: &str) -> Option<PreparedPlan> {
         self.local
             .get(name)
-            .and_then(|name| self.global.read().prepare_and_unique_ids(name))
+            .and_then(|name| self.global.read().prepared_plan(name))
     }
 
     /// Number of prepared statements in the client's cache.

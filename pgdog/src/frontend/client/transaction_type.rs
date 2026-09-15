@@ -49,6 +49,12 @@ pub(crate) struct QueryTimestamps {
     pub(crate) statement_start: DateTime<Utc>,
 }
 
+impl Default for QueryTimestamps {
+    fn default() -> Self {
+        QueryTimestamps::now()
+    }
+}
+
 impl QueryTimestamps {
     pub(crate) fn new(transaction: Option<&Transaction>, statement_start: DateTime<Utc>) -> Self {
         Self {

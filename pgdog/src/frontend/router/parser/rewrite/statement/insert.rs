@@ -2,7 +2,6 @@ use indexmap::IndexSet;
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
 
-use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::Ast;
 use crate::frontend::router::parser::Cache;
 use crate::frontend::{BufferedQuery, ClientRequest};
@@ -177,7 +176,6 @@ impl StatementRewrite<'_> {
         &mut self,
         insert: &nodes::InsertStmt,
         plan: &mut RewritePlan,
-        timestamps: QueryTimestamps,
     ) -> Result<(), Error> {
         // Don't rewrite INSERTs in unsharded databases.
         if self.schema.shards == 1 || self.schema.rewrite.split_inserts != RewriteMode::Rewrite {
@@ -205,7 +203,7 @@ impl StatementRewrite<'_> {
                 BufferedQuery::Query(Query::new(&stmt))
             };
             let ast = cache
-                .query(&query, &ctx, self.prepared_statements, timestamps)
+                .query(&query, &ctx, self.prepared_statements)
                 .map_err(|e| Error::Cache(e.to_string()))?;
 
             // If this is a named prepared statement, register the split in the global cache
@@ -260,6 +258,7 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::net::messages::bind::{Format, Parameter};
 
@@ -297,11 +296,10 @@ mod tests {
             user: "",
             search_path: None,
             timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = RewritePlan::default();
-        rewriter
-            .split_insert(insert, &mut plan, QueryTimestamps::now())
-            .unwrap();
+        rewriter.split_insert(insert, &mut plan).unwrap();
         plan.insert_split
     }
 

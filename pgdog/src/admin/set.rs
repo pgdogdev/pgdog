@@ -135,8 +135,8 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
-            "rewrite_omni_database_defaults" => {
-                config.config.rewrite.omni_database_defaults = self
+            "rewrite_omni_non_deterministic_functions" => {
+                config.config.rewrite.omni_non_deterministic_functions = self
                     .value
                     .parse::<RewriteMode>()
                     .map_err(|_| Error::Syntax)?;

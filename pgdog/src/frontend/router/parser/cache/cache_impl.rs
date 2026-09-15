@@ -11,7 +11,6 @@ use tracing::debug;
 
 use super::super::{Error, Route};
 use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
-use crate::frontend::client::QueryTimestamps;
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -90,14 +89,10 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        timestamps: QueryTimestamps,
     ) -> Result<Ast, Error> {
         match query {
-            // TODO: It may be better to omit the timestamps for the Prepared branch,
-            //       while the current code doesn't use it (!self.extended && !self.prepared), we shouldn't be giving the appearance
-            //       of potentially caching while keeping the (stateful) timestamps in mind.
-            BufferedQuery::Prepared(_) => self.parse(query, ctx, prepared_statements, timestamps),
-            BufferedQuery::Query(_) => self.simple(query, ctx, prepared_statements, timestamps),
+            BufferedQuery::Prepared(_) => self.parse(query, ctx, prepared_statements),
+            BufferedQuery::Query(_) => self.simple(query, ctx, prepared_statements),
         }
     }
 
@@ -112,7 +107,6 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        timestamps: QueryTimestamps,
     ) -> Result<Ast, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
@@ -133,14 +127,13 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let mut entry = Ast::with_context(
+        let mut entry = Ast::new(
             &AstQuery {
                 original_query: query,
                 query_without_comment: query_and_comment.query,
             },
             ctx,
             prepared_statements,
-            timestamps,
         )?;
         entry.comment_role = query_and_comment.role;
         entry.comment_shard = query_and_comment.shard;
@@ -173,18 +166,16 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-        timestamps: QueryTimestamps,
     ) -> Result<Ast, Error> {
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
 
-        let mut entry = Ast::with_context(
+        let mut entry = Ast::new(
             &AstQuery {
                 original_query: query,
                 query_without_comment: query_and_comment.query,
             },
             ctx,
             prepared_statements,
-            timestamps,
         )?;
         entry.cached = false;
         entry.comment_role = query_and_comment.role;
