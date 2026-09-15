@@ -16,7 +16,7 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
-        cached_ast: &Ast,
+        _cached_ast: &Ast,
         stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -269,18 +269,13 @@ impl QueryParser {
             }
         }
 
-        let mut query = Route::select(
+        let query = Route::select(
             context.shards_calculator.shard().clone(),
             order_by,
             aggregates,
             limit,
             distinct,
         );
-
-        // Only rewrite if query is cross-shard.
-        if query.is_cross_shard() && context.shards > 1 {
-            query.set_rewrite_plan(cached_ast.rewrite_plan.aggregates.clone());
-        }
 
         Ok(Command::Query(
             query

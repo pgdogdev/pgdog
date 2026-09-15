@@ -30,6 +30,7 @@ use super::*;
 pub(crate) struct GlobalCache {
     statements: HashMap<CacheKey, CachedStmt>,
     names: HashMap<String, Statement>,
+    cross_shard_variants: HashMap<String, Statement>,
     unused: HashSet<Counter>,
     counter: Counter,
 }
@@ -39,12 +40,20 @@ impl MemoryUsage for GlobalCache {
     fn memory_usage(&self) -> usize {
         self.statements.memory_usage()
             + self.names.memory_usage()
+            + self.cross_shard_variants.memory_usage()
             + self.counter.memory_usage()
             + self.unused.capacity() * 1usize.memory_usage()
     }
 }
 
 impl GlobalCache {
+    pub(crate) fn cross_shard_variant_name(&self, name: &str) -> Option<String> {
+        let variant_name = format!("{name}_cross_shard");
+        self.cross_shard_variants
+            .contains_key(&variant_name)
+            .then_some(variant_name)
+    }
+
     /// Record a Parse message with the global cache and return a globally unique
     /// name PgDog is using for that statement.
     ///
@@ -137,10 +146,41 @@ impl GlobalCache {
         }
     }
 
+    pub(crate) fn cross_shard_variant(&mut self, name: &str, query: &str) -> Option<String> {
+        if let Some(variant_name) = self.cross_shard_variant_name(name) {
+            return Some(variant_name);
+        }
+        let variant_name = format!("{name}_cross_shard");
+
+        let mut parse = self.rewritten_parse(name)?;
+        parse.rename(&variant_name);
+        parse.set_query(query);
+        let cache_key = CacheKey::Extended {
+            query: parse.query_ref(),
+            data_types: parse.data_types_ref(),
+        };
+        self.cross_shard_variants.insert(
+            variant_name.clone(),
+            Statement {
+                stmt: StatementType::Parse {
+                    parse,
+                    rewrite: None,
+                },
+                row_description: None,
+                cache_key,
+            },
+        );
+
+        Some(variant_name)
+    }
+
     /// Client sent a Describe for a prepared statement and received a RowDescription.
     /// We record the RowDescription for later use by the results decoder.
     pub(crate) fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
-        if let Some(entry) = self.names.get_mut(name)
+        if let Some(entry) = self
+            .names
+            .get_mut(name)
+            .or_else(|| self.cross_shard_variants.get_mut(name))
             && entry.row_description.is_none()
         {
             entry.row_description = Some(row_description);
@@ -176,8 +216,9 @@ impl GlobalCache {
     /// Used for preparing this statement on a server connection.
     ///
     pub(crate) fn rewritten_parse(&self, name: &str) -> Option<Parse> {
-        self.names
+        self.cross_shard_variants
             .get(name)
+            .or_else(|| self.names.get(name))
             .and_then(|p| p.rewritten_parse().clone().or(p.parse()))
     }
 
@@ -195,7 +236,16 @@ impl GlobalCache {
     /// It can be used to decode results received from executing the prepared
     /// statement.
     pub(crate) fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.names.get(name).and_then(|p| p.row_description.clone())
+        self.cross_shard_variants
+            .get(name)
+            .or_else(|| self.names.get(name))
+            .and_then(|p| p.row_description.clone())
+    }
+
+    pub(crate) fn cross_shard_variant_needs_row_description(&self, name: &str) -> bool {
+        self.cross_shard_variants
+            .get(name)
+            .is_some_and(|statement| statement.row_description.is_none())
     }
 
     /// Number of prepared statements in the local cache.
@@ -267,6 +317,8 @@ impl GlobalCache {
     fn remove(&mut self, name: &str) {
         if let Some(stmt) = self.names.remove(name) {
             self.statements.remove(stmt.cache_key());
+            self.cross_shard_variants
+                .remove(&format!("{name}_cross_shard"));
         }
     }
 
@@ -303,6 +355,7 @@ impl GlobalCache {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::net::messages::Field;
 
     impl GlobalCache {
         /// Get the query string stored in the global cache
@@ -342,6 +395,67 @@ mod test {
         assert_eq!(owned.as_ptr(), stored.cache_key.query_ref().as_ptr());
         assert_eq!(owned.as_ptr(), map_key.query_ref().as_ptr());
         assert_ne!(owned.as_ptr(), source.query_ref().as_ptr());
+    }
+
+    #[test]
+    fn cross_shard_variant_is_owned_by_base_statement() {
+        let mut cache = GlobalCache::default();
+        let (_, base) = cache.insert(&Parse::named(
+            "client",
+            "SELECT AVG(value) FROM measurements",
+        ));
+
+        let variant = cache
+            .cross_shard_variant(
+                &base,
+                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 FROM measurements",
+            )
+            .unwrap();
+        assert_eq!(variant, format!("{base}_cross_shard"));
+        assert_eq!(
+            cache.cross_shard_variant_name(&base).as_deref(),
+            Some(variant.as_str())
+        );
+        assert_eq!(
+            cache.rewritten_parse(&base).unwrap().query(),
+            "SELECT AVG(value) FROM measurements"
+        );
+        assert!(
+            cache
+                .rewritten_parse(&variant)
+                .unwrap()
+                .query()
+                .contains("__pgdog_count_col0")
+        );
+        assert_eq!(cache.len(), 1, "variant is not a second logical statement");
+
+        cache.close(&base);
+        assert_eq!(cache.close_unused(0), 1);
+        assert!(cache.rewritten_parse(&variant).is_none());
+    }
+
+    #[test]
+    fn cross_shard_variant_has_separate_row_description() {
+        let mut cache = GlobalCache::default();
+        let (_, base) = cache.insert(&Parse::named(
+            "client",
+            "SELECT AVG(value) FROM measurements",
+        ));
+        let variant = cache
+            .cross_shard_variant(
+                &base,
+                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 FROM measurements",
+            )
+            .unwrap();
+
+        cache.insert_row_description(&base, RowDescription::new(&[Field::double("avg")]));
+        cache.insert_row_description(
+            &variant,
+            RowDescription::new(&[Field::double("avg"), Field::bigint("__pgdog_count_col0")]),
+        );
+
+        assert_eq!(cache.row_description(&base).unwrap().len(), 1);
+        assert_eq!(cache.row_description(&variant).unwrap().len(), 2);
     }
 
     #[test]

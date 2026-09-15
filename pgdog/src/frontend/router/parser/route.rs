@@ -2,7 +2,7 @@ use std::{fmt::Display, ops::Deref};
 
 use super::{
     Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
-    rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
+    rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
@@ -110,10 +110,8 @@ pub(crate) struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    /// Rewrites performed by the aggregate rewriter; adds
-    /// helper columns to this query so we can compute things
-    /// like avg() or variance().
-    rewrite_plan: AggregateRewritePlan,
+    /// Temporary columns projected for cross-shard result processing.
+    projection_rewrite_plan: ProjectionRewritePlan,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
     explain: Option<ExplainTrace>,
@@ -253,6 +251,10 @@ impl Route {
 
     pub(crate) fn order_by(&self) -> &[OrderBy] {
         &self.order_by
+    }
+
+    pub(crate) fn set_order_by(&mut self, order_by: Vec<OrderBy>) {
+        self.order_by = order_by;
     }
 
     pub(crate) fn aggregate(&self) -> &Aggregate {
@@ -402,12 +404,12 @@ impl Route {
         self.is_cross_shard() && self.is_write()
     }
 
-    pub(crate) fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
-        &self.rewrite_plan
+    pub(crate) fn projection_rewrite_plan(&self) -> &ProjectionRewritePlan {
+        &self.projection_rewrite_plan
     }
 
-    pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
-        self.rewrite_plan = plan;
+    pub(crate) fn set_projection_rewrite_plan(&mut self, plan: ProjectionRewritePlan) {
+        self.projection_rewrite_plan = plan;
     }
 
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {

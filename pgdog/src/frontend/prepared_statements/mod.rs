@@ -67,6 +67,15 @@ impl PreparedStatements {
         Self::new().global.clone()
     }
 
+    pub(crate) fn cross_shard_variant(name: &str, query: &str) -> Option<String> {
+        let cache = Self::global();
+        if let Some(variant) = cache.read().cross_shard_variant_name(name) {
+            return Some(variant);
+        }
+
+        cache.write().cross_shard_variant(name, query)
+    }
+
     /// Rewrite extended protocol messages to use global names. This allows multiple
     /// clients to re-use the same statement prepared on a Postgres server.
     ///
