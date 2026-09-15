@@ -9,6 +9,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 use pgdog_config::Role;
+use tokio::spawn;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::{debug, error};
@@ -16,7 +17,7 @@ use tracing::{debug, error};
 use crate::backend::pool::LsnStats;
 use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
 use crate::config::PoolerMode;
-use crate::net::messages::{BackendPid, FrontendPid};
+use crate::net::messages::BackendPid;
 use crate::net::{Liveness, Parameter, Parameters};
 
 use super::inner::CheckInResult;
@@ -242,7 +243,40 @@ impl Pool {
     }
 
     /// Check the connection back into the pool.
-    pub(super) fn checkin(&self, mut server: Box<Server>) -> Result<(), Error> {
+    pub(super) fn checkin(&self, server: Box<Server>) -> Result<(), Error> {
+        if self.lock().does_backend_have_pending_cancel(server.id()) {
+            self.checkin_after_pending_cancel(server);
+        } else {
+            self.checkin_inner(server)?;
+        }
+
+        Ok(())
+    }
+
+    /// Deferred check-in: park on the cancel lease, then run the normal
+    /// check-in path once the last lease drops.
+    ///
+    /// NOTE: spawns one tokio task per deferred check-in. Fine when
+    /// cancels are rare. If a workload turns out to be heavily cancel-driven,
+    /// we may want to replace this with a per-checkin spawn using `VecDeque<Box<Server>>`
+    /// on the pool drained by a single background loop woken by the per-backend
+    /// Notify.
+    fn checkin_after_pending_cancel(&self, server: Box<Server>) {
+        let pool = self.clone();
+        spawn(async move {
+            pool.wait_for_cancels_to_finish(server.id()).await;
+
+            if let Err(err) = pool.checkin_inner(server) {
+                error!(
+                    "pool checkin error after cancel drained [{}]: {}",
+                    pool.addr(),
+                    err,
+                );
+            }
+        });
+    }
+
+    fn checkin_inner(&self, mut server: Box<Server>) -> Result<(), Error> {
         // Server is checked in right after transaction finished
         // in transaction mode but can be checked in anytime in session mode.
         let now = if server.pooler_mode() == &PoolerMode::Session {
@@ -283,16 +317,6 @@ impl Pool {
         Ok(())
     }
 
-    /// Send a cancellation request if the client is connected to a server.
-    pub(crate) async fn cancel(&self, id: FrontendPid) -> Result<(), super::super::Error> {
-        // Must NOT hold the lock while doing async I/O.
-        let key = self.lock().cancel_key(id).cloned();
-        if let Some(key) = key {
-            Server::cancel(self.addr(), key).await?;
-        }
-        Ok(())
-    }
-
     /// Connection pool unique identifier.
     #[inline]
     pub(crate) fn id(&self) -> u64 {
@@ -311,6 +335,10 @@ impl Pool {
         {
             let mut from_guard = self.lock();
             let mut to_guard = destination.lock();
+
+            if from_guard.taken.has_any_cancels_in_flight() {
+                return Err(Error::CancelInFlight);
+            }
 
             // Propagate pause state so a paused database stays paused after reload.
             to_guard.paused = from_guard.paused;

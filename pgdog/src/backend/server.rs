@@ -177,6 +177,10 @@ impl MemoryUsage for Server {
     }
 }
 
+/// Bound on how long [`Server::cancel`] waits for Postgres to close the
+/// socket after receiving a CancelRequest.
+const CANCEL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl Server {
     /// Create new PostgreSQL server connection.
     pub(crate) async fn connect(
@@ -448,10 +452,34 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
+    ///
+    /// Sends the CancelRequest, then waits for Postgres to close the socket,
+    /// signaling it's completed. Falls through on timeout so a hung server
+    /// can't pin backends forever.
     pub(crate) async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
+
+        let mut sink = [0u8; 16];
+
+        if tokio::time::timeout(CANCEL_ACK_TIMEOUT, async {
+            loop {
+                match stream.read(&mut sink).await {
+                    Ok(0) => return,   // EOF: Postgres closed after signaling the backend.
+                    Ok(_) => continue, // Drain anything Postgres sends; it shouldn't send data.
+                    Err(_) => return,  // Socket error: packet already left, treat as done.
+                }
+            }
+        })
+        .await
+        .is_err()
+        {
+            warn!(
+                "CancelRequest to {} not acknowledged within {:?}; releasing lease anyway",
+                addr, CANCEL_ACK_TIMEOUT,
+            );
+        }
 
         Ok(())
     }

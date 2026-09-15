@@ -55,6 +55,9 @@ pub(crate) enum Error {
 
     #[error("initial health check has not been successfully performed")]
     InitialHealthCheck,
+
+    #[error("cannot move pool while cancel leases are in flight")]
+    CancelInFlight,
 }
 
 impl Error {
@@ -95,6 +98,7 @@ mod tests {
         assert!(Error::Offline.is_retryable());
         assert!(Error::ReplicaLag.is_retryable());
         assert!(Error::PoolUnhealthy.is_retryable());
+        assert!(Error::CancelInFlight.is_retryable());
     }
 
     #[test]
