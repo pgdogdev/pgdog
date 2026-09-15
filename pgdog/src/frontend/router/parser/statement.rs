@@ -293,6 +293,21 @@ impl<'a> SearchContext<'a> {
     fn resolve_table(&self, name: &str) -> Option<Table<'a>> {
         self.aliases.get(name).copied()
     }
+
+    /// Qualify a column with the actual table its table alias refers to.
+    fn resolve_column(&self, column: Column<'a>) -> Column<'a> {
+        match column
+            .table()
+            .and_then(|table| self.resolve_table(table.name))
+        {
+            Some(resolved) => Column {
+                name: column.name,
+                table: Some(resolved.name),
+                schema: resolved.schema,
+            },
+            None => column,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -506,12 +521,18 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         let sharded_tables = self.schema.tables.tables();
+        let omnishards = self.schema.tables.omnishards();
 
         // Separate configs with explicit table names from those without
         let (named, nameless): (Vec<_>, Vec<_>) =
             sharded_tables.iter().partition(|t| t.name.is_some());
 
         for table in self.tables() {
+            // Omnisharded config takes priority over sharded tables.
+            if omnishards.contains_key(table.name) {
+                continue;
+            }
+
             // Check named sharded table configs (fast path, no schema lookup needed)
             for config in &named {
                 if let Some(ref name) = config.name
@@ -664,6 +685,12 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         table_name: Option<&str>,
         schema: Option<&str>,
     ) -> Option<&'b ShardedTable> {
+        // Omnisharded config takes priority over sharded tables:
+        // a sharding key on an omnisharded table doesn't route.
+        if table_name.is_some_and(|name| self.schema.tables.omnishards().contains_key(name)) {
+            return None;
+        }
+
         // Try named table configs first
         if let Some(table_name) = table_name {
             let column = Column {
@@ -880,7 +907,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                     // For ANY expressions with sharding columns, we can't reliably
                     // parse array literals or parameters, so route to all shards.
                     (SearchResult::Column(column), _, true)
-                        if self.get_sharded_table(column).is_some() =>
+                        if self.get_sharded_table(ctx.resolve_column(column)).is_some() =>
                     {
                         ControlFlow::Break(Ok(Shard::All))
                     }
@@ -981,20 +1008,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         value: Value<'a>,
         ctx: &SearchContext<'a>,
     ) -> Result<Option<Shard>, Error> {
-        // Resolve table alias if present
-        let resolved_column = if let Some(table_ref) = column.table() {
-            if let Some(resolved) = ctx.resolve_table(table_ref.name) {
-                Column {
-                    name: column.name,
-                    table: Some(resolved.name),
-                    schema: resolved.schema,
-                }
-            } else {
-                column
-            }
-        } else {
-            column
-        };
+        let resolved_column = ctx.resolve_column(column);
 
         let shard = self.compute_shard(resolved_column, value.clone())?;
         if let Some(ref shard) = shard {
