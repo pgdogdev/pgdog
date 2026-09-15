@@ -81,6 +81,7 @@ pub(crate) struct Cluster {
     sharding_lookup_timeout: Duration,
     regex_parser: RegexParser,
     identity: Option<String>,
+    server_role: Option<String>,
     tls_client_certificate_required: bool,
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
@@ -132,6 +133,7 @@ impl Default for Cluster {
             sharding_lookup_timeout: Duration::from_millis(General::sharding_lookup_timeout()),
             regex_parser: Default::default(),
             identity: Default::default(),
+            server_role: Default::default(),
             tls_client_certificate_required: Default::default(),
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
@@ -222,6 +224,7 @@ pub(crate) struct ClusterConfig<'a> {
     regex_parser_limit: usize,
     pub_sub_enabled: bool,
     identity: &'a Option<String>,
+    server_role: Option<String>,
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
@@ -292,6 +295,7 @@ impl<'a> ClusterConfig<'a> {
             regex_parser_limit: general.regex_parser_limit,
             pub_sub_enabled: general.pub_sub_enabled(),
             identity: &user.identity,
+            server_role: user.server_role.clone(),
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
@@ -339,6 +343,7 @@ impl Cluster {
             regex_parser_limit,
             pub_sub_enabled,
             identity,
+            server_role,
             tls_client_certificate_required,
             schema_cache,
             canonicalize_oids,
@@ -412,6 +417,7 @@ impl Cluster {
             sharding_lookup_timeout: Duration::from_millis(sharding_lookup_timeout),
             regex_parser: RegexParser::new(regex_parser_limit, query_parser),
             identity: identity.clone(),
+            server_role,
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
@@ -497,6 +503,12 @@ impl Cluster {
     /// when connecting.
     pub(crate) fn identity(&self) -> Option<&str> {
         self.identity.as_deref()
+    }
+
+    /// PostgreSQL role backend connections impersonate through the `role`
+    /// startup parameter.
+    pub(crate) fn server_role(&self) -> Option<&str> {
+        self.server_role.as_deref()
     }
 
     /// This user must present a client TLS certificate when connecting over TLS.
@@ -603,6 +615,12 @@ impl Cluster {
 
     /// Use the query parser.
     pub(crate) fn use_query_parser(&self, request: &ClientRequest) -> bool {
+        // Every statement has to be inspected for role changes; the regex
+        // fast path would let `SELECT set_config('role', ...)` through.
+        if self.server_role.is_some() {
+            return true;
+        }
+
         match self.query_parser() {
             QueryParserLevel::Off => false,
             QueryParserLevel::On => true,
@@ -932,6 +950,11 @@ mod test {
             cluster
         }
 
+        /// Impersonate `role` on this cluster's backend connections.
+        pub(crate) fn set_server_role(&mut self, role: &str) {
+            self.server_role = Some(role.into());
+        }
+
         pub(crate) fn new_test_single_primary(config: &ConfigAndUsers) -> Cluster {
             let identifier = Arc::new(DatabaseUser {
                 user: "pgdog".into(),
@@ -1210,5 +1233,27 @@ mod test {
 
         cluster.query_parser = QueryParserLevel::Off;
         assert!(!cluster.use_query_parser(&req));
+    }
+
+    #[test]
+    fn test_use_query_parser_server_role() {
+        // A plain SELECT never trips the regex fast path on its own.
+        let req = ClientRequest::from(vec![
+            Query::new("SELECT set_config('role', 'postgres', false)").into(),
+        ]);
+
+        let mut cluster = Cluster::new_test_single_primary(&config());
+        cluster.query_parser = QueryParserLevel::Off;
+        assert!(!cluster.use_query_parser(&req));
+
+        cluster.set_server_role("analytics");
+        for level in [
+            QueryParserLevel::Off,
+            QueryParserLevel::SessionControl,
+            QueryParserLevel::Auto,
+        ] {
+            cluster.query_parser = level;
+            assert!(cluster.use_query_parser(&req), "{level:?}");
+        }
     }
 }

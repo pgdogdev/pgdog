@@ -340,6 +340,15 @@ impl QueryParser {
             .run()?;
         }
 
+        // Pools that impersonate a fixed `server_role` must not let clients
+        // change it. Checked before multi-statement handling so
+        // `SELECT 1; SET ROLE x` is caught as well.
+        if context.router_context.cluster.server_role().is_some()
+            && let Some(name) = set_config::role_escape_target(stmts)
+        {
+            return Ok(Command::RoleLocked { name });
+        }
+
         if let Some(command) = self.check_multi_query_statement(statement, context)? {
             return Ok(command);
         }

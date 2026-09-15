@@ -110,4 +110,15 @@ impl<'a> QueryEngineContext<'a> {
     pub(crate) fn in_error(&self) -> bool {
         self.transaction.map(|t| t.error()).unwrap_or_default()
     }
+
+    /// Put an open transaction into the aborted state, like Postgres does
+    /// after an error: the client has to end it before running anything else.
+    pub(crate) fn abort_transaction(&mut self) {
+        self.transaction = self.transaction.map(|transaction| match transaction {
+            TransactionType::ReadOnly | TransactionType::ErrorReadOnly => {
+                TransactionType::ErrorReadOnly
+            }
+            _ => TransactionType::ErrorReadWrite,
+        });
+    }
 }

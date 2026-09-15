@@ -106,6 +106,19 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn role_locked(name: &str) -> ErrorResponse {
+        ErrorResponse {
+            severity: "ERROR".into(),
+            code: "42501".into(),
+            message: format!(
+                "\"SET {}\" is not allowed: this connection impersonates a fixed role",
+                name
+            ),
+            routine: Some("client::QueryEngine::set".into()),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn omni_write_with_directive() -> ErrorResponse {
         ErrorResponse {
             severity: "ERROR".into(),

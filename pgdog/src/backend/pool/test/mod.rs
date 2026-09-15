@@ -1289,3 +1289,61 @@ fn test_server_options_role() {
             .all(|p| p.name != "role")
     );
 }
+
+/// A role a client escaped to must not survive on the pooled connection.
+///
+/// The query parser rejects the statements that change `role`, but it cannot
+/// see every spelling, and `RESET ALL` skips `role`, so the pool restores it
+/// explicitly on check-in. `pgdog1` and `pgdog2` are created by
+/// `integration/setup.sh`.
+#[tokio::test]
+async fn test_server_role_restored_on_checkin() {
+    crate::logger();
+
+    let pool = Pool::new(&PoolConfig {
+        address: Address {
+            server_role: Some("pgdog1".into()),
+            ..Address::new_test()
+        },
+        config: Config {
+            max: 1,
+            min: 0,
+            ..Config::default()
+        },
+    });
+    pool.launch();
+
+    let id = {
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let role: Vec<String> = guard.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(role[0], "pgdog1");
+
+        // Talk to the server directly, the way a `DO` block or a function body
+        // reaches `SET ROLE` without the parser seeing it.
+        guard.execute("SET ROLE pgdog2").await.unwrap();
+        let role: Vec<String> = guard.fetch_all("SELECT current_user").await.unwrap();
+        assert_eq!(role[0], "pgdog2");
+
+        guard.id()
+    };
+
+    // Cleanup runs in a recovery task spawned when the guard is dropped.
+    for _ in 0..100 {
+        if pool.lock().idle() == 1 {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+
+    let mut guard = pool.get(&Request::default()).await.unwrap();
+    assert_eq!(
+        guard.id(),
+        id,
+        "connection was replaced, nothing was reused"
+    );
+    let role: Vec<String> = guard.fetch_all("SELECT current_user").await.unwrap();
+    assert_eq!(role[0], "pgdog1", "escaped role leaked to the next session");
+
+    drop(guard);
+    pool.shutdown();
+}

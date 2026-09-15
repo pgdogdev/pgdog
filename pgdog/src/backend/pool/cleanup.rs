@@ -23,6 +23,34 @@ static ALL: Lazy<Vec<Query>> =
     Lazy::new(|| vec!["DISCARD ALL"].into_iter().map(Query::new).collect());
 static NONE: Lazy<Vec<Query>> = Lazy::new(Vec::new);
 
+/// `RESET ROLE` restores the role from the startup packet, which on a pool
+/// with `server_role` is the impersonated role, not "no role".
+///
+/// `RESET ALL` does not do this: `role` is `GUC_NO_RESET_ALL` in PostgreSQL
+/// and is skipped. Only `DISCARD ALL` covers it, through its implicit
+/// `SET SESSION AUTHORIZATION DEFAULT`.
+static ROLE: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("RESET ROLE")]);
+static DIRTY_ROLE: Lazy<Vec<Query>> = Lazy::new(|| {
+    let mut queries = DIRTY.clone();
+    queries.push(Query::new("RESET ROLE"));
+    queries
+});
+static PREPARED_ROLE: Lazy<Vec<Query>> = Lazy::new(|| {
+    let mut queries = PREPARED.clone();
+    queries.push(Query::new("RESET ROLE"));
+    queries
+});
+
+/// Whether the connection belongs to a pool that impersonates a `server_role`
+/// and therefore has to have that role restored before it is reused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum RoleReset {
+    /// The pool does not impersonate a role.
+    NotNeeded,
+    /// Restore the startup-packet role on check-in.
+    Needed,
+}
+
 /// Queries used to clean up server connections after
 /// client modifications.
 pub(crate) struct Cleanup {
@@ -60,12 +88,27 @@ impl std::fmt::Display for Cleanup {
 impl Cleanup {
     /// New cleanup operation.
     pub(crate) fn new(guard: &Guard, server: &mut Server) -> Self {
+        // A pool that impersonates a role has to put that role back before the
+        // connection serves another session. The query parser rejects the
+        // statements that change `role`, but it cannot see every spelling (a
+        // `DO` block, a function body, a computed `set_config` name), and
+        // `RESET ALL` skips `role`, so without this an escaped role would
+        // outlive the session that set it.
+        let role = if server.addr().server_role.is_some() {
+            RoleReset::Needed
+        } else {
+            RoleReset::NotNeeded
+        };
+
         let mut clean = if guard.reset {
+            // `DISCARD ALL` already restores the startup-packet role.
             Self::all()
         } else if server.dirty() {
-            Self::parameters()
+            Self::parameters(role)
         } else if server.schema_changed() {
-            Self::prepared_statements()
+            Self::prepared_statements(role)
+        } else if role == RoleReset::Needed {
+            Self::role()
         } else {
             Self::none()
         };
@@ -81,19 +124,33 @@ impl Cleanup {
     }
 
     /// Cleanup prepared statements.
-    pub(crate) fn prepared_statements() -> Self {
+    pub(super) fn prepared_statements(role: RoleReset) -> Self {
         Self {
-            queries: &*PREPARED,
+            queries: match role {
+                RoleReset::NotNeeded => &*PREPARED,
+                RoleReset::Needed => &*PREPARED_ROLE,
+            },
             deallocate: true,
             ..Default::default()
         }
     }
 
     /// Cleanup parameters.
-    pub(crate) fn parameters() -> Self {
+    pub(super) fn parameters(role: RoleReset) -> Self {
         Self {
-            queries: &*DIRTY,
+            queries: match role {
+                RoleReset::NotNeeded => &*DIRTY,
+                RoleReset::Needed => &*DIRTY_ROLE,
+            },
             dirty: true,
+            ..Default::default()
+        }
+    }
+
+    /// Restore the impersonated role and nothing else.
+    pub(super) fn role() -> Self {
+        Self {
+            queries: &*ROLE,
             ..Default::default()
         }
     }

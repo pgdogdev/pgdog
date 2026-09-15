@@ -8,6 +8,7 @@ use tracing::warn;
 use super::core::Config;
 use super::pooling::PoolerMode;
 use crate::RoleConfig;
+use crate::sharding::QueryParserLevel;
 use crate::util::random_string;
 use schemars::JsonSchema;
 
@@ -100,6 +101,16 @@ impl Users {
             {
                 warn!(
                     r#"user "{}" (database "{}") sets "server_role" but has no backend credential ("server_password" or a non-password "server_auth"), PgDog cannot connect to the server to impersonate it"#,
+                    user.name, user.database
+                );
+            }
+
+            // The role guard needs the AST of every statement, so these pools
+            // parse queries whatever `query_parser` says. Say so instead of
+            // silently ignoring the setting.
+            if user.server_role.is_some() && config.general.query_parser == QueryParserLevel::Off {
+                warn!(
+                    r#"user "{}" (database "{}") sets "server_role", so its queries are parsed even though "query_parser" is off"#,
                     user.name, user.database
                 );
             }
@@ -346,8 +357,15 @@ pub struct User {
     /// to it and `RESET ALL` leaves it untouched, so connection cleanup never
     /// clears it.
     ///
-    /// This is impersonation, not an authorization boundary: what the client
-    /// can reach is limited by which roles `server_user` is a member of.
+    /// Clients on this pool are stopped from changing it: `SET ROLE`,
+    /// `RESET ROLE`, `SET SESSION AUTHORIZATION` and the `set_config(...)`
+    /// spellings are rejected with a permission error, and the role is
+    /// restored when the connection is checked back in, so a statement the
+    /// parser does not recognize (a `DO` block, a function body) cannot leak a
+    /// role to the next session. Within a session this is not an authorization
+    /// boundary: the real limit on what the client can reach is which roles
+    /// `server_user` is a member of. Queries on these pools are always parsed,
+    /// whatever `query_parser` is set to.
     ///
     /// **Note:** `server_user` needs a working backend credential of its own
     /// (`server_password` or a non-password `server_auth`) and must be a

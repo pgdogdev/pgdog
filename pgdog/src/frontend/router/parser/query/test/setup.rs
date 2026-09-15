@@ -89,6 +89,12 @@ impl QueryParserTest {
         me
     }
 
+    /// Impersonate a fixed role on the cluster's backend connections.
+    pub(crate) fn with_server_role(mut self, role: &str) -> Self {
+        self.cluster.set_server_role(role);
+        self
+    }
+
     /// Set whether we're in a transaction.
     pub(crate) fn in_transaction(mut self, in_tx: bool) -> Self {
         self.transaction = if in_tx {

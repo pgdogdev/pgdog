@@ -284,6 +284,12 @@ impl QueryEngine {
             Command::Discard { target, extended } => {
                 self.discard(context, *target, *extended).await?
             }
+            Command::RoleLocked { name } => {
+                // Postgres aborts the transaction on this error too.
+                context.abort_transaction();
+                self.error_response(context, ErrorResponse::role_locked(name))
+                    .await?;
+            }
             Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 

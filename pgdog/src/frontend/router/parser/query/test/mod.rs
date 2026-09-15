@@ -35,6 +35,7 @@ pub(crate) mod test_rr;
 pub(crate) mod test_schema_sharding;
 pub(crate) mod test_search_path;
 pub(crate) mod test_select;
+pub(crate) mod test_server_role;
 pub(crate) mod test_session_control;
 pub(crate) mod test_set;
 pub(crate) mod test_sharding;
