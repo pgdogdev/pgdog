@@ -13,7 +13,9 @@ use tokio_util::task::TaskTracker;
 
 use crate::backend::ConnectReason;
 use crate::backend::pool::token_cache::TokenCache;
+use crate::backend::server::Server;
 use crate::net::ProtocolMessage;
+use crate::net::messages::FrontendPid;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
 
@@ -1259,4 +1261,78 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
     );
 
     destination.shutdown();
+}
+
+/// `Pool::cancel` snapshots the cancel key while holding the pool lock and then
+/// releases the lock before sending the CancelRequest over TCP. During that window
+/// the physical backend may be returned to the pool and reassigned to a different
+/// frontend causing a cancel issued for frontend A to land on frontend B's query.
+#[tokio::test]
+async fn test_cancel_request_cross_frontend_race() {
+    crate::logger();
+
+    let pool = pool();
+
+    // Frontend A checks out the only backend.
+    let a_req = Request::unrouted(FrontendPid::new());
+    let a_guard = pool.get(&a_req).await.unwrap();
+    let backend_id = a_guard.id();
+
+    // Snapshot A's cancel key exactly like `Pool::cancel` does at
+    // pool_impl.rs:292.
+    let snapshotted_key = pool
+        .lock()
+        .cancel_key(a_req.id)
+        .cloned()
+        .expect("A must have a cancel key while it holds the backend");
+
+    // A returns the backend to the pool
+    drop(a_guard);
+
+    sleep(Duration::from_millis(100)).await;
+
+    // Frontend B takes the same physical backend.
+    let b_req = Request::unrouted(FrontendPid::new());
+
+    assert_ne!(a_req.id, b_req.id);
+
+    let mut b_guard = pool.get(&b_req).await.unwrap();
+
+    assert_eq!(
+        b_guard.id(),
+        backend_id,
+        "test relies on transaction-pooling reuse of the same backend",
+    );
+
+    let addr = pool.addr().clone();
+    let b_sleep_query = spawn(async move {
+        let result = b_guard.execute("SELECT pg_sleep(0.5)").await;
+        (b_guard, result)
+    });
+
+    // Let B's query reach Postgres before firing the cancel.
+    sleep(Duration::from_millis(100)).await;
+
+    // Fire A's snapshotted cancel. This shouldn't effect B's `pg_sleep`.
+    Server::cancel(&addr, snapshotted_key).await.unwrap();
+
+    let (_b_guard, b_sleep_result) = timeout(Duration::from_secs(3), b_sleep_query)
+        .await
+        .expect("B's query must complete within its natural runtime")
+        .unwrap();
+
+    if let Err(err) = b_sleep_result {
+        if let crate::backend::Error::ExecutionError(ref resp) = err
+            && resp.code == "57014"
+        {
+            panic!(
+                "cross-frontend cancel race: B's pg_sleep was canceled by A's \
+                 snapshotted CancelRequest (SQLSTATE 57014). This test must \
+                 pass once the race is fixed."
+            );
+        }
+        panic!("B's query failed for an unrelated reason: {:?}", err);
+    }
+
+    println!("Despite frontend A's cancel request, frontend B's sleep completed.")
 }
