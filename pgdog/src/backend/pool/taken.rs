@@ -1,10 +1,14 @@
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use fnv::FnvHashMap as HashMap;
+use tokio::sync::Notify;
 
+use crate::backend::pool::cancel::{BackendCancelState, CancelLease, CancelLeaseReleaseOutcome};
 use crate::net::{BackendKeyData, BackendPid, FrontendPid};
 
 use super::Error;
+use super::Pool;
 
 /// Bundles the backend's identity with the cancel key it carries.
 #[derive(Clone, Debug)]
@@ -32,6 +36,8 @@ pub(super) struct Taken {
     /// check-in the pool only knows the backend pid, so we use this to find
     /// which `frontend_to_cancel` entry to drop.
     backend_to_frontend: HashMap<BackendPid, FrontendPid>,
+    /// Cancel leases outstanding per backend pid.
+    backend_cancels_in_flight: HashMap<BackendPid, BackendCancelState>,
 }
 
 impl Taken {
@@ -83,6 +89,7 @@ impl Taken {
     }
 
     /// Backend cancel key for this frontend's current checkout.
+    #[cfg(test)]
     #[inline]
     pub(super) fn cancel_key(&self, frontend: FrontendPid) -> Option<&BackendKeyData> {
         self.frontend_to_cancel.get(&frontend).map(|c| &c.key)
@@ -93,6 +100,91 @@ impl Taken {
     /// returned (matches prior behavior).
     pub(super) fn cancel_keys(&self) -> impl Iterator<Item = &BackendKeyData> {
         self.frontend_to_cancel.values().map(|c| &c.key)
+    }
+
+    /// Increment the in-flight counter for `frontend`'s backend and hand
+    /// back a [`CancelLease`] that releases on drop.
+    #[inline]
+    pub(super) fn begin_cancel(
+        &mut self,
+        frontend: FrontendPid,
+        pool: &Pool,
+    ) -> Option<CancelLease> {
+        let entry = self.frontend_to_cancel.get(&frontend)?;
+        let backend = entry.backend;
+        let key = entry.key.clone();
+        let state = self
+            .backend_cancels_in_flight
+            .entry(backend)
+            .or_insert_with(|| BackendCancelState {
+                count: 0,
+                notify: Arc::new(Notify::new()),
+            });
+
+        state.count += 1;
+
+        Some(CancelLease::new(pool.clone(), backend, key))
+    }
+
+    /// Release a cancel lease previously acquired with [`Self::begin_cancel`].
+    /// Fires the per-backend `Notify` when the last lease drops so parked
+    /// check-ins for that specific backend wake up — other backends'
+    /// waiters stay asleep.
+    #[inline]
+    pub(super) fn end_cancel(&mut self, backend: BackendPid) -> CancelLeaseReleaseOutcome {
+        match self.backend_cancels_in_flight.entry(backend) {
+            Entry::Occupied(mut entry) => {
+                let state = entry.get_mut();
+                state.count = state.count.saturating_sub(1);
+                if state.count == 0 {
+                    // Clone the Arc before removing the entry so the
+                    // Notify stays alive for any waiter that already
+                    // registered against it.
+                    let notify = state.notify.clone();
+                    entry.remove();
+                    notify.notify_waiters();
+                    CancelLeaseReleaseOutcome::Cleared
+                } else {
+                    CancelLeaseReleaseOutcome::StillPending
+                }
+            }
+            Entry::Vacant(_) => CancelLeaseReleaseOutcome::NotTracked,
+        }
+    }
+
+    /// True if any cancel packet targeting `backend` is still in flight.
+    /// Check-in and reassignment must wait while this is the case.
+    #[inline]
+    pub(super) fn does_backend_have_pending_cancel(&self, backend: BackendPid) -> bool {
+        self.backend_cancels_in_flight.contains_key(&backend)
+    }
+
+    /// Handle to the per-backend `Notify` that fires when the last lease
+    /// on `backend` drops. `None` if no cancel is currently in flight for
+    /// `backend`.
+    #[inline]
+    pub(super) fn get_cancel_notify(&self, backend: BackendPid) -> Option<Arc<Notify>> {
+        self.backend_cancels_in_flight
+            .get(&backend)
+            .map(|s| s.notify.clone())
+    }
+
+    /// True if any backend has an outstanding cancel lease. `Pool::move_conns_to`
+    /// uses this to refuse draining while leases still target this pool.
+    #[inline]
+    pub(super) fn has_any_cancels_in_flight(&self) -> bool {
+        !self.backend_cancels_in_flight.is_empty()
+    }
+
+    /// Total number of cancel leases currently outstanding, summed across
+    /// every backend in the pool. Surfaced via `State::cancels_in_flight`
+    /// as a live gauge.
+    #[inline]
+    pub(super) fn cancels_in_flight_total(&self) -> usize {
+        self.backend_cancels_in_flight
+            .values()
+            .map(|s| s.count as usize)
+            .sum()
     }
 
     /// Mark or unmark a checked-out backend as pinned to its client. Called by
@@ -125,6 +217,8 @@ impl Taken {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::pool::Pool;
+    use crate::backend::pool::cancel::CancelLease;
 
     fn key(pid: i32) -> BackendKeyData {
         BackendKeyData::legacy(pid, 0)
@@ -327,6 +421,193 @@ mod tests {
         // Live B still works normally.
         taken.set_locked(backend_b, true);
         assert_eq!(taken.locked_count(), 1);
+    }
+
+    #[test]
+    fn begin_cancel_returns_none_without_checkout() {
+        let pool = Pool::new_test();
+        assert!(CancelLease::acquire(&pool, FrontendPid::new()).is_none());
+    }
+
+    #[test]
+    fn begin_cancel_snapshots_backend_and_key() {
+        let pool = Pool::new_test();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(20);
+        let cancel_key = key(backend.pid);
+        pool.lock()
+            .taken
+            .take(frontend, backend, cancel_key.clone());
+
+        let lease = CancelLease::acquire(&pool, frontend).unwrap();
+        assert_eq!(lease.backend(), backend);
+        assert_eq!(lease.key, cancel_key);
+        assert!(pool.lock().taken.does_backend_have_pending_cancel(backend));
+    }
+
+    #[test]
+    fn end_cancel_clears_when_last_lease_drops() {
+        let pool = Pool::new_test();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(21);
+        pool.lock().taken.take(frontend, backend, key(backend.pid));
+
+        let lease1 = CancelLease::acquire(&pool, frontend).unwrap();
+        let lease2 = CancelLease::acquire(&pool, frontend).unwrap();
+        assert!(pool.lock().taken.does_backend_have_pending_cancel(backend));
+
+        drop(lease1);
+        assert!(
+            pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "one lease still outstanding",
+        );
+
+        drop(lease2);
+        assert!(
+            !pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "last lease released",
+        );
+    }
+
+    /// Multiple concurrent cancels for the same frontend must stack on the
+    /// same backend's counter. Every intermediate drop leaves the backend
+    /// pinned; only the final drop clears it. This is the property that
+    /// makes concurrent `pg_cancel` calls from a client (or from separate
+    /// callers targeting the same session) all wait for each other before
+    /// the backend can be reassigned.
+    #[test]
+    fn cancel_leases_stack_on_same_backend() {
+        let pool = Pool::new_test();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(40);
+        pool.lock().taken.take(frontend, backend, key(backend.pid));
+
+        // Stack four concurrent cancels for the same frontend.
+        let l1 = CancelLease::acquire(&pool, frontend).unwrap();
+        let l2 = CancelLease::acquire(&pool, frontend).unwrap();
+        let l3 = CancelLease::acquire(&pool, frontend).unwrap();
+        let l4 = CancelLease::acquire(&pool, frontend).unwrap();
+
+        // All four target the same physical backend.
+        assert_eq!(l1.backend(), backend);
+        assert_eq!(l2.backend(), backend);
+        assert_eq!(l3.backend(), backend);
+        assert_eq!(l4.backend(), backend);
+
+        // The counter reflects the stack depth and the backend stays
+        // pinned throughout every intermediate drop.
+        assert!(pool.lock().taken.does_backend_have_pending_cancel(backend));
+
+        drop(l1);
+        assert!(
+            pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "3 leases still stacked",
+        );
+
+        // Drop out of order to prove the counter is order-agnostic.
+        drop(l3);
+        assert!(
+            pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "2 leases still stacked",
+        );
+
+        drop(l2);
+        assert!(
+            pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "1 lease still stacked",
+        );
+
+        drop(l4);
+        assert!(
+            !pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "last lease released, backend fully unpinned",
+        );
+
+        // After the whole stack unwinds, `end_cancel` on this backend
+        // returns `NotTracked` — the counter entry was removed by the
+        // final decrement.
+        assert_eq!(
+            pool.lock().taken.end_cancel(backend),
+            CancelLeaseReleaseOutcome::NotTracked,
+        );
+    }
+
+    /// The RAII drop of [`CancelLease`] must run on every exit path,
+    /// including `?`-propagated errors from `Server::cancel`. Simulate the
+    /// early-return-with-error shape and verify the counter is released.
+    #[test]
+    fn cancel_lease_releases_counter_on_error_early_return() {
+        let pool = Pool::new_test();
+        let frontend = FrontendPid::new();
+        let backend = BackendPid::for_test(30);
+        pool.lock().taken.take(frontend, backend, key(backend.pid));
+
+        fn simulate_cancel_that_errors(
+            pool: &Pool,
+            client: FrontendPid,
+        ) -> Result<(), &'static str> {
+            let _lease = CancelLease::acquire(pool, client).ok_or("no checkout")?;
+            // Pretend `Server::cancel(...).await?` errored here — early
+            // return before any explicit `drop(lease)`. Rust must still
+            // run the lease's Drop as `_lease` goes out of scope.
+            Err("simulated Server::cancel failure")
+        }
+
+        assert!(simulate_cancel_that_errors(&pool, frontend).is_err());
+        assert!(
+            !pool.lock().taken.does_backend_have_pending_cancel(backend),
+            "counter must decrement on the error-propagation path too",
+        );
+    }
+
+    #[test]
+    fn end_cancel_on_unknown_backend_is_not_tracked() {
+        // `end_cancel` operates purely on the counter, no lease needed —
+        // still worth testing directly at the Taken level so we know the
+        // enum discriminant for the misuse case.
+        let mut taken = Taken::default();
+        let unknown = BackendPid::for_test(22);
+        assert_eq!(
+            taken.end_cancel(unknown),
+            CancelLeaseReleaseOutcome::NotTracked
+        );
+    }
+
+    /// If the frontend retakes a different backend between begin_cancel and
+    /// lease drop, the lease still names the original backend and must
+    /// decrement that backend's counter — not the frontend's current one.
+    #[test]
+    fn end_cancel_targets_original_backend_across_retake() {
+        let pool = Pool::new_test();
+        let frontend = FrontendPid::new();
+        let backend_a = BackendPid::for_test(23);
+        let backend_b = BackendPid::for_test(24);
+
+        pool.lock()
+            .taken
+            .take(frontend, backend_a, key(backend_a.pid));
+        let lease = CancelLease::acquire(&pool, frontend).unwrap();
+        assert_eq!(lease.backend(), backend_a);
+
+        // Frontend retakes with a different backend.
+        pool.lock()
+            .taken
+            .take(frontend, backend_b, key(backend_b.pid));
+
+        // Lease drop still targets A, not B.
+        drop(lease);
+        assert!(
+            !pool
+                .lock()
+                .taken
+                .does_backend_have_pending_cancel(backend_a)
+        );
+        assert!(
+            !pool
+                .lock()
+                .taken
+                .does_backend_have_pending_cancel(backend_b)
+        );
     }
 
     #[test]

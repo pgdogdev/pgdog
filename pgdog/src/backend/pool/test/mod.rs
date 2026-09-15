@@ -14,6 +14,7 @@ use tokio_util::task::TaskTracker;
 use crate::backend::ConnectReason;
 use crate::backend::pool::token_cache::TokenCache;
 use crate::net::ProtocolMessage;
+use crate::net::messages::FrontendPid;
 use crate::net::{Parse, Protocol, Query, Sync};
 use crate::state::State;
 
@@ -1259,4 +1260,85 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
     );
 
     destination.shutdown();
+}
+
+/// `Pool::cancel` used to snapshot the cancel key under the lock and then
+/// release the lock before sending the CancelRequest over TCP. During that
+/// window the physical backend could be returned to the pool and reassigned
+/// to a different frontend, so a cancel issued for frontend A could land on
+/// frontend B's query.
+///
+/// The fix takes a *cancel lease* on the target backend for the duration of
+/// the TCP send. While the lease is alive, [`Pool::checkin`] cannot return
+/// the physical backend to the idle set, so no other frontend can grab it
+/// before the CancelRequest is out on the wire and settled.
+#[tokio::test]
+async fn test_cancel_request_cross_frontend_race() {
+    crate::logger();
+
+    let pool = pool();
+
+    // Frontend A checks out the only backend.
+    let a_req = Request::unrouted(FrontendPid::new());
+    let mut a_guard = pool.get(&a_req).await.unwrap();
+    let backend_id = a_guard.id();
+    let a_pid = a_req.id;
+
+    let a_task = spawn(async move {
+        // We don't care about the outcome: A is only here to give the
+        // cancel something to hit. Drop returns the backend after the
+        // execute call resolves.
+        let _ = a_guard.execute("SELECT pg_sleep(2)").await;
+    });
+
+    // Let A's query reach Postgres.
+    sleep(Duration::from_millis(100)).await;
+
+    // Cancel A. The lease must keep the backend from being reassigned to
+    // B until the CancelRequest is fully out on the wire.
+    let cancel_task = {
+        let pool = pool.clone();
+        spawn(async move { pool.cancel(a_pid).await.unwrap() })
+    };
+
+    // Frontend B races to grab the same backend and run its own query.
+    // Without the lease, B could take the backend and reach Postgres
+    // before A's cancel packet does, and A's cancel would eat B's query.
+    let b_req = Request::unrouted(FrontendPid::new());
+    assert_ne!(a_req.id, b_req.id);
+
+    let b_task = {
+        let pool = pool.clone();
+        spawn(async move {
+            let mut b_guard = pool.get(&b_req).await.unwrap();
+            let backend_id = b_guard.id();
+            let result = b_guard.execute("SELECT pg_sleep(0.3)").await;
+            (backend_id, result)
+        })
+    };
+
+    cancel_task.await.unwrap();
+    a_task.await.unwrap();
+    let (b_backend_id, b_result) = timeout(Duration::from_secs(5), b_task)
+        .await
+        .expect("B's query must complete within its natural runtime")
+        .unwrap();
+
+    assert_eq!(
+        b_backend_id, backend_id,
+        "test relies on transaction-pool reuse of the same physical backend",
+    );
+
+    if let Err(err) = b_result {
+        if let crate::backend::Error::ExecutionError(ref resp) = err
+            && resp.code == "57014"
+        {
+            panic!(
+                "cross-frontend cancel race: B's pg_sleep was canceled by A's \
+                 CancelRequest (SQLSTATE 57014). The cancel lease did not \
+                 hold the backend across the send."
+            );
+        }
+        panic!("B's query failed for an unrelated reason: {:?}", err);
+    }
 }

@@ -73,6 +73,8 @@ pub struct Counts {
     pub rows_updated: usize,
     /// Rows reported affected by DELETE command tags.
     pub rows_deleted: usize,
+    /// Total number of CancelRequests dispatched to Postgres by this pool.
+    pub cancels: usize,
 }
 
 impl Sub for Counts {
@@ -111,6 +113,7 @@ impl Sub for Counts {
             rows_inserted: self.rows_inserted.saturating_sub(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_sub(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_sub(rhs.rows_deleted),
+            cancels: self.cancels.saturating_sub(rhs.cancels),
         }
     }
 }
@@ -151,6 +154,7 @@ impl Add for Counts {
             rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
+            cancels: self.cancels.saturating_add(rhs.cancels),
         }
     }
 }
@@ -193,6 +197,7 @@ impl Div<usize> for Counts {
             rows_inserted: self.rows_inserted.checked_div(rhs).unwrap_or(0),
             rows_updated: self.rows_updated.checked_div(rhs).unwrap_or(0),
             rows_deleted: self.rows_deleted.checked_div(rhs).unwrap_or(0),
+            cancels: self.cancels.checked_div(rhs).unwrap_or(0),
         }
     }
 }
@@ -294,4 +299,7 @@ pub struct State {
     pub force_close: usize,
     // LSN stats.
     pub lsn_stats: LsnStats,
+    /// Number of CancelRequests currently in flight against this pool's
+    /// backends. Summed across all pinned backends.
+    pub cancels_in_flight: usize,
 }

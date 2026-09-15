@@ -246,6 +246,87 @@
           }
         }
       }
+    },
+    {
+      "type": "stat",
+      "title": "Cancels in flight",
+      "description": "CancelRequests currently pinning backends. Non-zero means at least one backend is held while its cancel is being processed by Postgres.",
+      "id": 10,
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(pgdog_cancels_in_flight_ratio)",
+          "legendFormat": "in flight",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 8 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cancels per second",
+      "description": "Rate of CancelRequests dispatched to Postgres, broken down by shard.",
+      "id": 11,
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (shard) (rate(pgdog_total_cancels_total[1m]))",
+          "legendFormat": "shard {{shard}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cancels in flight (by pool)",
+      "description": "Live gauge per pool. Spikes correspond to backends currently pinned by an outstanding CancelLease.",
+      "id": 12,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (database, shard, role) (pgdog_cancels_in_flight_ratio)",
+          "legendFormat": "{{database}} shard {{shard}} {{role}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10
+          }
+        }
+      }
     }
   ],
   "refresh": "5s",

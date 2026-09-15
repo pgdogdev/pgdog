@@ -44,6 +44,7 @@ impl Command for ShowPools {
             Field::numeric("force_closed"),
             Field::bool("online"),
             Field::bool("schema_admin"),
+            Field::numeric("cancels_in_flight"),
         ]);
         let mut messages = vec![rd.message()];
         for (user, cluster) in databases().all() {
@@ -78,7 +79,8 @@ impl Command for ShowPools {
                         .add(state.out_of_sync)
                         .add(state.force_close)
                         .add(state.online)
-                        .add(cluster.schema_admin());
+                        .add(cluster.schema_admin())
+                        .add(state.cancels_in_flight);
 
                     messages.push(row.message());
                 }

@@ -56,6 +56,7 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_rows_inserted", prefix)),
                         Field::numeric(&format!("{}_rows_updated", prefix)),
                         Field::numeric(&format!("{}_rows_deleted", prefix)),
+                        Field::numeric(&format!("{}_cancels", prefix)),
                     ]
                 })
                 .collect::<Vec<Field>>(),
@@ -109,7 +110,8 @@ impl Command for ShowStats {
                             .add(stat.auth_attempts)
                             .add(stat.rows_inserted)
                             .add(stat.rows_updated)
-                            .add(stat.rows_deleted);
+                            .add(stat.rows_deleted)
+                            .add(stat.cancels);
                     }
 
                     messages.push(dr.message());
