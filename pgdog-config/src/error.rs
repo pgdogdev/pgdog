@@ -28,6 +28,9 @@ pub enum Error {
 
     #[error("parse error: {0}")]
     ParseError(String),
+
+    #[error("cannot read ${{file.{0}}}: {1}")]
+    FileReference(String, std::io::Error),
 }
 
 impl Error {

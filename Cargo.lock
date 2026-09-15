@@ -3194,7 +3194,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "shellexpand",
  "tempfile",
  "thiserror",
  "toml",
