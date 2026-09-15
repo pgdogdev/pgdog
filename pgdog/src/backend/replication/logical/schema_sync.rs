@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use futures::future::join_all;
 use pgdog_config::RewriteMode;
 use tracing::{info, warn};
 
@@ -11,6 +12,8 @@ use crate::backend::{
     pool::{Guard, Request},
     schema::sync::{PgDump, SchemaSyncError, Statement, pg_dump::PgDumpOutput},
 };
+
+use super::publisher::queries::server_version;
 
 /// Sync the schema from a source database to a destination, one phase at a
 /// time.
@@ -43,10 +46,33 @@ impl SchemaSync {
         Ok(())
     }
 
-    /// Dump the source schema.
+    /// Dump the source schema for the oldest known destination version.
+    ///
+    /// PostgreSQL 17 rejects NOT VALID foreign keys on partitioned tables:
+    /// <https://www.postgresql.org/docs/17/sql-altertable.html#SQL-ALTERTABLE-DESC-ADD-TABLE-CONSTRAINT>.
+    /// PostgreSQL 18 adds support:
+    /// <https://www.postgresql.org/docs/18/release-18.html#RELEASE-18-CONSTRAINTS>.
+    /// Keep normal constraint validation for older destinations.
     pub(crate) async fn dump(&self) -> Result<Arc<PgDumpOutput>, SchemaSyncError> {
+        let destination_version = join_all((0..self.destination.shards().len()).map(
+            |shard| async move {
+                let mut primary = self
+                    .destination
+                    .primary(shard, &Request::default())
+                    .await
+                    .ok()?;
+                server_version(&mut primary).await.ok().flatten()
+            },
+        ))
+        .await
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(0);
         Ok(Arc::new(
-            PgDump::new(&self.source, &self.publication).dump().await?,
+            PgDump::new(&self.source, &self.publication)
+                .dump(destination_version)
+                .await?,
         ))
     }
 

@@ -143,7 +143,10 @@ impl PgDump {
     /// Cross-checks the publication's table list on every shard, then runs
     /// `pg_dump --schema-only` against shard 0 only: all shards are assumed to
     /// share a schema, so a mismatch only warns.
-    pub(crate) async fn dump(&self) -> Result<PgDumpOutput, SchemaSyncError> {
+    pub(crate) async fn dump(
+        &self,
+        destination_version: i64,
+    ) -> Result<PgDumpOutput, SchemaSyncError> {
         let mut comparison: Vec<PublicationTable> = vec![];
         let addr = self
             .source
@@ -220,6 +223,7 @@ impl PgDump {
         Ok(PgDumpOutput {
             stmts,
             original: cleaned,
+            destination_version,
         })
     }
 }
@@ -233,6 +237,7 @@ pub(crate) struct PgDumpOutput {
     /// instead of deparsing, so any change to `clean` must preserve the byte
     /// offsets the parser saw.
     original: String,
+    destination_version: i64,
 }
 
 pub(crate) use pgdog_stats::SchemaSyncStatement as Statement;
@@ -579,6 +584,11 @@ impl PgDumpOutput {
         // Get partitioned parent column types and parent-child relationships
         let parent_column_types = self.partitioned_parent_column_types(&columns_to_convert);
         let partition_parents = self.partition_parents();
+        let partitioned_tables = if self.destination_version < 180_000 {
+            self.partitioned_tables()
+        } else {
+            HashSet::new()
+        };
 
         for stmt in self.stmts.into_iter() {
             let original = self
@@ -693,7 +703,11 @@ impl PgDumpOutput {
                                             // FK columns referencing integer PKs are
                                             // computed from fk_columns at the end
                                             if state == SyncState::PostData {
-                                                let sql = if cons.skip_validation {
+                                                let sql = if cons.skip_validation
+                                                    || stmt.relation().is_some_and(|relation| {
+                                                        partitioned_tables
+                                                            .contains(&Table::from(relation))
+                                                    }) {
                                                     original.to_owned()
                                                 } else {
                                                     format!(
@@ -1267,20 +1281,50 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
 
     #[test]
     fn test_partitioned_foreign_key_not_valid() {
-        let output = parse(
+        let mut output = parse(
             "CREATE TABLE parent (id BIGINT PRIMARY KEY);
              CREATE TABLE child (id BIGINT, parent_id BIGINT) PARTITION BY RANGE (id);
              CREATE TABLE child_0 PARTITION OF child FOR VALUES FROM (0) TO (100);
              ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);",
         );
-        let statements = output.statements(SyncState::PostData).unwrap();
+        for (version, expected) in [
+            (
+                170_009,
+                "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id)",
+            ),
+            (
+                180_000,
+                "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID",
+            ),
+        ] {
+            output.destination_version = version;
+            let statements = output.statements(SyncState::PostData).unwrap();
+            assert_eq!(statements.len(), 1);
+            assert_eq!(statements[0].sql.trim(), expected);
+            assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+        }
+    }
 
-        assert_eq!(statements.len(), 1);
+    #[test]
+    fn test_old_destination_foreign_keys_use_referencing_table() {
+        let mut output = parse(
+            "CREATE TABLE public.parent (id BIGINT PRIMARY KEY);
+             CREATE TABLE public.child (id BIGINT, parent_id BIGINT);
+             CREATE TABLE other.child (id BIGINT, parent_id BIGINT) PARTITION BY RANGE (id);
+             ALTER TABLE public.child ADD CONSTRAINT ordinary_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id);
+             ALTER TABLE other.child ADD CONSTRAINT partitioned_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;",
+        );
+        output.destination_version = 170_009;
+        let statements = output.statements(SyncState::PostData).unwrap();
+        assert_eq!(statements.len(), 2);
         assert_eq!(
             statements[0].sql.trim(),
-            "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID"
+            "ALTER TABLE public.child ADD CONSTRAINT ordinary_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id) NOT VALID"
         );
-        assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+        assert_eq!(
+            statements[1].sql.trim(),
+            "ALTER TABLE other.child ADD CONSTRAINT partitioned_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED"
+        );
     }
 
     #[test]
@@ -1550,6 +1594,7 @@ b
         PgDumpOutput {
             stmts: pg_raw_parse::parse(query).unwrap().into_inner(),
             original: query.to_owned(),
+            destination_version: 180_000,
         }
     }
 }
