@@ -27,7 +27,7 @@ use tracing::{error, info, warn};
 use util::pgdog_version;
 
 use arc_swap::ArcSwapOption;
-use pgdog_config::{General, LogFormat, Memory};
+use pgdog_config::{General, FromToml, LogFormat, Memory};
 use tracing::level_filters::LevelFilter;
 use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
@@ -347,7 +347,7 @@ fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::r
 fn bootstrap_logger(config_path: &Path) {
     let general = read_to_string(config_path)
         .ok()
-        .and_then(|config| toml::from_str::<config::Config>(&config).ok())
+        .and_then(|config| config::Config::from_toml(&config).ok())
         .map(|config| config.general)
         .unwrap_or_default();
 
