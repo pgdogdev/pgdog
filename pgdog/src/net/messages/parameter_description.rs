@@ -1,5 +1,6 @@
 use super::code;
 use super::prelude::*;
+use crate::stats::memory::MemoryUsage;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default)]
@@ -38,10 +39,27 @@ impl Protocol for ParameterDescription {
     }
 }
 
+impl MemoryUsage for ParameterDescription {
+    #[inline]
+    fn memory_usage(&self) -> usize {
+        self.params.capacity() * std::mem::size_of::<i32>()
+    }
+}
+
 impl ParameterDescription {
     /// Create an empty parameter description.
     pub(crate) fn empty() -> Self {
         Self { params: Vec::new() }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(params: Vec<i32>) -> Self {
+        Self { params }
+    }
+
+    /// Parameter data type OIDs.
+    pub(crate) fn data_types(&self) -> impl Iterator<Item = u32> + '_ {
+        self.params.iter().map(|&param| param as u32)
     }
 
     pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {

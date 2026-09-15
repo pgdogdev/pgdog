@@ -29,7 +29,9 @@ pub(crate) mod role_detector;
 
 use failover_signal::{FailoverSignal, FailoverSignalWatcher};
 use monitor::*;
-pub(crate) use oids::{CanonicalOids, Oids};
+#[cfg(test)]
+pub(crate) use oids::TypeKind;
+pub(crate) use oids::{CanonicalOids, Oids, PayloadRewriter};
 use role_detector::*;
 
 #[cfg_attr(test, derive(Default))]
