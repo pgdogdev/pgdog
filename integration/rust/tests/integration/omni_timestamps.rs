@@ -1,5 +1,6 @@
 use std::ops::Sub;
 
+use crate::setup::admin_sqlx;
 use crate::setup::connection_sqlx_direct_db;
 use crate::setup::connections_sqlx;
 use chrono::DateTime;
@@ -197,6 +198,7 @@ async fn omni_timestamp_rewrite_statement_timestamp_consistency() {
     )
     .await
     .unwrap();
+    admin_sqlx().await.execute("RELOAD").await.unwrap();
 
     let mut transaction = conn.begin().await.unwrap();
 
@@ -375,6 +377,7 @@ async fn reusable_func_test(
     )
     .await
     .unwrap();
+    admin_sqlx().await.execute("RELOAD").await.unwrap();
 
     let pg_rows = test_simple_extended_and_prepare(
         &connection_sqlx_direct_db("shard_0").await,
@@ -423,6 +426,7 @@ where
         .await
         .unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS public.test_omni_ts(id BIGSERIAL PRIMARY KEY, created_at TIMESTAMP, created_at_tz TIMESTAMPTZ, created_at_default TIMESTAMP DEFAULT CURRENT_TIMESTAMP, created_at_tz_default TIMESTAMPTZ DEFAULT TRANSACTION_TIMESTAMP())").await.unwrap();
+    admin_sqlx().await.execute("RELOAD").await.unwrap();
 
     for (insertion_tz, fetch_tz) in [
         ("America/Los_Angeles", "America/New_York"),

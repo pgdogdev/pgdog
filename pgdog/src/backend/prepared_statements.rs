@@ -942,8 +942,13 @@ pub(crate) mod test {
 
     /// Describe `name` -> forward a ParameterDescription
     fn describe_parameters(ps: &mut PreparedStatements, name: &str, oids: Vec<i32>) -> Vec<i32> {
-        ps.handle(&ProtocolMessage::Describe(Describe::new_statement(name)))
+        let result = ps
+            .handle(&ProtocolMessage::Describe(Describe::new_statement(name)))
             .unwrap();
+        assert!(matches!(result, HandleResult::Prepend(_)));
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        ps.forward(&mut parse_complete).unwrap();
 
         let mut message = Message::new(ParameterDescription::new(oids).to_bytes());
         ps.forward(&mut message).unwrap();
