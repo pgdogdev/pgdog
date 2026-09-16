@@ -5,6 +5,7 @@ pub(crate) mod connect_reason;
 pub(crate) mod databases;
 pub(crate) mod disconnect_reason;
 pub(crate) mod error;
+mod local_cache;
 pub(crate) mod maintenance_mode;
 pub(crate) mod pool;
 pub(crate) mod prepared_statements;

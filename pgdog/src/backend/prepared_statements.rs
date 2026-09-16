@@ -1,11 +1,6 @@
-use lru::LruCache;
-use std::{
-    cmp::Reverse,
-    collections::VecDeque,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, sync::Arc};
 
+use crate::net::ErrorResponse;
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -15,48 +10,15 @@ use crate::{
     },
     state::State,
 };
-use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
-use pgdog_config::{PreparedStatementsEviction, prepared_statements::PreparedStatementsConfig};
+use pgdog_config::prepared_statements::PreparedStatementsConfig;
 
+use super::local_cache::{Access, LocalCache, LocalStatementStatus};
 use super::{Error, Oids};
 use super::{
     protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
 };
-
-/// Rough size of one local cache entry. Ignores the LRU node itself,
-/// so it undercounts a little.
-#[inline]
-fn entry_mem(s: &str) -> usize {
-    s.len() + std::mem::size_of::<String>() + std::mem::size_of::<LocalStatement>()
-}
-
-/// A statement info prepared on this connection.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct LocalStatement {
-    /// When this statement should be replanned
-    deadline: Option<Instant>,
-
-    /// How many times this connection has executed the statement.
-    /// Relevant for [`PreparedStatementsEviction::LeastFrequentlyUsed`].
-    executions: u32,
-}
-
-impl LocalStatement {
-    /// Restarts the TTL, because Postgres has just planned the statement again.
-    fn set_deadline(&mut self, ttl: Option<Duration>, jitter: Duration) {
-        self.deadline = ttl.map(|ttl| deadline(ttl, jitter));
-    }
-
-    /// Check for expired
-    ///
-    /// If the check is called and deadline is not set then it's marked as expired
-    /// to cover the case when the TTL was set after the statement creation
-    fn expired(&self, now: Instant) -> bool {
-        self.deadline.is_none_or(|deadline| deadline <= now)
-    }
-}
 
 /// A statement Postgres is preparing now, waiting on the reply that puts it in the local cache.
 #[derive(Debug)]
@@ -82,36 +44,6 @@ impl InFlightStatement {
             name: name.into(),
             executions: 1,
         }
-    }
-}
-
-/// Where a statement stands in the local cache on this connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalStatementStatus {
-    /// Not prepared on this connection.
-    Missing,
-
-    /// Reached its TTL limit, so it has to be closed and prepared again.
-    Expired,
-
-    /// Prepared and not due to be prepared again.
-    Fresh,
-}
-
-/// How a client message reaches a statement in the local cache.
-/// Only an `Execution` counts toward [`PreparedStatementsEviction::LeastFrequentlyUsed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Access {
-    /// A Bind, or the EXECUTE an EnsurePrepared is spliced in front of.
-    Execution,
-
-    /// A Parse, a PREPARE or a Describe. Each reaches the entry without executing it.
-    Lookup,
-}
-
-impl Access {
-    const fn is_execution(self) -> bool {
-        matches!(self, Access::Execution)
     }
 }
 
@@ -159,7 +91,7 @@ pub(super) enum HandleResult {
 #[derive(Debug)]
 pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
-    local_cache: LruCache<String, LocalStatement>,
+    local_cache: LocalCache,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<InFlightStatement>,
@@ -168,7 +100,6 @@ pub(crate) struct PreparedStatements {
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
     parameter_describes: VecDeque<String>,
     config: PreparedStatementsConfig,
-    memory_used: usize,
     oids: Arc<Oids>,
     server_state: State,
     // Client parameter count of the unnamed statement being rewritten
@@ -187,13 +118,12 @@ impl PreparedStatements {
     pub(crate) fn new(oids: Arc<Oids>) -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::unbounded(),
+            local_cache: LocalCache::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
             parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
-            memory_used: 0,
             oids,
             server_state: State::Idle,
             anonymous_client_params: None,
@@ -513,10 +443,8 @@ impl PreparedStatements {
 
                     // A client that re-Parses a name without closing it first leaves the entry,
                     // and its count, in place.
-                    if let Some(statement) = self.local_cache.peek_mut(&in_flight.name) {
-                        statement.executions =
-                            statement.executions.saturating_add(in_flight.executions);
-                    }
+                    self.local_cache
+                        .add_executions(&in_flight.name, in_flight.executions);
                 }
             }
 
@@ -529,10 +457,9 @@ impl PreparedStatements {
                 if let Some(mut in_flight) = self.parses.pop_front() {
                     // The remove below drops the entry, so its count has to move onto the
                     // Parse that is about to put the statement back.
-                    if let Some(statement) = self.local_cache.peek(&in_flight.name) {
-                        in_flight.executions =
-                            in_flight.executions.saturating_add(statement.executions);
-                    }
+                    in_flight.executions = in_flight
+                        .executions
+                        .saturating_add(self.local_cache.executions(&in_flight.name).unwrap_or(0));
 
                     self.remove(&in_flight.name);
                     self.parses.push_front(in_flight);
@@ -625,54 +552,32 @@ impl PreparedStatements {
         }))
     }
 
-    /// Status of a statement in the local cache. Promotes it either way, and counts one
-    /// execution on [`Access::Execution`].
     fn statement_status(&mut self, name: &str, access: Access) -> LocalStatementStatus {
-        match self.local_cache.get_mut(name) {
-            None => LocalStatementStatus::Missing,
-            Some(statement) => {
-                if access.is_execution() {
-                    statement.executions = statement.executions.saturating_add(1);
-                }
-
-                if self.config.ttl.is_some() && statement.expired(Instant::now()) {
-                    LocalStatementStatus::Expired
-                } else {
-                    LocalStatementStatus::Fresh
-                }
-            }
-        }
+        self.local_cache.status(name, access, &self.config)
     }
 
     /// Whether the server has prepared this statement already.
     pub(crate) fn contains(&mut self, name: &str) -> bool {
-        !matches!(
-            self.statement_status(name, Access::Lookup),
-            LocalStatementStatus::Missing
-        )
-    }
-
-    #[cfg(test)]
-    fn peek_statement(&self, name: &str) -> Option<&LocalStatement> {
-        self.local_cache.peek(name)
+        self.local_cache.contains(name, &self.config)
     }
 
     pub(crate) fn prepared(&mut self, name: &str) {
-        let (ttl, jitter) = (self.config.ttl, self.config.ttl_jitter);
-
-        self.local_cache
-            .get_or_insert_mut_ref(name, || {
-                // Cache is unbounded, so the insert never evicts anything to account for.
-                self.memory_used += entry_mem(name);
-
-                LocalStatement::default()
-            })
-            .set_deadline(ttl, jitter);
+        self.local_cache.prepared(name, &self.config);
     }
 
     /// How much memory is used by this structure, approx.
     pub(crate) fn memory_used(&self) -> usize {
-        self.memory_used
+        self.local_cache.memory_used()
+    }
+
+    #[cfg(test)]
+    fn executions(&self, name: &str) -> Option<u32> {
+        self.local_cache.executions(name)
+    }
+
+    #[cfg(test)]
+    fn expired(&self, name: &str) -> Option<bool> {
+        self.local_cache.expired(name)
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -700,19 +605,13 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        if self.local_cache.pop(name).is_some() {
-            self.memory_used = self.memory_used.saturating_sub(entry_mem(name));
-            true
-        } else {
-            false
-        }
+        self.local_cache.remove(name)
     }
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
     pub(crate) fn clear(&mut self) {
         self.local_cache.clear();
-        self.memory_used = 0;
     }
 
     /// Get current extended protocol state.
@@ -738,57 +637,7 @@ impl PreparedStatements {
     /// what's actually inside Postgres.
     #[must_use]
     pub(crate) fn ensure_capacity(&mut self) -> Vec<Close> {
-        let to_evict = self.local_cache.len().saturating_sub(self.config.limit);
-
-        match self.config.eviction {
-            PreparedStatementsEviction::LeastRecentlyUsed => self.ensure_capacity_lru(to_evict),
-            PreparedStatementsEviction::LeastFrequentlyUsed => self.ensure_capacity_lfu(to_evict),
-        }
-    }
-
-    fn ensure_capacity_lru(&mut self, count: usize) -> Vec<Close> {
-        let mut closed = Vec::with_capacity(count);
-
-        for _ in 0..count {
-            if let Some((name, _)) = self.local_cache.pop_lru() {
-                self.memory_used = self.memory_used.saturating_sub(entry_mem(&name));
-                closed.push(Close::named(&name));
-            }
-        }
-
-        closed
-    }
-
-    fn ensure_capacity_lfu(&mut self, count: usize) -> Vec<Close> {
-        if count == 0 {
-            return vec![];
-        }
-
-        // iter() walks most-recently-used first, so a higher position is a less
-        // recent statement, and reversing it sends the least recent of a tie first.
-        let mut candidates: Vec<_> = self
-            .local_cache
-            .iter()
-            .enumerate()
-            .map(|(i, (name, statement))| (statement.executions, Reverse(i), name))
-            .collect();
-
-        // Splits the cache into the ones we're closing and the ones we're keeping, so
-        // the sort afterwards only has the first group to order.
-        candidates.select_nth_unstable_by_key(count - 1, |&(executions, i, _)| (executions, i));
-        candidates.truncate(count);
-        candidates.sort_unstable_by_key(|&(executions, i, _)| (executions, i));
-
-        let closed: Vec<_> = candidates
-            .into_iter()
-            .map(|(_, _, name)| Close::named(name))
-            .collect();
-
-        for close in &closed {
-            self.remove(close.name());
-        }
-
-        closed
+        self.local_cache.ensure_capacity(&self.config)
     }
 
     pub(crate) fn replace_oids(&mut self, oids: &Arc<Oids>) {
@@ -862,6 +711,10 @@ impl PreparedStatements {
 
 #[cfg(test)]
 pub(crate) mod test {
+    use std::time::Duration;
+
+    use pgdog_config::PreparedStatementsEviction;
+
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
@@ -987,7 +840,7 @@ pub(crate) mod test {
         ps.prepared(&name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.peek_statement(&name).unwrap().expired(Instant::now()));
+        assert_eq!(ps.expired(&name), Some(true));
 
         ps.configure(PreparedStatementsConfig {
             ttl: Some(TTL),
@@ -1004,7 +857,7 @@ pub(crate) mod test {
         prepare_expired(&mut ps, &name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.peek_statement(&name).unwrap().expired(Instant::now()));
+        assert_eq!(ps.expired(&name), Some(true));
 
         assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
         assert!(ps.contains(&name));
@@ -1591,51 +1444,8 @@ pub(crate) mod test {
     }
 
     // -------------------------------------------------------
-    // Local cache eviction and memory accounting
+    // Local cache eviction
     // -------------------------------------------------------
-
-    #[test]
-    fn ensure_capacity_evicts_in_least_recently_used_order() {
-        let mut ps = new_with_limit(3);
-        for name in ["a", "b", "c", "d", "e"] {
-            ps.prepared(name);
-        }
-
-        let close = ps.ensure_capacity();
-
-        assert_eq!(close, [Close::named("a"), Close::named("b")]);
-        assert_eq!(ps.len(), 3);
-        for name in ["c", "d", "e"] {
-            assert!(
-                ps.peek_statement(name).is_some(),
-                "{name} should have survived"
-            );
-        }
-    }
-
-    #[test]
-    fn ensure_capacity_evicts_nothing_at_the_limit() {
-        let mut ps = new_with_limit(3);
-        for name in ["a", "b", "c"] {
-            ps.prepared(name);
-        }
-
-        assert!(ps.ensure_capacity().is_empty());
-        assert_eq!(ps.len(), 3);
-    }
-
-    #[test]
-    fn contains_keeps_a_statement_out_of_the_next_eviction() {
-        let mut ps = new_with_limit(2);
-        for name in ["a", "b", "c"] {
-            ps.prepared(name);
-        }
-
-        assert!(ps.contains("a"));
-
-        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
-        assert!(ps.peek_statement("a").is_some());
-    }
 
     #[test]
     fn check_prepared_keeps_a_statement_out_of_the_next_eviction() {
@@ -1647,43 +1457,7 @@ pub(crate) mod test {
         assert!(ps.check_prepared("a", Access::Execution).unwrap().is_none());
 
         assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
-        assert!(ps.peek_statement("a").is_some());
-    }
-
-    #[test]
-    fn prepared_keeps_a_statement_out_of_the_next_eviction() {
-        let mut ps = new_with_limit(2);
-        for name in ["a", "b", "c"] {
-            ps.prepared(name);
-        }
-
-        ps.prepared("a");
-
-        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
-        assert!(ps.peek_statement("a").is_some());
-    }
-
-    #[test]
-    fn prepared_counts_a_repeated_name_once_in_memory_used() {
-        let mut ps = new_extended();
-        ps.prepared("a");
-        let once = ps.memory_used();
-
-        ps.prepared("a");
-
-        assert_eq!(ps.memory_used(), once);
-        assert_eq!(ps.len(), 1);
-    }
-
-    #[test]
-    fn ensure_capacity_reclaims_memory_for_evicted_statements() {
-        let mut ps = new_with_limit(1);
-        for name in ["a", "b", "c"] {
-            ps.prepared(name);
-        }
-
-        assert_eq!(ps.ensure_capacity().len(), 2);
-        assert_eq!(ps.memory_used(), entry_mem("c"));
+        assert!(ps.contains("a"));
     }
 
     // -------------------------------------------------------
@@ -1873,22 +1647,8 @@ pub(crate) mod test {
         assert_eq!(ps.ensure_capacity(), [Close::named("b"), Close::named("d")]);
         assert_eq!(ps.len(), 3);
         for name in ["a", "c", "e"] {
-            assert!(
-                ps.peek_statement(name).is_some(),
-                "{name} should have survived"
-            );
+            assert!(ps.contains(name), "{name} should have survived");
         }
-    }
-
-    #[test]
-    fn ensure_capacity_evicts_nothing_at_the_limit_under_lfu() {
-        let mut ps = new_with_eviction(3, PreparedStatementsEviction::LeastFrequentlyUsed);
-        for name in ["a", "b", "c"] {
-            ps.prepared(name);
-        }
-
-        assert!(ps.ensure_capacity().is_empty());
-        assert_eq!(ps.len(), 3);
     }
 
     #[test]
@@ -1908,20 +1668,7 @@ pub(crate) mod test {
         // "a" is what lru would have closed, and it has to still be here.
         assert_eq!(ps.ensure_capacity(), [Close::named("c")]);
         assert_eq!(ps.len(), 2);
-        assert!(ps.peek_statement("a").is_some());
-    }
-
-    #[test]
-    fn ensure_capacity_reclaims_memory_for_evicted_statements_under_lfu() {
-        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
-        ps.prepared("hot");
-        use_statement(&mut ps, "hot", 2);
-        ps.prepared("warm");
-        use_statement(&mut ps, "warm", 1);
-        ps.prepared("cold");
-
-        assert_eq!(ps.ensure_capacity().len(), 2);
-        assert_eq!(ps.memory_used(), entry_mem("hot"));
+        assert!(ps.contains("a"));
     }
 
     /// The second Bind reaches the in-flight Parse rather than the entry, so a test that
@@ -1951,7 +1698,7 @@ pub(crate) mod test {
         let mut parse_complete = Message::new(ParseComplete.to_bytes());
         assert!(!ps.forward(&mut parse_complete).unwrap());
 
-        assert_eq!(ps.peek_statement(&hot).unwrap().executions, 4);
+        assert_eq!(ps.executions(&hot), Some(4));
         assert_eq!(ps.ensure_capacity(), [Close::named("cold")]);
     }
 
@@ -1991,6 +1738,6 @@ pub(crate) mod test {
 
         // "hot" outranks "cold" only if the round trip carried its count back.
         assert_eq!(ps.ensure_capacity(), [Close::named("cold")]);
-        assert!(ps.peek_statement(&hot).is_some());
+        assert!(ps.contains(&hot));
     }
 }
