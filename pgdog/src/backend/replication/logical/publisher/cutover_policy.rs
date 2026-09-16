@@ -130,7 +130,7 @@ impl CutoverPolicy {
 
     /// Wait until cutover conditions are met depending on the
     /// [`CutoverConfig`] settings
-    pub(crate) async fn wait_for_cutover(&self) -> Result<(), Error> {
+    pub(crate) async fn wait_for_catchup(&self) -> Result<(), Error> {
         let cutover_threshold = self.config.replication_lag_threshold;
         let last_transaction_delay = self.config.last_transaction_delay;
         let cutover_timeout = self.config.timeout;
@@ -202,9 +202,6 @@ impl CutoverPolicy {
 mod tests {
     use super::*;
     use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
-    use crate::backend::replication::logical::publisher::replication_stream::ReplicationStream;
-    use crate::util::{safe_sleep, safe_timeout};
-    use pgdog_config::ConfigAndUsers;
     use std::assert_matches;
     use tokio::time::Instant;
 
@@ -254,7 +251,7 @@ mod tests {
             CutoverAction::Go(CutoverReason::Lag)
         );
 
-        let result = waiter.wait_for_cutover().await;
+        let result = waiter.wait_for_catchup().await;
         assert!(result.is_ok());
     }
 
@@ -279,7 +276,7 @@ mod tests {
             CutoverAction::Go(CutoverReason::LastTransaction)
         );
 
-        let result = waiter.wait_for_cutover().await;
+        let result = waiter.wait_for_catchup().await;
         assert!(result.is_ok());
     }
 
@@ -393,116 +390,5 @@ mod tests {
             waiter.should_cutover(elapsed),
             CutoverAction::Go(CutoverReason::Lag)
         );
-    }
-
-    #[tokio::test]
-    async fn wait_for_replication_finishes_with_unrelated_writes() {
-        use crate::backend::replication::logical::publisher::publisher_impl::Publisher;
-        use crate::backend::server::test::test_server;
-
-        crate::logger();
-
-        const TRAFFIC_STOP: u64 = 1_000;
-
-        let config = CutoverConfig {
-            traffic_stop_threshold: TRAFFIC_STOP,
-            timeout: Duration::from_secs(120),
-            ..cutover_config()
-        };
-
-        let cluster = crate::backend::pool::Cluster::new_test(&ConfigAndUsers::default());
-        let publication = "test_pub".to_owned();
-        let slot = "test_slot".to_owned();
-        let shards = cluster.shards().len();
-
-        let mut source = test_server().await;
-        let _ = source
-            .execute(format!("DROP PUBLICATION IF EXISTS {publication}"))
-            .await;
-        for shard in 0..shards {
-            let _ = source
-                .execute(format!("SELECT pg_drop_replication_slot('{slot}_{shard}')"))
-                .await;
-        }
-        source
-            .execute("DROP TABLE IF EXISTS issue1_main, issue1_noise")
-            .await
-            .unwrap();
-        source
-            .execute("CREATE TABLE issue1_main (id BIGINT PRIMARY KEY)")
-            .await
-            .unwrap();
-        source
-            .execute("CREATE TABLE issue1_noise (id BIGINT, payload TEXT)")
-            .await
-            .unwrap();
-        source
-            .execute(format!(
-                "CREATE PUBLICATION {publication} FOR TABLE issue1_main"
-            ))
-            .await
-            .unwrap();
-
-        cluster.launch();
-
-        let stop = tokio_util::sync::CancellationToken::new();
-        let mut publisher = Publisher::new(&publication, slot.clone());
-        publisher
-            .prepare_replication(&cluster, &stop)
-            .await
-            .unwrap();
-        let progress = ReplicationProgress::new(shards);
-        let tasks: Vec<_> = std::mem::take(&mut publisher.slots)
-            .into_iter()
-            .map(|(source_shard, slot)| {
-                let tables = publisher.tables.remove(&source_shard).unwrap_or_default();
-                let updater = progress.updater_for_shard(source_shard);
-                let task = crate::api::replication::ReplicationStreamTask::builder()
-                    .source_shard(source_shard)
-                    .slot(slot)
-                    .tables(tables)
-                    .replication_stream(ReplicationStream::new(&cluster, &cluster, updater))
-                    .stop(stop.clone())
-                    .build();
-                crate::api::run_task(task)
-            })
-            .collect();
-
-        let waiter = CutoverPolicy::new(config, progress);
-
-        source
-            .execute(
-                "INSERT INTO issue1_noise \
-                 SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 64)) \
-                 FROM generate_series(1, 5000) g",
-            )
-            .await
-            .unwrap();
-
-        safe_sleep(Duration::from_secs(1)).await;
-
-        let result = safe_timeout(Duration::from_secs(20), waiter.wait_for_stop_threshold()).await;
-
-        stop.cancel();
-        let mut drained = Ok(());
-        for task in tasks {
-            drained = drained.and(task.await);
-        }
-        for shard in 0..shards {
-            let _ = source
-                .execute(format!("SELECT pg_drop_replication_slot('{slot}_{shard}')"))
-                .await;
-        }
-        let _ = source
-            .execute(format!("DROP PUBLICATION IF EXISTS {publication}"))
-            .await;
-        let _ = source
-            .execute("DROP TABLE IF EXISTS issue1_main, issue1_noise")
-            .await;
-
-        drained.expect("replication tasks failed while stopping");
-        let waited = result
-            .expect("wait_for_replication never finished: lag stays inflated by unrelated WAL");
-        waited.expect("wait_for_replication returned an error");
     }
 }

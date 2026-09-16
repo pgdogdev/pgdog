@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db, connections_sqlx};
 use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
@@ -130,7 +130,7 @@ async fn test_stop_task() {
 }
 
 #[tokio::test]
-async fn test_cutover() {
+async fn test_cutover_starts_reverse_replication() {
     let direct = connection_sqlx_direct().await;
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
@@ -165,5 +165,40 @@ async fn test_cutover() {
     );
 
     wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
+
+    let connections = connections_sqlx().await;
+    connections[0]
+        .execute(
+            format!(
+                "INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) \
+                 VALUES (1001, 'written_after_cutover')"
+            )
+            .as_str(),
+        )
+        .await
+        .expect("writes through the new source must succeed");
+
+    for database in ["shard_0", "shard_1"] {
+        let shard = connection_sqlx_direct_db(database).await;
+        let value: String = sqlx::query_scalar(&format!(
+            "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
+        ))
+        .fetch_one(&shard)
+        .await
+        .expect("the new source must contain the post-cutover row");
+        assert_eq!(value, "written_after_cutover");
+    }
+
+    poll("the post-cutover row to replicate back to the old source", || async {
+        let value: Option<String> = sqlx::query_scalar(&format!(
+            "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
+        ))
+        .fetch_optional(&direct)
+        .await
+        .expect("the old source must remain readable");
+        (value.as_deref() == Some("written_after_cutover")).then_some(())
+    })
+    .await;
+
     cleanup(&admin, &direct).await;
 }

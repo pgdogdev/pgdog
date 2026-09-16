@@ -23,6 +23,7 @@ impl Command for ShowReplicationSlots {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
+        // W: add maybe slot's task id?
         let rd = RowDescription::new(&[
             Field::text("host"),
             Field::bigint("port"),

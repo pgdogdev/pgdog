@@ -599,21 +599,28 @@ impl fmt::Display for SchemaShardStatus {
 /// Stages of logical replication, reported as the task's status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
+// W: this should contain ReplicationProgress actually
+// and maybe last cutover reason
 pub enum ReplicationStatus {
     #[display("initializing replication streams")]
     InitializingReplicationStreams,
     /// Streaming changes to catch the destination up.
     #[display("replicating")]
     Replicating,
+    #[display("stopping traffic")]
+    StoppingTraffic,
+    #[display("waiting for catch-up")]
+    WaitingForCatchUp,
+    #[display("syncing schema")]
+    SyncingSchema,
+    #[display("preparing reverse replication")]
+    PreparingReverseReplication,
     /// Cutting traffic over to the destination.
     #[display("cutting over")]
     CuttingOver,
     /// Cutting traffic back to the original after a prior cutover (rollback).
     #[display("rolling back")]
     RollingBack,
-    /// Winding down on a stop request.
-    #[display("stopping")]
-    Stopping,
     /// A stage this build does not know.
     #[display("")]
     #[serde(other)]

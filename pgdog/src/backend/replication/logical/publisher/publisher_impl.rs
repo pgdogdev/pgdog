@@ -28,6 +28,18 @@ impl Publisher {
         }
     }
 
+    pub(crate) fn pop_tables(&mut self, shard: usize) -> Result<Vec<Table>, Error> {
+        self.tables
+            .remove(&shard)
+            .ok_or(Error::NoReplicationTables(shard))
+    }
+
+    pub(crate) fn pop_slot(&mut self, shard: usize) -> Result<ReplicationSlot, Error> {
+        self.slots
+            .remove(&shard)
+            .ok_or(Error::NoReplicationSlot(shard))
+    }
+
     /// Synchronize tables for all shards.
     pub(crate) async fn sync_tables(
         &mut self,
@@ -96,6 +108,7 @@ impl Publisher {
     pub(crate) async fn prepare_replication(
         &mut self,
         source: &Cluster,
+        // W: maybe drop this slot and just create it
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
         // Synchronize tables from publication.
@@ -104,12 +117,6 @@ impl Publisher {
         // Create replication slots if we haven't already.
         if self.slots.is_empty() {
             Box::pin(self.create_slots(source, cancel)).await?;
-        }
-
-        for (number, _) in source.shards().iter().enumerate() {
-            if !self.slots.contains_key(&number) {
-                return Err(Error::NoReplicationSlot(number));
-            }
         }
 
         Ok(())

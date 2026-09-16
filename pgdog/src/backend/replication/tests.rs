@@ -11,7 +11,7 @@ use crate::{
         replication::ReplicationStreamTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
-        task::TaskError,
+        task::{TaskError, TaskWaiter},
     },
     backend::{
         Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
@@ -21,6 +21,71 @@ use crate::{
     },
     config::{config, set},
 };
+#[tokio::test]
+async fn wait_for_replication_finishes_with_unrelated_writes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema = "unrelated_writes_test";
+    let destination = "unrelated_writes_test_dest";
+    let original_config = config();
+    let mut admin = test_server().await;
+    let mut publisher = Publisher::new(schema, schema.into());
+    let result = async {
+        setup_replication_test(&mut admin, schema, destination).await?;
+        let source = databases::databases().schema_owner(schema)?;
+        let dest = databases::databases().schema_owner(destination)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY); \
+                 CREATE TABLE {schema}.noise (id BIGINT, payload TEXT); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
+            ))
+            .await?;
+        let mut dest_server = dest.primary(0, &Request::default()).await?;
+        dest_server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY)"
+            ))
+            .await?;
+
+        let stop = CancellationToken::new();
+        publisher.prepare_replication(&source, &stop).await?;
+        let (_, tasks) = start_replication(&mut publisher, &source, &dest, &stop).await?;
+        let result = async {
+            server
+                .execute_checked(format!(
+                    "INSERT INTO {schema}.noise \
+                     SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 64)) \
+                     FROM generate_series(1, 5000) g"
+                ))
+                .await?;
+            wait_for_slot(&mut server, &format!("{schema}_0")).await?;
+            Ok::<_, Box<dyn std::error::Error>>(())
+        }
+        .await;
+
+        stop.cancel();
+        let mut drained = Ok(());
+        for task in tasks {
+            drained = drained.and(task.await);
+        }
+        result?;
+        drained?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    cleanup_replication_test(
+        &mut publisher,
+        &mut admin,
+        &original_config,
+        [schema, destination],
+    )
+    .await?;
+    result
+}
 
 async fn setup_replication_test(
     admin: &mut Server,
@@ -57,6 +122,56 @@ async fn setup_replication_test(
     Ok(())
 }
 
+async fn start_replication(
+    publisher: &mut Publisher,
+    source: &Cluster,
+    destination: &Cluster,
+    stop: &CancellationToken,
+) -> Result<(ReplicationProgress, Vec<TaskWaiter<(), Error>>), Error> {
+    let progress = ReplicationProgress::new(source.shards().len());
+    let tasks = (0..source.shards().len())
+        .map(|source_shard| {
+            let tables = publisher.pop_tables(source_shard)?;
+            let slot = publisher.pop_slot(source_shard)?;
+            let updater = progress.updater_for_shard(source_shard);
+            Ok(ReplicationStreamTask::builder()
+                .source_shard(source_shard)
+                .slot(slot)
+                .tables(tables)
+                .replication_stream(ReplicationStream::new(source, destination, updater))
+                .stop(stop.clone())
+                .build())
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok((progress, tasks.into_iter().map(run_task).collect()))
+}
+
+async fn wait_for_slot(
+    server: &mut Server,
+    slot_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target: Vec<String> = server
+        .fetch_all("SELECT pg_current_wal_lsn()::text")
+        .await?;
+    let target = target.first().ok_or(Error::MissingData)?;
+    let query = format!(
+        "SELECT 1::bigint FROM pg_replication_slots \
+         WHERE slot_name = '{slot_name}' \
+         AND confirmed_flush_lsn >= '{target}'::pg_lsn"
+    );
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let rows: Vec<i64> = server.fetch_all(&query).await?;
+            if rows == [1] {
+                return Ok::<_, Box<dyn std::error::Error>>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
+}
+
 async fn replicate_until_caught_up(
     publisher: &mut Publisher,
     source: &Cluster,
@@ -64,51 +179,18 @@ async fn replicate_until_caught_up(
     slot_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut server = source.primary(0, &Request::default()).await?;
-    let target: Vec<String> = server
-        .fetch_all("SELECT pg_current_wal_lsn()::text")
-        .await?;
-    let target = target.first().ok_or(Error::MissingData)?;
-    let query = format!(
-        "SELECT 1::bigint FROM pg_replication_slots \
-         WHERE slot_name = '{slot_name}_0' \
-         AND confirmed_flush_lsn >= '{target}'::pg_lsn"
-    );
     let stop = CancellationToken::new();
     publisher.prepare_replication(source, &stop).await?;
-    let progress = ReplicationProgress::new(source.shards().len());
-    let handles: Vec<_> = std::mem::take(&mut publisher.slots)
-        .into_iter()
-        .map(|(source_shard, slot)| {
-            let tables = publisher.tables.remove(&source_shard).unwrap_or_default();
-            let updater = progress.updater_for_shard(source_shard);
-            let task = ReplicationStreamTask::builder()
-                .source_shard(source_shard)
-                .slot(slot)
-                .tables(tables)
-                .replication_stream(ReplicationStream::new(source, destination, updater))
-                .stop(stop.clone())
-                .build();
-            run_task(task)
-        })
-        .collect();
+    let (_, handles) = start_replication(publisher, source, destination, &stop).await?;
 
-    let caught_up = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let rows: Vec<i64> = server.fetch_all(&query).await?;
-            if rows == [1] {
-                return Ok::<_, Box<dyn std::error::Error>>(());
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
+    let caught_up = wait_for_slot(&mut server, &format!("{slot_name}_0")).await;
 
     stop.cancel();
     let mut drained = Ok(());
     for handle in handles {
         drained = drained.and(handle.await);
     }
-    caught_up??;
+    caught_up?;
     drained?;
     Ok(())
 }

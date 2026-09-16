@@ -131,11 +131,17 @@ pub(crate) enum Error {
     #[error("replication timeout")]
     ReplicationTimeout,
 
+    #[error("replication stream stopped before shutdown was requested")]
+    ReplicationStreamStopped,
+
     #[error("publication \"{0}\" has no tables")]
     EmptyPublication(String),
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication table entry")]
+    NoReplicationTables(usize),
 
     #[error("parallel connection error")]
     ParallelConnection,
