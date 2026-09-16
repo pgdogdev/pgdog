@@ -98,6 +98,8 @@ impl Pools {
         let mut avg_rows_updated = vec![];
         let mut total_rows_deleted = vec![];
         let mut avg_rows_deleted = vec![];
+        let mut total_checkout_timeouts = vec![];
+        let mut avg_checkout_timeouts = vec![];
 
         let general = &crate::config::config().config.general;
 
@@ -386,6 +388,16 @@ impl Pools {
                     avg_rows_deleted.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rows_deleted.into(),
+                    });
+
+                    total_checkout_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.checkout_timeouts.into(),
+                    });
+
+                    avg_checkout_timeouts.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.checkout_timeouts.into(),
                     });
                 }
             }
@@ -852,6 +864,22 @@ impl Pools {
             name: "avg_rows_deleted".into(),
             measurements: avg_rows_deleted,
             help: "Average rows deleted per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_checkout_timeouts".into(),
+            measurements: total_checkout_timeouts,
+            help: "Total number of connection pool checkout timeouts.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_checkout_timeouts".into(),
+            measurements: avg_checkout_timeouts,
+            help: "Average number of connection pool checkout timeouts.".into(),
             unit: None,
             metric_type: None,
         }));

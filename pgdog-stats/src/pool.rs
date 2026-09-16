@@ -73,6 +73,8 @@ pub struct Counts {
     pub rows_updated: usize,
     /// Rows reported affected by DELETE command tags.
     pub rows_deleted: usize,
+    /// Checkout timeouts.
+    pub checkout_timeouts: usize,
 }
 
 impl Sub for Counts {
@@ -111,6 +113,7 @@ impl Sub for Counts {
             rows_inserted: self.rows_inserted.saturating_sub(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_sub(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_sub(rhs.rows_deleted),
+            checkout_timeouts: self.checkout_timeouts.saturating_sub(rhs.checkout_timeouts),
         }
     }
 }
@@ -151,6 +154,7 @@ impl Add for Counts {
             rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
+            checkout_timeouts: self.checkout_timeouts.saturating_add(rhs.checkout_timeouts),
         }
     }
 }
@@ -193,6 +197,7 @@ impl Div<usize> for Counts {
             rows_inserted: self.rows_inserted.checked_div(rhs).unwrap_or(0),
             rows_updated: self.rows_updated.checked_div(rhs).unwrap_or(0),
             rows_deleted: self.rows_deleted.checked_div(rhs).unwrap_or(0),
+            checkout_timeouts: self.checkout_timeouts.checked_div(rhs).unwrap_or(0),
         }
     }
 }
