@@ -624,6 +624,7 @@ async fn test_checkout_timeout() {
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), Error::CheckoutTimeout);
     assert!(pool.lock().waiting.is_empty());
+    assert_eq!(pool.state().stats.counts.checkout_timeouts, 1);
 }
 
 #[tokio::test]
