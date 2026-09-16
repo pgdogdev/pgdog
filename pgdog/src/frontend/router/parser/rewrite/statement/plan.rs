@@ -6,7 +6,7 @@ use super::{
     Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
 };
 use crate::frontend::client::QueryTimestamps;
-use crate::frontend::router::parser::rewrite::statement::timestamp::TimeFunction;
+use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query, parameter::ParameterValue};
@@ -24,7 +24,9 @@ pub(crate) struct GeneratedParam {
 pub(crate) enum GeneratedId {
     UniqueId,
     Sequence(SequenceCall),
-    ProxyTime(TimeFunction),
+    /// This represents a function (such as date/time, UUID) that was re-written to a constant
+    /// to be consistent across shards for omni writes.
+    NDFunction(NDFunction),
 }
 
 /// Statement rewrite plan.
@@ -142,8 +144,8 @@ impl RewritePlan {
                 GeneratedId::Sequence(call) => {
                     Self::convert_int_to_param(execute(call).await?, format)
                 }
-                GeneratedId::ProxyTime(time) => {
-                    let (text, binary) = time.formatted_time(&timestamps, timezone)?;
+                GeneratedId::NDFunction(nd_func) => {
+                    let (text, binary) = nd_func.write_as_constant(&timestamps, timezone)?;
                     match format {
                         Format::Binary => Parameter::new(binary.as_slice()),
                         Format::Text => Parameter::new(text.as_bytes()),

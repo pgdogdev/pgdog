@@ -1,8 +1,5 @@
-use std::fmt;
 use std::ops::Deref;
 
-use chrono::{DateTime, Offset, SubsecRound, TimeZone, Timelike, Utc};
-use chrono_tz::Tz;
 use pg_raw_parse::{
     ConstValue, Node, NodeMut,
     list::NodeList,
@@ -21,6 +18,7 @@ use crate::{
             StatementParser, StatementRewrite, Table,
             rewrite::statement::{
                 Error,
+                non_deterministic_funcs::{time::TimeFunctionType, uuid::UUIDFunctionType},
                 plan::{GeneratedId, GeneratedParam},
             },
         },
@@ -28,50 +26,38 @@ use crate::{
     net::parameter::ParameterValue,
 };
 
-/// A "parsed" time function the Client specified; either from database schema or manual commands.
-/// Column type represents the data type attached, so that we can correctly assemble the String.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TimeFunction {
-    time_function_type: TimeFunctionType,
+/// No need to expose these outside.
+mod time;
+mod uuid;
+
+/// A non-deterministic function that we must re-write when writing to an omnisharded table,
+/// so that we can maintain consistency instead of generating a different value (from executing the function)
+/// on each shard. This re-writes function calls to a constant.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct NDFunction {
+    nd_function_type: NDFunctionType,
+
     /// TODO: What happens if the database schema is changed? This should be invalidated if cached.
     column_type: String,
 }
 
-impl TimeFunction {
-    /// Based on the internal values (col type, arguments passed, ...),
-    /// and the reference time (e.g., transaction time), generate
-    /// the String and binary equivalent to be put in the final String.
-    pub(crate) fn formatted_time(
+impl NDFunction {
+    /// Generate a Postgres-ready String and binary equivalent for the non-deterministic function.
+    /// Binary format is always text-based as we explicitly inner-cast the ParamRefs we use with ::text
+    /// (and have an outer re-cast into the actual column data type)
+    pub(crate) fn write_as_constant(
         &self,
         timestamps: &QueryTimestamps,
         timezone_param: Option<&ParameterValue>,
     ) -> Result<(String, Vec<u8>), Error> {
-        let timestamp = self.column_type.eq("timestamp without time zone");
+        let formatted_string = match self.nd_function_type {
+            NDFunctionType::TimeFunction(tf) => {
+                tf.formatted_time(&self.column_type, timestamps, timezone_param)
+            }
+            NDFunctionType::UUIDFunction(uuid) => uuid.format(),
+        }?;
 
-        let reference_time = match self.time_function_type.time_reference() {
-            TimeReference::Current => Utc::now(),
-            TimeReference::TransactionStart => timestamps.transaction_start,
-            TimeReference::StatementStart => timestamps.statement_start,
-        };
-
-        let mut time_output: TimeFunctionOutput = self.time_function_type.default_output_type();
-
-        // Column expects 'timestamp', function outputs 'timestamptz', need to convert.
-        if time_output == TimeFunctionOutput::TimestampWithTimeZone && timestamp {
-            time_output = TimeFunctionOutput::Timestamp
-        }
-
-        let precision = self.time_function_type.precision();
-
-        let tz = match session_time_zone(timezone_param) {
-            Ok(tz) => tz,
-            Err(_) if time_output == TimeFunctionOutput::TimestampWithTimeZone => Tz::UTC,
-            Err(err) => return Err(err),
-        };
-
-        let formatted_string = time_output.format(&reference_time, &tz, precision);
         let binary = formatted_string.as_bytes().to_vec();
-
         Ok((formatted_string, binary))
     }
 
@@ -90,190 +76,44 @@ impl TimeFunction {
             "timestamp with time zone" => "timestamptz",
             "timestamp without time zone" => "timestamp",
             "time without time zone" => "time",
-            string => string,
+            other => other,
         }
     }
 }
 
-/// The session's `TimeZone` as an IANA name, e.g. `UTC` or `America/New_York`.
-///
-/// Offsets like `+00:00` or `<-08>+08` are future work.
-fn session_time_zone(timezone: Option<&ParameterValue>) -> Result<Tz, Error> {
-    let timezone = timezone.ok_or(Error::UnknownTimeZone)?;
-    timezone
-        .as_str()
-        .and_then(|value| value.parse::<Tz>().ok())
-        .ok_or_else(|| Error::UnsupportedTimeZone(timezone.to_string()))
+/// Simple wrapper around `TimeFunctionType` and `UUIDFunctionType` to pass functions through
+/// depending on the type of non-deterministic function that was parsed.
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+enum NDFunctionType {
+    TimeFunction(TimeFunctionType),
+    UUIDFunction(UUIDFunctionType),
 }
 
-/// Postgres trims trailing zeros from fractional seconds
-/// It also drops the dot when there's none
-fn fractional_seconds(nanoseconds: u32) -> String {
-    let microseconds = nanoseconds / 1_000;
-
-    if microseconds == 0 {
-        return String::new();
+impl NDFunctionType {
+    /// Convert `SQLValueFunctionOp` (e.g. current_date, current_time... non ()) to `NDFunctionType`
+    fn from_sql_value_function(op: SQLValueFunctionOp::Type, typmod: i32) -> Option<Self> {
+        TimeFunctionType::from_sql_value_function(op, typmod)
+            .map(NDFunctionType::TimeFunction)
+            .or_else(|| {
+                UUIDFunctionType::from_sql_value_function(op, typmod)
+                    .map(NDFunctionType::UUIDFunction)
+            })
     }
 
-    format!(".{microseconds:06}")
-        .trim_end_matches('0')
-        .to_string()
-}
-
-/// Postgres prints UTC offsets as +HH
-/// Adds :MM and :SS when they're non-zero.
-fn utc_offset(local_minus_utc: i32) -> String {
-    let sign = if local_minus_utc < 0 { '-' } else { '+' };
-    let total_seconds = local_minus_utc.unsigned_abs();
-    let (hours, minutes, seconds) = (
-        total_seconds / 3600,
-        total_seconds / 60 % 60,
-        total_seconds % 60,
-    );
-
-    match (minutes, seconds) {
-        (0, 0) => format!("{sign}{hours:02}"),
-        (_, 0) => format!("{sign}{hours:02}:{minutes:02}"),
-        _ => format!("{sign}{hours:02}:{minutes:02}:{seconds:02}"),
-    }
-}
-
-/// Represents the kind of `TimeFunction` that we're re-writing.
-/// If an Option argument is present and Some(..), the Client specified precision.
-/// <https://www.postgresql.org/docs/current/functions-datetime.html>
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum TimeFunctionType {
-    CurrentDate,
-    CurrentTime(Option<u8>),
-    CurrentTimestamp(Option<u8>),
-    ClockTimestamp,
-    LocalTime(Option<u8>),
-    LocalTimestamp(Option<u8>),
-    Now,
-    StatementTimestamp,
-    TimeOfDay,
-    TransactionTimestamp,
-}
-
-/// Represents what Postgres type the `TimeFunction` would normally output.
-#[derive(PartialEq)]
-enum TimeFunctionOutput {
-    Date,
-    TimeWithTimeZone,
-    TimestampWithTimeZone,
-    Time,
-    Timestamp,
-
-    /// Specially formatted (e.g. EST instead of -05) as it's intended for a text col.
-    TextFormattedTimestampWithTimeZone,
-}
-
-impl TimeFunctionOutput {
-    /// Formats `utc_time` how Postgres outputs for this time func. Timezone taken into account (`tz`).
-    /// Seconds with fractions rounded to `precision` (which are capped by Postgres at 6)
-    fn format<Z>(&self, utc_time: &DateTime<Utc>, tz: &Z, precision: u8) -> String
-    where
-        Z: TimeZone,
-        Z::Offset: fmt::Display,
-    {
-        let local_time = utc_time.with_timezone(tz);
-        let rounded = local_time
-            .clone()
-            .round_subsecs(u16::from(precision.min(6)));
-
-        let date = rounded.format("%Y-%m-%d");
-        let time = format!(
-            "{}{}",
-            rounded.format("%H:%M:%S"),
-            fractional_seconds(rounded.nanosecond())
-        );
-        let offset = utc_offset(rounded.offset().fix().local_minus_utc());
-
+    /// Postgres-formatted function name for this function type.
+    /// Used for pattern matching to determine what kind of function (if any) is present.
+    fn name(&self) -> &str {
         match self {
-            Self::Date => local_time.format("%Y-%m-%d").to_string(),
-            Self::Time => time,
-            Self::TimeWithTimeZone => format!("{time}{offset}"),
-            Self::Timestamp => format!("{date} {time}"),
-            Self::TimestampWithTimeZone => format!("{date} {time}{offset}"),
-            Self::TextFormattedTimestampWithTimeZone => format!(
-                "{}.{:06} {}",
-                local_time.format("%a %b %d %H:%M:%S"),
-                local_time.nanosecond() / 1_000,
-                local_time.format("%Y %Z"),
-            ),
-        }
-    }
-}
-
-enum TimeReference {
-    /// Changes with statement execution
-    Current,
-
-    TransactionStart,
-
-    /// "returns the start time of the current statement (more specifically,
-    ///  the time of receipt of the latest command message from the client)."
-    StatementStart,
-}
-
-impl TimeFunctionType {
-    /// For easy iteration over all enum variants
-    /// "CurrentTimestamp" is purposefully ordered before "CurrentTime" (+ LocalTimestamp/LocalTime) to prevent
-    /// partial match bugs with .starts_with (we can't match on NAME() as not all require ())
-    const ALL_VARIANTS: [Self; 10] = [
-        Self::CurrentDate,
-        Self::CurrentTimestamp(None),
-        Self::CurrentTime(None),
-        Self::ClockTimestamp,
-        Self::LocalTimestamp(None),
-        Self::LocalTime(None),
-        Self::Now,
-        Self::StatementTimestamp,
-        Self::TimeOfDay,
-        Self::TransactionTimestamp,
-    ];
-
-    /// The precision of partial seconds that should be displayed in the `TimeFunction`'s output.
-    fn precision(self) -> u8 {
-        match self {
-            Self::CurrentTime(precision)
-            | Self::LocalTime(precision)
-            | Self::LocalTimestamp(precision)
-            | Self::CurrentTimestamp(precision) => precision,
-            _ => None,
-        }
-        .unwrap_or(6)
-    }
-
-    /// What point of time (current, transaction start, statement start) should we base the
-    /// `TimeFunction`'s output on?
-    fn time_reference(self) -> TimeReference {
-        match self {
-            Self::ClockTimestamp | Self::TimeOfDay => TimeReference::Current,
-            Self::CurrentDate
-            | Self::CurrentTime(_)
-            | Self::CurrentTimestamp(_)
-            | Self::LocalTime(_)
-            | Self::LocalTimestamp(_)
-            | Self::TransactionTimestamp
-            | Self::Now => TimeReference::TransactionStart,
-            Self::StatementTimestamp => TimeReference::StatementStart,
+            Self::TimeFunction(tf) => tf.name(),
+            Self::UUIDFunction(uuid) => uuid.name(),
         }
     }
 
-    /// Represents what Postgres type the `TimeFunction` would normally output.
-    fn default_output_type(self) -> TimeFunctionOutput {
+    /// If the type has a parameter (for precision), return the same type with that parameter.
+    fn with_param(&self, param: u8) -> Self {
         match self {
-            Self::CurrentTimestamp(_)
-            | Self::ClockTimestamp
-            | Self::Now
-            | Self::StatementTimestamp
-            | Self::TransactionTimestamp => TimeFunctionOutput::TimestampWithTimeZone,
-            Self::CurrentTime(_) => TimeFunctionOutput::TimeWithTimeZone,
-            Self::CurrentDate => TimeFunctionOutput::Date,
-            Self::LocalTime(_) => TimeFunctionOutput::Time,
-            Self::LocalTimestamp(_) => TimeFunctionOutput::Timestamp,
-            Self::TimeOfDay => TimeFunctionOutput::TextFormattedTimestampWithTimeZone,
+            Self::TimeFunction(tf) => Self::TimeFunction(tf.with_param(param)),
+            Self::UUIDFunction(uuid) => Self::UUIDFunction(uuid.with_param(param)),
         }
     }
 
@@ -292,61 +132,18 @@ impl TimeFunctionType {
             }
             Node::SQLValueFunction(func) => Self::from_sql_value_function(func.op, func.typmod),
 
-            Node::SetToDefault(_) => {
-                // If DEFAULT is in a VALUES list; fetch the column based on index.
-                if let Some(column) = column_relation
-                    && let Ok(time_function_type) =
-                        column.column_default.parse::<TimeFunctionType>()
-                {
-                    return Some(time_function_type);
-                }
+            // If DEFAULT is in a VALUES list; fetch the column based on index.
+            Node::SetToDefault(_) => column_relation
+                .map(|column| column.column_default.parse::<NDFunctionType>())
+                .and_then(Result::ok),
 
-                None
-            }
             _ => None,
-        }
-    }
-
-    /// Convert `SQLValueFunctionOp` (e.g. current_date, current_time... non ()) to `TimeFunctionType`
-    fn from_sql_value_function(op: SQLValueFunctionOp::Type, typmod: i32) -> Option<Self> {
-        use SQLValueFunctionOp::*;
-
-        let precision = u8::try_from(typmod).ok();
-
-        Some(match op {
-            SVFOP_CURRENT_DATE => Self::CurrentDate,
-            SVFOP_CURRENT_TIME => Self::CurrentTime(None),
-            SVFOP_CURRENT_TIME_N => Self::CurrentTime(precision),
-            SVFOP_CURRENT_TIMESTAMP => Self::CurrentTimestamp(None),
-            SVFOP_CURRENT_TIMESTAMP_N => Self::CurrentTimestamp(precision),
-            SVFOP_LOCALTIME => Self::LocalTime(None),
-            SVFOP_LOCALTIME_N => Self::LocalTime(precision),
-            SVFOP_LOCALTIMESTAMP => Self::LocalTimestamp(None),
-            SVFOP_LOCALTIMESTAMP_N => Self::LocalTimestamp(precision),
-            // Others: CURRENT_USER, CURRENT_SCHEMA... not relevant here
-            _ => return None,
-        })
-    }
-
-    /// Postgres formatted String to match against Client-provided names in query.
-    fn name(self) -> &'static str {
-        match self {
-            Self::CurrentDate => "current_date",
-            Self::CurrentTime(_) => "current_time",
-            Self::CurrentTimestamp(_) => "current_timestamp",
-            Self::ClockTimestamp => "clock_timestamp",
-            Self::LocalTime(_) => "localtime",
-            Self::LocalTimestamp(_) => "localtimestamp",
-            Self::Now => "now",
-            Self::StatementTimestamp => "statement_timestamp",
-            Self::TimeOfDay => "timeofday",
-            Self::TransactionTimestamp => "transaction_timestamp",
         }
     }
 }
 
-/// Client `now()`.parse() -> TimeFunctionType::Now()
-impl FromStr for TimeFunctionType {
+/// Client `now()`.parse() -> NDFunction::TimeFunction(TimeFunctionType::Now())
+impl FromStr for NDFunctionType {
     type Err = Option<Error>;
 
     /// TODO: Doc comment
@@ -356,7 +153,10 @@ impl FromStr for TimeFunctionType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.to_lowercase();
 
-        for variant in Self::ALL_VARIANTS {
+        for variant in TimeFunctionType::ALL_VARIANTS
+            .iter()
+            .chain(UUIDFunctionType::ALL_VARIANTS.iter())
+        {
             let variant_name = &variant.name();
             if s.starts_with(variant_name) {
                 // TODO: I think this can be written better
@@ -370,15 +170,9 @@ impl FromStr for TimeFunctionType {
                         Err(_) => continue,
                     };
 
-                    return Ok(match variant {
-                        Self::CurrentTime(_) => Self::CurrentTime(Some(after_to_int)),
-                        Self::CurrentTimestamp(_) => Self::CurrentTimestamp(Some(after_to_int)),
-                        Self::LocalTime(_) => Self::LocalTime(Some(after_to_int)),
-                        Self::LocalTimestamp(_) => Self::LocalTimestamp(Some(after_to_int)),
-                        _ => continue,
-                    });
+                    return Ok(variant.with_param(after_to_int));
                 } else if after.eq("()") || after.is_empty() {
-                    return Ok(variant);
+                    return Ok(*variant);
                 } else {
                     continue;
                 }
@@ -414,7 +208,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        let mut timestamp_rewrite = TimestampRewrite {
+        let mut nd_rewrite = NDRewrite {
             rewrite: self,
             plan,
             next_param,
@@ -426,12 +220,12 @@ impl StatementRewrite<'_> {
 
         // 1. iterates through Schema to find DEFAULT columns
         // 2. adds the column to target list & all the values lists (ParamRef or String)
-        timestamp_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols);
+        nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols);
 
         // Replaces all time function calls (ParamRef or String)
-        timestamp_rewrite.transform_func_calls(stmt);
+        nd_rewrite.transform_func_calls(stmt);
 
-        timestamp_rewrite.error.map_or(Ok(()), Err)
+        nd_rewrite.error.map_or(Ok(()), Err)
     }
 
     /// Fetch the table Relation, so that we can get the relevant Schema for each column.
@@ -474,7 +268,7 @@ impl StatementRewrite<'_> {
     }
 }
 
-struct TimestampRewrite<'mem, 'a, 's> {
+struct NDRewrite<'mem, 'a, 's> {
     rewrite: &'a mut StatementRewrite<'s>,
     plan: &'a mut RewritePlan,
     /// TODO: Replace `next_param` with plan.param directly
@@ -488,7 +282,7 @@ struct TimestampRewrite<'mem, 'a, 's> {
     error: Option<Error>,
 }
 
-impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
+impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
     /// Replaces all time function calls (ParamRef or String)
     /// Used by all to handle re-writes.
     fn transform_func_calls(&mut self, stmt: NodeMut<'mem, '_>) {
@@ -518,22 +312,20 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                             }
                         };
 
-                        if let Some(time_function_type) =
-                            TimeFunctionType::from_node(value, col_relation)
+                        if let Some(nd_function_type) =
+                            NDFunctionType::from_node(value, col_relation)
                         {
                             let Some(col_relation) = col_relation else {
                                 continue;
                             };
 
-                            let time_function = TimeFunction {
-                                time_function_type,
+                            let nd_function = NDFunction {
+                                nd_function_type,
                                 column_type: col_relation.data_type.clone(),
                             };
 
                             // Replace the specific node within the list.
-                            cloned_values
-                                .as_mut()
-                                .set(i, self.make_node(&time_function));
+                            cloned_values.as_mut().set(i, self.make_node(&nd_function));
                             changed = true;
                         }
                     }
@@ -566,13 +358,12 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
 
         for col in not_covered_cols {
             let col_relation = self.relation.columns.get(col.as_str()).unwrap();
-            let Ok(time_function_type) = col_relation.column_default.parse::<TimeFunctionType>()
-            else {
+            let Ok(nd_function_type) = col_relation.column_default.parse::<NDFunctionType>() else {
                 continue;
             };
 
-            let time_function = TimeFunction {
-                time_function_type,
+            let nd_function = NDFunction {
+                nd_function_type,
                 column_type: col_relation.data_type.clone(),
             };
 
@@ -593,19 +384,19 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
             for values_list in select_stmt.values_lists_mut() {
                 let mut node_list_mut = values_list.expect_node_list();
 
-                node_list_mut.push(self.mem, self.make_node(&time_function));
+                node_list_mut.push(self.mem, self.make_node(&nd_function));
             }
         }
     }
 
     /// If simple protocol, make an A_Const node with the String constant of the formatted time.
     /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted time later.
-    fn make_node(&mut self, time_function: &TimeFunction) -> Unique<'mem, Node<'mem>> {
+    fn make_node(&mut self, nd_function: &NDFunction) -> Unique<'mem, Node<'mem>> {
         self.rewrite.rewritten = true;
 
         if !self.rewrite.extended && !self.rewrite.prepared {
-            let text = match time_function
-                .formatted_time(&self.rewrite.query_timestamps, self.rewrite.timezone)
+            let text = match nd_function
+                .write_as_constant(&self.rewrite.query_timestamps, self.rewrite.timezone)
             {
                 Ok((text, _)) => text,
                 // The statement is discarded when the error is returned (thus, value doesn't matter)
@@ -624,7 +415,7 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
             // TODO: add a method to plan() for this...
             self.plan.generated_params.push(GeneratedParam {
                 param_num: (*self.next_param - 1) as u16,
-                generated_id: GeneratedId::ProxyTime(time_function.clone()),
+                generated_id: GeneratedId::NDFunction(nd_function.clone()),
             });
 
             // Example: CAST($1::pg_catalog.text AS timetz)
@@ -643,7 +434,7 @@ impl<'mem, 'a, 's> TimestampRewrite<'mem, 'a, 's> {
                         .uncast(),
                     self.mem.make_list(&[self
                         .mem
-                        .make_string(Some(time_function.col_type_to_type_cast_alias()))]),
+                        .make_string(Some(nd_function.col_type_to_type_cast_alias()))]),
                 )
                 .uncast()
         }

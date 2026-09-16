@@ -24,6 +24,76 @@ use sqlx::{Executor, Row};
 // TODO: Test to make sure this doesn't affect harded tables (it doesn't; but doesn't hurt to assert that)
 // TODO: Assert what happens if we don't explicitly set timezone
 
+// <https://www.postgresql.org/docs/current/functions-uuid.html>
+#[tokio::test]
+async fn omni_uuid_rewrite() {
+    let sharded_conn = connections_sqlx().await;
+    let sharded_conn = sharded_conn.get(1).unwrap();
+
+    // TODO: Check that UUID v7 shift interval is parsed correctly (and works without errors)
+
+    // Create a test table through PgDog, and then reload, so that the Schema is loaded.
+    {
+        sharded_conn
+            .execute("DROP TABLE IF EXISTS test_omni_uuid")
+            .await
+            .unwrap();
+        sharded_conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS test_omni_uuid(
+            id BIGSERIAL PRIMARY KEY,
+            uuid4 uuid,
+            uuid7 uuid,
+            uuid4_default uuid DEFAULT gen_random_uuid(),
+            uuid7_default uuid DEFAULT uuidv7(),
+            uuid7_default_explicit uuid DEFAULT uuidv7())",
+            )
+            .await
+            .unwrap();
+
+        admin_sqlx().await.execute("RELOAD").await.unwrap();
+    }
+
+    // Other functions below test that general rewrites work in all protocols.
+    // It would be redundant to test that here, as they all share the same re-usable structure.
+    {
+        let mut transaction = sharded_conn.begin().await.unwrap();
+
+        transaction
+            .execute(
+                "INSERT INTO test_omni_uuid(id, uuid4, uuid7, uuid7_default_explicit)
+            VALUES(1, uuidv4(), uuidv7(), DEFAULT)",
+            )
+            .await
+            .unwrap();
+
+        let (shard_0_row, shard_1_row) = (
+            transaction
+                .fetch_one("/* pgdog_shard: 0 */ SELECT * FROM test_omni_uuid")
+                .await
+                .unwrap(),
+            transaction
+                .fetch_one("/* pgdog_shard: 1 */ SELECT * FROM test_omni_uuid")
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(shard_0_row.columns().len(), shard_1_row.columns().len());
+
+        // Iterate through all columns ensuring the UUIDs are consistent across shards for each case.
+        for col_num in 1..shard_0_row.columns().len() {
+            let (shard_0_uuid, shard_1_uuid) = (
+                shard_0_row.get::<sqlx::types::Uuid, usize>(col_num),
+                shard_1_row.get::<sqlx::types::Uuid, usize>(col_num),
+            );
+
+            assert_eq!(shard_0_uuid, shard_1_uuid);
+        }
+
+        transaction.rollback().await.unwrap();
+    }
+}
+
 /// LOCAL_TIME testing
 /// - Case 1: `test_time_text` has no DEFAULT w/ precision arg & text col.
 /// - Case 2: `test_time_regular` has DEFAULT w/ no precision arg & time col.

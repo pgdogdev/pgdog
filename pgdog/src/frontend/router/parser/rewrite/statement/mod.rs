@@ -14,10 +14,10 @@ pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
 pub(crate) mod nextval;
+pub(crate) mod non_deterministic_funcs;
 pub(crate) mod offset;
 pub(crate) mod plan;
 pub(crate) mod simple_prepared;
-pub(crate) mod timestamp;
 pub(crate) mod unique_id;
 pub(crate) mod update;
 
