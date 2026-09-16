@@ -201,7 +201,7 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     if let Some(mut existing) = existing {
         // Password hasn't been set yet.
         if existing.password.is_none() {
-            existing.password = user.password.clone();
+            existing.password = user.password;
             add_user(existing)?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
@@ -217,8 +217,8 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
             Ok(AuthResult::Ok)
         } else if config.config.general.passthrough_auth.allows_change() {
             // Passwords don't match but we can change it.
-            existing.password = user.password.clone();
-            add_user(user)?;
+            existing.password = user.password;
+            add_user(existing)?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
         } else {
@@ -884,6 +884,26 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_password_change_preserves_user_config() {
+        let mut erin = make_user("erin", Some("old_pass"));
+        erin.statement_timeout = Some(100);
+        erin.pool_size = Some(7);
+        erin.server_password = Some("server_secret".to_string());
+
+        setup_config(PassthroughAuth::EnabledPlainAllowChange, vec![erin]);
+
+        let result = add(make_user("erin", Some("new_pass")));
+        assert!(result.unwrap().is_ok());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("erin", None)).unwrap();
+        assert_eq!(found.password, Some("new_pass".to_string()));
+        assert_eq!(found.statement_timeout, Some(100));
+        assert_eq!(found.pool_size, Some(7));
+        assert_eq!(found.server_password, Some("server_secret".to_string()));
     }
 
     #[test]
