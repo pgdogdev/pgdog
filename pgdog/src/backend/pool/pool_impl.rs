@@ -503,6 +503,11 @@ impl Pool {
         *self.inner().lsn_stats.read()
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_lsn_stats(&self, stats: LsnStats) {
+        *self.inner().lsn_stats.write() = stats;
+    }
+
     /// Set pool role returning true if the role changed.
     pub(crate) fn set_role(&self, role: Role) -> bool {
         self.lock().set_role(role)

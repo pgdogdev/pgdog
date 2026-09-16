@@ -32,6 +32,7 @@ pub(crate) mod test_functions;
 pub(crate) mod test_insert;
 pub(crate) mod test_prefer_primary;
 pub(crate) mod test_prepared;
+mod test_replica_only;
 pub(crate) mod test_rr;
 pub(crate) mod test_schema_sharding;
 pub(crate) mod test_search_path;

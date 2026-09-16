@@ -12,6 +12,8 @@ use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 use super::*;
 use monitor::Monitor;
 
+mod role_detection;
+
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
     create_test_pool_config_with_db_num(host, port, Default::default())
 }
