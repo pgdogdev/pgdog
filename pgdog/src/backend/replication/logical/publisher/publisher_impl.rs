@@ -14,7 +14,7 @@ pub(crate) struct Publisher {
     /// Shard -> Tables mapping.
     pub(crate) tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
-    slots: HashMap<usize, ReplicationSlot>,
+    pub(crate) slots: HashMap<usize, ReplicationSlot>,
     slot_name: String,
 }
 
@@ -97,7 +97,7 @@ impl Publisher {
         &mut self,
         source: &Cluster,
         cancel: &CancellationToken,
-    ) -> Result<Vec<PreparedReplicationStream>, Error> {
+    ) -> Result<(), Error> {
         // Synchronize tables from publication.
         self.sync_tables(false, source).await?;
 
@@ -112,21 +112,7 @@ impl Publisher {
             }
         }
 
-        let mut streams = Vec::with_capacity(source.shards().len());
-        for (number, _) in source.shards().iter().enumerate() {
-            // Use table offsets from data sync
-            // or from loading them above.
-            let tables = self.tables.remove(&number).unwrap_or_default();
-            // Take ownership of the slot for replication.
-            let slot = self.slots.remove(&number).expect("slot was validated");
-            streams.push(PreparedReplicationStream {
-                source_shard: number,
-                slot,
-                tables,
-            });
-        }
-
-        Ok(streams)
+        Ok(())
     }
 
     pub(crate) fn post_data_sync(&mut self, tables: HashMap<usize, Vec<Table>>) {
@@ -149,13 +135,6 @@ impl Publisher {
 
         error.map_or(Ok(()), Err)
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct PreparedReplicationStream {
-    pub(crate) source_shard: usize,
-    pub(crate) slot: ReplicationSlot,
-    pub(crate) tables: Vec<Table>,
 }
 
 #[cfg(test)]

@@ -4,14 +4,13 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use tokio::time::Instant;
 
-use crate::backend::replication::logical::subscriber::stream::MissedRows;
 use crate::backend::replication::publisher::Lsn;
+use pgdog_stats::MissedRows;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ReplicationShardProgress {
     pub(crate) replication_lag: Option<i64>,
     pub(crate) last_transaction: Option<Instant>,
-    pub(crate) last_transaction_ms: Option<i64>,
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
 }
@@ -27,7 +26,7 @@ impl ReplicationProgress {
         Self { shards }
     }
 
-    pub(crate) fn shard(&self, shard: usize) -> ReplicationProgressShardUpdater {
+    pub(crate) fn updater_for_shard(&self, shard: usize) -> ReplicationProgressShardUpdater {
         ReplicationProgressShardUpdater {
             shards: self.shards.clone(),
             shard,
@@ -79,20 +78,26 @@ mod tests {
 
         assert_eq!(progress.replication_lag(), None);
 
-        progress.shard(0).update(|p| p.replication_lag = Some(100));
+        progress
+            .updater_for_shard(0)
+            .update(|p| p.replication_lag = Some(100));
         assert_eq!(progress.replication_lag(), None);
 
-        progress.shard(1).update(|p| p.replication_lag = Some(200));
+        progress
+            .updater_for_shard(1)
+            .update(|p| p.replication_lag = Some(200));
         assert_eq!(progress.replication_lag(), None);
 
-        progress.shard(2).update(|p| p.replication_lag = Some(150));
+        progress
+            .updater_for_shard(2)
+            .update(|p| p.replication_lag = Some(150));
         assert_eq!(progress.replication_lag(), Some(200));
     }
 
     #[test]
     fn cloned_updater_shares_shard_state() {
         let progress = ReplicationProgress::new(2);
-        let a = progress.shard(0);
+        let a = progress.updater_for_shard(0);
         let b = a.clone();
 
         a.update(|p| p.replication_lag = Some(77));
@@ -105,11 +110,21 @@ mod tests {
     #[test]
     fn updaters_for_different_shards_are_independent() {
         let progress = ReplicationProgress::new(2);
-        progress.shard(0).update(|p| p.replication_lag = Some(10));
-        progress.shard(1).update(|p| p.replication_lag = Some(20));
+        progress
+            .updater_for_shard(0)
+            .update(|p| p.replication_lag = Some(10));
+        progress
+            .updater_for_shard(1)
+            .update(|p| p.replication_lag = Some(20));
 
-        assert_eq!(progress.shard(0).snapshot().replication_lag, Some(10));
-        assert_eq!(progress.shard(1).snapshot().replication_lag, Some(20));
+        assert_eq!(
+            progress.updater_for_shard(0).snapshot().replication_lag,
+            Some(10)
+        );
+        assert_eq!(
+            progress.updater_for_shard(1).snapshot().replication_lag,
+            Some(20)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -120,13 +135,13 @@ mod tests {
 
         let older = tokio::time::Instant::now() - Duration::from_millis(300);
         progress
-            .shard(0)
+            .updater_for_shard(0)
             .update(|p| p.last_transaction = Some(older));
 
         tokio::time::advance(Duration::from_millis(10)).await;
         let recent = tokio::time::Instant::now();
         progress
-            .shard(1)
+            .updater_for_shard(1)
             .update(|p| p.last_transaction = Some(recent));
 
         let elapsed = progress

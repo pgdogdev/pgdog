@@ -12,6 +12,7 @@ use std::{
 use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
+use pgdog_stats::MissedRows;
 use tracing::{debug, trace, warn};
 
 use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_index};
@@ -940,70 +941,6 @@ impl StreamSubscriber {
             })
             .collect();
         ensure_validation!(errors);
-        Ok(())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct MissedRows {
-    insert: usize,
-    delete: usize,
-    update: usize,
-}
-
-impl MissedRows {
-    pub(crate) fn non_zero(&self) -> bool {
-        self.insert > 0 || self.delete > 0 || self.update > 0
-    }
-
-    /// Missed-row counts as `(insert, update, delete)`.
-    pub(crate) fn counts(&self) -> (usize, usize, usize) {
-        (self.insert, self.update, self.delete)
-    }
-
-    /// Count a direct-to-shard DML that touched 0 rows, keyed by command tag.
-    pub(crate) fn record(&mut self, tag: &str) {
-        match tag {
-            "UPDATE" => self.update += 1,
-            "DELETE" => self.delete += 1,
-            "INSERT" => self.insert += 1,
-            _ => (),
-        }
-    }
-
-    /// Fold another shard's counts into this one.
-    pub(crate) fn merge(&mut self, other: MissedRows) {
-        self.insert += other.insert;
-        self.update += other.update;
-        self.delete += other.delete;
-    }
-}
-
-impl Display for MissedRows {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut written = false;
-        if self.insert > 0 {
-            write!(f, "insert={}", self.insert)?;
-            written = true;
-        }
-        if self.update > 0 {
-            write!(
-                f,
-                "{}update={}",
-                if written { " " } else { "" },
-                self.update
-            )?;
-            written = true;
-        }
-        if self.delete > 0 {
-            write!(
-                f,
-                "{}delete={}",
-                if written { " " } else { "" },
-                self.delete
-            )?;
-        }
-
         Ok(())
     }
 }

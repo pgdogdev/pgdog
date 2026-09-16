@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use tokio::select;
 use tokio::time::Instant;
@@ -151,14 +151,9 @@ impl ReplicationStream {
                                     if let Some(su) = stream.handle(data).await? {
                                         slot.status_update(su).await?;
                                         let applied = Lsn::from_i64(stream.status_update().last_applied);
-                                        let ts_ms = SystemTime::now()
-                                            .duration_since(UNIX_EPOCH)
-                                            .ok()
-                                            .and_then(|e| e.as_millis().try_into().ok());
                                         self.updater.update(|p| {
                                             p.last_transaction = Some(Instant::now());
                                             p.applied_lsn = Some(applied);
-                                            p.last_transaction_ms = ts_ms;
                                         });
                                     }
                                     attempt = 0;
@@ -252,7 +247,7 @@ mod tests {
             let suffix = random_string(12).to_lowercase();
             let source = Cluster::new_test_single_shard(&config());
             let progress = ReplicationProgress::new(1);
-            let updater = progress.shard(0);
+            let updater = progress.updater_for_shard(0);
             let replication = Arc::new(ReplicationStream::new(&source, &source, updater));
             Self {
                 source_table: format!("replication_source_{suffix}"),
@@ -535,14 +530,14 @@ mod tests {
                 .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "3"))
                 .await?;
 
-            if fixture.replication.progress().missed_rows.counts().1 == 0 {
+            if fixture.replication.progress().missed_rows.updates == 0 {
                 return Err("missed update count was lost during reconnect".into());
             }
 
             missed_rows_cause_missed_update(fixture, 3, 4).await?;
 
             fixture.stop().await?;
-            if fixture.replication.progress().missed_rows.counts().1 < 2 {
+            if fixture.replication.progress().missed_rows.updates < 2 {
                 return Err("missed updates did not accumulate across reconnect".into());
             }
             Ok(())

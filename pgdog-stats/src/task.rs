@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampMilliSeconds, serde_as, skip_serializing_none};
 
-use crate::{Lsn, SyncState};
+use crate::{Lsn, MissedRows, SyncState};
 
 /// Identity of a task in the registry. Ids are unique per registry.
 #[derive(
@@ -600,8 +600,8 @@ impl fmt::Display for SchemaShardStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ReplicationStatus {
-    #[display("creating slots")]
-    CreatingSlots,
+    #[display("initializing replication streams")]
+    InitializingReplicationStreams,
     /// Streaming changes to catch the destination up.
     #[display("replicating")]
     Replicating,
@@ -631,22 +631,13 @@ pub struct ReplicationStreamDefinition {
     pub source_shard: usize,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ReplicationMissedRows {
-    pub inserts: usize,
-    pub updates: usize,
-    pub deletes: usize,
-}
-
 /// How far one replication slot has streamed.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationStreamStatus {
     pub lsn: Lsn,
     /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
     pub lag_bytes: Option<i64>,
-    /// Epoch millis of the last transaction applied through this slot.
-    pub last_transaction: Option<i64>,
-    pub missed_rows: ReplicationMissedRows,
+    pub missed_rows: MissedRows,
 }
 
 impl fmt::Display for ReplicationStreamStatus {
@@ -967,8 +958,7 @@ mod test {
                     lsn: 16,
                 },
                 lag_bytes: Some(4096),
-                last_transaction: Some(1_700_000_000_000),
-                missed_rows: ReplicationMissedRows {
+                missed_rows: MissedRows {
                     inserts: 1,
                     updates: 2,
                     deletes: 3,

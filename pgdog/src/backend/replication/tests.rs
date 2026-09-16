@@ -4,6 +4,7 @@ use pgdog_config::{ConfigAndUsers, Database, ShardedTableConfig, User};
 use tokio_util::sync::CancellationToken;
 
 use super::logical::publisher::replication_progress::ReplicationProgress;
+use super::logical::publisher::replication_stream::ReplicationStream;
 use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
 use crate::{
     api::{
@@ -73,14 +74,20 @@ async fn replicate_until_caught_up(
          AND confirmed_flush_lsn >= '{target}'::pg_lsn"
     );
     let stop = CancellationToken::new();
-    let streams = publisher.prepare_replication(source, &stop).await?;
+    publisher.prepare_replication(source, &stop).await?;
     let progress = ReplicationProgress::new(source.shards().len());
-    let handles: Vec<_> = streams
+    let handles: Vec<_> = std::mem::take(&mut publisher.slots)
         .into_iter()
-        .map(|stream| {
-            let updater = progress.shard(stream.source_shard);
-            let task =
-                ReplicationStreamTask::new(stream, source, destination, stop.clone(), updater);
+        .map(|(source_shard, slot)| {
+            let tables = publisher.tables.remove(&source_shard).unwrap_or_default();
+            let updater = progress.updater_for_shard(source_shard);
+            let task = ReplicationStreamTask::builder()
+                .source_shard(source_shard)
+                .slot(slot)
+                .tables(tables)
+                .replication_stream(ReplicationStream::new(source, destination, updater))
+                .stop(stop.clone())
+                .build();
             run_task(task)
         })
         .collect();

@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::time::Duration;
 
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
 use tokio::{select, time::Instant};
@@ -9,12 +9,40 @@ use super::replication_progress::ReplicationProgress;
 use crate::util::{format_bytes, human_duration, safe_interval};
 
 #[derive(Debug)]
+pub(crate) struct CutoverConfig {
+    /// Check when replication_lag becomes less than this value
+    /// to stop the traffic on source.
+    pub(crate) traffic_stop_threshold: u64,
+    /// Start the cutover if replication_lag is less than this value
+    pub(crate) replication_lag_threshold: u64,
+    /// Start the cutover if last_transaction was more than this value time ago
+    pub(crate) last_transaction_delay: Duration,
+    /// Start/abort the wait for cutover after timeout
+    pub(crate) timeout: Duration,
+    pub(crate) timeout_action: CutoverTimeoutAction,
+}
+
+impl From<&ConfigAndUsers> for CutoverConfig {
+    fn from(config: &ConfigAndUsers) -> Self {
+        let general = &config.config.general;
+        Self {
+            traffic_stop_threshold: general.cutover_traffic_stop_threshold,
+            replication_lag_threshold: general.cutover_replication_lag_threshold,
+            last_transaction_delay: Duration::from_millis(general.cutover_last_transaction_delay),
+            timeout: Duration::from_millis(general.cutover_timeout),
+            timeout_action: general.cutover_timeout_action,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct CutoverPolicy {
-    config: Arc<ConfigAndUsers>,
+    config: CutoverConfig,
     progress: ReplicationProgress,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Display, Clone, PartialEq, Eq, Copy)]
+#[display(rename_all = "snake_case")]
 pub(crate) enum CutoverReason {
     Lag,
     Timeout,
@@ -34,23 +62,17 @@ pub(crate) struct CutoverData {
     pub(crate) elapsed: Duration,
 }
 
-impl Display for CutoverReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Lag => write!(f, "lag"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::LastTransaction => write!(f, "last_transaction"),
-        }
-    }
-}
-
 impl CutoverPolicy {
-    pub(crate) fn new(config: Arc<ConfigAndUsers>, progress: ReplicationProgress) -> Self {
+    pub(crate) fn new(config: CutoverConfig, progress: ReplicationProgress) -> Self {
         Self { config, progress }
     }
 
-    pub(crate) async fn wait_for_replication(&self) -> Result<(), Error> {
-        let traffic_stop = self.config.config.general.cutover_traffic_stop_threshold;
+    /// Resolves when replication_lag reaches the value less than
+    /// configured [CutoverConfig::traffic_stop_threshold].
+    /// After this source should stop any write activity and
+    /// [`CutoverPolicy::wait_for_cutover`] should be started.
+    pub(crate) async fn wait_for_stop_threshold(&self) -> Result<(), Error> {
+        let traffic_stop = self.config.traffic_stop_threshold;
 
         info!(
             "[cutover] started, waiting for traffic stop threshold={}",
@@ -83,10 +105,9 @@ impl CutoverPolicy {
     }
 
     fn should_cutover(&self, elapsed: Duration) -> CutoverAction {
-        let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
-        let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
-        let last_transaction_delay =
-            Duration::from_millis(self.config.config.general.cutover_last_transaction_delay);
+        let cutover_timeout = self.config.timeout;
+        let cutover_threshold = self.config.replication_lag_threshold;
+        let last_transaction_delay = self.config.last_transaction_delay;
 
         let lag = self.progress.replication_lag();
         let last_transaction = self.progress.last_transaction();
@@ -107,12 +128,13 @@ impl CutoverPolicy {
         }
     }
 
+    /// Wait until cutover conditions are met depending on the
+    /// [`CutoverConfig`] settings
     pub(crate) async fn wait_for_cutover(&self) -> Result<(), Error> {
-        let cutover_threshold = self.config.config.general.cutover_replication_lag_threshold;
-        let last_transaction_delay =
-            Duration::from_millis(self.config.config.general.cutover_last_transaction_delay);
-        let cutover_timeout = Duration::from_millis(self.config.config.general.cutover_timeout);
-        let cutover_timeout_action = self.config.config.general.cutover_timeout_action;
+        let cutover_threshold = self.config.replication_lag_threshold;
+        let last_transaction_delay = self.config.last_transaction_delay;
+        let cutover_timeout = self.config.timeout;
+        let cutover_timeout_action = self.config.timeout_action;
 
         info!(
             "[cutover] waiting for first cutover threshold: timeout={}, transaction={}, lag={}",
@@ -180,37 +202,52 @@ impl CutoverPolicy {
 mod tests {
     use super::*;
     use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
+    use crate::backend::replication::logical::publisher::replication_stream::ReplicationStream;
     use crate::util::{safe_sleep, safe_timeout};
     use pgdog_config::ConfigAndUsers;
     use std::assert_matches;
-    use std::sync::Arc;
     use tokio::time::Instant;
+
+    fn cutover_config() -> CutoverConfig {
+        CutoverConfig {
+            traffic_stop_threshold: 1000,
+            replication_lag_threshold: 100,
+            last_transaction_delay: Duration::from_millis(500),
+            timeout: Duration::from_secs(10),
+            timeout_action: CutoverTimeoutAction::Abort,
+        }
+    }
 
     #[tokio::test]
     async fn test_wait_for_replication_exits_when_lag_below_threshold() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_traffic_stop_threshold = 1000;
+        let config = cutover_config();
 
         let progress = ReplicationProgress::new(2);
-        progress.shard(0).update(|s| s.replication_lag = Some(500));
-        progress.shard(1).update(|s| s.replication_lag = Some(500));
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(500));
+        progress
+            .updater_for_shard(1)
+            .update(|s| s.replication_lag = Some(500));
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
-        let result = waiter.wait_for_replication().await;
+        let waiter = CutoverPolicy::new(config, progress);
+        let result = waiter.wait_for_stop_threshold().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_wait_for_cutover_exits_when_lag_below_threshold() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_replication_lag_threshold = 100;
-        config.config.general.cutover_timeout = 10000;
+        let config = cutover_config();
 
         let progress = ReplicationProgress::new(2);
-        progress.shard(0).update(|s| s.replication_lag = Some(50));
-        progress.shard(1).update(|s| s.replication_lag = Some(50));
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(50));
+        progress
+            .updater_for_shard(1)
+            .update(|s| s.replication_lag = Some(50));
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -223,18 +260,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_cutover_exits_when_last_transaction_old() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_replication_lag_threshold = 10;
-        config.config.general.cutover_last_transaction_delay = 100;
-        config.config.general.cutover_timeout = 10000;
+        let config = CutoverConfig {
+            replication_lag_threshold: 10,
+            last_transaction_delay: Duration::from_millis(100),
+            ..cutover_config()
+        };
 
         let progress = ReplicationProgress::new(1);
-        progress.shard(0).update(|s| {
+        progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(1000);
             s.last_transaction = Some(Instant::now() - Duration::from_millis(200));
         });
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -247,15 +285,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_cutover_when_no_transaction() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_replication_lag_threshold = 10;
-        config.config.general.cutover_last_transaction_delay = 100;
-        config.config.general.cutover_timeout = 10000;
+        let config = CutoverConfig {
+            replication_lag_threshold: 10,
+            last_transaction_delay: Duration::from_millis(100),
+            ..cutover_config()
+        };
 
         let progress = ReplicationProgress::new(1);
-        progress.shard(0).update(|s| s.replication_lag = Some(1000));
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(1000));
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -265,18 +306,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_cutover_when_lag_above_threshold_and_recent_transaction() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_timeout = 10000;
-        config.config.general.cutover_replication_lag_threshold = 100;
-        config.config.general.cutover_last_transaction_delay = 500;
+        let config = cutover_config();
 
         let progress = ReplicationProgress::new(1);
-        progress.shard(0).update(|s| {
+        progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(1000);
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -286,18 +324,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_cutover_when_timeout_not_reached() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_timeout = 1000;
-        config.config.general.cutover_replication_lag_threshold = 10;
-        config.config.general.cutover_last_transaction_delay = 500;
+        let config = CutoverConfig {
+            timeout: Duration::from_secs(1),
+            replication_lag_threshold: 10,
+            ..cutover_config()
+        };
 
         let progress = ReplicationProgress::new(1);
-        progress.shard(0).update(|s| {
+        progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(1000);
             s.last_transaction = Some(Instant::now() - Duration::from_millis(100));
         });
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(999)),
@@ -307,18 +346,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_cutover_when_lag_just_above_threshold() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_timeout = 10000;
-        config.config.general.cutover_replication_lag_threshold = 100;
-        config.config.general.cutover_last_transaction_delay = 500;
+        let config = cutover_config();
 
         let progress = ReplicationProgress::new(1);
-        progress.shard(0).update(|s| {
+        progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(101);
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -328,27 +364,31 @@ mod tests {
 
     #[tokio::test]
     async fn should_not_cutover_before_every_shard_reports() {
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_timeout = 10000;
-        config.config.general.cutover_replication_lag_threshold = 1000;
-        config.config.general.cutover_last_transaction_delay = 500;
+        let config = CutoverConfig {
+            replication_lag_threshold: 1000,
+            ..cutover_config()
+        };
 
         let progress = ReplicationProgress::new(2);
         progress
-            .shard(0)
+            .updater_for_shard(0)
             .update(|s| s.last_transaction = Some(Instant::now()));
 
-        let waiter = CutoverPolicy::new(Arc::new(config), progress.clone());
+        let waiter = CutoverPolicy::new(config, progress.clone());
         let elapsed = Duration::from_millis(100);
 
         assert_eq!(progress.replication_lag(), None);
         assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
-        progress.shard(0).update(|s| s.replication_lag = Some(500));
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(500));
         assert_eq!(progress.replication_lag(), None);
         assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
-        progress.shard(1).update(|s| s.replication_lag = Some(400));
+        progress
+            .updater_for_shard(1)
+            .update(|s| s.replication_lag = Some(400));
         assert_eq!(
             waiter.should_cutover(elapsed),
             CutoverAction::Go(CutoverReason::Lag)
@@ -364,11 +404,13 @@ mod tests {
 
         const TRAFFIC_STOP: u64 = 1_000;
 
-        let mut config = ConfigAndUsers::default();
-        config.config.general.cutover_traffic_stop_threshold = TRAFFIC_STOP;
-        config.config.general.cutover_timeout = 120_000;
+        let config = CutoverConfig {
+            traffic_stop_threshold: TRAFFIC_STOP,
+            timeout: Duration::from_secs(120),
+            ..cutover_config()
+        };
 
-        let cluster = crate::backend::pool::Cluster::new_test(&config);
+        let cluster = crate::backend::pool::Cluster::new_test(&ConfigAndUsers::default());
         let publication = "test_pub".to_owned();
         let slot = "test_slot".to_owned();
         let shards = cluster.shards().len();
@@ -405,27 +447,27 @@ mod tests {
 
         let stop = tokio_util::sync::CancellationToken::new();
         let mut publisher = Publisher::new(&publication, slot.clone());
-        let streams = publisher
+        publisher
             .prepare_replication(&cluster, &stop)
             .await
             .unwrap();
         let progress = ReplicationProgress::new(shards);
-        let tasks: Vec<_> = streams
+        let tasks: Vec<_> = std::mem::take(&mut publisher.slots)
             .into_iter()
-            .map(|stream| {
-                let updater = progress.shard(stream.source_shard);
-                let task = crate::api::replication::ReplicationStreamTask::new(
-                    stream,
-                    &cluster,
-                    &cluster,
-                    stop.clone(),
-                    updater,
-                );
+            .map(|(source_shard, slot)| {
+                let tables = publisher.tables.remove(&source_shard).unwrap_or_default();
+                let updater = progress.updater_for_shard(source_shard);
+                let task = crate::api::replication::ReplicationStreamTask::builder()
+                    .source_shard(source_shard)
+                    .slot(slot)
+                    .tables(tables)
+                    .replication_stream(ReplicationStream::new(&cluster, &cluster, updater))
+                    .stop(stop.clone())
+                    .build();
                 crate::api::run_task(task)
             })
             .collect();
 
-        let config = Arc::new(config);
         let waiter = CutoverPolicy::new(config, progress);
 
         source
@@ -439,7 +481,7 @@ mod tests {
 
         safe_sleep(Duration::from_secs(1)).await;
 
-        let result = safe_timeout(Duration::from_secs(20), waiter.wait_for_replication()).await;
+        let result = safe_timeout(Duration::from_secs(20), waiter.wait_for_stop_threshold()).await;
 
         stop.cancel();
         let mut drained = Ok(());

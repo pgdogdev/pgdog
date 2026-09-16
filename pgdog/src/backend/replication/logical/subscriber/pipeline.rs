@@ -10,13 +10,13 @@ use tokio::sync::{
 };
 use tracing::trace;
 
-use super::stream::MissedRows;
 use crate::backend::Server;
 use crate::backend::pool::Address;
 use crate::net::{
     Bind, CommandComplete, ErrorResponse, Execute, Flush, FromBytes, Message, Parse, Protocol,
     ProtocolMessage, Sync, ToBytes,
 };
+use pgdog_stats::MissedRows;
 
 use super::super::Error;
 
@@ -350,7 +350,13 @@ impl Listener {
                     && let Ok(complete) = CommandComplete::try_from(message)
                     && matches!(complete.rows(), Ok(Some(0)))
                 {
-                    self.shared.lock().missed.record(complete.tag());
+                    let mut shared = self.shared.lock();
+                    match complete.tag() {
+                        "INSERT" => shared.missed.inserts += 1,
+                        "UPDATE" => shared.missed.updates += 1,
+                        "DELETE" => shared.missed.deletes += 1,
+                        _ => (),
+                    }
                 }
                 if !self
                     .queue
@@ -702,6 +708,8 @@ mod test {
         // (insert, update, delete): one 0-row direct UPDATE and one 0-row direct
         // DELETE counted; the non-direct DELETE and the 1-row DELETE are not.
         // Insert never missed here, so it must stay 0 (no spurious counter).
-        assert_eq!(missed.counts(), (0, 1, 1));
+        assert_eq!(missed.inserts, 0);
+        assert_eq!(missed.updates, 1);
+        assert_eq!(missed.deletes, 1);
     }
 }

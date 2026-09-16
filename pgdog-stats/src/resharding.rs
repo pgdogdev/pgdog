@@ -79,3 +79,50 @@ pub enum SyncState {
     PostData,
     Cutover,
 }
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MissedRows {
+    pub inserts: usize,
+    pub updates: usize,
+    pub deletes: usize,
+}
+
+impl MissedRows {
+    pub fn non_zero(&self) -> bool {
+        self.inserts > 0 || self.updates > 0 || self.deletes > 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.inserts += other.inserts;
+        self.updates += other.updates;
+        self.deletes += other.deletes;
+    }
+}
+
+impl std::fmt::Display for MissedRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut written = false;
+        if self.inserts > 0 {
+            write!(f, "insert={}", self.inserts)?;
+            written = true;
+        }
+        if self.updates > 0 {
+            write!(
+                f,
+                "{}update={}",
+                if written { " " } else { "" },
+                self.updates
+            )?;
+            written = true;
+        }
+        if self.deletes > 0 {
+            write!(
+                f,
+                "{}delete={}",
+                if written { " " } else { "" },
+                self.deletes
+            )?;
+        }
+        Ok(())
+    }
+}
