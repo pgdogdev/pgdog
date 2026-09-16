@@ -192,7 +192,9 @@ impl Shard {
 
     /// Returns true if the shard has a primary database.
     pub(crate) fn has_primary(&self) -> bool {
-        self.lb.primary().is_some() || self.lb.role_detection_enabled()
+        // Until detection completes, a configured auto target may be a primary.
+        let pending = self.lb.role_detection_enabled() && !self.lb.roles_detected();
+        pending || self.lb.primary().is_some()
     }
 
     /// Returns true if the shard has any replica databases.

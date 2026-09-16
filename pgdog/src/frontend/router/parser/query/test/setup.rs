@@ -82,6 +82,11 @@ impl QueryParserTest {
         me
     }
 
+    pub(crate) fn with_cluster(mut self, cluster: Cluster) -> Self {
+        self.cluster = cluster;
+        self
+    }
+
     pub(crate) fn new_session_mode(config: &ConfigAndUsers) -> Self {
         let mut me = Self::new_with_config(config);
         me.cluster = Cluster::new_test_session_mode(config);

@@ -98,12 +98,14 @@ impl<'a> QueryParserContext<'a> {
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
         let role = self.router_context.parameter_hints.compute_role();
+        // Readonly clusters cannot pin ordinary transactions to a writer.
         let txn_write = matches!(
             self.router_context
                 .transaction()
                 .map(|t| t.transaction_type()),
             Some(TransactionType::ReadWrite | TransactionType::Implicit)
-        ) && self.rw_conservative();
+        ) && self.rw_conservative()
+            && !self.read_only;
         // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
         txn_write
             || role == Some(Role::Primary)
