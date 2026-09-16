@@ -40,11 +40,11 @@ impl Command for ShowStats {
                         Field::numeric(&format!("{}_idle_xact_time", prefix)),
                         Field::numeric(&format!("{}_query_time", prefix)),
                         Field::numeric(&format!("{}_wait_time", prefix)),
-                        // Field::numeric(&format!("{}_client_parse_count", prefix)),
                         Field::numeric(&format!("{}_server_parse_count", prefix)),
                         Field::numeric(&format!("{}_bind_count", prefix)),
                         Field::numeric(&format!("{}_close_count", prefix)),
                         Field::numeric(&format!("{}_errors", prefix)),
+                        Field::numeric(&format!("{}_checkout_timeouts", prefix)),
                         Field::numeric(&format!("{}_cleaned", prefix)),
                         Field::numeric(&format!("{}_rollbacks", prefix)),
                         Field::numeric(&format!("{}_idle_xact_timeouts", prefix)),
@@ -99,6 +99,7 @@ impl Command for ShowStats {
                             .add(stat.bind_count)
                             .add(stat.close)
                             .add(stat.errors)
+                            .add(stat.checkout_timeouts)
                             .add(stat.cleaned)
                             .add(stat.rollbacks)
                             .add(stat.idle_xact_timeouts)

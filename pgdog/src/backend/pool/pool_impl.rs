@@ -119,6 +119,7 @@ impl Pool {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
                 self.inner.health.toggle(false);
+                self.lock().stats.counts.checkout_timeouts += 1;
                 Err(Error::CheckoutTimeout)
             }
             Ok(Err(err)) => {
