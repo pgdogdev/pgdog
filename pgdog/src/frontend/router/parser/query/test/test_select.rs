@@ -476,6 +476,82 @@ fn test_omnisharded_listed_with_key_join_sharded() {
     assert!(!command.route().is_omnisharded());
 }
 
+#[test]
+fn test_omnisharded_left_join_sharding_key_takes_priority() {
+    use crate::backend::ShardedTables;
+    use crate::frontend::router::sharding::ShardedTable;
+    use pgdog_config::{OmnishardedTable, SystemCatalogsBehavior};
+
+    // The join equality connects companies' predicate to local_companies'
+    // sharding key, including when only local_companies has a sharding rule.
+    for tables in [
+        vec![Some("companies"), Some("local_companies")],
+        vec![None],
+        vec![Some("local_companies")],
+    ] {
+        let tables = ShardedTables::new(
+            tables
+                .into_iter()
+                .map(|name| ShardedTable {
+                    database: "pgdog".into(),
+                    name: name.map(String::from),
+                    column: "org_id".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            vec![OmnishardedTable {
+                name: "companies".into(),
+                sticky_routing: true,
+            }],
+            true,
+            SystemCatalogsBehavior::default(),
+        );
+        let mut test = QueryParserTest::new().with_sharded_tables(tables);
+
+        for org_id in [7, 8] {
+            let expected = test.execute(vec![
+                Query::new(format!(
+                    "SELECT * FROM local_companies WHERE local_companies.org_id = {org_id}"
+                ))
+                .into(),
+            ]);
+            assert!(matches!(expected.route().shard(), Shard::Direct(_)));
+            let expected_shard = expected.route().shard();
+
+            let command = test.execute(vec![
+                Query::new(format!(
+                    "SELECT count(*) FROM companies
+                     LEFT JOIN local_companies ON local_companies.org_id = companies.org_id
+                         AND local_companies.id = companies.id
+                     WHERE companies.org_id = {org_id} AND local_companies.id IS NULL;"
+                ))
+                .into(),
+            ]);
+            assert_eq!(command.route().shard(), expected_shard);
+            assert!(!command.route().is_omnisharded());
+
+            let command = test.execute(vec![
+                Parse::named(
+                    "__omni_left_join",
+                    "SELECT count(*) FROM companies c
+                     LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
+                     WHERE c.org_id = $1 AND l.id IS NULL",
+                )
+                .into(),
+                Bind::new_params(
+                    "__omni_left_join",
+                    &[Parameter::new(org_id.to_string().as_bytes())],
+                )
+                .into(),
+                Execute::new().into(),
+                Sync.into(),
+            ]);
+            assert_eq!(command.route().shard(), expected_shard);
+            assert!(!command.route().is_omnisharded());
+        }
+    }
+}
+
 /// A sharded table queried without a sharding key fans out to all shards and is
 /// NOT omnisharded.
 #[test]
