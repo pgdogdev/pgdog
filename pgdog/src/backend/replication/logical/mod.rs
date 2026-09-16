@@ -14,4 +14,4 @@ pub(crate) use error::*;
 
 pub(crate) use publisher::publisher_impl::Publisher;
 
-use crate::{backend::databases::databases, config::config};
+use crate::backend::databases::databases;

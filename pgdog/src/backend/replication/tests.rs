@@ -3,6 +3,7 @@ use std::time::Duration;
 use pgdog_config::{ConfigAndUsers, Database, ShardedTableConfig, User};
 use tokio_util::sync::CancellationToken;
 
+use super::logical::publisher::replication_progress::ReplicationProgress;
 use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
 use crate::{
     api::{
@@ -73,11 +74,12 @@ async fn replicate_until_caught_up(
     );
     let stop = CancellationToken::new();
     let streams = publisher.prepare_replication(source, &stop).await?;
+    let progress = ReplicationProgress::new(source.shards().len());
     let handles: Vec<_> = streams
         .into_iter()
         .map(|stream| {
-            let task = ReplicationSlotTask::new(stream, source, destination, stop.clone());
-            publisher.track_replication(task.source_shard, task.replication.clone());
+            let updater = progress.shard(stream.source_shard);
+            let task = ReplicationSlotTask::new(stream, source, destination, stop.clone(), updater);
             run_task(task)
         })
         .collect();

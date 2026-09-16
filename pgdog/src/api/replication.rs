@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -12,11 +12,20 @@ use crate::api::Task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::{TaskContext, TaskId};
 use crate::backend::replication::logical::Error;
-use crate::backend::replication::logical::orchestrator::{Cutover, Orchestrator};
+use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::backend::replication::logical::publisher::cutover::Cutover;
 use crate::backend::replication::logical::publisher::publisher_impl::ReplicationStream;
 use crate::backend::replication::logical::publisher::replicate::Replication;
+use crate::backend::replication::logical::publisher::replication_progress::{
+    ReplicationProgress, ReplicationProgressShardUpdater,
+};
 use crate::backend::replication::logical::publisher::{ReplicationSlot, Table};
-use crate::backend::{Cluster, databases::cutover, maintenance_mode};
+use crate::backend::{
+    Cluster,
+    databases::{cancel_all, cutover},
+    maintenance_mode,
+};
+use crate::config::config;
 use crate::util::{safe_interval, safe_timeout};
 use pgdog_stats::{
     Lsn, ReplicationDefinition, ReplicationMissedRows, ReplicationSlotDefinition,
@@ -54,7 +63,7 @@ pub(crate) struct ReplicationSlotTask {
     pub(crate) slot: ReplicationSlot,
     pub(crate) source_shard: usize,
     pub(crate) tables: Vec<Table>,
-    pub(crate) replication: Arc<Replication>,
+    pub(crate) replication: Replication,
     pub(crate) stop: CancellationToken,
 }
 
@@ -64,12 +73,13 @@ impl ReplicationSlotTask {
         source: &Cluster,
         destination: &Cluster,
         stop: CancellationToken,
+        progress: ReplicationProgressShardUpdater,
     ) -> Self {
         Self {
             slot: stream.slot,
             source_shard: stream.source_shard,
             tables: stream.tables,
-            replication: Arc::new(Replication::new(source, destination)),
+            replication: Replication::new(source, destination, progress),
             stop,
         }
     }
@@ -139,7 +149,7 @@ impl Task for ReplicationSlotTask {
 }
 
 fn slot_status(replication: &Replication, fallback_lsn: Lsn) -> ReplicationSlotStatus {
-    let info = replication.info();
+    let info = replication.progress();
     let (inserts, updates, deletes) = info.missed_rows.counts();
     ReplicationSlotStatus {
         lsn: info.applied_lsn.unwrap_or(fallback_lsn),
@@ -215,6 +225,7 @@ impl Task for ReplicationTask {
             let _stop_guard = stop.drop_guard_ref();
             let guard = self.orchestrator.publication_guard();
             let mut streams = ReplicationStreams::new();
+            let progress = ReplicationProgress::new(self.orchestrator.source.shards().len());
 
             ctx.set_status(ReplicationStatus::CreatingSlots);
             let result = async {
@@ -223,20 +234,22 @@ impl Task for ReplicationTask {
                     .prepare_replication(&self.orchestrator.source, &cancel)
                     .await?;
                 for stream in prepared {
+                    let updater = progress.shard(stream.source_shard);
                     let task = ReplicationSlotTask::new(
                         stream,
                         &self.orchestrator.source,
                         &self.orchestrator.destination,
                         stop.clone(),
+                        updater,
                     );
-                    publisher.track_replication(task.source_shard, Arc::clone(&task.replication));
                     let child = ctx.run(task);
                     // Replicate in parallel.
                     streams.push(AbortOnDropHandle::new(tokio::spawn(child)));
                 }
                 drop(publisher);
                 ctx.set_status(ReplicationStatus::Replicating);
-                self.drive(&ctx, &cancel, &stop, &mut streams).await
+                self.drive(&ctx, &cancel, &stop, &mut streams, progress)
+                    .await
             }
             .await;
 
@@ -274,9 +287,12 @@ impl ReplicationTask {
         cancel: &CancellationToken,
         stop: &CancellationToken,
         streams: &mut ReplicationStreams,
+        progress: ReplicationProgress,
     ) -> Result<(), Error> {
         if self.auto_cutover {
-            return self.perform_cutover(ctx, cancel, stop, streams).await;
+            return self
+                .perform_cutover(ctx, cancel, stop, streams, progress)
+                .await;
         }
 
         let cutover = Self::register_cutover(ctx.root_id());
@@ -294,7 +310,7 @@ impl ReplicationTask {
                     }
                 }
                 _ = cutover.requested() => {
-                    return self.perform_cutover(ctx, cancel, stop, streams).await;
+                    return self.perform_cutover(ctx, cancel, stop, streams, progress).await;
                 }
             }
         }
@@ -306,6 +322,7 @@ impl ReplicationTask {
         cancel: &CancellationToken,
         stop: &CancellationToken,
         streams: &mut ReplicationStreams,
+        progress: ReplicationProgress,
     ) -> Result<(), Error> {
         let _resume = ResumeTraffic;
         ctx.set_status(match self.direction {
@@ -314,28 +331,32 @@ impl ReplicationTask {
         });
 
         async {
-            let mut cutover_policy = Cutover::new(self.orchestrator.clone());
-            let thresholds = async {
-                cutover_policy.wait_for_replication().await?;
-                cutover_policy.wait_for_cutover().await
-            };
-            tokio::pin!(thresholds);
-            loop {
-                select! {
-                    biased;
-                    _ = cancel.cancelled() => {
-                        ctx.set_status(ReplicationStatus::Stopping);
-                        return Ok(());
-                    }
-                    result = streams.next() => {
-                        match result {
-                            Some(result) => result??,
-                            None => return Ok(()),
+            let cutover_policy = Cutover::new(config(), progress);
+            {
+                let thresholds = async {
+                    cutover_policy.wait_for_replication().await?;
+                    maintenance_mode::start(None);
+                    cancel_all(&self.orchestrator.source.identifier().database).await?;
+                    cutover_policy.wait_for_cutover().await
+                };
+                tokio::pin!(thresholds);
+                loop {
+                    select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            ctx.set_status(ReplicationStatus::Stopping);
+                            return Ok(());
                         }
-                    }
-                    result = &mut thresholds => {
-                        result?;
-                        break;
+                        result = streams.next() => {
+                            match result {
+                                Some(result) => result??,
+                                None => return Ok(()),
+                            }
+                        }
+                        result = &mut thresholds => {
+                            result?;
+                            break;
+                        }
                     }
                 }
             }

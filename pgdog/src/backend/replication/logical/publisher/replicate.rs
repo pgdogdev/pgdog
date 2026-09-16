@@ -1,6 +1,5 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
 use tokio::select;
 use tokio::time::Instant;
 use tokio::try_join;
@@ -11,38 +10,35 @@ use super::progress::Progress;
 use super::{Lsn, ReplicationData, ReplicationSlot, Table};
 use crate::backend::Cluster;
 use crate::backend::replication::logical::Error;
-use crate::backend::replication::logical::subscriber::stream::{MissedRows, StreamSubscriber};
+use crate::backend::replication::logical::publisher::replication_progress::{
+    ReplicationProgressShardUpdater, ReplicationShardProgress,
+};
+use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
 use crate::util::{safe_interval, safe_sleep};
 
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct ReplicationInfo {
-    pub(crate) replication_lag: Option<i64>,
-    pub(crate) last_transaction: Option<Instant>,
-    pub(crate) last_transaction_ms: Option<i64>,
-    pub(crate) applied_lsn: Option<Lsn>,
-    pub(crate) missed_rows: MissedRows,
-}
-
 #[derive(Debug)]
-#[cfg_attr(test, derive(Default))]
 pub(crate) struct Replication {
     source: Cluster,
     dest: Cluster,
-    info: Mutex<ReplicationInfo>,
+    updater: ReplicationProgressShardUpdater,
 }
 
 impl Replication {
-    pub(crate) fn new(source: &Cluster, dest: &Cluster) -> Self {
+    pub(crate) fn new(
+        source: &Cluster,
+        dest: &Cluster,
+        updater: ReplicationProgressShardUpdater,
+    ) -> Self {
         Self {
             source: source.clone(),
             dest: dest.clone(),
-            info: Mutex::default(),
+            updater,
         }
     }
 
-    pub(crate) fn info(&self) -> ReplicationInfo {
-        *self.info.lock()
+    pub(crate) fn progress(&self) -> ReplicationShardProgress {
+        self.updater.snapshot()
     }
 
     pub(crate) async fn run(
@@ -53,28 +49,30 @@ impl Replication {
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest, tables);
         stream.set_current_lsn(slot.lsn().lsn);
-        self.info.lock().applied_lsn = Some(slot.lsn());
+        self.updater.update(|p| p.applied_lsn = Some(slot.lsn()));
         let result = self.replicate(&mut slot, &mut stream, stop).await;
-        let mut info = self.info.lock();
-        info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
-        info.missed_rows.merge(stream.missed_rows());
+        let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
+        let missed = stream.missed_rows();
+        self.updater.update(|p| {
+            p.applied_lsn = Some(final_lsn);
+            p.missed_rows.merge(missed);
+        });
         result
     }
 
-    async fn update_info(
+    async fn update_progress(
         &self,
         slot: &mut ReplicationSlot,
         stream: &mut StreamSubscriber,
     ) -> Result<(), Error> {
         let lag = slot.replication_lag().await?;
-        // W: what is missed rows and how do we track them?
         let missed = stream.missed_rows();
-        {
-            let mut info = self.info.lock();
-            info.replication_lag = Some(lag);
-            info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
-            info.missed_rows.merge(missed);
-        }
+        let applied = Lsn::from_i64(stream.status_update().last_applied);
+        self.updater.update(|p| {
+            p.replication_lag = Some(lag);
+            p.applied_lsn = Some(applied);
+            p.missed_rows.merge(missed);
+        });
         if missed.non_zero() {
             warn!(
                 "replication {} => {} has missing rows: {}",
@@ -152,13 +150,16 @@ impl Replication {
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
                                         slot.status_update(su).await?;
-                                        let mut info = self.info.lock();
-                                        info.last_transaction = Some(Instant::now());
-                                        info.applied_lsn = Some(Lsn::from_i64(stream.status_update().last_applied));
-                                        info.last_transaction_ms = SystemTime::now()
+                                        let applied = Lsn::from_i64(stream.status_update().last_applied);
+                                        let ts_ms = SystemTime::now()
                                             .duration_since(UNIX_EPOCH)
                                             .ok()
-                                            .and_then(|elapsed| elapsed.as_millis().try_into().ok());
+                                            .and_then(|e| e.as_millis().try_into().ok());
+                                        self.updater.update(|p| {
+                                            p.last_transaction = Some(Instant::now());
+                                            p.applied_lsn = Some(applied);
+                                            p.last_transaction_ms = ts_ms;
+                                        });
                                     }
                                     attempt = 0;
                                     progress.update(stream.bytes_sharded(), stream.lsn());
@@ -184,7 +185,8 @@ impl Replication {
                                 delay.as_millis()
                             );
                             safe_sleep(delay).await;
-                            self.info.lock().missed_rows.merge(stream.missed_rows());
+                            let missed = stream.missed_rows();
+                            self.updater.update(|p| p.missed_rows.merge(missed));
                             if let Err(reconnect_err) =
                                 try_join!(slot.reconnect(), stream.reconnect())
                             {
@@ -202,23 +204,12 @@ impl Replication {
                 }
 
                 _ = check_lag.tick() => {
-                    self.update_info(slot, stream).await?;
+                    self.update_progress(slot, stream).await?;
                 }
             }
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Replication {
-    pub(super) fn set_replication_lag(&self, lag: i64) {
-        self.info.lock().replication_lag = Some(lag);
-    }
-
-    pub(super) fn set_last_transaction(&self, instant: Option<Instant>) {
-        self.info.lock().last_transaction = instant;
     }
 }
 
@@ -232,6 +223,9 @@ mod tests {
     };
 
     use crate::{
+        backend::replication::logical::publisher::replication_progress::{
+            ReplicationProgress, ReplicationShardProgress,
+        },
         backend::{Server, server::test::test_server},
         config::config,
         util::random_string,
@@ -257,7 +251,9 @@ mod tests {
         async fn new() -> Self {
             let suffix = random_string(12).to_lowercase();
             let source = Cluster::new_test_single_shard(&config());
-            let replication = Arc::new(Replication::new(&source, &source));
+            let progress = ReplicationProgress::new(1);
+            let updater = progress.shard(0);
+            let replication = Arc::new(Replication::new(&source, &source, updater));
             Self {
                 source_table: format!("replication_source_{suffix}"),
                 destination_table: format!("replication_destination_{suffix}"),
@@ -297,7 +293,7 @@ mod tests {
                 0,
             );
             slot.create_slot().await?;
-            if self.replication.info().replication_lag.is_some() {
+            if self.replication.progress().replication_lag.is_some() {
                 return Err("lag was measured before replication started".into());
             }
             let replication = Arc::clone(&self.replication);
@@ -311,12 +307,12 @@ mod tests {
         async fn wait_for(
             &mut self,
             query: String,
-            ready: impl Fn(&[String], ReplicationInfo) -> bool,
+            ready: impl Fn(&[String], ReplicationShardProgress) -> bool,
         ) -> TestResult {
             timeout(Duration::from_secs(10), async {
                 loop {
                     let rows: Vec<String> = self.server.fetch_all(query.clone()).await?;
-                    if ready(&rows, self.replication.info()) {
+                    if ready(&rows, self.replication.progress()) {
                         return Ok::<(), Box<dyn StdError>>(());
                     }
                     if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
@@ -402,7 +398,7 @@ mod tests {
                     rows == ["alpha"] && info.last_transaction.is_some()
                 })
                 .await?;
-            let first_transaction = fixture.replication.info().last_transaction;
+            let first_transaction = fixture.replication.progress().last_transaction;
 
             fixture
                 .server
@@ -539,14 +535,14 @@ mod tests {
                 .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "3"))
                 .await?;
 
-            if fixture.replication.info().missed_rows.counts().1 == 0 {
+            if fixture.replication.progress().missed_rows.counts().1 == 0 {
                 return Err("missed update count was lost during reconnect".into());
             }
 
             missed_rows_cause_missed_update(fixture, 3, 4).await?;
 
             fixture.stop().await?;
-            if fixture.replication.info().missed_rows.counts().1 < 2 {
+            if fixture.replication.progress().missed_rows.counts().1 < 2 {
                 return Err("missed updates did not accumulate across reconnect".into());
             }
             Ok(())

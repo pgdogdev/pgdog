@@ -1,16 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
-use parking_lot::Mutex;
-#[cfg(test)]
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::super::{Error, publisher::Table};
 use super::ReplicationSlot;
-
-use super::replicate::Replication;
 use crate::backend::replication::tables_sync::tables_sync;
 use crate::backend::{Cluster, pool::Request};
 
@@ -22,8 +15,6 @@ pub(crate) struct Publisher {
     pub(crate) tables: HashMap<usize, Vec<Table>>,
     /// Replication slots.
     slots: HashMap<usize, ReplicationSlot>,
-    replications: Mutex<HashMap<usize, Arc<Replication>>>,
-    /// Slot name.
     slot_name: String,
 }
 
@@ -33,7 +24,6 @@ impl Publisher {
             publication: publication.to_string(),
             tables: HashMap::new(),
             slots: HashMap::new(),
-            replications: Mutex::default(),
             slot_name,
         }
     }
@@ -139,31 +129,6 @@ impl Publisher {
         Ok(streams)
     }
 
-    pub(crate) fn track_replication(&mut self, shard: usize, replication: Arc<Replication>) {
-        self.replications.get_mut().insert(shard, replication);
-    }
-
-    /// Get current replication lag.
-    pub(crate) fn replication_lag(&self) -> HashMap<usize, i64> {
-        self.replications
-            .lock()
-            .iter()
-            .filter_map(|(&shard, replication)| {
-                replication.info().replication_lag.map(|lag| (shard, lag))
-            })
-            .collect()
-    }
-
-    /// Get how long ago last transaction was committed.
-    pub(crate) fn last_transaction(&self) -> Option<Duration> {
-        self.replications
-            .lock()
-            .values()
-            .filter_map(|replication| replication.info().last_transaction)
-            .max()
-            .map(|last| last.elapsed())
-    }
-
     pub(crate) fn post_data_sync(&mut self, tables: HashMap<usize, Vec<Table>>) {
         self.tables = tables;
     }
@@ -183,25 +148,6 @@ impl Publisher {
         }
 
         error.map_or(Ok(()), Err)
-    }
-}
-
-#[cfg(test)]
-impl Publisher {
-    pub(crate) fn set_replication_lag(&self, shard: usize, lag: i64) {
-        self.replications
-            .lock()
-            .entry(shard)
-            .or_default()
-            .set_replication_lag(lag);
-    }
-
-    pub(crate) fn set_last_transaction(&self, instant: Option<Instant>) {
-        let mut replications = self.replications.lock();
-        replications.entry(0).or_default();
-        for replication in replications.values() {
-            replication.set_last_transaction(instant);
-        }
     }
 }
 
