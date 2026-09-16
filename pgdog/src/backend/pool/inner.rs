@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::time::Duration;
 
+use crate::backend::pool::cancel::{CancelLease, CancelLeaseReleaseOutcome};
 use crate::backend::{ConnectReason, DisconnectReason};
 use crate::backend::{Server, stats::Counts as BackendCounts};
 use crate::net::messages::{BackendKeyData, BackendPid, FrontendPid};
@@ -22,7 +23,7 @@ pub(super) struct Inner {
     #[allow(clippy::vec_box)]
     idle_connections: Vec<Box<Server>>,
     /// Server connections currently checked out.
-    taken: Taken,
+    pub(super) taken: Taken,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
@@ -133,15 +134,24 @@ impl Inner {
         self.taken.set_locked(backend, locked);
     }
 
-    /// Cancel key for the server currently assigned to this client.
-    #[inline]
-    pub(super) fn cancel_key(&self, client: FrontendPid) -> Option<&BackendKeyData> {
-        self.taken.cancel_key(client)
-    }
-
     /// All cancel keys for currently checked-out server connections.
     pub(super) fn cancel_keys(&self) -> impl Iterator<Item = &BackendKeyData> {
         self.taken.cancel_keys()
+    }
+
+    #[inline]
+    pub(super) fn begin_cancel(&mut self, client: FrontendPid, pool: &Pool) -> Option<CancelLease> {
+        self.taken.begin_cancel(client, pool)
+    }
+
+    #[inline]
+    pub(super) fn end_cancel(&mut self, backend: BackendPid) -> CancelLeaseReleaseOutcome {
+        self.taken.end_cancel(backend)
+    }
+
+    #[inline]
+    pub(super) fn does_backend_have_pending_cancel(&self, backend: BackendPid) -> bool {
+        self.taken.does_backend_have_pending_cancel(backend)
     }
 
     /// How many connections can be removed from the pool
@@ -862,11 +872,11 @@ mod test {
         let server_id = BackendPid::for_test(1);
         let cancel_key = BackendKeyData::legacy(server_id.pid, 0);
 
-        assert_eq!(inner.cancel_key(client_id), None);
+        assert_eq!(inner.taken.cancel_key(client_id), None);
 
         inner.taken.take(client_id, server_id, cancel_key.clone());
 
-        assert_eq!(inner.cancel_key(client_id), Some(&cancel_key));
+        assert_eq!(inner.taken.cancel_key(client_id), Some(&cancel_key));
     }
 
     #[test]

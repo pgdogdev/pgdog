@@ -177,6 +177,10 @@ impl MemoryUsage for Server {
     }
 }
 
+/// Bound on how long [`Server::cancel`] waits for Postgres to close the
+/// socket after receiving a CancelRequest.
+const CANCEL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl Server {
     /// Create new PostgreSQL server connection.
     pub(crate) async fn connect(
@@ -448,10 +452,34 @@ impl Server {
     }
 
     /// Request query cancellation for the given backend server identifier.
+    ///
+    /// Sends the CancelRequest, then waits for Postgres to close the socket,
+    /// signaling it's completed. Falls through on timeout so a hung server
+    /// can't pin backends forever.
     pub(crate) async fn cancel(addr: &Address, id: BackendKeyData) -> Result<(), Error> {
         let mut stream = TcpStream::connect(addr.addr().await?).await?;
         stream.write_all(&Startup::Cancel { id }.to_bytes()).await?;
         stream.flush().await?;
+
+        let mut sink = [0u8; 16];
+
+        if tokio::time::timeout(CANCEL_ACK_TIMEOUT, async {
+            loop {
+                match stream.read(&mut sink).await {
+                    Ok(0) => return,   // EOF: Postgres closed after signaling the backend.
+                    Ok(_) => continue, // Drain anything Postgres sends; it shouldn't send data.
+                    Err(_) => return,  // Socket error: packet already left, treat as done.
+                }
+            }
+        })
+        .await
+        .is_err()
+        {
+            warn!(
+                "CancelRequest to {} not acknowledged within {:?}; releasing lease anyway",
+                addr, CANCEL_ACK_TIMEOUT,
+            );
+        }
 
         Ok(())
     }
@@ -4495,6 +4523,102 @@ pub(crate) mod test {
         // 1000 uniform samples should cover both sides.
         assert!(saw_below_base, "never sampled below base");
         assert!(saw_above_base, "never sampled above base");
+    }
+
+    #[tokio::test]
+    async fn cancel_returns_when_peer_closes_socket() {
+        // Happy path: Postgres receives the CancelRequest and closes the
+        // socket. `Server::cancel` sees EOF from `read` and returns Ok
+        // well before the CANCEL_ACK_TIMEOUT budget elapses.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let peer_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Drain the startup/cancel packet so the read side has data to
+            // observe, then close to signal completion.
+            let mut buf = [0u8; 64];
+            let _ = socket.read(&mut buf).await;
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(1, 42);
+
+        tokio::time::timeout(Duration::from_secs(2), Server::cancel(&addr, key))
+            .await
+            .expect("cancel must return promptly on peer close")
+            .expect("cancel returns Ok on the happy path");
+        peer_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_consumes_stray_data_before_eof() {
+        // Some peers (e.g. proxies) may write a byte or two before closing.
+        // The `Ok(_) => continue` arm must swallow that and still return once
+        // the peer eventually closes.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let peer_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 64];
+            let _ = socket.read(&mut buf).await;
+            socket.write_all(b"garbage").await.unwrap();
+            socket.flush().await.unwrap();
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(2, 99);
+
+        tokio::time::timeout(Duration::from_secs(2), Server::cancel(&addr, key))
+            .await
+            .expect("cancel must drain and return on peer close")
+            .expect("cancel returns Ok even when peer sent unexpected bytes");
+        peer_task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_returns_after_ack_timeout_when_peer_hangs() {
+        // If Postgres accepts the CancelRequest but never closes the socket,
+        // `Server::cancel` must not pin the lease forever: it logs and returns
+        // Ok once CANCEL_ACK_TIMEOUT elapses.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Hold the accepted socket open for the duration of the test so the
+        // client sees neither EOF nor a socket error. Keeping the listener
+        // task alive also keeps the peer socket alive.
+        let peer_task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            // Park; the test tears the task down at end.
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(3, 7);
+
+        // Under paused time, tokio auto-advances to the timer that fires
+        // CANCEL_ACK_TIMEOUT, so this completes without real waiting.
+        Server::cancel(&addr, key)
+            .await
+            .expect("cancel returns Ok even after ack timeout");
+
+        peer_task.abort();
     }
 
     #[test]
