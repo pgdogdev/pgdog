@@ -1041,6 +1041,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     /// ```
     /// The join equality connects c.org_id to l.org_id, so we compute the
     /// shard using local_companies' sharding rule, not companies' config.
+    /// IN lists use the same rule for every value and combine their shards.
     /// Without that equality (e.g. ON l.id = c.id alone), c.org_id = 7
     /// doesn't constrain a sharded key, and existing fallback routing applies.
     ///
@@ -1065,20 +1066,20 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                 }
             }
             Node::A_Expr(expr)
-                if expr.kind == nodes::A_Expr_Kind::AEXPR_OP
-                    && expr
-                        .name()
-                        .into_iter()
-                        .exactly_one()
-                        .ok()
-                        .and_then(Node::as_str)
-                        == Some("=") =>
+                if matches!(
+                    expr.kind,
+                    nodes::A_Expr_Kind::AEXPR_OP | nodes::A_Expr_Kind::AEXPR_IN
+                ) && expr
+                    .name()
+                    .into_iter()
+                    .exactly_one()
+                    .ok()
+                    .and_then(Node::as_str)
+                    == Some("=") =>
             {
                 for (column, value) in [(expr.lexpr(), expr.rexpr()), (expr.rexpr(), expr.lexpr())]
                 {
-                    let (Ok(column), Ok(value)) =
-                        (Column::try_from(column), Value::try_from(value))
-                    else {
+                    let Ok(column) = Column::try_from(column) else {
                         continue;
                     };
                     if !ctx
@@ -1088,11 +1089,29 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                     {
                         continue;
                     }
+                    let values = match value {
+                        Node::NodeList(list) => Either::Left(list.into_iter()),
+                        value => Either::Right(std::iter::once(value)),
+                    };
+                    // Every list entry must be understood: routing from only
+                    // the known values could omit shards needed by the rest.
+                    let Ok(values) = values.map(Value::try_from).collect::<Result<Vec<_>, _>>()
+                    else {
+                        continue;
+                    };
                     for (from, to) in &ctx.joined_columns {
-                        if *from == column
-                            && let Some(shard) = self
-                                .compute_shard_with_ctx(*to, value.clone(), ctx)
-                                .break_err()?
+                        if *from != column {
+                            continue;
+                        }
+                        let shards = values
+                            .iter()
+                            .map(|value| self.compute_shard_with_ctx(*to, value.clone(), ctx))
+                            .collect::<Result<Vec<_>, _>>()
+                            .break_err()?;
+                        // Resolve every value above so all pending lookups
+                        // are recorded, even if an earlier value has no shard.
+                        if let Some(shards) = shards.into_iter().collect::<Option<Vec<_>>>()
+                            && let Some(shard) = Self::converge(&shards)
                         {
                             return ControlFlow::Break(Ok(shard));
                         }
@@ -2829,6 +2848,9 @@ mod test {
             "SELECT * FROM orders o RIGHT JOIN users u ON o.tenant_id = u.tenant_id WHERE u.tenant_id = 7",
             "SELECT * FROM users u JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
             "SELECT * FROM orders o JOIN users u ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id IN (7)",
+            "SELECT * FROM orders o RIGHT JOIN users u ON o.tenant_id = u.tenant_id WHERE u.tenant_id IN (7, 7)",
+            "SELECT * FROM users u JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id IN (7)",
         ] {
             assert_eq!(run_shard_test(query), expected, "{query}");
         }
@@ -2854,7 +2876,48 @@ mod test {
             "SELECT * FROM orders o LEFT JOIN users u ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
         ] {
             assert_eq!(run_shard_test(query), None, "{query}");
+            let query = query.replace("u.tenant_id = 7", "u.tenant_id IN (7)");
+            assert_eq!(run_shard_test(&query), None, "{query}");
         }
+    }
+
+    #[test]
+    fn test_omnisharded_joined_in_requires_all_values() {
+        for predicate in [
+            "IN (7, unknown_function())",
+            "IN (7, u.id)",
+            "IN (7, $1)",
+            "NOT IN (7)",
+        ] {
+            let query = format!(
+                "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id
+                 WHERE u.tenant_id {predicate}"
+            );
+            assert_eq!(run_shard_test(&query), None, "{query}");
+        }
+    }
+
+    #[test]
+    fn test_omnisharded_joined_in_combines_shards() {
+        let expected: HashSet<_> = [7, 8, 9]
+            .into_iter()
+            .map(|id| {
+                let Some(Shard::Direct(shard)) =
+                    run_shard_test(&format!("SELECT * FROM orders WHERE tenant_id = {id}"))
+                else {
+                    panic!("a single key should route directly");
+                };
+                shard
+            })
+            .collect();
+        assert!(expected.len() > 1);
+        let Some(Shard::Multi(shards)) = run_shard_test(
+            "SELECT * FROM users u JOIN orders o ON u.tenant_id = o.tenant_id
+             WHERE u.tenant_id IN (7, 8, 9)",
+        ) else {
+            panic!("the list should route to multiple shards");
+        };
+        assert_eq!(shards.into_iter().collect::<HashSet<_>>(), expected);
     }
 
     #[test]
