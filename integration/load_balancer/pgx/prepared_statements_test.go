@@ -10,6 +10,19 @@ import (
 )
 
 func TestPrepared(t *testing.T) {
+	setup := GetPool()
+	defer setup.Close()
+	_, err := setup.Exec(context.Background(), `CREATE TABLE run_prepared (id BIGINT, value VARCHAR)`)
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer func() {
+		_, err := setup.Exec(context.Background(), "DROP TABLE run_prepared")
+		assert.NoError(t, err)
+	}()
+
+	// Create the fixture once so concurrent transactions exercise prepared
+	// statements without serializing on a transactional CREATE TABLE lock.
 	done := make(chan int)
 	concurrency := 100
 
@@ -36,14 +49,6 @@ func runPrepared(t *testing.T, pool *pgxpool.Pool, iterations int) {
 		assert.NoError(t, err)
 
 		tx, err := pool.Begin(context.Background())
-		assert.NoError(t, err)
-
-		_, err = tx.Exec(context.Background(),
-			`CREATE TABLE IF NOT EXISTS run_prepared (
-				id BIGINT,
-				value VARCHAR
-			)`)
-
 		assert.NoError(t, err)
 
 		rows, err := tx.Query(context.Background(),

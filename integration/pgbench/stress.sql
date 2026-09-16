@@ -1,7 +1,8 @@
 \set response_size (random(2, 1000000))
 
--- Generate large response from server.
+-- Generate large responses without evaluating a SQL row per output character.
 -- Range: 2 bytes to 1M
-SELECT
-    string_agg(substr('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', (random()*61+1)::int, 1), '')
-FROM generate_series(1, :response_size);
+SELECT left(
+    repeat('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', (:response_size + 61) / 62),
+    :response_size
+);
