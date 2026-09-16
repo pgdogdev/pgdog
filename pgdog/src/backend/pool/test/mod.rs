@@ -1262,6 +1262,48 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
     destination.shutdown();
 }
 
+#[tokio::test]
+async fn test_move_conns_to_refuses_with_cancel_in_flight() {
+    use crate::backend::pool::cancel::CancelLease;
+    use crate::net::messages::{BackendKeyData, BackendPid};
+
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    source.launch();
+    destination.launch();
+
+    let frontend = FrontendPid::new();
+    let backend = BackendPid::for_test(1);
+    let key = BackendKeyData::legacy(1, 42);
+
+    source.lock().taken.take(frontend, backend, key);
+
+    // Hold a lease. move_conns_to must refuse while it's outstanding: draining
+    // the pool now would strand a cancel packet in flight against a backend
+    // that has already been reassigned to the destination.
+    let lease = CancelLease::acquire(&source, frontend).expect("frontend is tracked");
+
+    let err = source
+        .move_conns_to(&destination)
+        .expect_err("move must fail while a cancel is in flight");
+    assert!(
+        matches!(err, Error::CancelInFlight),
+        "expected CancelInFlight, got {:?}",
+        err,
+    );
+    // Source is still online, since move_conns_to returned before flipping it.
+    assert!(source.lock().online);
+
+    drop(lease);
+
+    // Once the lease clears, the move goes through.
+    source
+        .move_conns_to(&destination)
+        .expect("move succeeds after lease drops");
+    assert!(!source.lock().online);
+}
+
 /// `Pool::cancel` used to snapshot the cancel key under the lock and then
 /// release the lock before sending the CancelRequest over TCP. During that
 /// window the physical backend could be returned to the pool and reassigned

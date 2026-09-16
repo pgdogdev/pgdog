@@ -4515,6 +4515,102 @@ pub(crate) mod test {
         assert!(saw_above_base, "never sampled above base");
     }
 
+    #[tokio::test]
+    async fn cancel_returns_when_peer_closes_socket() {
+        // Happy path: Postgres receives the CancelRequest and closes the
+        // socket. `Server::cancel` sees EOF from `read` and returns Ok
+        // well before the CANCEL_ACK_TIMEOUT budget elapses.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let peer_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Drain the startup/cancel packet so the read side has data to
+            // observe, then close to signal completion.
+            let mut buf = [0u8; 64];
+            let _ = socket.read(&mut buf).await;
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(1, 42);
+
+        tokio::time::timeout(Duration::from_secs(2), Server::cancel(&addr, key))
+            .await
+            .expect("cancel must return promptly on peer close")
+            .expect("cancel returns Ok on the happy path");
+        peer_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_consumes_stray_data_before_eof() {
+        // Some peers (e.g. proxies) may write a byte or two before closing.
+        // The `Ok(_) => continue` arm must swallow that and still return once
+        // the peer eventually closes.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let peer_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 64];
+            let _ = socket.read(&mut buf).await;
+            socket.write_all(b"garbage").await.unwrap();
+            socket.flush().await.unwrap();
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(2, 99);
+
+        tokio::time::timeout(Duration::from_secs(2), Server::cancel(&addr, key))
+            .await
+            .expect("cancel must drain and return on peer close")
+            .expect("cancel returns Ok even when peer sent unexpected bytes");
+        peer_task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_returns_after_ack_timeout_when_peer_hangs() {
+        // If Postgres accepts the CancelRequest but never closes the socket,
+        // `Server::cancel` must not pin the lease forever: it logs and returns
+        // Ok once CANCEL_ACK_TIMEOUT elapses.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Hold the accepted socket open for the duration of the test so the
+        // client sees neither EOF nor a socket error. Keeping the listener
+        // task alive also keeps the peer socket alive.
+        let peer_task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            // Park; the test tears the task down at end.
+            std::future::pending::<()>().await;
+            drop(socket);
+        });
+
+        let addr = Address {
+            host: "127.0.0.1".into(),
+            port,
+            ..Default::default()
+        };
+        let key = BackendKeyData::legacy(3, 7);
+
+        // Under paused time, tokio auto-advances to the timer that fires
+        // CANCEL_ACK_TIMEOUT, so this completes without real waiting.
+        Server::cancel(&addr, key)
+            .await
+            .expect("cancel returns Ok even after ack timeout");
+
+        peer_task.abort();
+    }
+
     #[test]
     fn test_apply_lifetime_jitter_saturates_at_zero() {
         // base < jitter forces the lower bound to clamp at zero
