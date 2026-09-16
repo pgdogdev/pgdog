@@ -11,5 +11,9 @@ async fn test_postgres_version_in_ci() {
         .unwrap();
 
     let version = pg_version_row.get::<&str, &str>("version");
-    assert!(version.contains("PostgreSQL 18"));
+    assert!(
+        version.contains("PostgreSQL 18"),
+        "Version incorrect: {}",
+        version
+    );
 }
