@@ -8,7 +8,6 @@ use pg_raw_parse::{
     transform::{TransformClosure, transform_node},
 };
 use pgdog_stats::{Column, Relation};
-use std::str::FromStr;
 
 use crate::{
     frontend::{
@@ -113,7 +112,7 @@ impl NDFunctionType {
     fn with_param(&self, param: u8) -> Self {
         match self {
             Self::TimeFunction(tf) => Self::TimeFunction(tf.with_param(param)),
-            Self::UUIDFunction(uuid) => Self::UUIDFunction(uuid.with_param(param)),
+            Self::UUIDFunction(uuid) => Self::UUIDFunction(uuid.with_param()),
         }
     }
 
@@ -122,64 +121,111 @@ impl NDFunctionType {
     /// Parse both `FuncCall`s and `SQLValueFunction`s here.
     /// `now()` = `FuncCall`,
     /// `CURRENT_TIMESTAMP`, `LOCALTIME` = `SQLValueFunction`,
-    fn from_node(node: Node, column_relation: Option<&Column>) -> Option<Self> {
+    fn from_node(node: Node, column_relation: Option<&Column>) -> Result<Option<Self>, Error> {
         match node {
             Node::FuncCall(func) => {
-                let Node::String(str) = func.funcname().first()? else {
-                    return None;
+                let Some(Node::String(str)) = func.funcname().first() else {
+                    return Ok(None);
                 };
-                str.sval()?.parse().ok()
+
+                let Some(func_name) = str.sval() else {
+                    return Ok(None);
+                };
+
+                Self::from_func_call(func_name, Some(func.args()))
             }
-            Node::SQLValueFunction(func) => Self::from_sql_value_function(func.op, func.typmod),
+            Node::SQLValueFunction(func) => Ok(Self::from_sql_value_function(func.op, func.typmod)),
 
             // If DEFAULT is in a VALUES list; fetch the column based on index.
-            Node::SetToDefault(_) => column_relation
-                .map(|column| column.column_default.parse::<NDFunctionType>())
-                .and_then(Result::ok),
+            Node::SetToDefault(_) => {
+                if let Some(relation) = column_relation {
+                    return Self::from_func_call(relation.column_default.as_str(), None);
+                }
 
-            _ => None,
+                Ok(None)
+            }
+
+            _ => Ok(None),
         }
     }
-}
 
-/// Client `now()`.parse() -> NDFunction::TimeFunction(TimeFunctionType::Now())
-impl FromStr for NDFunctionType {
-    type Err = Option<Error>;
-
-    /// TODO: Doc comment
-    /// Not sure it's necessary to error in this circumstance.
-    /// Would mean they didn't correctly call the function;
-    /// Postgres will error them out (unless we have a logic bug)
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.to_lowercase();
+    /// Parse the function to determine if it's one we should re-write (date/time, uuid)
+    /// If it is, return the corresponding `NDFunctionType`.
+    ///
+    /// from_str(Client `now()`) -> NDFunction::TimeFunction(TimeFunctionType::Now())
+    /// This doesn't use the FromStr trait because I wanted to return an `Option` type
+    ///
+    /// Returns an Error when the argument is not supported by us yet (e.g. intervals for uuidv7())
+    fn from_func_call(func_name: &str, args: Option<&NodeList>) -> Result<Option<Self>, Error> {
+        // Normalize the function name. Postgres does this.
+        let func_name = func_name.to_lowercase();
 
         for variant in TimeFunctionType::ALL_VARIANTS
             .iter()
             .chain(UUIDFunctionType::ALL_VARIANTS.iter())
         {
             let variant_name = &variant.name();
-            if s.starts_with(variant_name) {
-                // TODO: I think this can be written better
-                let after = s.replace(' ', "");
-                let after = &after[variant_name.len()..];
-                if after.starts_with('(') && after.ends_with(')') && after.len() >= 3 {
-                    let after = &after[1..after.len() - 1];
+            if func_name.starts_with(variant_name) {
+                // If `args` is None, this means that it was passed by Schema (DEFAULT), where we haven't run pg_raw_parse
+                // TODO: pg_raw_parse could (potentially) parse this instead.
+                if args.is_none() {
+                    let func_name = func_name.replace(' ', "");
+                    let arguments = &func_name[variant_name.len()..];
 
-                    let after_to_int: u8 = match after.parse() {
-                        Ok(integer_argument) => integer_argument,
-                        Err(_) => continue,
+                    if arguments.starts_with('(')
+                        && arguments.ends_with(')')
+                        && arguments.len() >= 3
+                    {
+                        let arguments = &arguments[1..arguments.len() - 1];
+
+                        let after_to_int: u8 = match arguments.parse() {
+                            Ok(integer_argument) => integer_argument,
+                            Err(_) => {
+                                // Unsupported argument in Schema
+                                return Err(Error::UnsupportedArgument(variant_name.to_string()));
+                            }
+                        };
+
+                        return Ok(Some(variant.with_param(after_to_int)));
+                    } else if arguments.eq("()") || arguments.is_empty() {
+                        return Ok(Some(*variant));
+                    } else {
+                        continue;
+                    }
+                } else if let Some(args) = args {
+                    if args.len() >= 2 {
+                        // Only support a singular parameter right now;
+                        // none of our current functions require more than that.
+                        return Err(Error::UnsupportedArgument(variant_name.to_string()));
+                    }
+
+                    let Some(first_arg) = args.get(0) else {
+                        // No arguments. As-is.
+                        return Ok(Some(*variant));
                     };
 
-                    return Ok(variant.with_param(after_to_int));
-                } else if after.eq("()") || after.is_empty() {
-                    return Ok(*variant);
-                } else {
-                    continue;
+                    if let Node::A_Const(constant) = first_arg
+                        && let Some(constant) = constant.val()
+                        && let Some(constant_number) = constant.numeric_value::<i32>()
+                    {
+                        match constant_number.try_into() {
+                            Ok(constant_number) => {
+                                return Ok(Some(variant.with_param(constant_number)));
+                            }
+                            Err(_) => {
+                                return Err(Error::UnsupportedArgument(variant_name.to_string()));
+                            }
+                        }
+                    } else {
+                        // Only support parsing out a numeric constant right now.
+                        // TODO: uuidv7 param
+                        return Err(Error::UnsupportedArgument(variant_name.to_string()));
+                    }
                 }
             }
         }
 
-        Err(None)
+        Ok(None)
     }
 }
 
@@ -215,17 +261,16 @@ impl StatementRewrite<'_> {
             mem,
             relation,
             cols,
-            error: None,
         };
 
         // 1. iterates through Schema to find DEFAULT columns
         // 2. adds the column to target list & all the values lists (ParamRef or String)
-        nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols);
+        nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols)?;
 
         // Replaces all time function calls (ParamRef or String)
-        nd_rewrite.transform_func_calls(stmt);
+        nd_rewrite.transform_func_calls(stmt)?;
 
-        nd_rewrite.error.map_or(Ok(()), Err)
+        Ok(())
     }
 
     /// Fetch the table Relation, so that we can get the relevant Schema for each column.
@@ -277,15 +322,15 @@ struct NDRewrite<'mem, 'a, 's> {
     mem: MemoryToken<'mem>,
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
-
-    // Error from formatting a time.
-    error: Option<Error>,
 }
 
 impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
     /// Replaces all time function calls (ParamRef or String)
     /// Used by all to handle re-writes.
-    fn transform_func_calls(&mut self, stmt: NodeMut<'mem, '_>) {
+    fn transform_func_calls(&mut self, stmt: NodeMut<'mem, '_>) -> Result<(), Error> {
+        // If any Error is caught during transform_node, update this, and it'll be returned when the transform is done.
+        // Have this workaround because it's within a closure.
+        let mut err: Option<Error> = None;
         transform_node(
             stmt,
             &mut TransformClosure::new(|node| match &*node {
@@ -312,21 +357,37 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                             }
                         };
 
-                        if let Some(nd_function_type) =
-                            NDFunctionType::from_node(value, col_relation)
-                        {
-                            let Some(col_relation) = col_relation else {
-                                continue;
-                            };
+                        match NDFunctionType::from_node(value, col_relation) {
+                            Ok(Some(nd_function_type)) => {
+                                let Some(col_relation) = col_relation else {
+                                    continue;
+                                };
 
-                            let nd_function = NDFunction {
-                                nd_function_type,
-                                column_type: col_relation.data_type.clone(),
-                            };
+                                let nd_function = NDFunction {
+                                    nd_function_type,
+                                    column_type: col_relation.data_type.clone(),
+                                };
 
-                            // Replace the specific node within the list.
-                            cloned_values.as_mut().set(i, self.make_node(&nd_function));
-                            changed = true;
+                                let node = self.make_node(&nd_function);
+                                match node {
+                                    Ok(node) => {
+                                        // Replace the specific node within the list.
+                                        cloned_values.as_mut().set(i, node);
+                                        changed = true;
+                                    }
+                                    Err(e) => {
+                                        err.get_or_insert(e);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            Ok(None) => continue,
+
+                            Err(e) => {
+                                err.get_or_insert(e);
+                                break;
+                            }
                         }
                     }
 
@@ -343,6 +404,8 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                 _ => Some(node),
             }),
         );
+
+        err.map(Err).unwrap_or(Ok(()))
     }
 
     /// Iterates through Schema to find DEFAULT columns
@@ -351,14 +414,18 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
         &mut self,
         mut stmt: &mut NodeMut<'mem, '_>,
         not_covered_cols: &Vec<String>,
-    ) {
+    ) -> Result<(), Error> {
         let NodeMut::InsertStmt(insert_stmt) = &mut stmt else {
-            return;
+            return Ok(());
         };
 
         for col in not_covered_cols {
             let col_relation = self.relation.columns.get(col.as_str()).unwrap();
-            let Ok(nd_function_type) = col_relation.column_default.parse::<NDFunctionType>() else {
+
+            let nd_function_type =
+                NDFunctionType::from_func_call(&col_relation.column_default, None)?;
+
+            let Some(nd_function_type) = nd_function_type else {
                 continue;
             };
 
@@ -376,7 +443,7 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
             );
 
             let NodeMut::SelectStmt(select_stmt) = &mut insert_stmt.select_stmt_mut() else {
-                return;
+                return Ok(());
             };
 
             // Have to add the now() to every single select VALUES list now.
@@ -384,26 +451,25 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
             for values_list in select_stmt.values_lists_mut() {
                 let mut node_list_mut = values_list.expect_node_list();
 
-                node_list_mut.push(self.mem, self.make_node(&nd_function));
+                node_list_mut.push(self.mem, self.make_node(&nd_function)?);
             }
         }
+
+        Ok(())
     }
 
     /// If simple protocol, make an A_Const node with the String constant of the formatted time.
     /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted time later.
-    fn make_node(&mut self, nd_function: &NDFunction) -> Unique<'mem, Node<'mem>> {
+    fn make_node(&mut self, nd_function: &NDFunction) -> Result<Unique<'mem, Node<'mem>>, Error> {
         self.rewrite.rewritten = true;
 
-        if !self.rewrite.extended && !self.rewrite.prepared {
+        Ok(if !self.rewrite.extended && !self.rewrite.prepared {
             let text = match nd_function
                 .write_as_constant(&self.rewrite.query_timestamps, self.rewrite.timezone)
             {
                 Ok((text, _)) => text,
                 // The statement is discarded when the error is returned (thus, value doesn't matter)
-                Err(err) => {
-                    self.error.get_or_insert(err);
-                    String::new()
-                }
+                Err(err) => return Err(err),
             };
             self.mem
                 .make_a_const(ConstValue::String(text.as_str()))
@@ -437,6 +503,6 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                         .make_string(Some(nd_function.col_type_to_type_cast_alias()))]),
                 )
                 .uncast()
-        }
+        })
     }
 }

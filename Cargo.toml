@@ -31,7 +31,7 @@ indexmap = { version = "2.14", features = ["serde"] }
 serde_with = { version = "3.22", features = ["macros", "schemars_1"] }
 reqwest = { version = "0.13", features = ["json"] }
 bytes = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 parking_lot = "0.12"
 futures-util = "0.3.32"
 

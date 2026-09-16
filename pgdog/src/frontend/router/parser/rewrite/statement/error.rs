@@ -54,4 +54,9 @@ pub(crate) enum Error {
 
     #[error("could not determine the session TimeZone for time functions on omnisharded tables")]
     UnknownTimeZone,
+
+    #[error(
+        "could not determine how to parse the argument passed in {0}; it is likely not supported yet"
+    )]
+    UnsupportedArgument(String),
 }

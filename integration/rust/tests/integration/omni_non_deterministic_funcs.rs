@@ -24,7 +24,14 @@ use sqlx::{Executor, Row};
 // TODO: Test to make sure this doesn't affect harded tables (it doesn't; but doesn't hurt to assert that)
 // TODO: Assert what happens if we don't explicitly set timezone
 
-// <https://www.postgresql.org/docs/current/functions-uuid.html>
+/// Test that an INSERT into an omnisharded table which uses UUID functions is
+/// re-written to a constant to be consistent across all shards.
+///
+/// - Verifies DEFAULT works (in schema, in VALUES)
+/// - Verifies functions in VALUES work.
+/// - Tests uuidv4(), uuidv7(), gen_random_uuid()
+///
+/// It also asserts that uuidv7(interval) does **NOT** work right now, as we don't have an easy way to parse intervals.
 #[tokio::test]
 async fn omni_uuid_rewrite() {
     let sharded_conn = connections_sqlx().await;
@@ -89,6 +96,19 @@ async fn omni_uuid_rewrite() {
 
             assert_eq!(shard_0_uuid, shard_1_uuid);
         }
+
+        // Specify an INTERVAL as an argument within uuidv7. This should fail with an Error.
+        // It would require us to parse Postgres intervals (possible, but not supported yet)
+        let err = transaction
+            .execute(
+                "INSERT INTO test_omni_uuid(id, uuid4, uuid7, uuid7_default_explicit)
+            VALUES(2, uuidv4(), uuidv7(INTERVAL '-2 weeks'), DEFAULT)",
+            )
+            .await
+            .err()
+            .unwrap();
+
+        assert!(err.to_string().contains("parser: rewrite: could not determine how to parse the argument passed in uuidv7; it is likely not supported yet"));
 
         transaction.rollback().await.unwrap();
     }
