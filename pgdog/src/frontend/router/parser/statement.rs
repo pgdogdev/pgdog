@@ -269,6 +269,18 @@ impl<'a> SearchContext<'a> {
         ctx
     }
 
+    /// Record which column equalities can carry a WHERE value across a join.
+    /// For example:
+    ///
+    /// ```sql
+    /// SELECT * FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
+    /// WHERE c.org_id = 7;
+    /// ```
+    /// This records c.org_id -> l.org_id (and c.id -> l.id). The caller
+    /// checks whether the destination column is actually a sharding key.
+    /// INNER JOIN records both directions; RIGHT JOIN records right -> left.
+    /// FULL JOIN and joins involving subqueries or nested joins aren't inferred.
     fn extract_joined_columns(&mut self, node: Node<'a>) {
         use nodes::{A_Expr_Kind, BoolExprType, JoinType};
 
@@ -286,6 +298,8 @@ impl<'a> SearchContext<'a> {
                 .or(table.relname())
         };
         walk::walk_manual::<()>(node, |node| match node {
+            // ON l.org_id = c.org_id OR l.id = c.id doesn't guarantee equal
+            // org_ids: a row can match through the id comparison alone.
             Node::BoolExpr(expr) => Recurse::recurse_if(expr.boolop == BoolExprType::AND_EXPR),
             Node::A_Expr(expr)
                 if expr.kind == A_Expr_Kind::AEXPR_OP
@@ -1016,8 +1030,29 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
     }
 
-    /// A WHERE predicate on an omnisharded table can constrain a joined
-    /// sharded table. ON predicates alone don't restrict preserved outer rows.
+    /// Use a WHERE value on an omnisharded table to constrain a joined
+    /// sharded table. With companies omnisharded and local_companies sharded
+    /// on org_id, this query routes using local_companies.org_id = 7:
+    ///
+    /// ```sql
+    /// SELECT count(*) FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
+    /// WHERE c.org_id = 7 AND l.id IS NULL;
+    /// ```
+    /// The join equality connects c.org_id to l.org_id, so we compute the
+    /// shard using local_companies' sharding rule, not companies' config.
+    /// Without that equality (e.g. ON l.id = c.id alone), c.org_id = 7
+    /// doesn't constrain a sharded key, and existing fallback routing applies.
+    ///
+    /// Putting the value only in ON does not filter the preserved companies:
+    ///
+    /// ```sql
+    /// SELECT * FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND c.org_id = 7;
+    /// ```
+    /// Companies from other orgs still appear with NULL local_companies
+    /// columns, so this function only uses WHERE predicates. Likewise,
+    /// WHERE c.org_id = 7 OR c.id = 1 cannot restrict the query to org 7.
     fn search_joined_key(
         &mut self,
         node: Node<'a>,
