@@ -191,8 +191,8 @@ impl StatementRewrite<'_> {
     ) -> Result<(), Error> {
         for param in generated_params {
             let (text, _) = match &param.generated_id {
-                GeneratedId::ProxyTime(time) => {
-                    time.formatted_time(&self.query_timestamps, timezone)?
+                GeneratedId::NDFunction(nd_func) => {
+                    nd_func.write_as_constant(&self.query_timestamps, timezone)?
                 }
                 // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
                 _ => continue,
