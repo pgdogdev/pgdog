@@ -5,8 +5,9 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn};
@@ -41,7 +42,7 @@ pub(crate) mod transaction_type;
 
 use query_engine::QueryEngine;
 pub(crate) use sticky::Sticky;
-pub(crate) use transaction_type::TransactionType;
+pub(crate) use transaction_type::{QueryTimestamps, Transaction, TransactionType};
 
 /// PostgreSQL client.
 ///
@@ -75,7 +76,7 @@ pub(crate) struct Client {
     // Client prepared statements cache.
     prepared_statements: PreparedStatements,
     // Client transaction state.
-    transaction: Option<TransactionType>,
+    transaction: Option<Transaction>,
     // Current timeouts to use for client/server communication.
     // These change based on client state, e.g. if client is running query,
     // the `query_timeout` is active, and if the client is idle, the `client_idle_timeout` is.
@@ -96,6 +97,8 @@ pub(crate) struct Client {
     query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     query_size_limit: Option<usize>,
+    /// When we received the first message of the current request.
+    statement_start: DateTime<Utc>,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -435,6 +438,7 @@ impl Client {
             database: database.to_string(),
             query_log_stdout: false,
             query_size_limit: None,
+            statement_start: Utc::now(),
         }))
     }
 
@@ -475,6 +479,7 @@ impl Client {
             database: "pgdog".to_string(),
             query_log_stdout: false,
             query_size_limit: None,
+            statement_start: Utc::now(),
         }
     }
 
@@ -610,7 +615,8 @@ impl Client {
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
                 if extended {
-                    self.transaction.get_or_insert(TransactionType::Implicit);
+                    self.transaction
+                        .get_or_insert(Transaction::new(TransactionType::Implicit));
                 }
 
                 while let Some(mut request) = requests.next() {
@@ -647,9 +653,6 @@ impl Client {
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
-        // Only start timer once we receive the first message.
-        let mut timer = None;
-
         // Check config once per request.
         let config = config::config();
         // Configure prepared statements cache.
@@ -660,6 +663,7 @@ impl Client {
         self.stream_buffer
             .set_size_limit_block(config.config.general.frontend_query_size_limit_block());
 
+        let mut has_set_time: bool = false;
         while !self.client_request.is_complete() {
             let idle_timeout = self
                 .timeouts
@@ -695,8 +699,9 @@ impl Client {
                 }
             };
 
-            if timer.is_none() {
-                timer = Some(Instant::now());
+            if !has_set_time {
+                has_set_time = true;
+                self.statement_start = Utc::now();
             }
 
             // Terminate (B & F).
@@ -708,10 +713,11 @@ impl Client {
             }
         }
 
+        let elapsed_time = Utc::now() - self.statement_start;
         if !enabled!(LogLevel::TRACE) {
             debug!(
                 "request buffered [{:.4}ms] {:?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request
                     .messages
                     .iter()
@@ -721,7 +727,7 @@ impl Client {
         } else {
             trace!(
                 "request buffered [{:.4}ms]\n{:#?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request,
             );
         }

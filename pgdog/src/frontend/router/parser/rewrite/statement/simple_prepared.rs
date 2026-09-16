@@ -7,10 +7,16 @@ use pg_raw_parse::{
 
 use crate::{
     frontend::{
-        PreparedStatements,
-        router::parser::{Limit, rewrite::statement::offset::OffsetPlan},
+        prepared_statements::PreparedPlan,
+        router::parser::{
+            Limit,
+            rewrite::statement::{
+                offset::OffsetPlan,
+                plan::{GeneratedId, GeneratedParam},
+            },
+        },
     },
-    net::{PREPARE_TEMPLATE_NAME, Prepare},
+    net::{PREPARE_TEMPLATE_NAME, Prepare, parameter::ParameterValue},
     unique_id::UniqueId,
 };
 
@@ -63,6 +69,7 @@ impl StatementRewrite<'_> {
         node: NodeMut<'a, '_>,
         mem: MemoryToken<'a>,
         plan: &mut RewritePlan,
+        timestamp_rewrite: bool,
     ) -> Result<SimplePreparedResult, Error> {
         let mut result = SimplePreparedResult::default();
 
@@ -70,7 +77,7 @@ impl StatementRewrite<'_> {
             return Ok(result);
         }
 
-        match rewrite_single_prepared(node, mem, self.prepared_statements, plan)? {
+        match self.rewrite_single_prepared(node, mem, plan, timestamp_rewrite)? {
             SimplePreparedRewrite::Prepared { prepare } => {
                 result.rewrites.push(PrepareExecute::Prepare(prepare));
                 result.rewritten = true;
@@ -84,75 +91,120 @@ impl StatementRewrite<'_> {
 
         Ok(result)
     }
-}
 
-/// Rewrites a single `PREPARE` or `EXECUTE` node.
-fn rewrite_single_prepared<'a>(
-    node: NodeMut<'a, '_>,
-    mem: MemoryToken<'a>,
-    prepared_statements: &mut PreparedStatements,
-    plan: &mut RewritePlan,
-) -> Result<SimplePreparedRewrite, Error> {
-    match node {
-        NodeMut::PrepareStmt(mut stmt) => {
-            let client_name = stmt.name().expect("prepare must have a name").to_owned();
+    /// Rewrites a single `PREPARE` or `EXECUTE` node.
+    fn rewrite_single_prepared<'a>(
+        &mut self,
+        node: NodeMut<'a, '_>,
+        mem: MemoryToken<'a>,
+        plan: &mut RewritePlan,
+        timestamp_rewrite: bool,
+    ) -> Result<SimplePreparedRewrite, Error> {
+        match node {
+            NodeMut::PrepareStmt(mut stmt) => {
+                let client_name = stmt.name().expect("prepare must have a name").to_owned();
 
-            // Create a globally unique key using the query text
-            // with a hardcoded name.
-            stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
+                // Create a globally unique key using the query text
+                // with a hardcoded name.
+                stmt.set_name(Some(mem.copy_string(PREPARE_TEMPLATE_NAME)));
 
-            let original_query = Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
+                let original_query =
+                    Bytes::from(pg_raw_parse::deparse(&*stmt)?.as_str().to_owned());
 
-            // Is the query a SELECT? Do we have both LIMIT and OFFSET in the SELECT?
-            let offset_plan: Option<OffsetPlan> = create_offset_plan(mem, &mut stmt);
+                // Is the query a SELECT? Do we have both LIMIT and OFFSET in the SELECT?
+                let offset_plan: Option<OffsetPlan> = create_offset_plan(mem, &mut stmt);
 
-            let new_query = offset_plan
-                .as_ref()
-                .map(|_| {
-                    pg_raw_parse::deparse(&*stmt)
-                        .map(|deparse_result| Bytes::from(deparse_result.as_str().to_owned()))
-                })
-                .transpose()?;
+                let new_query = offset_plan
+                    .as_ref()
+                    .map(|_| {
+                        pg_raw_parse::deparse(&*stmt)
+                            .map(|deparse_result| Bytes::from(deparse_result.as_str().to_owned()))
+                    })
+                    .transpose()?;
 
-            let prepare = prepared_statements.insert_prepare(
-                &client_name,
-                original_query,
-                new_query,
-                plan,
-                offset_plan,
-            );
-
-            stmt.set_name(Some(mem.copy_string(prepare.name())));
-
-            Ok(SimplePreparedRewrite::Prepared { prepare })
-        }
-
-        NodeMut::ExecuteStmt(mut stmt) => {
-            let stmt_name = stmt.name().expect("EXECUTE always has name");
-
-            if let Some((prepare, unique_ids, offset_plan)) =
-                prepared_statements.prepare_and_unique_ids(stmt_name)
-            {
-                if let Some(mut offset_plan) = offset_plan {
-                    // Note: This needs to be ordered before the offset_val/limit_val adjustment.
-                    insert_offset_params(&mut stmt, mem, &offset_plan);
-                    update_offset_plan_fields(&mut offset_plan, &mut stmt)?;
-
-                    plan.offset = Some(offset_plan);
-                }
-
-                // Rewrite EXECUTE statement to match the rewrite
-                // we did on the PREPARE statement.
-                insert_unique_ids(&mut stmt, mem, unique_ids)?;
+                let generated_params = plan.generated_params.clone();
+                let prepare = self.prepared_statements.insert_prepare(
+                    &client_name,
+                    original_query,
+                    new_query,
+                    plan,
+                    offset_plan,
+                    generated_params,
+                );
 
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
-                Ok(SimplePreparedRewrite::Executed { prepare })
-            } else {
-                Err(Error::ExecuteMissingPrepare(stmt_name.to_owned()))
+
+                Ok(SimplePreparedRewrite::Prepared { prepare })
             }
+
+            NodeMut::ExecuteStmt(mut stmt) => {
+                let stmt_name = stmt.name().expect("EXECUTE always has name");
+
+                if let Some(PreparedPlan {
+                    prepare,
+                    unique_ids,
+                    offset_plan,
+                    generated_params,
+                }) = self.prepared_statements.prepared_plan(stmt_name)
+                {
+                    if let Some(mut offset_plan) = offset_plan {
+                        // Note: This needs to be ordered before the offset_val/limit_val adjustment.
+                        insert_offset_params(&mut stmt, mem, &offset_plan);
+                        update_offset_plan_fields(&mut offset_plan, &mut stmt)?;
+
+                        plan.offset = Some(offset_plan);
+                    }
+
+                    // TODO: Should we be setting this on Plan? Pros? Cons?
+                    // TODO: Double check that this only runs on omnisharded (as well as Bind/Execute, etc)
+                    if timestamp_rewrite {
+                        plan.generated_params = generated_params;
+                        self.insert_generated_ids(
+                            &mut stmt,
+                            mem,
+                            &plan.generated_params,
+                            self.timezone,
+                        )?;
+                    }
+
+                    // Rewrite EXECUTE statement to match the rewrite
+                    // we did on the PREPARE statement.
+                    insert_unique_ids(&mut stmt, mem, unique_ids)?;
+
+                    stmt.set_name(Some(mem.copy_string(prepare.name())));
+                    Ok(SimplePreparedRewrite::Executed { prepare })
+                } else {
+                    Err(Error::ExecuteMissingPrepare(stmt_name.to_owned()))
+                }
+            }
+
+            _ => Ok(SimplePreparedRewrite::None),
+        }
+    }
+
+    fn insert_generated_ids<'a>(
+        &self,
+        stmt: &mut ExecuteStmtMut<'a, '_>,
+        mem: MemoryToken<'a>,
+        generated_params: &Vec<GeneratedParam>,
+        timezone: Option<&ParameterValue>,
+    ) -> Result<(), Error> {
+        for param in generated_params {
+            let (text, _) = match &param.generated_id {
+                GeneratedId::ProxyTime(time) => {
+                    time.formatted_time(&self.query_timestamps, timezone)?
+                }
+                // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
+                _ => continue,
+            };
+
+            stmt.params_mut().push(
+                mem,
+                mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
+            );
         }
 
-        _ => Ok(SimplePreparedRewrite::None),
+        Ok(())
     }
 }
 
@@ -379,6 +431,8 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::config::PreparedStatementsLevel;
+    use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::test_utils::set_env_var;
     use pg_raw_parse::Node;
     use pgdog_config::Rewrite;
@@ -418,6 +472,8 @@ mod tests {
                 db_schema: &self.db_schema,
                 user: "",
                 search_path: None,
+                timezone: None,
+                query_timestamps: QueryTimestamps::default(),
             });
             let mut plan = Default::default();
             let ast = pg_raw_parse::make::try_owned(|mem| {
@@ -541,9 +597,9 @@ mod tests {
             assert_eq!(ctx.ps.global.read().len(), 1);
 
             // Verify the OffsetPlan is correct from the PreparedStatement name used.
-            let (fetched_prepare, _, offset_plan) =
-                ctx.ps.prepare_and_unique_ids("test_stmt").unwrap();
-            let offset_plan = offset_plan.unwrap();
+            let fetched = ctx.ps.prepared_plan("test_stmt").unwrap();
+            let fetched_prepare = fetched.prepare;
+            let offset_plan = fetched.offset_plan.unwrap();
             assert_eq!(
                 fetched_prepare.query,
                 "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"
@@ -600,9 +656,9 @@ mod tests {
             assert_eq!(ctx.ps.global.read().len(), 2);
 
             // Verify the OffsetPlan is correct using the PreparedStatement name used.
-            let (fetched_prepare, _, offset_plan) =
-                ctx.ps.prepare_and_unique_ids("test_stmt2").unwrap();
-            let offset_plan = offset_plan.unwrap();
+            let fetched = ctx.ps.prepared_plan("test_stmt2").unwrap();
+            let fetched_prepare = fetched.prepare;
+            let offset_plan = fetched.offset_plan.unwrap();
             assert_eq!(
                 fetched_prepare.query,
                 "PREPARE __pgdog_template_name AS SELECT * FROM sharded LIMIT $1 OFFSET $2"

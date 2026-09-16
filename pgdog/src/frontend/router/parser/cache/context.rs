@@ -4,6 +4,7 @@ use crate::backend::ShardingSchema;
 use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::frontend::BufferedQuery;
+use crate::frontend::client::QueryTimestamps;
 use crate::net::Parameters;
 use crate::net::parameter::ParameterValue;
 
@@ -23,16 +24,28 @@ pub(crate) struct AstContext<'a> {
     pub(crate) user: &'a str,
     /// Search path for table lookups.
     pub(crate) search_path: Option<&'a ParameterValue>,
+    /// Allows `timestamp` types to use the Client's local time when excecuting a `TimeFunction`
+    pub(crate) timezone: Option<&'a ParameterValue>,
+    /// Statement, and transaction DateTime<Utc> relevant to the current Query (if not being cached)
+    pub(crate) query_timestamps: QueryTimestamps,
 }
 
 impl<'a> AstContext<'a> {
     /// Create AstContext from a Cluster and Parameters.
-    pub(crate) fn from_cluster(cluster: &'a Cluster, params: &'a Parameters) -> Self {
+    pub(crate) fn from_cluster(
+        cluster: &'a Cluster,
+        params: &'a Parameters,
+        query_timestamps: QueryTimestamps,
+    ) -> Self {
         Self {
             sharding_schema: cluster.sharding_schema(),
             db_schema: cluster.schema(),
             user: cluster.user(),
             search_path: params.get("search_path"),
+            timezone: params
+                .get("timezone")
+                .or_else(|| cluster.default_timezone()),
+            query_timestamps,
         }
     }
 }

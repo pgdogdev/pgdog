@@ -258,6 +258,7 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::net::messages::bind::{Format, Parameter};
 
@@ -294,6 +295,8 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(insert, &mut plan).unwrap();

@@ -135,6 +135,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_omni_non_deterministic_functions" => {
+                config.config.rewrite.omni_non_deterministic_functions = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }

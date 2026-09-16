@@ -33,6 +33,8 @@ pub(crate) struct ClientRequest {
     pub(crate) ast: Option<Ast>,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
+    /// How many parameters the client wrote in the unnamed prepared statement
+    pub(crate) anonymous_client_params: Option<u16>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -58,6 +60,7 @@ impl ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            anonymous_client_params: None,
         }
     }
 
@@ -215,6 +218,7 @@ impl ClientRequest {
             route: self.route.clone(),
             ast: self.ast.clone(),
             last_parse: None,
+            anonymous_client_params: self.anonymous_client_params,
         }
     }
 
@@ -397,6 +401,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            anonymous_client_params: None,
         }
     }
 }

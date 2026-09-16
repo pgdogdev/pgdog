@@ -92,6 +92,23 @@ pub struct Rewrite {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>
     #[serde(default = "Rewrite::default_primary_key")]
     pub primary_key: RewriteMode,
+
+    /// Behavior when an `INSERT` is headed to an omnisharded table using a function (such as date-time functions)
+    /// that will not be consistent when performing the functions separately on each shard.
+    /// Thus, it re-writes all such functions before performing the `INSERT` with constant values to maintain consistency.
+    ///
+    /// Example: `NOW()` is re-written to `2026-09-15 18:14:09.123456-05` (or whatever the current time is)
+    /// before performing the individual `INSERT` operations.
+    ///
+    /// This applies to both `DEFAULT` table schema and functions called within a VALUES list of an `INSERT`.
+    ///
+    /// `ignore` allows the `INSERT` without modification.
+    ///
+    /// _Default:_ `ignore`
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#omni_non_deterministic_functions>
+    #[serde(default = "Rewrite::default_omni_non_deterministic_functions")]
+    pub omni_non_deterministic_functions: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -101,6 +118,7 @@ impl Default for Rewrite {
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
+            omni_non_deterministic_functions: Self::default_omni_non_deterministic_functions(),
         }
     }
 }
@@ -115,6 +133,10 @@ impl Rewrite {
     }
 
     const fn default_primary_key() -> RewriteMode {
+        RewriteMode::Ignore
+    }
+
+    const fn default_omni_non_deterministic_functions() -> RewriteMode {
         RewriteMode::Ignore
     }
 }

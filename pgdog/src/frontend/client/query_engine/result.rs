@@ -1,9 +1,9 @@
-use crate::frontend::{ClientRequest, client::TransactionType};
+use crate::frontend::{ClientRequest, client::Transaction};
 
 /// Query engine execution result.
 pub(crate) enum QueryEngineResult {
     /// Query engine is done executing the request.
-    Done(Option<TransactionType>),
+    Done(Option<Transaction>),
     /// Query engine requests the request to be resubmitted
     /// as a series of separate requests.
     Split {

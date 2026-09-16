@@ -32,7 +32,7 @@ impl QueryParser {
 mod test_show {
     use crate::backend::Cluster;
     use crate::config::config;
-    use crate::frontend::client::Sticky;
+    use crate::frontend::client::{QueryTimestamps, Sticky};
     use crate::frontend::router::QueryParser;
     use crate::frontend::router::parser::{AstContext, Cache, Shard};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
@@ -44,7 +44,7 @@ mod test_show {
         let c = Cluster::new_test(&config());
         let mut parser = QueryParser::default();
         let params = Parameters::default();
-        let ctx = AstContext::from_cluster(&c, &params);
+        let ctx = AstContext::from_cluster(&c, &params, QueryTimestamps::default());
 
         // First call
         let query = "SHOW TRANSACTION ISOLATION LEVEL";

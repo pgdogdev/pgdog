@@ -110,7 +110,7 @@ impl StatementRewrite<'_> {
     }
 
     /// Get the table from an INSERT statement.
-    fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
+    pub(crate) fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
         let relation = insert.relation().expect("INSERT always has table");
         let is_sharded = StatementParser::new(insert.into(), None, self.schema, None).is_sharded(
             self.db_schema,
@@ -232,6 +232,8 @@ mod split_tests;
 mod tests {
     use super::super::nextval::SequenceCall;
     use super::super::plan::GeneratedId;
+    use crate::frontend::client::QueryTimestamps;
+    use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
     use crate::frontend::router::sharding::ShardedTable;
     use indexmap::IndexMap;
     use pgdog_config::{Rewrite, SystemCatalogsBehavior};
@@ -551,6 +553,8 @@ mod tests {
             db_schema,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = Default::default();
         let ast = make::try_owned(|mem| {
@@ -693,16 +697,20 @@ mod tests {
                 assert_eq!(plan.auto_id_injected, injected);
                 assert_eq!(plan.unique_ids, 0);
                 assert_eq!(
-                    plan.generated_ids,
+                    plan.generated_params,
                     vec![
-                        (
-                            1,
-                            GeneratedId::Sequence(SequenceCall::Nextval(sequence.to_owned()))
-                        ),
-                        (
-                            2,
-                            GeneratedId::Sequence(SequenceCall::Nextval(sequence.to_owned()))
-                        ),
+                        GeneratedParam {
+                            param_num: 1,
+                            generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                                sequence.to_owned()
+                            ))
+                        },
+                        GeneratedParam {
+                            param_num: 2,
+                            generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                                sequence.to_owned()
+                            ))
+                        },
                     ]
                 );
             }
@@ -722,7 +730,7 @@ mod tests {
 
             assert_eq!(sql, original);
             assert_eq!(plan.auto_id_injected, 0);
-            assert!(plan.generated_ids.is_empty());
+            assert!(plan.generated_params.is_empty());
         }
     }
 }

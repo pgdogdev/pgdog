@@ -7,7 +7,7 @@ use crate::{
     config::{self, ReadWriteStrategy, config},
     frontend::{
         ClientRequest, Command, PreparedStatements, RouterContext,
-        client::{Sticky, TransactionType},
+        client::{QueryTimestamps, Sticky, TransactionType, transaction_type::Transaction},
         router::{
             QueryParser,
             parser::{AstContext, Cache, Error},
@@ -22,7 +22,7 @@ pub(super) use crate::net::*;
 pub(crate) struct QueryParserTest {
     cluster: Cluster,
     params: Parameters,
-    transaction: Option<TransactionType>,
+    transaction: Option<Transaction>,
     sticky: Sticky,
     prepared: PreparedStatements,
     pub(crate) parser: QueryParser,
@@ -92,7 +92,7 @@ impl QueryParserTest {
     /// Set whether we're in a transaction.
     pub(crate) fn in_transaction(mut self, in_tx: bool) -> Self {
         self.transaction = if in_tx {
-            Some(TransactionType::ReadWrite)
+            Some(Transaction::new(TransactionType::ReadWrite))
         } else {
             None
         };
@@ -102,7 +102,7 @@ impl QueryParserTest {
     /// Set the exact transaction state, e.g. `TransactionType::ReadOnly` for
     /// a `BEGIN READ ONLY` transaction.
     pub(crate) fn with_transaction(mut self, transaction: TransactionType) -> Self {
-        self.transaction = Some(transaction);
+        self.transaction = Some(Transaction::new(transaction));
         self
     }
 
@@ -215,7 +215,11 @@ impl QueryParserTest {
         if use_parser {
             // Some requests (like Close) don't have a query
             if let Ok(Some(buffered_query)) = request.query() {
-                let ctx = AstContext::from_cluster(&self.cluster, &self.params);
+                let ctx = AstContext::from_cluster(
+                    &self.cluster,
+                    &self.params,
+                    QueryTimestamps::default(),
+                );
                 // The engine surfaces cache-time errors (e.g. a comment
                 // directive that fails to resolve) as client errors.
                 let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared)?;

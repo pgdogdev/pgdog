@@ -470,6 +470,9 @@ impl Server {
             self.in_transaction = true;
         }
 
+        self.prepared_statements
+            .set_anonymous_client_params(client_request.anonymous_client_params);
+
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
@@ -2255,7 +2258,14 @@ pub(crate) mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(name, query.clone(), None, &RewritePlan::default(), None);
+        let prepare = prep.insert_prepare(
+            name,
+            query.clone(),
+            None,
+            &RewritePlan::default(),
+            None,
+            vec![],
+        );
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server

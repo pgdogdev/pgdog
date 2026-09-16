@@ -99,7 +99,9 @@ impl<'a> QueryParserContext<'a> {
     pub(super) fn write_override(&self) -> bool {
         let role = self.router_context.parameter_hints.compute_role();
         let txn_write = matches!(
-            self.router_context.transaction(),
+            self.router_context
+                .transaction()
+                .map(|t| t.transaction_type()),
             Some(TransactionType::ReadWrite | TransactionType::Implicit)
         ) && self.rw_conservative();
         // prefer_primary defaults reads to the primary; an explicit replica hint opts out.

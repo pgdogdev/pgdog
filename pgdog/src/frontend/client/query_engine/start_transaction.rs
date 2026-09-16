@@ -1,5 +1,5 @@
 use crate::{
-    frontend::client::TransactionType,
+    frontend::client::{TransactionType, transaction_type::Transaction},
     net::{
         BindComplete, CommandComplete, NoData, NoticeResponse, ParameterDescription, ParseComplete,
         Protocol, ProtocolMessage, ReadyForQuery,
@@ -17,7 +17,7 @@ impl QueryEngine {
         transaction_type: TransactionType,
         extended: bool,
     ) -> Result<(), Error> {
-        context.transaction = Some(transaction_type);
+        context.transaction = Some(Transaction::new(transaction_type));
 
         if self.backend.connected() {
             self.execute(context, None).await?;

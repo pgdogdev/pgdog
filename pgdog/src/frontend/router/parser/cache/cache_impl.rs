@@ -127,7 +127,7 @@ impl Cache {
         }
 
         // Parse query without holding lock.
-        let mut entry = Ast::with_context(
+        let mut entry = Ast::new(
             &AstQuery {
                 original_query: query,
                 query_without_comment: query_and_comment.query,
@@ -169,7 +169,7 @@ impl Cache {
     ) -> Result<Ast, Error> {
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
 
-        let mut entry = Ast::with_context(
+        let mut entry = Ast::new(
             &AstQuery {
                 original_query: query,
                 query_without_comment: query_and_comment.query,

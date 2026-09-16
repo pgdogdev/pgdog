@@ -458,6 +458,8 @@ mod test {
             prepared_statements: &mut stmts,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         };
         let mut plan = RewritePlan::default();
         StatementRewrite::new(ctx).sharding_key_update(
