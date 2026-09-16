@@ -7,7 +7,7 @@ use super::logical::publisher::replication_progress::ReplicationProgress;
 use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
 use crate::{
     api::{
-        replication::ReplicationSlotTask,
+        replication::ReplicationStreamTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
         task::TaskError,
@@ -79,7 +79,8 @@ async fn replicate_until_caught_up(
         .into_iter()
         .map(|stream| {
             let updater = progress.shard(stream.source_shard);
-            let task = ReplicationSlotTask::new(stream, source, destination, stop.clone(), updater);
+            let task =
+                ReplicationStreamTask::new(stream, source, destination, stop.clone(), updater);
             run_task(task)
         })
         .collect();

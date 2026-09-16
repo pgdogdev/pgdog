@@ -18,13 +18,13 @@ use crate::net::replication::ReplicationMeta;
 use crate::util::{safe_interval, safe_sleep};
 
 #[derive(Debug)]
-pub(crate) struct Replication {
+pub(crate) struct ReplicationStream {
     source: Cluster,
     dest: Cluster,
     updater: ReplicationProgressShardUpdater,
 }
 
-impl Replication {
+impl ReplicationStream {
     pub(crate) fn new(
         source: &Cluster,
         dest: &Cluster,
@@ -242,7 +242,7 @@ mod tests {
         slot_base: String,
         server: Server,
         source: Cluster,
-        replication: Arc<Replication>,
+        replication: Arc<ReplicationStream>,
         stop: CancellationToken,
         worker: Option<JoinHandle<Result<(), Error>>>,
     }
@@ -253,7 +253,7 @@ mod tests {
             let source = Cluster::new_test_single_shard(&config());
             let progress = ReplicationProgress::new(1);
             let updater = progress.shard(0);
-            let replication = Arc::new(Replication::new(&source, &source, updater));
+            let replication = Arc::new(ReplicationStream::new(&source, &source, updater));
             Self {
                 source_table: format!("replication_source_{suffix}"),
                 destination_table: format!("replication_destination_{suffix}"),

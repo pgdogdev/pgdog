@@ -61,7 +61,7 @@ pub enum TaskStatus {
     CopyData(CopyDataStatus),
     // in progress, not used
     Replication(ReplicationStatus),
-    ReplicationSlot(ReplicationSlotStatus),
+    ReplicationStream(ReplicationStreamStatus),
     Reshard(ReshardStatus),
     /// Any other task status that is either doesn't report any status
     /// or is not compatible with other versions of tasks.
@@ -347,7 +347,7 @@ pub enum TaskDefinitionKind {
     TableCopy(TableCopyDefinition),
     // In progress, not used yet
     Replication(ReplicationDefinition),
-    ReplicationSlot(ReplicationSlotDefinition),
+    ReplicationStream(ReplicationStreamDefinition),
     Reshard(ReshardDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
@@ -365,7 +365,7 @@ impl TaskDefinitionKind {
             Self::SchemaSync(_) => "schema_sync",
             Self::Replication(_) => "replication",
             Self::TableCopy(_) => "table_copy",
-            Self::ReplicationSlot(_) => "replication_slot",
+            Self::ReplicationStream(_) => "replication_stream",
             Self::SchemaShard(_) => "schema_shard",
             Self::Other => "other",
         }
@@ -623,7 +623,7 @@ pub enum ReplicationStatus {
 /// The slot one per-shard replication subtask streams from.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
 #[display("{slot} on {host}:{port}/{database_name}")]
-pub struct ReplicationSlotDefinition {
+pub struct ReplicationStreamDefinition {
     pub slot: String,
     pub host: String,
     pub port: u16,
@@ -640,7 +640,7 @@ pub struct ReplicationMissedRows {
 
 /// How far one replication slot has streamed.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ReplicationSlotStatus {
+pub struct ReplicationStreamStatus {
     pub lsn: Lsn,
     /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
     pub lag_bytes: Option<i64>,
@@ -649,7 +649,7 @@ pub struct ReplicationSlotStatus {
     pub missed_rows: ReplicationMissedRows,
 }
 
-impl fmt::Display for ReplicationSlotStatus {
+impl fmt::Display for ReplicationStreamStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.lag_bytes {
             Some(b) => write!(f, "lag {} bytes at {}", b, self.lsn),
@@ -758,7 +758,7 @@ mod test {
             }
             .into(),
             table_copy().into(),
-            ReplicationSlotDefinition {
+            ReplicationStreamDefinition {
                 slot: "pgdog_0".into(),
                 host: "127.0.0.1".into(),
                 port: 5432,
@@ -797,7 +797,7 @@ mod test {
                 | TaskDefinitionKind::SchemaSync(_)
                 | TaskDefinitionKind::Replication(_)
                 | TaskDefinitionKind::TableCopy(_)
-                | TaskDefinitionKind::ReplicationSlot(_)
+                | TaskDefinitionKind::ReplicationStream(_)
                 | TaskDefinitionKind::SchemaShard(_)
                 | TaskDefinitionKind::Other => (),
             }
@@ -960,7 +960,7 @@ mod test {
                 last_error: Some("connection reset".into()),
             }),
             TaskStatus::Replication(ReplicationStatus::Replicating),
-            TaskStatus::ReplicationSlot(ReplicationSlotStatus {
+            TaskStatus::ReplicationStream(ReplicationStreamStatus {
                 lsn: Lsn {
                     high: 0,
                     low: 16,
@@ -990,7 +990,7 @@ mod test {
                 | TaskStatus::SchemaShard(_)
                 | TaskStatus::TableCopy(_)
                 | TaskStatus::Replication(_)
-                | TaskStatus::ReplicationSlot(_)
+                | TaskStatus::ReplicationStream(_)
                 | TaskStatus::Other => (),
             }
         }
@@ -1143,7 +1143,7 @@ mod test {
             "public.users"
         );
         assert_eq!(
-            TaskDefinitionKind::from(ReplicationSlotDefinition {
+            TaskDefinitionKind::from(ReplicationStreamDefinition {
                 slot: "pgdog_0".into(),
                 host: "127.0.0.1".into(),
                 port: 5432,

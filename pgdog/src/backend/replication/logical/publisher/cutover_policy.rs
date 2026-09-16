@@ -9,7 +9,7 @@ use super::replication_progress::ReplicationProgress;
 use crate::util::{format_bytes, human_duration, safe_interval};
 
 #[derive(Debug)]
-pub(crate) struct Cutover {
+pub(crate) struct CutoverPolicy {
     config: Arc<ConfigAndUsers>,
     progress: ReplicationProgress,
 }
@@ -44,7 +44,7 @@ impl Display for CutoverReason {
     }
 }
 
-impl Cutover {
+impl CutoverPolicy {
     pub(crate) fn new(config: Arc<ConfigAndUsers>, progress: ReplicationProgress) -> Self {
         Self { config, progress }
     }
@@ -195,7 +195,7 @@ mod tests {
         progress.shard(0).update(|s| s.replication_lag = Some(500));
         progress.shard(1).update(|s| s.replication_lag = Some(500));
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
         let result = waiter.wait_for_replication().await;
         assert!(result.is_ok());
     }
@@ -210,7 +210,7 @@ mod tests {
         progress.shard(0).update(|s| s.replication_lag = Some(50));
         progress.shard(1).update(|s| s.replication_lag = Some(50));
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -234,7 +234,7 @@ mod tests {
             s.last_transaction = Some(Instant::now() - Duration::from_millis(200));
         });
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -255,7 +255,7 @@ mod tests {
         let progress = ReplicationProgress::new(1);
         progress.shard(0).update(|s| s.replication_lag = Some(1000));
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert_eq!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -276,7 +276,7 @@ mod tests {
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -297,7 +297,7 @@ mod tests {
             s.last_transaction = Some(Instant::now() - Duration::from_millis(100));
         });
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(999)),
@@ -318,7 +318,7 @@ mod tests {
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
-        let waiter = Cutover::new(Arc::new(config), progress);
+        let waiter = CutoverPolicy::new(Arc::new(config), progress);
 
         assert!(matches!(
             waiter.should_cutover(Duration::from_millis(100)),
@@ -338,7 +338,7 @@ mod tests {
             .shard(0)
             .update(|s| s.last_transaction = Some(Instant::now()));
 
-        let waiter = Cutover::new(Arc::new(config), progress.clone());
+        let waiter = CutoverPolicy::new(Arc::new(config), progress.clone());
         let elapsed = Duration::from_millis(100);
 
         assert_eq!(progress.replication_lag(), None);
@@ -414,7 +414,7 @@ mod tests {
             .into_iter()
             .map(|stream| {
                 let updater = progress.shard(stream.source_shard);
-                let task = crate::api::replication::ReplicationSlotTask::new(
+                let task = crate::api::replication::ReplicationStreamTask::new(
                     stream,
                     &cluster,
                     &cluster,
@@ -426,7 +426,7 @@ mod tests {
             .collect();
 
         let config = Arc::new(config);
-        let waiter = Cutover::new(config, progress);
+        let waiter = CutoverPolicy::new(config, progress);
 
         source
             .execute(

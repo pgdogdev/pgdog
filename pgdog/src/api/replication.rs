@@ -13,12 +13,12 @@ use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::{TaskContext, TaskId};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::orchestrator::Orchestrator;
-use crate::backend::replication::logical::publisher::cutover::Cutover;
-use crate::backend::replication::logical::publisher::publisher_impl::ReplicationStream;
-use crate::backend::replication::logical::publisher::replicate::Replication;
+use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
+use crate::backend::replication::logical::publisher::publisher_impl::PreparedReplicationStream;
 use crate::backend::replication::logical::publisher::replication_progress::{
     ReplicationProgress, ReplicationProgressShardUpdater,
 };
+use crate::backend::replication::logical::publisher::replication_stream::ReplicationStream;
 use crate::backend::replication::logical::publisher::{ReplicationSlot, Table};
 use crate::backend::{
     Cluster,
@@ -28,8 +28,8 @@ use crate::backend::{
 use crate::config::config;
 use crate::util::{safe_interval, safe_timeout};
 use pgdog_stats::{
-    Lsn, ReplicationDefinition, ReplicationMissedRows, ReplicationSlotDefinition,
-    ReplicationSlotStatus, ReplicationStatus, TaskDefinition,
+    Lsn, ReplicationDefinition, ReplicationMissedRows, ReplicationStatus,
+    ReplicationStreamDefinition, ReplicationStreamStatus, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -59,17 +59,17 @@ pub(crate) struct ReplicationTask {
 }
 
 #[derive(Debug)]
-pub(crate) struct ReplicationSlotTask {
+pub(crate) struct ReplicationStreamTask {
     pub(crate) slot: ReplicationSlot,
     pub(crate) source_shard: usize,
     pub(crate) tables: Vec<Table>,
-    pub(crate) replication: Replication,
+    pub(crate) replication: ReplicationStream,
     pub(crate) stop: CancellationToken,
 }
 
-impl ReplicationSlotTask {
+impl ReplicationStreamTask {
     pub(crate) fn new(
-        stream: ReplicationStream,
+        stream: PreparedReplicationStream,
         source: &Cluster,
         destination: &Cluster,
         stop: CancellationToken,
@@ -79,14 +79,14 @@ impl ReplicationSlotTask {
             slot: stream.slot,
             source_shard: stream.source_shard,
             tables: stream.tables,
-            replication: Replication::new(source, destination, progress),
+            replication: ReplicationStream::new(source, destination, progress),
             stop,
         }
     }
 }
 
-impl Task for ReplicationSlotTask {
-    type Status = ReplicationSlotStatus;
+impl Task for ReplicationStreamTask {
+    type Status = ReplicationStreamStatus;
     type Output = ();
     type Error = Error;
 
@@ -95,7 +95,7 @@ impl Task for ReplicationSlotTask {
     }
 
     fn definition(&self) -> impl Into<TaskDefinition> {
-        ReplicationSlotDefinition {
+        ReplicationStreamDefinition {
             slot: self.slot.name().to_owned(),
             host: self.slot.addr().host.clone(),
             port: self.slot.addr().port,
@@ -117,7 +117,7 @@ impl Task for ReplicationSlotTask {
         let replication_cancel = stop.child_token();
 
         let initial_lsn = slot.lsn();
-        ctx.set_status(ReplicationSlotStatus {
+        ctx.set_status(ReplicationStreamStatus {
             lsn: initial_lsn,
             lag_bytes: None,
             last_transaction: None,
@@ -137,21 +137,21 @@ impl Task for ReplicationSlotTask {
                     break result;
                 }
                 _ = report.tick() => {
-                    ctx.set_status(slot_status(&replication, initial_lsn));
+                    ctx.set_status(stream_status(&replication, initial_lsn));
                 }
             }
         };
 
-        ctx.set_status(slot_status(&replication, initial_lsn));
+        ctx.set_status(stream_status(&replication, initial_lsn));
 
         result
     }
 }
 
-fn slot_status(replication: &Replication, fallback_lsn: Lsn) -> ReplicationSlotStatus {
+fn stream_status(replication: &ReplicationStream, fallback_lsn: Lsn) -> ReplicationStreamStatus {
     let info = replication.progress();
     let (inserts, updates, deletes) = info.missed_rows.counts();
-    ReplicationSlotStatus {
+    ReplicationStreamStatus {
         lsn: info.applied_lsn.unwrap_or(fallback_lsn),
         lag_bytes: info.replication_lag,
         last_transaction: info.last_transaction_ms,
@@ -235,7 +235,7 @@ impl Task for ReplicationTask {
                     .await?;
                 for stream in prepared {
                     let updater = progress.shard(stream.source_shard);
-                    let task = ReplicationSlotTask::new(
+                    let task = ReplicationStreamTask::new(
                         stream,
                         &self.orchestrator.source,
                         &self.orchestrator.destination,
@@ -331,7 +331,7 @@ impl ReplicationTask {
         });
 
         async {
-            let cutover_policy = Cutover::new(config(), progress);
+            let cutover_policy = CutoverPolicy::new(config(), progress);
             {
                 let thresholds = async {
                     cutover_policy.wait_for_replication().await?;

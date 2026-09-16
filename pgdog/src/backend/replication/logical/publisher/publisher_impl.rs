@@ -97,7 +97,7 @@ impl Publisher {
         &mut self,
         source: &Cluster,
         cancel: &CancellationToken,
-    ) -> Result<Vec<ReplicationStream>, Error> {
+    ) -> Result<Vec<PreparedReplicationStream>, Error> {
         // Synchronize tables from publication.
         self.sync_tables(false, source).await?;
 
@@ -119,7 +119,7 @@ impl Publisher {
             let tables = self.tables.remove(&number).unwrap_or_default();
             // Take ownership of the slot for replication.
             let slot = self.slots.remove(&number).expect("slot was validated");
-            streams.push(ReplicationStream {
+            streams.push(PreparedReplicationStream {
                 source_shard: number,
                 slot,
                 tables,
@@ -152,7 +152,7 @@ impl Publisher {
 }
 
 #[derive(Debug)]
-pub(crate) struct ReplicationStream {
+pub(crate) struct PreparedReplicationStream {
     pub(crate) source_shard: usize,
     pub(crate) slot: ReplicationSlot,
     pub(crate) tables: Vec<Table>,
