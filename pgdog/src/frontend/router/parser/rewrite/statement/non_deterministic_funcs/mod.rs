@@ -29,7 +29,7 @@ use crate::{
 mod time;
 mod uuid;
 
-/// A non-deterministic function that we must re-write when writing to an omnisharded table,
+/// A non-deterministic function that we must re-write when writing to an omnisharded table (or now() for sharded),
 /// so that we can maintain consistency instead of generating a different value (from executing the function)
 /// on each shard. This re-writes function calls to a constant.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -90,13 +90,26 @@ enum NDFunctionType {
 
 impl NDFunctionType {
     /// Convert `SQLValueFunctionOp` (e.g. current_date, current_time... non ()) to `NDFunctionType`
-    fn from_sql_value_function(op: SQLValueFunctionOp::Type, typmod: i32) -> Option<Self> {
-        TimeFunctionType::from_sql_value_function(op, typmod)
+    fn from_sql_value_function(
+        op: SQLValueFunctionOp::Type,
+        typmod: i32,
+        is_sharded: bool,
+    ) -> Option<Self> {
+        let nd_func_type = TimeFunctionType::from_sql_value_function(op, typmod)
             .map(NDFunctionType::TimeFunction)
             .or_else(|| {
                 UUIDFunctionType::from_sql_value_function(op, typmod)
                     .map(NDFunctionType::UUIDFunction)
-            })
+            });
+
+        if let Some(nd_func) = nd_func_type
+            && is_sharded
+            && !nd_func.apply_rewrite_on_sharded_tables()
+        {
+            return None;
+        }
+
+        nd_func_type
     }
 
     /// Postgres-formatted function name for this function type.
@@ -116,12 +129,30 @@ impl NDFunctionType {
         }
     }
 
+    /// Should we apply a re-write to a `ShardedTable`?
+    /// This is mostly relevant to maintaining consistency in a Transaction affecting multiple Shards,
+    /// where our `TimeReference` is `TransactionStart`.
+    ///
+    /// Why not re-write everything? This implementation isn't perfect; some things aren't implemented (e.g. interval arg for uuidv7).
+    /// Best not to do anything we don't have to; otherwise, it could unnecessarily break something for someone.
+    /// (maybe they're reliant on the config setting for something else)
+    fn apply_rewrite_on_sharded_tables(&self) -> bool {
+        match self {
+            Self::TimeFunction(tf) => tf.apply_rewrite_on_sharded_tables(),
+            Self::UUIDFunction(_) => false,
+        }
+    }
+
     /// Convert `TimeFunction` in VALUES list
     ///
     /// Parse both `FuncCall`s and `SQLValueFunction`s here.
     /// `now()` = `FuncCall`,
     /// `CURRENT_TIMESTAMP`, `LOCALTIME` = `SQLValueFunction`,
-    fn from_node(node: Node, column_relation: Option<&Column>) -> Result<Option<Self>, Error> {
+    fn from_node(
+        node: Node,
+        column_relation: Option<&Column>,
+        is_sharded: bool,
+    ) -> Result<Option<Self>, Error> {
         match node {
             Node::FuncCall(func) => {
                 let Some(Node::String(str)) = func.funcname().first() else {
@@ -132,14 +163,22 @@ impl NDFunctionType {
                     return Ok(None);
                 };
 
-                Self::from_func_call(func_name, Some(func.args()))
+                Self::from_func_call(func_name, Some(func.args()), is_sharded)
             }
-            Node::SQLValueFunction(func) => Ok(Self::from_sql_value_function(func.op, func.typmod)),
+            Node::SQLValueFunction(func) => Ok(Self::from_sql_value_function(
+                func.op,
+                func.typmod,
+                is_sharded,
+            )),
 
             // If DEFAULT is in a VALUES list; fetch the column based on index.
             Node::SetToDefault(_) => {
                 if let Some(relation) = column_relation {
-                    return Self::from_func_call(relation.column_default.as_str(), None);
+                    return Self::from_func_call(
+                        relation.column_default.as_str(),
+                        None,
+                        is_sharded,
+                    );
                 }
 
                 Ok(None)
@@ -152,11 +191,15 @@ impl NDFunctionType {
     /// Parse the function to determine if it's one we should re-write (date/time, uuid)
     /// If it is, return the corresponding `NDFunctionType`.
     ///
-    /// from_str(Client `now()`) -> NDFunction::TimeFunction(TimeFunctionType::Now())
+    /// from_func_call(Client `now()`) -> NDFunction::TimeFunction(TimeFunctionType::Now())
     /// This doesn't use the FromStr trait because I wanted to return an `Option` type
     ///
     /// Returns an Error when the argument is not supported by us yet (e.g. intervals for uuidv7())
-    fn from_func_call(func_name: &str, args: Option<&NodeList>) -> Result<Option<Self>, Error> {
+    fn from_func_call(
+        func_name: &str,
+        args: Option<&NodeList>,
+        is_sharded: bool,
+    ) -> Result<Option<Self>, Error> {
         // Normalize the function name. Postgres does this.
         let func_name = func_name.to_lowercase();
 
@@ -164,6 +207,10 @@ impl NDFunctionType {
             .iter()
             .chain(UUIDFunctionType::ALL_VARIANTS.iter())
         {
+            if is_sharded && !variant.apply_rewrite_on_sharded_tables() {
+                continue;
+            }
+
             let variant_name = &variant.name();
             if func_name.starts_with(variant_name) {
                 // If `args` is None, this means that it was passed by Schema (DEFAULT), where we haven't run pg_raw_parse
@@ -230,9 +277,9 @@ impl NDFunctionType {
 }
 
 impl StatementRewrite<'_> {
-    /// Rewrites timestamp functions like now() into either ParamRefs or correctly formatted Strings,
-    /// for the purpose of maintaining consistency across databases for omni tables.
-    pub(super) fn rewrite_timestamp_functions<'mem, 'mutref>(
+    /// Rewrites non-deterministic functions like now() into either ParamRefs or correctly formatted Strings,
+    /// for the purpose of maintaining consistency across databases for omni tables (and now() for sharded tables).
+    pub(super) fn rewrite_nd_functions<'mem, 'mutref>(
         &mut self,
         mut stmt: NodeMut<'mem, 'mutref>,
         mem: MemoryToken<'mem>,
@@ -241,14 +288,10 @@ impl StatementRewrite<'_> {
         plan: &mut RewritePlan,
     ) -> Result<(), Error> {
         let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema, None);
+
+        // We allow `ShardedTable`s on a case-by-case basis (see `apply_rewrite_on_sharded_tables`)
         let is_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);
 
-        // not sharded = omni
-        if is_sharded {
-            return Ok(());
-        }
-
-        //
         let Some((relation, cols, not_covered_cols)) = self.find_not_used_cols(&mut stmt, mem)
         else {
             return Ok(());
@@ -261,13 +304,14 @@ impl StatementRewrite<'_> {
             mem,
             relation,
             cols,
+            is_sharded,
         };
 
         // 1. iterates through Schema to find DEFAULT columns
         // 2. adds the column to target list & all the values lists (ParamRef or String)
         nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols)?;
 
-        // Replaces all time function calls (ParamRef or String)
+        // Replaces all non-deterministic function calls (ParamRef or String)
         nd_rewrite.transform_func_calls(stmt)?;
 
         Ok(())
@@ -322,10 +366,11 @@ struct NDRewrite<'mem, 'a, 's> {
     mem: MemoryToken<'mem>,
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
+    is_sharded: bool,
 }
 
 impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
-    /// Replaces all time function calls (ParamRef or String)
+    /// Replaces all non-deterministic function calls (ParamRef or String)
     /// Used by all to handle re-writes.
     fn transform_func_calls(&mut self, stmt: NodeMut<'mem, '_>) -> Result<(), Error> {
         // If any Error is caught during transform_node, update this, and it'll be returned when the transform is done.
@@ -357,7 +402,7 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                             }
                         };
 
-                        match NDFunctionType::from_node(value, col_relation) {
+                        match NDFunctionType::from_node(value, col_relation, self.is_sharded) {
                             Ok(Some(nd_function_type)) => {
                                 let Some(col_relation) = col_relation else {
                                     continue;
@@ -383,7 +428,6 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                             }
 
                             Ok(None) => continue,
-
                             Err(e) => {
                                 err.get_or_insert(e);
                                 break;
@@ -422,8 +466,11 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
         for col in not_covered_cols {
             let col_relation = self.relation.columns.get(col.as_str()).unwrap();
 
-            let nd_function_type =
-                NDFunctionType::from_func_call(&col_relation.column_default, None)?;
+            let nd_function_type = NDFunctionType::from_func_call(
+                &col_relation.column_default,
+                None,
+                self.is_sharded,
+            )?;
 
             let Some(nd_function_type) = nd_function_type else {
                 continue;
@@ -458,8 +505,8 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
         Ok(())
     }
 
-    /// If simple protocol, make an A_Const node with the String constant of the formatted time.
-    /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted time later.
+    /// If simple protocol, make an A_Const node with the String constant of the formatted function output.
+    /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted output later.
     fn make_node(&mut self, nd_function: &NDFunction) -> Result<Unique<'mem, Node<'mem>>, Error> {
         self.rewrite.rewritten = true;
 

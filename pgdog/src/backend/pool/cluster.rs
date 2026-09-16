@@ -446,7 +446,7 @@ impl Cluster {
         cluster.rewrite.enabled = false;
         cluster.rewrite.shard_key = RewriteMode::Ignore;
         cluster.rewrite.split_inserts = RewriteMode::Ignore;
-        cluster.rewrite.omni_non_deterministic_functions = RewriteMode::Ignore;
+        cluster.rewrite.non_deterministic_functions = RewriteMode::Ignore;
         cluster
     }
 

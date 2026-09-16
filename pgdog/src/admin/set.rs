@@ -136,7 +136,7 @@ impl Command for Set {
             }
 
             "rewrite_omni_non_deterministic_functions" => {
-                config.config.rewrite.omni_non_deterministic_functions = self
+                config.config.rewrite.non_deterministic_functions = self
                     .value
                     .parse::<RewriteMode>()
                     .map_err(|_| Error::Syntax)?;
