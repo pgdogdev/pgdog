@@ -8,6 +8,15 @@ set -euo pipefail
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 REPO_ROOT="$( cd "${SCRIPT_DIR}/../.." && pwd )"
 
+# Update the runner image PostgresSQL version to 18.
+if [[ -z "${PSQL_VERSION:-}" ]] && ! dpkg -s postgresql-18 >/dev/null 2>&1; then
+    for cluster in /etc/postgresql/*/main; do
+        [[ -d "$cluster" ]] || continue
+        sudo pg_dropcluster --stop "$(basename "$(dirname "$cluster")")" main
+    done
+    sudo apt-get install -y --no-install-recommends postgresql-18
+fi
+
 # Use whatever pg cluster is installed on the runner unless overridden.
 if [[ -z "${PSQL_VERSION:-}" ]]; then
     PSQL_VERSION=$(ls -d /etc/postgresql/*/main 2>/dev/null \

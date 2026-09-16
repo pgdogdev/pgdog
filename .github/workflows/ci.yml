@@ -127,10 +127,6 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install CI deps
         run: bash integration/ci/install-deps.sh
-      - name: Install Postgres 18
-        uses: ikalnytskyi/action-setup-postgres@v8
-        with:
-            postgres-version: "18"
       - name: Compute cache key
         id: cache-key
         run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
