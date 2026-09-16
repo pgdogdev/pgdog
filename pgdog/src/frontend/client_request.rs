@@ -121,6 +121,12 @@ impl ClientRequest {
         false
     }
 
+    /// The client sent the beginning of a request (e.g. Parse and Bind without Sync)
+    /// and we're still waiting for the rest of it.
+    pub(crate) fn is_partial(&self) -> bool {
+        !self.messages.is_empty() && !self.is_complete()
+    }
+
     /// Number of bytes in the buffer.
     pub(crate) fn total_message_len(&self) -> usize {
         self.messages.iter().map(|b| b.len()).sum()
