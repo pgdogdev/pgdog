@@ -518,36 +518,42 @@ fn test_omnisharded_left_join_sharding_key_takes_priority() {
             assert!(matches!(expected.route().shard(), Shard::Direct(_)));
             let expected_shard = expected.route().shard();
 
-            let command = test.execute(vec![
-                Query::new(format!(
-                    "SELECT count(*) FROM companies
+            for predicate in [format!("= {org_id}"), format!("IN ({org_id})")] {
+                let command = test.execute(vec![
+                    Query::new(format!(
+                        "SELECT count(*) FROM companies
                      LEFT JOIN local_companies ON local_companies.org_id = companies.org_id
                          AND local_companies.id = companies.id
-                     WHERE companies.org_id = {org_id} AND local_companies.id IS NULL;"
-                ))
-                .into(),
-            ]);
-            assert_eq!(command.route().shard(), expected_shard);
-            assert!(!command.route().is_omnisharded());
+                     WHERE companies.org_id {predicate} AND local_companies.id IS NULL;"
+                    ))
+                    .into(),
+                ]);
+                assert_eq!(command.route().shard(), expected_shard);
+                assert!(!command.route().is_omnisharded());
+            }
 
-            let command = test.execute(vec![
-                Parse::named(
-                    "__omni_left_join",
-                    "SELECT count(*) FROM companies c
+            for predicate in ["= $1", "IN ($1)", "IN ($1, $1)"] {
+                let command = test.execute(vec![
+                    Parse::named(
+                        "__omni_left_join",
+                        format!(
+                            "SELECT count(*) FROM companies c
                      LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
-                     WHERE c.org_id = $1 AND l.id IS NULL",
-                )
-                .into(),
-                Bind::new_params(
-                    "__omni_left_join",
-                    &[Parameter::new(org_id.to_string().as_bytes())],
-                )
-                .into(),
-                Execute::new().into(),
-                Sync.into(),
-            ]);
-            assert_eq!(command.route().shard(), expected_shard);
-            assert!(!command.route().is_omnisharded());
+                     WHERE c.org_id {predicate} AND l.id IS NULL"
+                        ),
+                    )
+                    .into(),
+                    Bind::new_params(
+                        "__omni_left_join",
+                        &[Parameter::new(org_id.to_string().as_bytes())],
+                    )
+                    .into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]);
+                assert_eq!(command.route().shard(), expected_shard);
+                assert!(!command.route().is_omnisharded());
+            }
         }
     }
 }
