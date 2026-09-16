@@ -7,6 +7,7 @@ pub mod avg;
 pub mod ban;
 pub mod cache_bench;
 pub mod cancel;
+pub mod ci_postgres_version;
 pub mod client_ids;
 pub mod connection_recovery;
 pub mod copy;
