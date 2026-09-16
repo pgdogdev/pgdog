@@ -121,6 +121,7 @@ async fn show_pools_reports_schema_admin_flag() {
         "force_closed",
         "online",
         "schema_admin",
+        "cancels_in_flight",
     ];
     assert_eq!(actual_names, expected_names);
 
