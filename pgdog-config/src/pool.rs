@@ -338,6 +338,7 @@ impl<'a> ShardNodes<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::PreparedStatementsEviction;
 
     #[test]
     fn settings_render_durations_as_milliseconds() {
@@ -415,6 +416,7 @@ mod test {
         let general = General {
             prepared_statements_ttl: Some(60_000),
             prepared_statements_limit: 10,
+            prepared_statements_eviction: PreparedStatementsEviction::LeastFrequentlyUsed,
             ..Default::default()
         };
 
@@ -425,6 +427,10 @@ mod test {
             Some(Duration::from_millis(60_000))
         );
         assert_eq!(config.prepared_statements.limit, 10);
+        assert_eq!(
+            config.prepared_statements.eviction,
+            PreparedStatementsEviction::LeastFrequentlyUsed
+        );
         assert_eq!(
             config.prepared_statements.level,
             general.prepared_statements
