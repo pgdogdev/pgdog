@@ -239,6 +239,8 @@ struct SearchContext<'a> {
     aliases: HashMap<&'a str, Table<'a>>,
     /// The primary table from the FROM clause (if simple)
     table: Option<Table<'a>>,
+    /// Column equalities that can carry a key from one side of a join to the other.
+    joined_columns: Vec<(Column<'a>, Column<'a>)>,
 }
 
 impl<'a> SearchContext<'a> {
@@ -256,7 +258,84 @@ impl<'a> SearchContext<'a> {
             .ok()
             .and_then(|n| Table::try_from(n).ok());
 
-        Self { aliases, table }
+        let mut ctx = Self {
+            aliases,
+            table,
+            ..Default::default()
+        };
+        for node in nodes {
+            ctx.extract_joined_columns(node);
+        }
+        ctx
+    }
+
+    /// Record which column equalities can carry a WHERE value across a join.
+    /// For example:
+    ///
+    /// ```sql
+    /// SELECT * FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
+    /// WHERE c.org_id = 7;
+    /// ```
+    /// This records c.org_id -> l.org_id (and c.id -> l.id). The caller
+    /// checks whether the destination column is actually a sharding key.
+    /// INNER JOIN records both directions; RIGHT JOIN records right -> left.
+    /// FULL JOIN and joins involving subqueries or nested joins aren't inferred.
+    fn extract_joined_columns(&mut self, node: Node<'a>) {
+        use nodes::{A_Expr_Kind, BoolExprType, JoinType};
+
+        let Node::JoinExpr(join) = node else {
+            return;
+        };
+        // Keep inference within a single join of base tables.
+        let (Node::RangeVar(left), Node::RangeVar(right)) = (join.larg(), join.rarg()) else {
+            return;
+        };
+        let reference = |table: &'a nodes::RangeVar| {
+            table
+                .alias()
+                .and_then(|alias| alias.aliasname())
+                .or(table.relname())
+        };
+        walk::walk_manual::<()>(node, |node| match node {
+            // ON l.org_id = c.org_id OR l.id = c.id doesn't guarantee equal
+            // org_ids: a row can match through the id comparison alone.
+            Node::BoolExpr(expr) => Recurse::recurse_if(expr.boolop == BoolExprType::AND_EXPR),
+            Node::A_Expr(expr)
+                if expr.kind == A_Expr_Kind::AEXPR_OP
+                    && expr
+                        .name()
+                        .into_iter()
+                        .exactly_one()
+                        .ok()
+                        .and_then(Node::as_str)
+                        == Some("=") =>
+            {
+                if let (Ok(mut a), Ok(mut b)) = (
+                    Column::try_from(expr.lexpr()),
+                    Column::try_from(expr.rexpr()),
+                ) {
+                    if a.table == reference(right) && b.table == reference(left) {
+                        std::mem::swap(&mut a, &mut b);
+                    }
+                    if a.table.is_some()
+                        && a.table == reference(left)
+                        && b.table == reference(right)
+                    {
+                        // Outer joins only propagate from the preserved side.
+                        if matches!(join.jointype, JoinType::JOIN_INNER | JoinType::JOIN_LEFT) {
+                            self.joined_columns.push((a, b));
+                        }
+                        if matches!(join.jointype, JoinType::JOIN_INNER | JoinType::JOIN_RIGHT) {
+                            self.joined_columns.push((b, a));
+                        }
+                    }
+                }
+                Recurse::no()
+            }
+            Node::A_Expr(_) | Node::SelectStmt(_) => Recurse::no(),
+            _ => Recurse::yes(),
+        });
     }
 
     fn extract_alias_from_node(aliases: &mut HashMap<&'a str, Table<'a>>, node: Node<'a>) {
@@ -874,6 +953,12 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             _ => return ControlFlow::Continue(()),
         };
 
+        if let Node::SelectStmt(select) = stmt
+            && !ctx.joined_columns.is_empty()
+        {
+            self.search_joined_key(select.where_clause(), &ctx)?;
+        }
+
         let result = walk::walk_manual(stmt, |node| match node {
             Node::SelectStmt(_) => {
                 self.search_stmt(node)?;
@@ -943,6 +1028,80 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
             Some(r) => ControlFlow::Break(r),
             None => ControlFlow::Continue(()),
         }
+    }
+
+    /// Use a WHERE value on an omnisharded table to constrain a joined
+    /// sharded table. With companies omnisharded and local_companies sharded
+    /// on org_id, this query routes using local_companies.org_id = 7:
+    ///
+    /// ```sql
+    /// SELECT count(*) FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND l.id = c.id
+    /// WHERE c.org_id = 7 AND l.id IS NULL;
+    /// ```
+    /// The join equality connects c.org_id to l.org_id, so we compute the
+    /// shard using local_companies' sharding rule, not companies' config.
+    /// Without that equality (e.g. ON l.id = c.id alone), c.org_id = 7
+    /// doesn't constrain a sharded key, and existing fallback routing applies.
+    ///
+    /// Putting the value only in ON does not filter the preserved companies:
+    ///
+    /// ```sql
+    /// SELECT * FROM companies c
+    /// LEFT JOIN local_companies l ON l.org_id = c.org_id AND c.org_id = 7;
+    /// ```
+    /// Companies from other orgs still appear with NULL local_companies
+    /// columns, so this function only uses WHERE predicates. Likewise,
+    /// WHERE c.org_id = 7 OR c.id = 1 cannot restrict the query to org 7.
+    fn search_joined_key(
+        &mut self,
+        node: Node<'a>,
+        ctx: &SearchContext<'a>,
+    ) -> ControlFlow<Result<Shard, Error>> {
+        match node {
+            Node::BoolExpr(expr) if expr.boolop == nodes::BoolExprType::AND_EXPR => {
+                for arg in expr.args() {
+                    self.search_joined_key(arg, ctx)?;
+                }
+            }
+            Node::A_Expr(expr)
+                if expr.kind == nodes::A_Expr_Kind::AEXPR_OP
+                    && expr
+                        .name()
+                        .into_iter()
+                        .exactly_one()
+                        .ok()
+                        .and_then(Node::as_str)
+                        == Some("=") =>
+            {
+                for (column, value) in [(expr.lexpr(), expr.rexpr()), (expr.rexpr(), expr.lexpr())]
+                {
+                    let (Ok(column), Ok(value)) =
+                        (Column::try_from(column), Value::try_from(value))
+                    else {
+                        continue;
+                    };
+                    if !ctx
+                        .resolve_column(column)
+                        .table
+                        .is_some_and(|table| self.schema.tables.omnishards().contains_key(table))
+                    {
+                        continue;
+                    }
+                    for (from, to) in &ctx.joined_columns {
+                        if *from == column
+                            && let Some(shard) = self
+                                .compute_shard_with_ctx(*to, value.clone(), ctx)
+                                .break_err()?
+                        {
+                            return ControlFlow::Break(Ok(shard));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
     }
 
     fn search_expr(
@@ -2658,6 +2817,44 @@ mod test {
             matches!(shard, Some(Shard::Direct(_))),
             "Sharding key on a sharded table should still route"
         );
+    }
+
+    #[test]
+    fn test_omnisharded_key_routes_through_join_equality() {
+        let expected = run_shard_test("SELECT * FROM orders WHERE tenant_id = 7");
+        assert!(matches!(expected, Some(Shard::Direct(_))));
+        for query in [
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u LEFT JOIN orders o ON o.tenant_id = u.tenant_id WHERE 7 = u.tenant_id",
+            "SELECT * FROM orders o RIGHT JOIN users u ON o.tenant_id = u.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM orders o JOIN users u ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+        ] {
+            assert_eq!(run_shard_test(query), expected, "{query}");
+        }
+    }
+
+    #[test]
+    fn test_omnisharded_key_requires_unconditional_sharded_join_key() {
+        for query in [
+            // A key solely on an omnisharded table doesn't route.
+            "SELECT * FROM users u JOIN comments c ON c.user_id = u.id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u JOIN orders o ON o.user_id = u.id WHERE u.tenant_id = 7",
+            // The other side must itself be sharded on the equated column.
+            "SELECT * FROM users u JOIN orders o ON o.user_id = u.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u JOIN sessions s ON s.tenant_id = u.tenant_id WHERE u.tenant_id = 7",
+            // Conditional equalities can't constrain the entire result.
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id OR u.id = o.user_id WHERE u.tenant_id = 7",
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7 OR u.id = 1",
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id WHERE NOT (u.tenant_id = 7)",
+            // ON alone doesn't filter preserved rows. Only infer toward
+            // the nullable side of an outer join.
+            "SELECT * FROM users u LEFT JOIN orders o ON u.tenant_id = o.tenant_id AND u.tenant_id = 7",
+            "SELECT * FROM users u FULL JOIN orders o ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+            "SELECT * FROM orders o LEFT JOIN users u ON u.tenant_id = o.tenant_id WHERE u.tenant_id = 7",
+        ] {
+            assert_eq!(run_shard_test(query), None, "{query}");
+        }
     }
 
     #[test]
