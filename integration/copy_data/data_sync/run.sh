@@ -25,6 +25,7 @@ export PGPASSWORD=pgdog
 
 BENCH_PID=""
 REPL_PID=""
+BENCH_APP="pgdog-copy-data-$$"
 
 drop_replication_slots() {
     local db
@@ -49,12 +50,9 @@ cleanup() {
 trap cleanup EXIT
 
 start_pgbench() {
-    (
-        pgbench -h 127.0.0.1 -p 5432 -U pgdog pgdog \
-            -t 100000000 -c 3 --protocol extended \
-            -f "${SCRIPT_DIR}/pgbench.sql" -P 1
-
-    ) &
+    PGAPPNAME="${BENCH_APP}" pgbench -h 127.0.0.1 -p 5432 -U pgdog pgdog \
+        -t 100000000 -c 3 --protocol extended \
+        -f "${SCRIPT_DIR}/pgbench.sql" -P 1 &
     BENCH_PID=$!
 }
 
@@ -63,6 +61,15 @@ stop_pgbench() {
         kill ${BENCH_PID} 2>/dev/null || true
         wait ${BENCH_PID} 2>/dev/null || true
         BENCH_PID=""
+        # A client can exit while PostgreSQL is still finishing its last command.
+        local deadline=$((SECONDS + 30))
+        while [ "$(query_one "${SRC_DB}" "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = '${BENCH_APP}'")" -ne 0 ]; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+                echo "ERROR: pgbench backends did not stop within 30s"
+                exit 1
+            fi
+            sleep 0.1
+        done
     fi
 }
 
@@ -106,7 +113,7 @@ PGDOG_BIN="${PGDOG_BIN}" bash "${SCRIPT_DIR}/prepare.sh"
 #
 start_pgbench
 ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
-    data-sync --from-database source --to-database destination --publication pgdog &
+    data-sync --from-database source --to-database destination --publication pgdog --replication-slot copy_data_0 &
 REPL_PID=$!
 
 # Give replication a moment to connect.
@@ -119,9 +126,21 @@ if ! kill -0 ${REPL_PID} 2>/dev/null; then
     exit $?
 fi
 
-# Let the initial table copy finish before injecting streaming DML.
-echo "Letting replication run for 15 seconds..."
-sleep 15
+# The permanent slot starts streaming only after every table's initial COPY has
+# completed. A marker observed earlier could have arrived through the snapshot.
+echo "Waiting for initial COPY to finish (timeout 120s)..."
+DEADLINE=$((SECONDS + 120))
+while [ "$(query_one "${SRC_DB}" "SELECT EXISTS (SELECT 1 FROM pg_replication_slots s JOIN pg_stat_replication r ON r.pid = s.active_pid WHERE s.slot_name = 'copy_data_0_0' AND r.state IN ('catchup', 'streaming'))")" != "t" ]; do
+    if ! kill -0 "${REPL_PID}" 2>/dev/null; then
+        echo "ERROR: replication process exited before initial COPY finished"
+        exit 1
+    fi
+    if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+        echo "ERROR: initial COPY did not finish within 120s"
+        exit 1
+    fi
+    sleep 0.2
+done
 
 # TOAST stream test: rows were seeded in setup.sql and copied to the destination
 # during the initial snapshot. Now UPDATE only `title`, leaving `body` untouched.
@@ -168,22 +187,20 @@ psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'dup_c
 psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET tenant_id = 3 WHERE seq = 1"
 
 stop_pgbench
-# REPLICATION SENTINEL — must be the last DML issued against the source.
-# Updating this row to 'sentinel_done' produces a WAL record that is downstream of
-# every preceding change. The poll loop below waits for it to land on the destination.
-psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'sentinel_done' WHERE seq = 999"
+# These markers must be the last DML issued against the source. Each destination
+# shard must apply its own marker before replication can be stopped.
+psql -d "${SRC_DB}" -c "UPDATE copy_data.full_identity_events SET label = 'sentinel_done' WHERE seq IN (998, 999)"
 
-# Wait for the replication sentinel to land on the destination.
-# seq=999 is dedicated solely to this purpose — see setup.sql.
-# WAL is ordered: once the sentinel row has propagated, every preceding change has too.
+# Wait for both shards, which can apply the ordered WAL stream at different rates.
 echo "Waiting for streaming changes to reach destination (timeout 120s)..."
 DEADLINE=$((SECONDS + 120))
+SENTINEL_SQL="SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq IN (998, 999) AND label = 'sentinel_done'"
 while true; do
-    SENTINEL=$(sum_shards "${DST_DB1}" "${DST_DB2}" \
-        "SELECT COUNT(*) FROM copy_data.full_identity_events WHERE seq = 999 AND label = 'sentinel_done'" 0)
-    [ "${SENTINEL}" -eq 1 ] && break
+    SENTINEL_0=$(query_one "${DST_DB1}" "${SENTINEL_SQL}" 2>/dev/null || echo 0)
+    SENTINEL_1=$(query_one "${DST_DB2}" "${SENTINEL_SQL}" 2>/dev/null || echo 0)
+    [ "${SENTINEL_0}" -eq 1 ] && [ "${SENTINEL_1}" -eq 1 ] && break
     if ! kill -0 "${REPL_PID}" 2>/dev/null; then
-        echo "ERROR: replication process exited before the sentinel (seq=999 label=sentinel_done) was delivered"
+        echo "ERROR: replication process exited before both shard sentinels were delivered"
         exit 1
     fi
     if [ "${SECONDS}" -ge "${DEADLINE}" ]; then

@@ -274,12 +274,11 @@ INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
     (1, 200, 'dup_label', repeat(md5('dup_label'), 1024)),
     (1, 200, 'dup_label', repeat(md5('dup_label'), 1024));
 
--- REPLICATION SENTINEL — not a test assertion target.
--- seq=999 is updated last in run.sh to 'sentinel_done'. The poll loop waits for that
--- label to appear on the destination before asserting anything. WAL ordering guarantees
--- all preceding changes have propagated once this row has landed.
+-- One replication sentinel per destination shard. Keys 1 and 3 route to different
+-- shards; observing one shard's marker cannot establish progress on the other.
 INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
-    (1, 999, 'sentinel', repeat(md5('sentinel'), 1024));
+    (1, 999, 'sentinel', repeat(md5('sentinel'), 1024)),
+    (3, 998, 'sentinel', repeat(md5('sentinel'), 1024));
 
 -- Omni (non-sharded) table with REPLICA IDENTITY FULL.
 -- 'click' row will be UPDATEd (label set to 'Click Updated') during the test run.
