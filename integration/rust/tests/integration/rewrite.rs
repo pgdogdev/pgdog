@@ -376,7 +376,7 @@ async fn prepare_split_table(pool: &Pool<Postgres>) {
             format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {SHARDED_INSERT_TABLE}");
         pool.execute(drop.as_str()).await.unwrap();
         let create = format!(
-            "/* pgdog_shard: {shard} */ CREATE TABLE {SHARDED_INSERT_TABLE} (id BIGINT PRIMARY KEY, value TEXT)"
+            "/* pgdog_shard: {shard} */ CREATE TABLE {SHARDED_INSERT_TABLE} (id BIGINT PRIMARY KEY, value TEXT, created_at TIMESTAMPTZ DEFAULT NOW())"
         );
         pool.execute(create.as_str()).await.unwrap();
     }

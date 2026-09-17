@@ -87,6 +87,7 @@ describe 'active record' do
 
       ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
       ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+      reload_schema
     end
 
     it 'can connect' do
@@ -141,6 +142,7 @@ describe 'active record' do
         conn('pgdog_sharded', true)
         ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
         ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+        reload_schema
         # Automatic primary key assignment.
         ActiveRecord::Base.connection.execute "/* pgdog_shard: 0 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 0)"
         ActiveRecord::Base.connection.execute "/* pgdog_shard: 1 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 1)"
@@ -230,6 +232,7 @@ describe 'active record' do
       conn('pgdog_sharded', false)
       ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
       ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+      reload_schema
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 0 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 0)"
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 1 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 1)"
       ActiveRecord::Base.connection.execute '/* pgdog_shard: 0 */ SELECT pgdog.install_shard_id(0)'
@@ -315,6 +318,7 @@ describe 'active record' do
       conn('pgdog_sharded', false)
       ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
       ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+      reload_schema
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 0 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 0)"
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 1 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 1)"
       ActiveRecord::Base.connection.execute '/* pgdog_shard: 0 */ SELECT pgdog.install_shard_id(0)'
@@ -371,6 +375,7 @@ describe 'active record' do
       conn('pgdog_sharded', false)
       ActiveRecord::Base.connection.execute 'DROP TABLE IF EXISTS sharded'
       ActiveRecord::Base.connection.execute 'CREATE TABLE sharded (id BIGSERIAL PRIMARY KEY, value TEXT)'
+      reload_schema
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 0 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 0)"
       ActiveRecord::Base.connection.execute "/* pgdog_shard: 1 */ SELECT pgdog.install_next_id('pgdog', 'sharded', 'id', 2, 1)"
       ActiveRecord::Base.connection.execute '/* pgdog_shard: 0 */ SELECT pgdog.install_shard_id(0)'
