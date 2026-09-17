@@ -2487,6 +2487,32 @@ async fn ban_new_targets_until_health_check() {
 }
 
 #[tokio::test]
+async fn test_reload_preserves_only_manual_bans() {
+    let configs = [
+        create_test_pool_config("127.0.0.1", 5432),
+        create_test_pool_config("localhost", 5432),
+    ];
+    let new_lb = || {
+        LoadBalancer::new(
+            &None,
+            &configs,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+    };
+    let old = new_lb();
+    let new = new_lb();
+    old.targets[0].ban.ban(Error::ManualBan, Duration::MAX);
+    old.targets[1].ban.ban(Error::ServerError, Duration::MAX);
+
+    old.move_conns_to(&new).expect("transfer pools on reload");
+
+    assert_eq!(new.targets[0].ban.error(), Some(Error::ManualBan));
+    assert!(!new.targets[1].ban.banned());
+}
+
+#[tokio::test]
 async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {

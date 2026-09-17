@@ -281,6 +281,7 @@ impl LoadBalancer {
                     Ordering::Release,
                 );
                 *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+                to.ban.carry_manual_ban(&from.ban);
             }
         }
         destination.require_healthcheck_for_new_targets(&self.targets);
