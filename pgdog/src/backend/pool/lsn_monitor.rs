@@ -116,12 +116,18 @@ pub(super) struct LsnMonitor {
 }
 
 impl LsnMonitor {
-    pub(super) fn run(pool: &Pool) {
+    pub(super) fn run(pool: &Pool) -> bool {
+        if !pool.config().lsn_checks_enabled() {
+            return false;
+        }
+
         let monitor = Self { pool: pool.clone() };
 
         tasks::spawn("pool lsn monitor", async move {
             monitor.spawn().await;
         });
+
+        true
     }
 
     async fn run_query(&self, conn: &mut Server, query: &str) -> Option<DataRow> {
@@ -275,13 +281,38 @@ impl DerefMut for LsnConnection {
 mod test {
     use super::*;
 
+    use pgdog_config::MAX_DURATION;
     use pgdog_postgres_types::TimestampTz;
     use pgdog_stats::Lsn;
     use tokio::time::timeout;
 
-    // A launched pool against the local Postgres. The default `lsn_check_delay`
-    // is `MAX_DURATION`, so the background LSN monitor spawned by `launch()`
-    // stays asleep and never competes with the `run_check` calls below.
+    #[tokio::test]
+    async fn test_monitor_enabled() {
+        for (role_detection, replica_lag_banning, delay, enabled) in [
+            (false, false, Duration::ZERO, false),
+            (true, false, Duration::ZERO, true),
+            (false, true, Duration::ZERO, true),
+            (true, true, Duration::ZERO, true),
+            (true, false, MAX_DURATION, false),
+            (false, true, MAX_DURATION, false),
+            (true, true, Duration::MAX, false),
+        ] {
+            let pool = Pool::new(&PoolConfig {
+                address: Address::new_test(),
+                config: Config {
+                    role_detection,
+                    replica_lag_banning,
+                    lsn_check_delay: delay,
+                    ..Config::default()
+                },
+            });
+            assert_eq!(LsnMonitor::run(&pool), enabled);
+            pool.shutdown();
+        }
+    }
+
+    // A launched pool against the local Postgres. Monitoring is disabled by
+    // default, so it never competes with the `run_check` calls below.
     fn monitor() -> LsnMonitor {
         crate::logger();
         let pool = Pool::new_test();

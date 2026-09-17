@@ -7,6 +7,7 @@ use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use itertools::*;
+use pgdog_config::MAX_DURATION;
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 
 use super::*;
@@ -1345,6 +1346,80 @@ async fn test_move_conns_to_with_added_replica_matches_by_address() {
     assert_eq!(new_target_for_added.role(), Role::Replica);
 
     lb_new.shutdown();
+}
+
+#[tokio::test]
+async fn test_move_conns_to_preserves_manual_ban() {
+    let config = create_test_pool_config("127.0.0.1", 5432);
+    let make_lb = || {
+        LoadBalancer::new(
+            &None,
+            std::slice::from_ref(&config),
+            LoadBalancingStrategy::Random,
+            ReadWriteSplit::IncludePrimary,
+            Default::default(),
+        )
+    };
+    let old = make_lb();
+    let new = make_lb();
+
+    // Manual bans must survive reload and maintenance even with an expired timeout.
+    assert!(old.targets[0].ban.ban(Error::ManualBan, Duration::ZERO));
+    assert!(!new.targets[0].ban.banned());
+    assert_eq!(old.move_conns_to(&new).expect("reload should succeed"), 1);
+    assert_eq!(new.targets[0].ban.error(), Some(Error::ManualBan));
+
+    Monitor::new_test(&new).ban_check(&ReplicaLag {
+        duration: Duration::MAX,
+        bytes: i64::MAX,
+    });
+    assert_eq!(new.targets[0].ban.error(), Some(Error::ManualBan));
+    assert!(matches!(
+        new.get(&Request::default()).await,
+        Err(Error::AllReplicasDown)
+    ));
+    assert_eq!(new.targets[0].ban.error(), Some(Error::ManualBan));
+}
+
+#[tokio::test]
+async fn test_move_conns_to_discards_lsn_stats_when_monitoring_disabled() {
+    for (role_detection, replica_lag_banning, delay, keep_stats) in [
+        (false, false, Duration::ZERO, false),
+        (false, true, Duration::ZERO, true),
+        (true, false, Duration::ZERO, true),
+        (false, true, MAX_DURATION, false),
+        (true, false, MAX_DURATION, false),
+    ] {
+        let mut old_config = create_test_pool_config("127.0.0.1", 5432);
+        old_config.config.replica_lag_banning = true;
+        old_config.config.lsn_check_delay = Duration::ZERO;
+        old_config.config.role_detection = role_detection;
+        if role_detection {
+            old_config.address.configured_role = Role::Auto;
+        }
+
+        let mut new_config = old_config.clone();
+        new_config.config.replica_lag_banning = replica_lag_banning;
+        new_config.config.lsn_check_delay = delay;
+
+        let make_lb = |config| {
+            LoadBalancer::new(
+                &None,
+                &[config],
+                LoadBalancingStrategy::Random,
+                ReadWriteSplit::IncludePrimary,
+                Default::default(),
+            )
+        };
+        let old = make_lb(old_config);
+        let new = make_lb(new_config);
+        set_lsn_stats(&old.targets[0], true, 100);
+
+        assert_eq!(old.move_conns_to(&new).expect("reload should succeed"), 1);
+        let stats = new.targets[0].pool.lsn_stats();
+        assert_eq!(stats.valid(), keep_stats);
+        assert_eq!(stats.lsn.lsn, if keep_stats { 100 } else { 0 });
+    }
 }
 
 #[tokio::test]
