@@ -1,5 +1,3 @@
-use crate::net::{CommandComplete, Protocol, ReadyForQuery};
-
 use super::*;
 
 impl QueryEngine {
@@ -10,7 +8,7 @@ impl QueryEngine {
         shard: Shard,
     ) -> Result<(), Error> {
         self.backend.listen(channel, shard).await?;
-        self.command_complete(context, "LISTEN").await?;
+        self.fake_command_response(context, "LISTEN", None).await?;
 
         Ok(())
     }
@@ -30,7 +28,7 @@ impl QueryEngine {
             // Send immediately if not in transaction
             self.backend.notify(channel, payload, shard.clone()).await?;
         }
-        self.command_complete(context, "NOTIFY").await?;
+        self.fake_command_response(context, "NOTIFY", None).await?;
         Ok(())
     }
 
@@ -40,7 +38,8 @@ impl QueryEngine {
         channel: &str,
     ) -> Result<(), Error> {
         self.backend.unlisten(channel);
-        self.command_complete(context, "UNLISTEN").await?;
+        self.fake_command_response(context, "UNLISTEN", None)
+            .await?;
         Ok(())
     }
 
@@ -50,24 +49,6 @@ impl QueryEngine {
                 .notify(&notify_cmd.channel, &notify_cmd.payload, notify_cmd.shard)
                 .await?;
         }
-        Ok(())
-    }
-
-    async fn command_complete(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
-        command: &str,
-    ) -> Result<(), Error> {
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::new(command).message(),
-                ReadyForQuery::in_transaction(context.in_transaction()).message(),
-            ])
-            .await?;
-
-        self.stats.sent(bytes_sent);
-
         Ok(())
     }
 }

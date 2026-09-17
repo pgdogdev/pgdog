@@ -46,4 +46,17 @@ pub(crate) enum Error {
 
     #[error("missing or invalid parameters in Execute")]
     IncorrectExecuteParameters,
+
+    #[error(
+        "TimeZone {0} is not supported for time functions on omnisharded tables, only IANA names like UTC or America/New_York are (other formats are future work)"
+    )]
+    UnsupportedTimeZone(String),
+
+    #[error("could not determine the session TimeZone for time functions on omnisharded tables")]
+    UnknownTimeZone,
+
+    #[error(
+        "could not determine how to parse the argument passed in {0}; it is likely not supported yet"
+    )]
+    UnsupportedArgument(String),
 }

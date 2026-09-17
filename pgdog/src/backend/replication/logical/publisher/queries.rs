@@ -8,12 +8,19 @@ use std::{collections::HashSet, fmt::Display};
 use pgdog_postgres_types::Oid;
 
 use crate::{
-    backend::Server,
+    backend::{Error as BackendError, Server},
     net::{DataRow, Format},
 };
 
 use super::super::Error;
 use crate::util::sql::quote_literal;
+
+pub(crate) async fn server_version(server: &mut Server) -> Result<Option<i64>, BackendError> {
+    let versions: Vec<i64> = server
+        .fetch_all("SELECT current_setting('server_version_num')::bigint")
+        .await?;
+    Ok(versions.into_iter().next())
+}
 
 /// Get list of tables in publication.
 static TABLES: &str = "SELECT DISTINCT
@@ -279,6 +286,16 @@ mod test {
     use crate::backend::server::test::test_server;
 
     use super::*;
+
+    #[tokio::test]
+    async fn server_version_returns_value() -> Result<(), BackendError> {
+        let mut server = test_server().await;
+        let version = server_version(&mut server)
+            .await?
+            .expect("PostgreSQL returns its server version");
+        assert!((16_000..1_000_000).contains(&version));
+        Ok(())
+    }
 
     #[test]
     fn test_replica_identity_decodes_oid_above_i32_max() {

@@ -10,7 +10,7 @@ test = true
 tokio-postgres = {version = "0.7.13", features = ["with-uuid-1"]}
 postgres-native-tls = "0.5"
 native-tls = "0.2"
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal"]}
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal", "uuid"]}
 tokio = { version = "1", features = ["full"]}
 futures-util.workspace = true
 uuid.workspace = true
@@ -25,4 +25,5 @@ libc = "0.2"
 rand = "0.9"
 bytes.workspace = true
 rust_decimal = { version = "1.42.0", features = ["macros"] }
+chrono-tz = "0.10.4"
 pgdog-stats = { path = "../../pgdog-stats" }

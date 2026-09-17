@@ -161,6 +161,23 @@ def test_pipeline():
     no_out_of_sync()
 
 
+def test_pipeline_listen_then_query():
+    """An intercepted LISTEN must not emit ReadyForQuery before pipeline Sync."""
+    conn = normal_sync()
+    conn.autocommit = True
+
+    with conn.pipeline() as pipeline:
+        conn.execute("LISTEN pgdog_pipeline_listen")
+        cur = conn.execute("SELECT 1::bigint")
+        pipeline.sync()
+
+    assert cur.fetchone()[0] == 1
+    assert conn.execute("SELECT 42::bigint").fetchone()[0] == 42
+
+    conn.close()
+    no_out_of_sync()
+
+
 def test_pipeline_many_queries():
     """Stress the splicing logic with many queries in a single pipeline.
 

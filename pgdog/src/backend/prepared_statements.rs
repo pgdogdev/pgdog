@@ -116,10 +116,14 @@ pub(crate) struct PreparedStatements {
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
+    // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
+    parameter_describes: VecDeque<String>,
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
     server_state: State,
+    // Client parameter count of the unnamed statement being rewritten
+    anonymous_client_params: Option<u16>,
 }
 
 #[cfg(test)]
@@ -138,10 +142,12 @@ impl PreparedStatements {
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
+            parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
             server_state: State::Idle,
+            anonymous_client_params: None,
         }
     }
 
@@ -149,6 +155,11 @@ impl PreparedStatements {
     #[inline]
     pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+    }
+
+    /// Number of parameters the client wrote in the unnamed statement this request rewrites.
+    pub(crate) fn set_anonymous_client_params(&mut self, params: Option<u16>) {
+        self.anonymous_client_params = params;
     }
 
     pub(super) fn set_server_state(&mut self, state: State) {
@@ -231,6 +242,11 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::Describe(describe) => {
+                if describe.is_statement() {
+                    self.parameter_describes
+                        .push_back(describe.statement().to_string());
+                }
+
                 if !describe.anonymous() {
                     let message = self.check_prepared(describe.statement())?;
 
@@ -428,6 +444,7 @@ impl PreparedStatements {
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
                 self.describes.clear();
+                self.parameter_describes.clear();
                 self.parses.clear();
             }
 
@@ -474,7 +491,8 @@ impl PreparedStatements {
             }
 
             't' => {
-                self.rewrite_parameter_description_data_types(message)?;
+                let statement = self.parameter_describes.pop_front();
+                self.rewrite_parameter_description(message, statement.as_deref())?;
             }
 
             _ => (),
@@ -559,6 +577,7 @@ impl PreparedStatements {
         }
 
         self.describes.push_back(name.to_owned());
+        self.parameter_describes.push_back(name.to_owned());
         self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
         self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
 
@@ -699,17 +718,37 @@ impl PreparedStatements {
         }
     }
 
-    fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
-        let Some(mappings) = self.oids.get() else {
-            return Ok(());
+    /// Rewrite the ParameterDescription for `statement` to hide any parameters the rewrite engine added.
+    /// Asyncpg (& possibly others) check their argument count against this before sending Bind
+    fn rewrite_parameter_description(
+        &self,
+        message: &mut Message,
+        statement: Option<&str>,
+    ) -> Result<(), Error> {
+        let mappings = self
+            .oids
+            .get()
+            .map(|mappings| &mappings.shard_to_canonical)
+            .filter(|mappings| !mappings.is_empty());
+        let client_params = match statement.filter(|name| !name.is_empty()) {
+            Some(name) => self.global_cache.read().client_params(name),
+            None => self.anonymous_client_params,
         };
-        let mappings = &mappings.shard_to_canonical;
-        if mappings.is_empty() {
+
+        if mappings.is_none() && client_params.is_none() {
             return Ok(());
         }
 
         let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
-        parameter_description.rewrite_data_types(mappings);
+        if let Some(mappings) = mappings {
+            parameter_description.rewrite_data_types(mappings);
+        }
+
+        // Note: This relies on the invariant that the first X parameters are all client-provided
+        // params, while the ones we re-write are appended to the end.
+        if let Some(client_params) = client_params {
+            parameter_description.truncate(client_params as usize);
+        }
         message.replace_payload(parameter_description.to_bytes());
         Ok(())
     }
@@ -1026,6 +1065,73 @@ pub(crate) mod test {
         let parse = Parse::named(name, query);
         let (_, rewritten_name) = FrontendPreparedStatements::global().write().insert(&parse);
         rewritten_name
+    }
+
+    /// Describe `name` -> forward a ParameterDescription
+    fn describe_parameters(ps: &mut PreparedStatements, name: &str, oids: Vec<i32>) -> Vec<i32> {
+        let result = ps
+            .handle(&ProtocolMessage::Describe(Describe::new_statement(name)))
+            .unwrap();
+        assert!(matches!(result, HandleResult::Prepend(_)));
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        ps.forward(&mut parse_complete).unwrap();
+
+        let mut message = Message::new(ParameterDescription::new(oids).to_bytes());
+        ps.forward(&mut message).unwrap();
+
+        ParameterDescription::from_bytes(message.payload())
+            .unwrap()
+            .params()
+            .to_vec()
+    }
+
+    #[test]
+    fn parameter_description_hides_rewrite_engine_params() {
+        let mut ps = new_extended();
+        let name = insert_global("param_desc_rewritten", "SELECT $1 AS param_desc_rewritten");
+        FrontendPreparedStatements::global().write().rewrite(
+            &Parse::named(&name, "SELECT $1 AS param_desc_rewritten, $2::text"),
+            1,
+        );
+
+        assert_eq!(describe_parameters(&mut ps, &name, vec![23, 25]), vec![23]);
+    }
+
+    #[test]
+    fn parameter_description_hides_rewrite_params_for_cross_shard_variant() {
+        let mut ps = new_extended();
+        let base = insert_global("param_desc_variant", "SELECT $1 AS param_desc_variant");
+        let variant = {
+            let global = FrontendPreparedStatements::global();
+            let mut cache = global.write();
+            cache.rewrite(
+                &Parse::named(&base, "SELECT $1 AS param_desc_variant, $2::text"),
+                1,
+            );
+            cache
+                .cross_shard_variant(
+                    &base,
+                    "SELECT $1 AS param_desc_variant, $2::text, 1 AS __pgdog_order_col0",
+                )
+                .unwrap()
+        };
+
+        assert_eq!(
+            describe_parameters(&mut ps, &variant, vec![23, 25]),
+            vec![23]
+        );
+    }
+
+    #[test]
+    fn parameter_description_untouched_without_rewrite() {
+        let mut ps = new_extended();
+        let name = insert_global("param_desc_plain", "SELECT $1, $2 AS param_desc_plain");
+
+        assert_eq!(
+            describe_parameters(&mut ps, &name, vec![23, 25]),
+            vec![23, 25]
+        );
     }
 
     #[test]

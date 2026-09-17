@@ -44,6 +44,7 @@ enabled = false
 shard_key = "ignore"
 split_inserts = "error"
 # primary_key = "rewrite"
+non_deterministic_functions = "rewrite"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------

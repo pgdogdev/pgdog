@@ -2,15 +2,11 @@
 
 use std::ops::{Deref, DerefMut};
 
-use pgdog_config::pooling::ConnectionRecovery;
-use tokio::{spawn, time::Instant};
-use tracing::{debug, error};
+use tokio::time::Instant;
 
-use crate::backend::{Error, Server};
-use crate::state::State;
+use crate::backend::Server;
 
-use super::{Pool, cleanup::Cleanup};
-use crate::util::safe_timeout;
+use super::{Pool, cleanup::Cleanup, recovery::Recovery};
 
 /// Connection guard.
 pub(crate) struct Guard {
@@ -74,144 +70,10 @@ impl Guard {
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
     fn cleanup(&mut self) {
-        let server = self.server.take();
-        let pool = self.pool.clone();
-
-        if let Some(mut server) = server {
-            let rollback = server.in_transaction();
+        if let Some(mut server) = self.server.take() {
             let cleanup = Cleanup::new(self, &mut server);
-            let reset = cleanup.needed();
-            let sync_prepared = server.sync_prepared();
-            let needs_drain = server.needs_drain();
-            let force_close = server.force_close();
-            let needs_cleanup = rollback || reset || sync_prepared || needs_drain;
-
-            server.reset_changed_params();
-
-            // No need to delay checkin unless we have to.
-            if needs_cleanup && !force_close {
-                let rollback_timeout = pool.inner().config.rollback_timeout;
-                let conn_recovery = pool.inner().config.connection_recovery;
-                let addr = self.pool.addr().clone();
-
-                spawn(async move {
-                    match safe_timeout(
-                        rollback_timeout,
-                        Self::cleanup_internal(&mut server, cleanup, conn_recovery),
-                    )
-                    .await
-                    {
-                        Ok(Ok(_)) => (),
-                        Err(_) => {
-                            error!("server cleanup timed out [{}]", server.addr());
-                            server.stats_mut().state(State::ForceClose);
-                        }
-                        Ok(Err(err)) => {
-                            error!("server cleanup failed: {} [{}]", err, server.addr());
-                            if !server.error() {
-                                server.stats_mut().state(State::ForceClose);
-                            }
-                        }
-                    }
-
-                    if let Err(err) = pool.checkin(server) {
-                        error!("pool checkin error: {} [{}]", err, addr);
-                    }
-                });
-            } else {
-                debug!(
-                    "[cleanup] no cleanup needed, server in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr(),
-                );
-                if let Err(err) = pool.checkin(server) {
-                    error!("pool checkin error: {} [{}]", err, self.pool.addr());
-                }
-            }
+            Recovery::new(server, self.pool.clone(), cleanup).recover();
         }
-    }
-
-    async fn cleanup_internal(
-        server: &mut Box<Server>,
-        cleanup: Cleanup,
-        conn_recovery: ConnectionRecovery,
-    ) -> Result<(), Error> {
-        let schema_changed = server.schema_changed();
-        let sync_prepared = server.sync_prepared();
-        let needs_drain = server.needs_drain();
-
-        if needs_drain {
-            if conn_recovery.can_recover() && !server.sending_request() {
-                // Receive whatever data the client left before disconnecting.
-                debug!(
-                    "[cleanup] draining data from \"{}\" server [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-                server.drain().await?;
-            } else {
-                server.stats_mut().state(State::ForceClose);
-                return Ok(());
-            }
-        }
-
-        let rollback = server.in_transaction();
-
-        // Rollback any unfinished transactions,
-        // but only if the server is in sync (protocol-wise).
-        if rollback {
-            if conn_recovery.can_rollback() {
-                debug!(
-                    "[cleanup] rolling back server transaction, in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr(),
-                );
-                server.rollback().await?;
-            } else {
-                server.stats_mut().state(State::ForceClose);
-                return Ok(());
-            }
-        }
-
-        if cleanup.needed() {
-            debug!(
-                "[cleanup] running {} cleanup queries, server in \"{}\" state [{}]",
-                cleanup.len(),
-                server.stats().get_state(),
-                server.addr()
-            );
-            server.execute_batch(cleanup.queries()).await?;
-
-            if cleanup.is_deallocate() {
-                server.prepared_statements_mut().clear();
-            }
-            server.cleaned();
-
-            debug!(
-                "[cleanup] closing {} prepared statements",
-                cleanup.close().len()
-            );
-            server.close_many(cleanup.close()).await?;
-        }
-
-        if schema_changed {
-            server.reset_schema_changed();
-        }
-
-        if cleanup.is_reset_params() {
-            server.reset_params();
-        }
-
-        if sync_prepared {
-            debug!(
-                "[cleanup] syncing prepared statements, server in \"{}\" state [{}]",
-                server.stats().get_state(),
-                server.addr()
-            );
-            server.sync_prepared_statements().await?;
-        }
-
-        Ok(())
     }
 }
 
@@ -247,7 +109,8 @@ mod test {
     use crate::{
         backend::{
             pool::{
-                Address, Config, Guard, Pool, PoolConfig, Request, cleanup::Cleanup, test::pool,
+                Address, Config, Guard, Pool, PoolConfig, Request, cleanup::Cleanup,
+                recovery::Recovery, test::pool,
             },
             server::test::test_server,
         },
@@ -424,7 +287,7 @@ mod test {
         assert_eq!(cleanup.close().len(), 4);
         assert!(server.needs_drain());
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
             .await
             .unwrap();
 
@@ -446,7 +309,7 @@ mod test {
         )
         .await;
         assert!(res.is_err());
-        assert!(server.force_close());
+        assert!(server.is_force_close());
         assert!(server.io_in_progress())
     }
 
@@ -492,7 +355,7 @@ mod test {
 
         assert!(server.needs_drain());
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
             .await
             .unwrap();
 
@@ -545,7 +408,7 @@ mod test {
 
         assert!(server.needs_drain());
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
             .await
             .unwrap();
 
@@ -596,7 +459,7 @@ mod test {
 
         assert!(server.needs_drain());
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
             .await
             .unwrap();
 
@@ -633,7 +496,7 @@ mod test {
         let mut server = guard.server.take().unwrap();
         let cleanup = Cleanup::new(&guard, &mut server);
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
             .await
             .unwrap();
 
@@ -671,7 +534,7 @@ mod test {
         let mut server = guard.server.take().unwrap();
         let cleanup = Cleanup::new(&guard, &mut server);
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::RollbackOnly)
             .await
             .unwrap();
 
@@ -709,7 +572,7 @@ mod test {
         let mut server = guard.server.take().unwrap();
         let cleanup = Cleanup::new(&guard, &mut server);
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
             .await
             .unwrap();
 
@@ -775,7 +638,7 @@ mod test {
         assert!(server.needs_drain());
         assert!(server.in_transaction());
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Drop)
             .await
             .unwrap();
 
@@ -816,7 +679,7 @@ mod test {
         let mut server = guard.server.take().unwrap();
         let cleanup = Cleanup::new(&guard, &mut server);
 
-        Guard::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
+        Recovery::cleanup_internal(&mut server, cleanup, ConnectionRecovery::Recover)
             .await
             .unwrap();
 
@@ -841,7 +704,7 @@ mod test {
         let server = test_server().await;
 
         assert!(
-            !server.sending_request(),
+            !server.is_sending_request(),
             "sending_request should be false initially"
         );
     }
@@ -858,7 +721,7 @@ mod test {
             .unwrap();
 
         assert!(
-            !server.sending_request(),
+            !server.is_sending_request(),
             "sending_request should be false after successful send"
         );
     }
@@ -887,7 +750,7 @@ mod test {
 
             assert!(res.is_err(), "send should timeout");
             assert!(
-                guard.sending_request(),
+                guard.is_sending_request(),
                 "sending_request should be true after interrupted send"
             );
         }

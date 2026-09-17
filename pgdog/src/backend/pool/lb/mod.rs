@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -40,6 +40,8 @@ pub(crate) struct Target {
     pub(crate) pool: Pool,
     pub(crate) ban: Ban,
     role: PoolRole,
+    /// Auto targets start as replicas before their roles are actually known.
+    role_detected: Arc<AtomicBool>,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
 }
@@ -47,6 +49,7 @@ pub(crate) struct Target {
 impl Target {
     pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
+        let role_detected = !pool.config().role_detection;
 
         // Set pool to last known role.
         pool.set_role(role);
@@ -54,6 +57,7 @@ impl Target {
         Self {
             ban,
             role: PoolRole::new(role),
+            role_detected: Arc::new(AtomicBool::new(role_detected)),
             pool,
             current_weight: Arc::new(AtomicI64::new(0)),
         }
@@ -64,10 +68,11 @@ impl Target {
         self.role.role()
     }
 
-    /// Set role.
+    /// Set a known role, including when detection confirms the initial replica role.
     pub(super) fn set_role(&self, role: Role) -> bool {
         let lb = self.role.set_role(role);
         let pool = self.pool.set_role(role);
+        self.role_detected.store(true, Ordering::Release);
 
         debug_assert_eq!(
             lb, pool,
@@ -271,6 +276,10 @@ impl LoadBalancer {
                 // Carry over detected roles and LSN stats so the new load balancer
                 // doesn't briefly appear read-only before the role detector runs.
                 to.set_role(from.role());
+                to.role_detected.store(
+                    from.role_detected.load(Ordering::Acquire),
+                    Ordering::Release,
+                );
                 *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
             }
         }
@@ -293,6 +302,13 @@ impl LoadBalancer {
                 .targets
                 .iter()
                 .all(|target| target.pool.config().role_detection)
+    }
+
+    /// True once every target has a configured or detected role.
+    pub(crate) fn roles_detected(&self) -> bool {
+        self.targets
+            .iter()
+            .all(|target| target.role_detected.load(Ordering::Acquire))
     }
 
     /// Cancel a query if one is running.

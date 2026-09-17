@@ -1,11 +1,12 @@
 use bytes::Bytes;
+use pgdog_config::User;
 use pgdog_postgres_types::Oid;
 use rand::Rng;
 
 use crate::{
     backend::{
-        Server,
-        pool::cluster::Cluster,
+        Error as BackendError, Server,
+        pool::{Address, ClusterConfig, ClusterShardConfig, PoolConfig, cluster::Cluster},
         replication::logical::publisher::{
             Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, Table,
         },
@@ -29,7 +30,103 @@ use crate::{
     },
 };
 
-use super::stream::StreamSubscriber;
+use super::{Error, connect_primary, stream::StreamSubscriber};
+
+fn resharding_test_cluster(user: &str) -> Cluster {
+    let user = User::new(user, "pgdog", "pgdog");
+    let shards = [ClusterShardConfig {
+        primary: Some(PoolConfig {
+            address: Address {
+                user: user.name.clone(),
+                passwords: vec!["pgdog".into()],
+                ..Address::new_test()
+            },
+            config: Default::default(),
+        }),
+        replicas: vec![],
+    }];
+    Cluster::new(ClusterConfig::new(
+        &config().config,
+        &user,
+        &shards,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    ))
+}
+
+#[tokio::test]
+async fn resharding_connection_rejects_unprivileged_user() -> Result<(), Box<dyn std::error::Error>>
+{
+    let user = format!("resharding_denied_{}", random_id());
+    let mut admin = test_server().await;
+    admin
+        .execute_checked(format!(
+            "CREATE ROLE {user} LOGIN NOSUPERUSER NOINHERIT PASSWORD 'pgdog'"
+        ))
+        .await?;
+    let result = async {
+        admin
+            .execute_checked(format!("GRANT CONNECT ON DATABASE pgdog TO {user}"))
+            .await?;
+        let cluster = resharding_test_cluster(&user);
+        let result = connect_primary(cluster.shards().first().ok_or(Error::MissingData)?)
+            .await
+            .map(drop);
+        Ok::<_, Box<dyn std::error::Error>>(result)
+    }
+    .await;
+    admin
+        .execute_checked(format!(
+            "REVOKE CONNECT ON DATABASE pgdog FROM {user}; DROP ROLE {user}"
+        ))
+        .await?;
+    let error = result?.expect_err("unprivileged user must not connect for resharding");
+    assert!(!error.is_retryable());
+    assert!(matches!(
+        error,
+        Error::ReshardingPermissionDenied { source, .. }
+            if matches!(source.as_ref(), BackendError::ConnectionError(response) if response.code == "42501")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resharding_connection_accepts_privileged_user() -> Result<(), Box<dyn std::error::Error>> {
+    let user = format!("resharding_allowed_{}", random_id());
+    let mut admin = test_server().await;
+    admin
+        .execute_checked(format!(
+            "CREATE ROLE {user} LOGIN NOSUPERUSER NOINHERIT PASSWORD 'pgdog'"
+        ))
+        .await?;
+    let result = async {
+        admin
+            .execute_checked(format!(
+                "GRANT CONNECT ON DATABASE pgdog TO {user}; \
+                 GRANT SET ON PARAMETER session_replication_role TO {user}"
+            ))
+            .await?;
+        let cluster = resharding_test_cluster(&user);
+        let mut server =
+            connect_primary(cluster.shards().first().ok_or(Error::MissingData)?).await?;
+        let users: Vec<String> = server.fetch_all("SELECT current_user").await?;
+        let roles: Vec<String> = server.fetch_all("SHOW session_replication_role").await?;
+        Ok::<_, Box<dyn std::error::Error>>((users, roles))
+    }
+    .await;
+    admin
+        .execute_checked(format!(
+            "REVOKE SET ON PARAMETER session_replication_role FROM {user}; \
+             REVOKE CONNECT ON DATABASE pgdog FROM {user}; DROP ROLE {user}"
+        ))
+        .await?;
+    let (users, roles) = result?;
+    assert_eq!(users, [user]);
+    assert_eq!(roles, ["replica"]);
+    Ok(())
+}
 
 fn random_id() -> String {
     rand::rng()

@@ -119,6 +119,7 @@ impl Pool {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
                 self.inner.health.toggle(false);
+                self.lock().stats.counts.checkout_timeouts += 1;
                 Err(Error::CheckoutTimeout)
             }
             Ok(Err(err)) => {
@@ -193,6 +194,18 @@ impl Pool {
                 Err(Error::ServerClosed) => continue,
                 Err(err) => return Err(err),
             }
+        }
+    }
+
+    /// Server parameters
+    pub(crate) fn cached_params(&self) -> Option<&Parameters> {
+        self.inner.params.get()
+    }
+
+    /// Record the server parameters of a newly created connection
+    pub(super) fn cache_params(&self, params: &Parameters) {
+        if self.inner.params.get().is_none() {
+            let _ = self.inner.params.set(params.clone());
         }
     }
 
@@ -435,61 +448,45 @@ impl Pool {
         &self.inner.config
     }
 
+    pub(crate) fn oids(&self) -> &Arc<Oids> {
+        &self.inner.oids
+    }
+
     /// Get startup parameters for new server connections.
-    pub(super) fn server_options(&self, reason: ConnectReason) -> ServerOptions {
-        let mut params = vec![
-            Parameter {
-                name: "application_name".into(),
-                value: "PgDog".into(),
-            },
-            Parameter {
-                name: "client_encoding".into(),
-                value: "utf-8".into(),
-            },
-        ];
+    pub(super) fn server_options(&self) -> ServerOptions {
+        let mut options = ServerOptions::default();
 
         let config = self.inner.config;
 
-        let lock_timeout = config
-            .lock_timeout
-            // Enforce some lock_timeout during resharding to prevent possible deadlocks.
-            // This should be mostly avoided by pgdog, but in case some invariants are not met,
-            // the resharding could deadlock and with timeout we'll probably retry the update
-            // and either succeed or fail explicitly.
-            .or(matches!(reason, ConnectReason::Resharding).then_some(Duration::from_secs(5)));
-
         if let Some(statement_timeout) = config.statement_timeout {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "statement_timeout".into(),
                 value: statement_timeout.as_millis().to_string().into(),
             });
         }
 
-        if let Some(lock_timeout) = lock_timeout {
-            params.push(Parameter {
+        if let Some(lock_timeout) = config.lock_timeout {
+            options.add(Parameter {
                 name: "lock_timeout".into(),
                 value: lock_timeout.as_millis().to_string().into(),
             });
         }
 
         if config.replication_mode {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "replication".into(),
                 value: "database".into(),
             });
         }
 
         if config.read_only {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "default_transaction_read_only".into(),
                 value: "on".into(),
             });
         }
 
-        ServerOptions {
-            params,
-            pool_id: self.id(),
-        }
+        options
     }
 
     /// Pool state.
@@ -505,6 +502,11 @@ impl Pool {
     /// LSN stats
     pub(crate) fn lsn_stats(&self) -> LsnStats {
         *self.inner().lsn_stats.read()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_lsn_stats(&self, stats: LsnStats) {
+        *self.inner().lsn_stats.write() = stats;
     }
 
     /// Set pool role returning true if the role changed.

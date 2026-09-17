@@ -57,15 +57,17 @@ impl Add<Counts> for PoolCounts {
             errors: self.errors + rhs.errors,
             cleaned: self.cleaned + rhs.cleaned,
             prepared_sync: self.prepared_sync + rhs.prepared_sync,
+            rows_inserted: self.rows_inserted + rhs.rows_inserted,
+            rows_updated: self.rows_updated + rhs.rows_updated,
+            rows_deleted: self.rows_deleted + rhs.rows_deleted,
+
             // These are not counted by each server stats.
             connect_count: self.connect_count,
             connect_time: self.connect_time,
             writes: self.writes,
             reads: self.reads,
             auth_attempts: self.auth_attempts,
-            rows_inserted: self.rows_inserted + rhs.rows_inserted,
-            rows_updated: self.rows_updated + rhs.rows_updated,
-            rows_deleted: self.rows_deleted + rhs.rows_deleted,
+            checkout_timeouts: self.checkout_timeouts,
         }
     }
 }

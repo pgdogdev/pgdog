@@ -18,6 +18,7 @@ pub(crate) mod lsn_monitor;
 pub(crate) mod monitor;
 pub(crate) mod password;
 pub(crate) mod pool_impl;
+pub(crate) mod recovery;
 pub(crate) mod request;
 pub(crate) mod role;
 pub(crate) mod shard;

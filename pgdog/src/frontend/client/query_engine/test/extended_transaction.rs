@@ -1,6 +1,6 @@
 use crate::{
     expect_message,
-    frontend::client::TransactionType,
+    frontend::client::{Transaction, TransactionType},
     net::{
         BindComplete, CommandComplete, NoData, NoticeResponse, ParameterDescription, ParseComplete,
         ReadyForQuery,
@@ -84,7 +84,7 @@ async fn begin_multiple_describes() {
 #[tokio::test]
 async fn commit_statement_describe() {
     let mut client = TestClient::new_replicas(Parameters::default()).await;
-    client.client.transaction = Some(TransactionType::ReadWrite);
+    client.client.transaction = Some(Transaction::new(TransactionType::ReadWrite));
     client.client.client_request = ClientRequest::from(vec![
         Parse::named("c", "COMMIT").into(),
         Bind::new_statement("c").into(),

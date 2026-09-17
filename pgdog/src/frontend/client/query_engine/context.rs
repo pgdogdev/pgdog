@@ -2,10 +2,15 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         Client, ClientRequest, PreparedStatements,
-        client::{Sticky, TransactionType, timeouts::Timeouts},
+        client::{
+            Sticky,
+            timeouts::Timeouts,
+            transaction_type::{QueryTimestamps, Transaction},
+        },
     },
     net::{FrontendPid, Parameters, Stream},
 };
+use chrono::{DateTime, Utc};
 
 use super::split::Pipeline;
 
@@ -26,7 +31,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
-    pub(super) transaction: Option<TransactionType>,
+    pub(super) transaction: Option<Transaction>,
     /// Timeouts
     pub(super) timeouts: Timeouts,
     /// Cross shard  queries are disabled.
@@ -43,6 +48,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) query_log_stdout: bool,
     /// Maximum query message size before a warning is logged.
     pub(super) query_size_limit: Option<usize>,
+    /// When we received the first message of the request.
+    pub(super) statement_start: DateTime<Utc>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -66,6 +73,7 @@ impl<'a> QueryEngineContext<'a> {
             sticky: client.sticky,
             query_log_stdout: client.query_log_stdout,
             query_size_limit: client.query_size_limit,
+            statement_start: client.statement_start,
         }
     }
 
@@ -96,11 +104,17 @@ impl<'a> QueryEngineContext<'a> {
             sticky: Sticky::new(),
             query_log_stdout: false,
             query_size_limit: None,
+            statement_start: Utc::now(),
         }
     }
 
-    pub(crate) fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<Transaction> {
         self.transaction
+    }
+
+    /// Request itself can start a transaction, so this is computed "on demand"
+    pub(crate) fn timestamps(&self) -> QueryTimestamps {
+        QueryTimestamps::new(self.transaction.as_ref(), self.statement_start)
     }
 
     pub(crate) fn in_transaction(&self) -> bool {

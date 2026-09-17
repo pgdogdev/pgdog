@@ -112,6 +112,14 @@ impl Parse {
         self.data_types.clone()
     }
 
+    /// Number of parameter data types the client declared.
+    pub(crate) fn num_data_types(&self) -> u16 {
+        self.data_types
+            .get(..2)
+            .map(|count| u16::from_be_bytes([count[0], count[1]]))
+            .unwrap_or_default()
+    }
+
     /// Update the SQL for this prepared statement.
     pub(crate) fn set_query(&mut self, query: &str) {
         self.query = c_string_bytes(query);

@@ -6,11 +6,13 @@ on:
       - main-ent
     paths:
       - "**/*.rs"
+      - "**/Cargo.toml"
       - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "**/*.rs"
+      - "**/Cargo.toml"
       - "integration/**"
 
 jobs:

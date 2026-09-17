@@ -1,9 +1,10 @@
 use super::{Error, ParameterHints};
+use crate::frontend::client::transaction_type::Transaction;
 use crate::{
     backend::{Cluster, Schema},
     frontend::{
         BufferedQuery, ClientRequest,
-        client::{Sticky, TransactionType},
+        client::Sticky,
         router::{Ast, parser::StatementParameters, sharding::ResolvedLookups},
     },
     net::Parameters,
@@ -20,7 +21,7 @@ pub(crate) struct RouterContext<'a> {
     /// Client parameters, e.g. search_path.
     pub(super) parameter_hints: ParameterHints<'a>,
     /// Client inside transaction,
-    pub(super) transaction: Option<TransactionType>,
+    pub(super) transaction: Option<Transaction>,
     /// Currently executing COPY statement.
     pub(super) copy_mode: bool,
     /// Do we have an executable buffer?
@@ -46,7 +47,7 @@ impl<'a> RouterContext<'a> {
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
         params: &'a Parameters,
-        transaction: Option<TransactionType>,
+        transaction: Option<Transaction>,
         sticky: Sticky,
     ) -> Result<Self, Error> {
         let query = buffer.query()?;
@@ -83,7 +84,7 @@ impl<'a> RouterContext<'a> {
         self.transaction.is_some()
     }
 
-    pub(crate) fn transaction(&self) -> &Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> &Option<Transaction> {
         &self.transaction
     }
 }

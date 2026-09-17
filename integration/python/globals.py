@@ -51,6 +51,8 @@ async def sharded_async():
         host="127.0.0.1",
         port=6432,
         statement_cache_size=250,
+        # Avoid spending the test's query timeout compiling type-introspection SQL.
+        server_settings={"jit": "off"},
     )
 
 
@@ -62,6 +64,7 @@ async def normal_async():
         host="127.0.0.1",
         port=6432,
         statement_cache_size=250,
+        server_settings={"jit": "off"},
     )
 
 async def schema_sharded_async():
@@ -71,5 +74,6 @@ async def schema_sharded_async():
         database="pgdog_schema",
         host="127.0.0.1",
         port=6432,
-        statement_cache_size=250
+        statement_cache_size=250,
+        server_settings={"jit": "off"},
     )

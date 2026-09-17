@@ -19,7 +19,10 @@ use crate::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
     frontend::{ClientRequest, RegexParser, router::round_robin},
-    net::{bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
+    net::{
+        bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid,
+        parameter::ParameterValue,
+    },
 };
 
 use super::{
@@ -443,6 +446,7 @@ impl Cluster {
         cluster.rewrite.enabled = false;
         cluster.rewrite.shard_key = RewriteMode::Ignore;
         cluster.rewrite.split_inserts = RewriteMode::Ignore;
+        cluster.rewrite.non_deterministic_functions = RewriteMode::Ignore;
         cluster
     }
 
@@ -487,6 +491,14 @@ impl Cluster {
     /// Get all shards.
     pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// The database's default `TimeZone`
+    pub(crate) fn default_timezone(&self) -> Option<&ParameterValue> {
+        self.shards
+            .iter()
+            .flat_map(|shard| shard.pool_iter())
+            .find_map(|pool| pool.cached_params()?.get("TimeZone"))
     }
 
     pub(crate) fn passwords(&self) -> &[PasswordKind] {

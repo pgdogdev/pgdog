@@ -39,9 +39,14 @@ ALTER TABLE copy_data.order_items REPLICA IDENTITY FULL;
 CREATE TABLE IF NOT EXISTS copy_data.log_actions(
     id BIGSERIAL PRIMARY KEY,
     tenant_id BIGINT,
+    user_id BIGINT,
     action VARCHAR,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT log_actions_user_fk FOREIGN KEY (user_id, tenant_id)
+        REFERENCES copy_data.users (id, tenant_id)
 );
+
+CREATE INDEX log_actions_user_idx ON copy_data.log_actions (user_id, tenant_id);
 
 CREATE TABLE copy_data.with_identity(
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS identity,
@@ -181,6 +186,11 @@ SELECT
     ] AS action
 FROM generate_series(1, 100000);
 
+INSERT INTO copy_data.log_actions (tenant_id, user_id, action)
+SELECT tenant_id, id, 'fk_seed'
+FROM copy_data.users
+WHERE id <= 100;
+
 
 INSERT INTO copy_data.with_identity (tenant_id)
 SELECT floor(random() * 10000)::bigint FROM generate_series(1, 100000);
@@ -264,12 +274,11 @@ INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
     (1, 200, 'dup_label', repeat(md5('dup_label'), 1024)),
     (1, 200, 'dup_label', repeat(md5('dup_label'), 1024));
 
--- REPLICATION SENTINEL — not a test assertion target.
--- seq=999 is updated last in run.sh to 'sentinel_done'. The poll loop waits for that
--- label to appear on the destination before asserting anything. WAL ordering guarantees
--- all preceding changes have propagated once this row has landed.
+-- One replication sentinel per destination shard. Keys 1 and 3 route to different
+-- shards; observing one shard's marker cannot establish progress on the other.
 INSERT INTO copy_data.full_identity_events (tenant_id, seq, label, body) VALUES
-    (1, 999, 'sentinel', repeat(md5('sentinel'), 1024));
+    (1, 999, 'sentinel', repeat(md5('sentinel'), 1024)),
+    (3, 998, 'sentinel', repeat(md5('sentinel'), 1024));
 
 -- Omni (non-sharded) table with REPLICA IDENTITY FULL.
 -- 'click' row will be UPDATEd (label set to 'Click Updated') during the test run.

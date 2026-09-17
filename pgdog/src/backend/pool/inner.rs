@@ -413,7 +413,7 @@ impl Inner {
         }
 
         // Force close the connection.
-        if server.force_close() {
+        if server.is_force_close() {
             self.force_close += 1;
             server.disconnect_reason(DisconnectReason::ForceClose);
             return Ok(result);

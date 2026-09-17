@@ -1,5 +1,5 @@
 use crate::{
-    frontend::RewritePlan,
+    frontend::{RewritePlan, router::parser::rewrite::statement::plan::GeneratedParam},
     net::{
         Prepare,
         messages::{Parse, RowDescription},
@@ -79,6 +79,7 @@ impl GlobalCache {
             stmt: StatementType::Parse {
                 parse,
                 rewrite: None,
+                client_params: None,
             },
             cache_key: cache_key.clone(),
             row_description: None,
@@ -103,6 +104,7 @@ impl GlobalCache {
         //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
         rewrite_plan: &RewritePlan,
         offset_plan: Option<OffsetPlan>,
+        generated_params: Vec<GeneratedParam>,
     ) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
             query: original_query.clone(),
@@ -123,14 +125,15 @@ impl GlobalCache {
         };
 
         let statement = Statement {
-            stmt: StatementType::Prepare {
+            stmt: StatementType::Prepare(PreparedPlan {
                 prepare: prepare.clone(),
                 unique_ids: rewrite_plan.unique_ids,
                 // The reason this isn't using [`rewrite_plan.offset`] is that in `rewrite_single_prepared`,
                 // for `PrepareStmt`, we don't set `offset` on`RewritePlan` yet. We only attach `offset`
                 // to the plan for `ExecuteStmt`, and we need access to `OffsetPlan` for both here.
                 offset_plan,
-            },
+                generated_params,
+            }),
             row_description: None,
             cache_key: cache_key.clone(),
         };
@@ -140,9 +143,10 @@ impl GlobalCache {
     }
 
     /// Rewrite prepared statement in the global cache.
-    pub(crate) fn rewrite(&mut self, parse: &Parse) {
+    /// `client_params` indicates how many Bind parameters the original statement has.
+    pub(crate) fn rewrite(&mut self, parse: &Parse, client_params: u16) {
         if let Some(stmt) = self.names.get_mut(parse.name()) {
-            stmt.set_rewrite(parse);
+            stmt.set_rewrite(parse, client_params);
         }
     }
 
@@ -150,6 +154,7 @@ impl GlobalCache {
         if let Some(variant_name) = self.cross_shard_variant_name(name) {
             return Some(variant_name);
         }
+        let client_params = self.client_params(name);
         let variant_name = format!("{name}_cross_shard");
 
         let mut parse = self.rewritten_parse(name)?;
@@ -165,6 +170,7 @@ impl GlobalCache {
                 stmt: StatementType::Parse {
                     parse,
                     rewrite: None,
+                    client_params,
                 },
                 row_description: None,
                 cache_key,
@@ -172,6 +178,15 @@ impl GlobalCache {
         );
 
         Some(variant_name)
+    }
+
+    /// Number of parameters the client's original statement has
+    /// (if we re-write, we must catch and not send back the extra cols ParameterDescriptions)
+    pub(crate) fn client_params(&self, name: &str) -> Option<u16> {
+        self.cross_shard_variants
+            .get(name)
+            .or_else(|| self.names.get(name))
+            .and_then(|stmt| stmt.client_params())
     }
 
     /// Client sent a Describe for a prepared statement and received a RowDescription.
@@ -198,17 +213,12 @@ impl GlobalCache {
 
     /// Get the [`Prepare`] message for a globally unique prepare statement name.
     pub(crate) fn prepare(&self, name: &str) -> Option<Prepare> {
-        self.prepare_and_unique_ids(name)
-            .map(|(prepare, _, _)| prepare)
+        self.prepared_plan(name).map(|plan| plan.prepare)
     }
 
-    pub(crate) fn prepare_and_unique_ids(
-        &self,
-        name: &str,
-    ) -> Option<(Prepare, u16, Option<OffsetPlan>)> {
-        self.names
-            .get(name)
-            .and_then(|p| p.prepare_and_unique_ids())
+    /// Fetch the `PreparedPlan`  for a globally unique prepare statement name.
+    pub(crate) fn prepared_plan(&self, name: &str) -> Option<PreparedPlan> {
+        self.names.get(name).and_then(|p| p.prepared_plan())
     }
 
     /// Get the rewritten Parse statement.
@@ -459,6 +469,20 @@ mod test {
     }
 
     #[test]
+    fn cross_shard_variant_preserves_client_parameter_count() {
+        let mut cache = GlobalCache::default();
+        let (_, base) = cache.insert(&Parse::named("client", "SELECT $1"));
+        cache.rewrite(&Parse::named(&base, "SELECT $1, $2::bigint"), 1);
+
+        let variant = cache
+            .cross_shard_variant(&base, "SELECT $1, $2::bigint")
+            .unwrap();
+
+        assert_eq!(cache.client_params(&base), Some(1));
+        assert_eq!(cache.client_params(&variant), Some(1));
+    }
+
+    #[test]
     fn test_prep_stmt_cache_close() {
         let mut cache = GlobalCache::default();
         let parse = Parse::named("test", "SELECT $1");
@@ -506,8 +530,9 @@ mod test {
         let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) = cache.insert_prepare(query.clone(), None, &RewritePlan::default(), None);
-        let (_, second) = cache.insert_prepare(query, None, &RewritePlan::default(), None);
+        let (_, first) =
+            cache.insert_prepare(query.clone(), None, &RewritePlan::default(), None, vec![]);
+        let (_, second) = cache.insert_prepare(query, None, &RewritePlan::default(), None, vec![]);
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);

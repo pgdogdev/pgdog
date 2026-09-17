@@ -420,7 +420,7 @@ impl Server {
             stream: Some(stream),
             key,
             id,
-            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
+            stats: Stats::connect(id, addr, &params, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -469,6 +469,9 @@ impl Server {
         if client_request.opens_portal() {
             self.in_transaction = true;
         }
+
+        self.prepared_statements
+            .set_anonymous_client_params(client_request.anonymous_client_params);
 
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
@@ -872,13 +875,19 @@ impl Server {
     }
 
     /// A request is being sent by a client.
-    pub(crate) fn sending_request(&self) -> bool {
+    pub(crate) fn is_sending_request(&self) -> bool {
         self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
-    pub(crate) fn force_close(&self) -> bool {
+    pub(crate) fn is_force_close(&self) -> bool {
         self.stats().get_state() == State::ForceClose || self.io_in_progress()
+    }
+
+    /// Indicate that this connection should be closed
+    /// when it's returned to the connection pool.
+    pub(crate) fn force_close(&mut self) {
+        self.stats_mut().state(State::ForceClose);
     }
 
     /// Server parameters.
@@ -1008,6 +1017,24 @@ impl Server {
         }
     }
 
+    /// Return connection to synchronized extended protocol state.
+    ///
+    /// Sends [`Sync`] to the server and receives all messages it returns, up to
+    /// [`ReadyForQuery`].
+    pub(super) async fn synchronize(&mut self) -> Result<(), Error> {
+        if !self.in_sync() {
+            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
+
+            while !self.in_sync() {
+                self.read().await?;
+            }
+
+            self.re_synced = true;
+        }
+
+        Ok(())
+    }
+
     /// Drain any remaining messages on the server connection,
     /// attempting to return the connection into a synchronized state.
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
@@ -1015,16 +1042,7 @@ impl Server {
             self.read().await?;
         }
 
-        if !self.in_sync() {
-            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
-
-            while !self.in_sync() {
-                self.read().await?;
-            }
-        }
-
-        self.re_synced = true;
-        Ok(())
+        self.synchronize().await
     }
 
     /// Synchronize prepared statements from Postgres.
@@ -1047,6 +1065,9 @@ impl Server {
     }
 
     /// Close any prepared statements that exceed cache capacity.
+    ///
+    /// N.B.: Caller is responsible for actually sending these to the server
+    /// to synchronize state, see [`Self::close_many`].
     pub(super) fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
@@ -1360,13 +1381,7 @@ pub(crate) mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
-                stats: Stats::connect(
-                    id,
-                    &addr,
-                    &Parameters::default(),
-                    &ServerOptions::default(),
-                    &Memory::default(),
-                ),
+                stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,
                 dirty: false,
@@ -2251,7 +2266,14 @@ pub(crate) mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(name, query.clone(), None, &RewritePlan::default(), None);
+        let prepare = prep.insert_prepare(
+            name,
+            query.clone(),
+            None,
+            &RewritePlan::default(),
+            None,
+            vec![],
+        );
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server
@@ -3976,7 +3998,7 @@ pub(crate) mod test {
             }
         };
         assert!(matches!(err, Error::ExecutionError(_)));
-        assert!(server.force_close());
+        assert!(server.is_force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
     }
 
