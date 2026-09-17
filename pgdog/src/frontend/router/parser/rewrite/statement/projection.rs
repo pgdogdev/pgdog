@@ -1,3 +1,9 @@
+//! Route-dependent SELECT rewrites.
+//!
+//! The cached AST stays in its base form so one statement can safely alternate
+//! between direct and cross-shard execution. Cross-shard SQL is built from that
+//! AST only after routing and cached independently from per-execution Bind values.
+
 use super::Error;
 use super::aggregate::{AggregatesRewrite, HelperKind};
 use super::offset::{self, OffsetPlan};
@@ -152,6 +158,8 @@ pub(crate) fn finalize_after_route(
             _ => {}
         }
     }
+    // Parse/Describe-only requests must keep the saved anonymous Parse in its
+    // base form; the later Bind/Execute request will finalize its injected copy.
     if request.is_executable()
         && let Some(parse) = request.last_parse.as_mut()
     {
@@ -163,6 +171,8 @@ pub(crate) fn finalize_after_route(
         route.set_projection_rewrite_plan(rewrite.plan.clone());
         let mut order_by = route.order_by().to_vec();
         for helper in rewrite.plan.order_by_helpers() {
+            // Prefer the structural position. The source fallback handles a
+            // bind-dependent vector sort omitted from this execution's route.
             let position = order_by
                 .get(helper.sort_position)
                 .filter(|sort| helper.matches(sort))

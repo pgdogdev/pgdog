@@ -189,6 +189,11 @@ fn to_bigint<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a,
     .uncast()
 }
 
+/// Keep LIMIT and OFFSET as an expression instead of folding them into an
+/// `A_Const`. One cached SQL form then works for literals and placeholders
+/// without changing client Bind values or their text/binary encoding. Postgres
+/// evaluates the per-shard fetch bound; the route keeps the original values for
+/// final proxy-side pagination.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,

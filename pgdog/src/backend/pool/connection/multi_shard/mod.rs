@@ -260,6 +260,8 @@ impl MultiShard {
             self.buffer.mark_full();
 
             if !self.buffer.is_empty() {
+                // Helpers remain in the internal row through aggregation and
+                // sorting, then are removed before client-visible operations.
                 self.buffer
                     .aggregate(
                         self.route.aggregate(),

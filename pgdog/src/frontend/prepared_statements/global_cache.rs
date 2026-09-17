@@ -154,6 +154,8 @@ impl GlobalCache {
         }
     }
 
+    /// Keep helper-bearing SQL separate from the base statement so direct
+    /// executions and client-visible metadata retain the original shape.
     pub(crate) fn cross_shard_variant(&mut self, name: &str, query: &str) -> Option<String> {
         if let Some(variant_name) = self.existing_cross_shard_variant_name(name) {
             return Some(variant_name);

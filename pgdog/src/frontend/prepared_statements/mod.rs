@@ -72,6 +72,8 @@ impl PreparedStatements {
 
     pub(crate) fn cross_shard_variant(name: &str, query: &str) -> Option<String> {
         let cache = Self::global();
+        // Existing variants are the hot path; only creation needs the global
+        // write lock.
         if let Some(variant) = cache.read().existing_cross_shard_variant_name(name) {
             return Some(variant);
         }

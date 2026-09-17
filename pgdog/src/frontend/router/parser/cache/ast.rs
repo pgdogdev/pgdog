@@ -42,7 +42,8 @@ pub(crate) struct AstInner {
     pub(crate) stats: Mutex<Stats>,
     /// Rewrite plan.
     pub(crate) rewrite_plan: RewritePlan,
-    /// Lazily generated SQL and response metadata for cross-shard execution.
+    /// Lazily generated cross-shard SQL and response metadata. This is derived
+    /// only from the AST so Bind values cannot permanently change a cache entry.
     pub(crate) post_route_rewrite: OnceCell<Option<PostRouteRewrite>>,
     /// Original query.
     pub(crate) query_without_comment: Arc<str>,

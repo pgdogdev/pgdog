@@ -566,6 +566,8 @@ impl PreparedStatements {
         }))
     }
 
+    /// Named Bind execution does not return RowDescription, so describe a new
+    /// cross-shard variant internally before decoding its helper columns.
     fn internal_describe(&mut self, name: &str) -> Option<ProtocolMessage> {
         if self.describes.iter().any(|describe| describe == name)
             || !self
