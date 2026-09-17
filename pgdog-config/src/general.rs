@@ -1129,6 +1129,11 @@ impl General {
         Self::env_or_default("PGDOG_BAN_REPLICA_LAG_BYTES", i64::MAX as u64)
     }
 
+    /// Whether either replica lag threshold is below the disabled value (`i64::MAX`).
+    pub fn replica_banning_enabled(&self) -> bool {
+        self.ban_replica_lag < i64::MAX as u64 || self.ban_replica_lag_bytes < i64::MAX as u64
+    }
+
     fn unique_id_function() -> UniqueIdFunction {
         Self::env_enum_or_default("PGDOG_UNIQUE_ID_FUNCTION")
     }
@@ -1858,6 +1863,31 @@ mod tests {
 
         general.lsn_check_delay = crate::MAX_DURATION.as_millis() as u64;
         assert!(!general.lsn_checks_enabled());
+    }
+
+    #[test]
+    fn test_replica_banning_enabled() {
+        let disabled = i64::MAX as u64;
+        for (milliseconds, bytes, enabled) in [
+            (disabled, disabled, false),
+            (5_000, disabled, true),
+            (disabled, 1_024, true),
+            (5_000, 1_024, true),
+            (0, disabled, true),
+            (disabled, 0, true),
+            (u64::MAX, u64::MAX, false),
+        ] {
+            let general = General {
+                ban_replica_lag: milliseconds,
+                ban_replica_lag_bytes: bytes,
+                ..General::default()
+            };
+            assert_eq!(
+                general.replica_banning_enabled(),
+                enabled,
+                "thresholds: {milliseconds} ms, {bytes} bytes"
+            );
+        }
     }
 
     #[test]

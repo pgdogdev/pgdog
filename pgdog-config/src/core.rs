@@ -618,6 +618,12 @@ impl Config {
             }
         }
 
+        if self.general.replica_banning_enabled() && !self.general.lsn_checks_enabled() {
+            warn!(
+                "replica lag banning is enabled but LSN checks are disabled: replica lag cannot be measured; set lsn_check_delay to enable LSN checks"
+            );
+        }
+
         for (database, check) in &checks {
             if !check.have_replicas
                 && self.general.read_write_split == ReadWriteSplit::ExcludePrimary
@@ -627,13 +633,6 @@ impl Config {
                     r#"database "{}" has no replicas and "read_write_split" is set to "{}": read queries will be rejected"#,
                     database, self.general.read_write_split
                 );
-            }
-
-            if self.general.lsn_checks_enabled() && !check.have_auto && !check.have_replicas {
-                warn!(
-                    r#"database "{}" has no replicas and LSN checks are enabled: PgDog will query databases for their LSNs unnecessarily"#,
-                    database
-                )
             }
 
             if !self.general.lsn_checks_enabled() && check.have_auto {

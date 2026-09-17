@@ -42,6 +42,21 @@ impl Ban {
         self.inner.read().ban.is_some()
     }
 
+    /// Copy ban state.
+    pub(super) fn copy_state(&self, other: &Self) {
+        self.inner.write().ban = other.inner.read().ban.clone();
+    }
+
+    /// Ban created by admin command.
+    pub(crate) fn is_manual(&self) -> bool {
+        self.inner
+            .read()
+            .ban
+            .as_ref()
+            .map(|ban| ban.is_manual())
+            .unwrap_or_default()
+    }
+
     /// Get ban error, if any.
     pub(crate) fn error(&self) -> Option<Error> {
         self.inner.read().ban.as_ref().map(|b| b.error)
@@ -146,7 +161,7 @@ impl Ban {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BanEntry {
     created_at: Instant,
     error: Error,
@@ -161,6 +176,10 @@ pub(super) struct BanInner {
 impl BanEntry {
     fn expired(&self, now: Instant) -> bool {
         now.duration_since(self.created_at) >= self.ban_timeout
+    }
+
+    pub(super) fn is_manual(&self) -> bool {
+        self.error == Error::ManualBan
     }
 }
 

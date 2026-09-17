@@ -976,6 +976,7 @@ async fn test_lsn_monitor() {
         lsn_check_delay: Duration::from_millis(10),
         lsn_check_interval: Duration::from_millis(50),
         lsn_check_timeout: Duration::from_millis(5_000),
+        role_detection: true,
         ..Config::default()
     };
 

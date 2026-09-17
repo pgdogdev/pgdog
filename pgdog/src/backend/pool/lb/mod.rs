@@ -280,7 +280,17 @@ impl LoadBalancer {
                     from.role_detected.load(Ordering::Acquire),
                     Ordering::Release,
                 );
-                *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+                // Disabled monitoring must not retain measurements that will
+                // never be refreshed (including when the delay disables it).
+                *to.pool.inner().lsn_stats.write() = if to.pool.config().lsn_checks_enabled() {
+                    from.pool.lsn_stats()
+                } else {
+                    Default::default()
+                };
+                // Preserve manual ban between configuration reloads.
+                if from.ban.is_manual() {
+                    to.ban.copy_state(&from.ban);
+                }
             }
         }
         destination.require_healthcheck_for_new_targets(&self.targets);

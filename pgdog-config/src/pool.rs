@@ -125,9 +125,16 @@ pub struct PoolConfig {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
+    /// Replica lag banning enabled.
+    pub replica_lag_banning: bool,
 }
 
 impl PoolConfig {
+    /// Whether this pool needs LSN monitoring and its check delay permits it.
+    pub fn lsn_checks_enabled(&self) -> bool {
+        (self.role_detection || self.replica_lag_banning) && self.lsn_check_delay < MAX_DURATION
+    }
+
     /// Resolve the settings of one connection pool: the `database` entry of
     /// `shard`, as `user` sees it.
     ///
@@ -228,6 +235,7 @@ impl PoolConfig {
             role_detection: database.is_role_auto(),
             resharding_only: database.resharding_only,
             lb_weight: database.lb_weight,
+            replica_lag_banning: general.replica_banning_enabled(),
             ..Default::default()
         }
     }
@@ -293,6 +301,7 @@ impl Default for PoolConfig {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
+            replica_lag_banning: false,
         }
     }
 }
