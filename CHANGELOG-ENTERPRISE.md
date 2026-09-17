@@ -9,8 +9,8 @@ the most optimal way to share those changes.
 
 | Application   | Docker image                                            |
 | ------------- | ------------------------------------------------------- |
-| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-09-10`         |
-| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-09-10` |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-09-17`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-09-17` |
 
 #### Features
 
