@@ -172,12 +172,7 @@ impl ConfigAndUsers {
     /// Prefer [`Self::prepared_statements_for`] with the pooler mode the client's
     /// pool actually runs in: users and databases can override `pooler_mode`.
     pub fn prepared_statements(&self) -> PreparedStatementsLevel {
-        // Disable prepared statements automatically in session mode
-        if self.config.general.pooler_mode == PoolerMode::Session {
-            PreparedStatementsLevel::Disabled
-        } else {
-            self.config.general.prepared_statements
-        }
+        self.prepared_statements_for(self.config.general.pooler_mode)
     }
 
     /// Prepared statements level for a client whose pool runs in `pooler_mode`.
@@ -191,11 +186,12 @@ impl ConfigAndUsers {
     /// not forced off for them, because the router still needs the statement
     /// text to route `Bind` and `Execute` on sharded clusters.
     pub fn prepared_statements_for(&self, pooler_mode: PoolerMode) -> PreparedStatementsLevel {
-        match pooler_mode {
-            PoolerMode::Session => self.prepared_statements(),
-            PoolerMode::Transaction | PoolerMode::Statement => {
-                self.config.general.prepared_statements
-            }
+        if pooler_mode == PoolerMode::Session
+            && self.config.general.pooler_mode == PoolerMode::Session
+        {
+            PreparedStatementsLevel::Disabled
+        } else {
+            self.config.general.prepared_statements
         }
     }
 
