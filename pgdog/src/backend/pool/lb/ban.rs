@@ -42,6 +42,20 @@ impl Ban {
         self.inner.read().ban.is_some()
     }
 
+    /// Carry manual ban over to the new ban state.
+    pub(crate) fn carry_manual_ban(&self, from: &Self) {
+        let ban = from
+            .inner
+            .read()
+            .ban
+            .as_ref()
+            .filter(|ban| ban.error == Error::ManualBan)
+            .cloned();
+        if let Some(ban) = ban {
+            self.inner.write().ban = Some(ban);
+        }
+    }
+
     /// Get ban error, if any.
     pub(crate) fn error(&self) -> Option<Error> {
         self.inner.read().ban.as_ref().map(|b| b.error)
@@ -146,7 +160,7 @@ impl Ban {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BanEntry {
     created_at: Instant,
     error: Error,
