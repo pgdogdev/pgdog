@@ -13,6 +13,10 @@ use fnv::FnvHashSet as HashSet;
 
 use super::*;
 
+fn cross_shard_variant_name(name: &str) -> String {
+    format!("{name}_cross_shard")
+}
+
 /// Global prepared statements cache.
 ///
 /// The cache contains two mappings:
@@ -47,8 +51,8 @@ impl MemoryUsage for GlobalCache {
 }
 
 impl GlobalCache {
-    pub(crate) fn cross_shard_variant_name(&self, name: &str) -> Option<String> {
-        let variant_name = format!("{name}_cross_shard");
+    pub(crate) fn existing_cross_shard_variant_name(&self, name: &str) -> Option<String> {
+        let variant_name = cross_shard_variant_name(name);
         self.cross_shard_variants
             .contains_key(&variant_name)
             .then_some(variant_name)
@@ -151,11 +155,11 @@ impl GlobalCache {
     }
 
     pub(crate) fn cross_shard_variant(&mut self, name: &str, query: &str) -> Option<String> {
-        if let Some(variant_name) = self.cross_shard_variant_name(name) {
+        if let Some(variant_name) = self.existing_cross_shard_variant_name(name) {
             return Some(variant_name);
         }
         let client_params = self.client_params(name);
-        let variant_name = format!("{name}_cross_shard");
+        let variant_name = cross_shard_variant_name(name);
 
         let mut parse = self.rewritten_parse(name)?;
         parse.rename(&variant_name);
@@ -328,7 +332,7 @@ impl GlobalCache {
         if let Some(stmt) = self.names.remove(name) {
             self.statements.remove(stmt.cache_key());
             self.cross_shard_variants
-                .remove(&format!("{name}_cross_shard"));
+                .remove(&cross_shard_variant_name(name));
         }
     }
 
@@ -423,7 +427,7 @@ mod test {
             .unwrap();
         assert_eq!(variant, format!("{base}_cross_shard"));
         assert_eq!(
-            cache.cross_shard_variant_name(&base).as_deref(),
+            cache.existing_cross_shard_variant_name(&base).as_deref(),
             Some(variant.as_str())
         );
         assert_eq!(
