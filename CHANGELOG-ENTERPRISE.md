@@ -5,7 +5,7 @@ the most optimal way to share those changes.
 
 ### v2026-09-17
 
-**OS version**: [v0.1.59](CHANGELOG.md#v0158)
+**OS version**: [v0.1.59](CHANGELOG.md#v0159)
 
 | Application   | Docker image                                            |
 | ------------- | ------------------------------------------------------- |
@@ -15,7 +15,7 @@ the most optimal way to share those changes.
 #### Features
 
 - Support query cancellation in multi-node PgDog deployments by broadcasting the cancel query request to all pods in the deployment
-- Add read-only mode to control plane UI to prevent operations from making accidental changes
+- Add read-only mode to control plane UI to prevent operators from making accidental changes
 - Add staging banner to the control plane UI, to let operators know they are _not_ using the production deployment of the control plane
 - Show `COPY_DATA` (resharding) tasks in the control plane UI
 - Add checkout timeout metric graph and Incident.io alert trigger
@@ -23,12 +23,11 @@ the most optimal way to share those changes.
 
 #### Bug fixes
 
-- Autodiscovery with `replicas_only = true` would deadlock the pool due to regression in load balancer target selection. Introduced in `v0.1.53` and fixed in `v0.1.59`.
+- Autodiscovery with `replicas_only = true` would deadlock the pool due to a regression in load balancer target selection. Introduced in `v0.1.53` and fixed in `v0.1.59`.
 - **Experimental** Raft snapshot storage moved to the database on disk, reducing snapshot size 100x. The database now only occupies a few KB on disk.
-- **Experimental** Control planes nodes using Raft would restart upon leadership changes, causing unnecessary downtime. Fixed by rebooting the internal jobs instead, keeping all containers alive.
+- **Experimental** Control plane nodes using Raft would restart upon leadership changes, causing unnecessary downtime. Fixed by rebooting the internal jobs instead, keeping all containers alive.
 - Query plans did not work correctly with the open source rewrite engine (in sharded deployments), planning the query the client sent, not the one executed by PgDog
 - Query plans would attempt to plan DDL, causing noise in the error log
-- 
 
 ### v2026-09-10
 

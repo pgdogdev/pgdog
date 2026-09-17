@@ -12,17 +12,17 @@ For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [C
 
 #### Bug fixes
 - **[Breaking]** Manual bans are now carried over to new connection pools after `RELOAD`. They were previously discarded, allowing traffic to flow through prematurely after configuration reload. Breaking because this changes existing behavior and may require operators to adjust migration scripts to issue a separate `UNBAN` command after `RELOAD`. @levkk 
-- Schema reload was not triggered on certain DDL statements, e.g., `CREATE TYPE`, which caused incorrect `RowDescription` messages sent to clients for direct-to-shard and cross-shard queries which touched those new types. @levkk 
+- Schema reload was not triggered on certain DDL statements, e.g., `CREATE TYPE`, which caused incorrect `RowDescription` messages to be sent to clients for direct-to-shard and cross-shard queries which touched those new types. @levkk 
 - 2pc WAL checkpointer could cause WAL corruption by removing segments necessary for recovery. Fixed by storing relationships between segments containing data about the same transaction, preventing dependent segments from being removed prematurely. @levkk 
 - SCRAM authentication could cause DoS because it was moved to background Tokio threads, which were unbounded. Added `background_workers` setting (default 0, disabling this whole feature) to limit that concurrency. Moved SCRAM auth back to the Tokio async worker pool. @levkk 
 - Fix segfault in query normalization (only affected the Enterprise edition) caused by a bug in our parser. Added `pg_raw_parse::normalize` to our regression test suite to prevent recurrences. @levkk 
 - Setting `connection_recovery` to `drop` would cause connection churn for connection drivers using prepared statements. Fixed by ensuring we don't drop connections in this scenario. @levkk 
-- Disable triggers on destination shards during resharding (by setting `replica_session_role` to `replica`). This prevents triggers from running twice and also ensures we can copy tables that use foreign keys and which delete / update relationships during resharding. @meskill 
-- Prevent deadlock in extended protocol pipelines when client sends a `Describe` out of specific order @murex971 
+- Disable triggers on destination shards during resharding (by setting `session_replication_role` to `replica`). This prevents triggers from running twice and also ensures we can copy tables that use foreign keys and which delete / update relationships during resharding. @meskill 
+- Prevent deadlock in extended protocol pipelines when a client sends a `Describe` out of a specific order @murex971 
 - Correctly handle omnisharded to sharded joins where the sharding key is present in omnisharded tables @ygxio @levkk 
 - Connections using `LISTEN` would incorrectly handle that command sent via extended protocol (returning `ReadyForQuery` prematurely) @murex971 
 - When using passthrough auth, reloading the config would not carry over any user-specific settings configured in `users.toml` @mehcode 
-- Role detection (`role = "auto"`) could cause deadlock in pool for read-only clusters that served write transactions (e.g., `BEGIN`, _not_ `BEGIN READ ONLY`) @levkk 
+- Role detection (`role = "auto"`) could cause deadlock in the pool for read-only clusters that served write transactions (e.g., `BEGIN`, _not_ `BEGIN READ ONLY`) @levkk 
 - Query router wouldn't handle nested typecasts correctly for shard key detection @sgrif 
 
 #### Performance
