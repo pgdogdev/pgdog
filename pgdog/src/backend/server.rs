@@ -1329,7 +1329,7 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub(crate) mod test {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use bytes::{BufMut, Bytes, BytesMut};
     use pgdog_config::prepared_statements::PreparedStatementsConfig;
@@ -1438,6 +1438,16 @@ pub(crate) mod test {
         (server, peer.await.unwrap())
     }
 
+    async fn wait_for_liveness(server: &mut Server, expected: Liveness) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while server.liveness() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("server socket did not reach expected liveness state");
+    }
+
     #[test]
     fn test_liveness_without_stream_is_closed() {
         let mut server = Server::default();
@@ -1452,9 +1462,8 @@ pub(crate) mod test {
         assert_eq!(server.liveness(), Liveness::Clean);
 
         drop(peer);
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::Closed);
+        wait_for_liveness(&mut server, Liveness::Closed).await;
     }
 
     #[tokio::test]
@@ -1463,9 +1472,8 @@ pub(crate) mod test {
 
         peer.write_all(b"E").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut server, Liveness::DataPending).await;
     }
 
     #[tokio::test]
