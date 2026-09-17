@@ -206,24 +206,19 @@ impl<'a> StatementRewrite<'a> {
             self.limit_offset(&select, &mut plan);
         }
 
-        let timestamp_rewrite = !matches!(
-            config().config.rewrite.omni_non_deterministic_functions,
+        let nd_function_rewrite = !matches!(
+            config().config.rewrite.non_deterministic_functions,
             RewriteMode::Ignore
         );
 
-        if timestamp_rewrite {
+        if nd_function_rewrite {
             match stmt.stmt_mut() {
                 NodeMut::InsertStmt(_) => {
-                    self.rewrite_timestamp_functions(
-                        stmt.stmt_mut(),
-                        mem,
-                        &mut next_param,
-                        &mut plan,
-                    )?;
+                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut next_param, &mut plan)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
-                        self.rewrite_timestamp_functions(
+                        self.rewrite_nd_functions(
                             prepare.query_mut(),
                             mem,
                             &mut next_param,
@@ -237,7 +232,7 @@ impl<'a> StatementRewrite<'a> {
 
         // Handle top-level PREPARE/EXECUTE statements.
         let prepared_result =
-            self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan, timestamp_rewrite)?;
+            self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan, nd_function_rewrite)?;
         if prepared_result.rewritten {
             self.rewritten = true;
             plan.prepare_rewrites = prepared_result.rewrites;

@@ -15,6 +15,7 @@ use sqlx::PgTransaction;
 use sqlx::Pool;
 use sqlx::Postgres;
 use sqlx::Transaction;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::postgres::PgRow;
 use sqlx::postgres::types::PgTimeTz;
 use sqlx::{Executor, Row};
@@ -23,6 +24,46 @@ use sqlx::{Executor, Row};
 // TODO: Test for other caching issues
 // TODO: Test to make sure this doesn't affect harded tables (it doesn't; but doesn't hurt to assert that)
 // TODO: Assert what happens if we don't explicitly set timezone
+
+/// It's in our interest to re-write now() (and other functions that use the Transaction start time)
+/// to maintain consistency in Transactions that use multiple connections to preserve Postgres behavior.
+///
+/// This tests a case where we're performing two INSERTs which resolve to different Shards. This uses 2 connections.
+/// Previously, the now() values would be different in each.
+#[tokio::test]
+async fn two_conns_transaction_time_reuse() {
+    let single_sharded_list_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect("postgres://pgdog:pgdog@127.0.0.1:6432/single_sharded_list?application_name=sqlx")
+        .await
+        .unwrap();
+
+    let mut transaction = single_sharded_list_pool.begin().await.unwrap();
+
+    {
+        // Both use DEFAULT now() into timestamptz
+        // 1 is mapped to Shard 0
+        // 11 is mapped to Shard 1
+        let row_1 = sqlx::raw_sql("INSERT INTO sharded(id) VALUES (1) RETURNING *")
+            .fetch_one(&mut *transaction)
+            .await
+            .unwrap();
+
+        let row_2 = sqlx::raw_sql("INSERT INTO sharded(id) VALUES (11) RETURNING *")
+            .fetch_one(&mut *transaction)
+            .await
+            .unwrap();
+
+        let (row_1_created, row_2_created) = (
+            row_1.get::<DateTime<Utc>, &str>("created_at"),
+            row_2.get::<DateTime<Utc>, &str>("created_at"),
+        );
+
+        assert_eq!(row_1_created, row_2_created);
+    }
+
+    transaction.rollback().await.unwrap();
+}
 
 /// Test that an INSERT into an omnisharded table which uses UUID functions is
 /// re-written to a constant to be consistent across all shards.

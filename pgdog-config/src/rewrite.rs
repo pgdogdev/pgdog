@@ -97,6 +97,9 @@ pub struct Rewrite {
     /// that will not be consistent when performing the functions separately on each shard.
     /// Thus, it re-writes all such functions before performing the `INSERT` with constant values to maintain consistency.
     ///
+    /// It also handles re-writing `NOW()` (and other funtions that rely on transaction start time) to be consistent
+    /// within a transaction. This is especially important when we write such a function to multiple Shards in a singular transaction.
+    ///
     /// Example: `NOW()` is re-written to `2026-09-15 18:14:09.123456-05` (or whatever the current time is)
     /// before performing the individual `INSERT` operations.
     ///
@@ -106,9 +109,9 @@ pub struct Rewrite {
     ///
     /// _Default:_ `ignore`
     ///
-    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#omni_non_deterministic_functions>
-    #[serde(default = "Rewrite::default_omni_non_deterministic_functions")]
-    pub omni_non_deterministic_functions: RewriteMode,
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#non_deterministic_functions>
+    #[serde(default = "Rewrite::default_non_deterministic_functions")]
+    pub non_deterministic_functions: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -118,7 +121,7 @@ impl Default for Rewrite {
             shard_key: Self::default_shard_key(),
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
-            omni_non_deterministic_functions: Self::default_omni_non_deterministic_functions(),
+            non_deterministic_functions: Self::default_non_deterministic_functions(),
         }
     }
 }
@@ -136,7 +139,7 @@ impl Rewrite {
         RewriteMode::Ignore
     }
 
-    const fn default_omni_non_deterministic_functions() -> RewriteMode {
+    const fn default_non_deterministic_functions() -> RewriteMode {
         RewriteMode::Ignore
     }
 }

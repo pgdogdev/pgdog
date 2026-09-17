@@ -95,10 +95,13 @@ impl TimeFunctionOutput {
     }
 }
 
+#[derive(PartialEq)]
 enum TimeReference {
     /// Changes with statement execution
     Current,
 
+    /// Time when a transaction is started; or, when an implicit transaction,
+    /// is the same as `StatementStart`.
     TransactionStart,
 
     /// "returns the start time of the current statement (more specifically,
@@ -212,6 +215,13 @@ impl TimeFunctionType {
             | Self::Now => TimeReference::TransactionStart,
             Self::StatementTimestamp => TimeReference::StatementStart,
         }
+    }
+
+    /// If we're considering re-writing a `TimeFunction`, the decision as to whether or not we should
+    /// rewrite rests solely on the corresponding `TimeReference` being `TransactionStart`. Otherwise,
+    /// there's no point; Postgres can achieve the same functionality without our assistance.
+    pub(super) fn apply_rewrite_on_sharded_tables(&self) -> bool {
+        self.time_reference() == TimeReference::TransactionStart
     }
 
     /// Represents what Postgres type the `TimeFunction` would normally output.

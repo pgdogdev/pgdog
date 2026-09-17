@@ -240,6 +240,13 @@ impl RewritePlan {
             }
         }
 
+        if request.is_executable()
+            && request.needs_parse_injection()
+            && let Some(parse) = request.last_parse.as_mut()
+        {
+            anonymous_client_params = self.apply_parse(parse);
+        }
+
         request.anonymous_client_params = anonymous_client_params;
 
         self.apply_after_messages(request)
