@@ -3,9 +3,35 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-09-17
+
+**OS version**: [v0.1.59](CHANGELOG.md#v0159)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-09-17`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-09-17` |
+
+#### Features
+
+- Support query cancellation in multi-node PgDog deployments by broadcasting the cancel query request to all pods in the deployment
+- Add read-only mode to control plane UI to prevent operators from making accidental changes
+- Add staging banner to the control plane UI, to let operators know they are _not_ using the production deployment of the control plane
+- Show `COPY_DATA` (resharding) tasks in the control plane UI
+- Add checkout timeout metric graph and Incident.io alert trigger
+
+
+#### Bug fixes
+
+- Autodiscovery with `replicas_only = true` would deadlock the pool due to a regression in load balancer target selection. Introduced in `v0.1.53` and fixed in `v0.1.59`.
+- **Experimental** Raft snapshot storage moved to the database on disk, reducing snapshot size 100x. The database now only occupies a few KB on disk.
+- **Experimental** Control plane nodes using Raft would restart upon leadership changes, causing unnecessary downtime. Fixed by rebooting the internal jobs instead, keeping all containers alive.
+- Query plans did not work correctly with the open source rewrite engine (in sharded deployments), planning the query the client sent, not the one executed by PgDog
+- Query plans would attempt to plan DDL, causing noise in the error log
+
 ### v2026-09-10
 
-**OS version**: [v0.1.58](CHANGELOG.md#v0.1.58)
+**OS version**: [v0.1.58](CHANGELOG.md#v0158)
 
 | Application   | Docker image                                            |
 | ------------- | ------------------------------------------------------- |
@@ -23,7 +49,7 @@ the most optimal way to share those changes.
 
 ### v2026-09-03
 
-**OS version**: [v0.1.57](CHANGELOG.md#v0.1.57)
+**OS version**: [v0.1.57](CHANGELOG.md#v0157)
 
 | Application   | Docker image                                            |
 | ------------- | ------------------------------------------------------- |
