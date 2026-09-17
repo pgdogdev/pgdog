@@ -1066,16 +1066,19 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                 }
             }
             Node::A_Expr(expr)
-                if matches!(
-                    expr.kind,
-                    nodes::A_Expr_Kind::AEXPR_OP | nodes::A_Expr_Kind::AEXPR_IN
-                ) && expr
-                    .name()
-                    .into_iter()
-                    .exactly_one()
-                    .ok()
-                    .and_then(Node::as_str)
-                    == Some("=") =>
+                if matches!(expr.kind, nodes::A_Expr_Kind::AEXPR_NOT_DISTINCT)
+                    || matches!(
+                        expr.kind,
+                        nodes::A_Expr_Kind::AEXPR_OP
+                            | nodes::A_Expr_Kind::AEXPR_IN
+                            | nodes::A_Expr_Kind::AEXPR_OP_ANY
+                    ) && expr
+                        .name()
+                        .into_iter()
+                        .exactly_one()
+                        .ok()
+                        .and_then(Node::as_str)
+                        == Some("=") =>
             {
                 for (column, value) in [(expr.lexpr(), expr.rexpr()), (expr.rexpr(), expr.lexpr())]
                 {
@@ -1128,11 +1131,9 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         node: Node<'a>,
         ctx: &SearchContext<'a>,
     ) -> ControlFlow<Result<Shard, Error>, Option<SearchResult<'a>>> {
-        use itertools::Either;
-
         match node {
             // Value types - these are leaf nodes representing actual values
-            Node::A_Const(_) | Node::ParamRef(_) | Node::FuncCall(_) => {
+            Node::A_Const(_) | Node::ParamRef(_) | Node::TypeCast(_) => {
                 ControlFlow::Continue(Value::try_from(node).map(SearchResult::Value).ok())
             }
 
@@ -1154,25 +1155,19 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                     .collect(),
             ))),
 
-            Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| None),
-
+            // Unrecognized expr. We can't determine the value to use for
+            // routing, but we can still look for subselects that may determine
+            // the route.
             _ => {
-                let result = walk::walk_manual(node, |node| {
-                    match self
-                        .search_expr(node, ctx)
-                        .map_break(|b| b.map(Either::Left))?
-                    {
-                        Some(result) => ControlFlow::Break(Ok(Either::Right(result))),
-                        // We're manually recursing
-                        None => Recurse::no(),
-                    }
+                let result = walk::walk_manual(node, |node| match node {
+                    Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| Recurse::No),
+                    _ => Recurse::yes(),
                 })
                 .transpose()
                 .break_err()?;
 
                 match result {
-                    Some(Either::Left(shard)) => ControlFlow::Break(Ok(shard)),
-                    Some(Either::Right(values)) => ControlFlow::Continue(Some(values)),
+                    Some(shard) => ControlFlow::Break(Ok(shard)),
                     None => ControlFlow::Continue(None),
                 }
             }
@@ -1417,6 +1412,11 @@ mod test {
     #[test]
     fn test_simple_select() {
         let result = run_test("SELECT * FROM sharded WHERE id = 1", None);
+        assert!(result.unwrap().is_some());
+        let result = run_test(
+            "SELECT * FROM sharded WHERE id IS NOT DISTINCT FROM 1",
+            None,
+        );
         assert!(result.unwrap().is_some());
     }
 
@@ -2473,6 +2473,25 @@ mod test {
     fn test_column_only_select() {
         let result = run_test_column_only("SELECT * FROM users WHERE tenant_id = 1", None).unwrap();
         assert!(result.is_some(), "Should detect column-only sharding key");
+    }
+
+    #[test]
+    fn test_column_with_unrecognized_expr() {
+        let result = run_test_column_only(
+            "SELECT * FROM users WHERE tenant_id = (($1->>'_shard_key'))::int4",
+            Some(&Bind::new_params(
+                "",
+                &[Parameter::new(br#"{"_shard_key":1}"#)],
+            )),
+        );
+        // If this test begins failing due to the addition of support for
+        // routing based on json expressions, don't delete this test. Change
+        // it to some other random unsupported expression
+        std::assert_matches!(
+            result,
+            Ok(None),
+            "Should not be able to route based on an unrecognized expr"
+        );
     }
 
     #[test]
