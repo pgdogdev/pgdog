@@ -23,6 +23,7 @@ use frontend::client::query_engine::two_pc::Manager;
 use frontend::listener::Listener;
 use frontend::prepared_statements;
 use tokio::runtime::Builder;
+use tokio::select;
 use tracing::{error, info, warn};
 use util::pgdog_version;
 
@@ -143,16 +144,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.config.general.unique_id_function
     );
 
-    runtime.block_on(async move { pgdog(args.command).await })?;
+    let result = runtime.block_on(async move {
+        select! {
+            result = pgdog(args.command) => result.map(|()| false),
 
-    Ok(())
+            _ = sigterm()? => {
+                info!("🐕 PgDog is shutting down immediately [SIGTERM]");
+                Ok(true)
+            }
+        }
+    });
+
+    if matches!(result, Ok(true)) {
+        // on SIGTERM, stop without waiting for in-flight work
+        runtime.shutdown_background();
+    }
+
+    // Any shutdown routines go below.
+    plugin::shutdown();
+
+    result.map(|_| ())
 }
 
 async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
-    // Run atexit handlers on SIGTERM (e.g. llvm-cov profile flushing).
-    #[cfg(unix)]
-    install_sigterm_handler();
-
     // Preload TLS. Resulting primitives
     // are async, so doing this after Tokio launched seems prudent.
     net::tls::load()?;
@@ -288,30 +302,30 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     api::tasks_storage().cancel_all();
     tasks::shutdown().await;
 
-    // Any shutdown routines go below.
-    plugin::shutdown();
-
     info!("🐕 PgDog is shutting down");
 
     Ok(())
 }
 
-/// Install a SIGTERM handler that exits the process via [`exit`], running
-/// `atexit` handlers. Without it, SIGTERM terminates the process outright,
-/// which skips the llvm-cov profile flush (no .profraw written) used by
-/// integration test coverage. Behavior is otherwise unchanged: PgDog stops
-/// immediately.
+/// Returns a future that resolves on SIGTERM.
+///
+/// Without it, SIGTERM terminates the process outright,
+/// which skips the llvm-cov profile flush (no .profraw written)
+/// used by integration test coverage.
 #[cfg(unix)]
-fn install_sigterm_handler() {
+fn sigterm() -> std::io::Result<impl Future<Output = ()>> {
     use tokio::signal::unix::{SignalKind, signal};
 
-    if let Ok(mut sigterm) = signal(SignalKind::terminate()) {
-        tokio::spawn(async move {
-            sigterm.recv().await;
-            info!("🐕 PgDog is shutting down immediately [SIGTERM]");
-            exit(0);
-        });
-    }
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    Ok(async move {
+        sigterm.recv().await;
+    })
+}
+
+#[cfg(not(unix))]
+fn sigterm() -> std::io::Result<impl Future<Output = ()>> {
+    Ok(std::future::pending())
 }
 
 fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::runtime::Runtime> {
