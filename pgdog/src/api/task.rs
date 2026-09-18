@@ -185,18 +185,12 @@ impl TaskEntry {
 
     /// Transition the task to the specified progress state.
     /// No-op if the task is already in terminal state.
-    fn transition(&self, mut progress: TaskProgress) {
+    fn transition(&self, progress: TaskProgress) {
         let _enter = self.tracing_span.enter();
 
         let mut state = self.state.write();
         if state.progress.is_terminal() {
             return;
-        }
-
-        let panicked = matches!(progress, TaskProgress::Panic { .. });
-        if progress.is_terminal() && !panicked && self.cancellation_token.is_cancelled() {
-            info!("task is cancelled, ignoring current progress ({progress})");
-            progress = TaskProgress::Cancelled;
         }
 
         debug!("task state transition to {progress}");
@@ -509,6 +503,10 @@ impl TaskStorage {
                 Ok(Ok(res)) => {
                     ctx.transition(TaskProgress::Finished);
                     let _ = sender.send(Ok(res));
+                }
+                Ok(Err(err)) if cancellation_token.is_cancelled() => {
+                    ctx.transition(TaskProgress::Cancelled);
+                    let _ = sender.send(Err(TaskError::Failed(err)));
                 }
                 Ok(Err(err)) => {
                     ctx.transition(TaskProgress::error(err.to_string()));
@@ -1123,7 +1121,7 @@ mod tests {
         assert_eq!(*state.lock(), "cancelled");
 
         let entry = storage.task(task_id).unwrap();
-        assert!(matches!(entry.state().progress, TaskProgress::Cancelled));
+        assert!(matches!(entry.state().progress, TaskProgress::Finished));
     }
 
     #[test(start_paused = true)]
@@ -1189,7 +1187,7 @@ mod tests {
         let res = task.await;
         assert!(res.unwrap());
         let entry = storage.task(task_id).unwrap();
-        assert!(matches!(entry.state().progress, TaskProgress::Cancelled));
+        assert!(matches!(entry.state().progress, TaskProgress::Finished));
     }
 
     #[test(start_paused = true)]
@@ -1745,7 +1743,10 @@ mod tests {
 
         let subtasks = root.subtasks();
         assert_eq!(subtasks.len(), 1);
-        assert_eq!(subtasks[0].state().progress, TaskProgress::Cancelled);
+        assert!(matches!(
+            subtasks[0].state().progress,
+            TaskProgress::Error { .. }
+        ));
     }
 
     #[test]

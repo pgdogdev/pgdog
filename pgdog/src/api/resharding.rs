@@ -124,9 +124,10 @@ impl Task for ReshardTask {
                 orchestrator.refresh()?;
 
                 // `auto_cutover` (reshard) cuts over on its own; otherwise the
-                // task runs until an operator `CUTOVER`/`STOP_TASK`. Both of
-                // those resolve to `Ok`, so awaiting surfaces only a genuine
-                // replication failure.
+                // task runs until an operator `CUTOVER`/`STOP_TASK`. A stop in
+                // a forward phase resolves to `Err(DataSyncAborted)` and runs
+                // the cleanup below; a stop in a reverse phase resolves to
+                // `Ok`, because the migration is already complete.
                 ctx.run(
                     ReplicationTask::builder()
                         .orchestrator(orchestrator.clone())

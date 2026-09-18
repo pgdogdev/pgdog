@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use super::super::{Error, publisher::Table};
 use super::ReplicationSlot;
@@ -81,10 +82,21 @@ impl Publisher {
         source: &Cluster,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
+        let result = self.create_every_slot(source, cancel).await;
+        if result.is_err()
+            && let Err(cleanup) = Box::pin(self.cleanup()).await
+        {
+            warn!("failed to drop partially created replication slots: {cleanup}");
+        }
+        result
+    }
+
+    async fn create_every_slot(
+        &mut self,
+        source: &Cluster,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
         for (number, shard) in source.shards().iter().enumerate() {
-            // Cancel at slot boundaries so we never tear down an in-flight
-            // CREATE_REPLICATION_SLOT: the current slot completes, the next is
-            // not started. Slots already created are dropped by the caller.
             if cancel.is_cancelled() {
                 return Err(Error::DataSyncAborted);
             }

@@ -31,6 +31,12 @@ impl ReplicationProgress {
 
     /// Returns the entity to update the progress for a single source shard
     pub(crate) fn updater_for_shard(&self, shard: usize) -> ReplicationProgressShardUpdater {
+        assert!(
+            shard < self.shards.len(),
+            "shard {shard} is out of range for {} shards",
+            self.shards.len()
+        );
+
         ReplicationProgressShardUpdater {
             shards: self.shards.clone(),
             shard,
@@ -45,7 +51,7 @@ impl ReplicationProgress {
             let lag = shard.lock().replication_lag?;
             max = Some(max.map_or(lag, |m| m.max(lag)));
         }
-        max.map(|l| l as u64)
+        max.map(|l| l.max(0) as u64)
     }
 
     /// Get the time elapsed from most recent transaction update for a progress

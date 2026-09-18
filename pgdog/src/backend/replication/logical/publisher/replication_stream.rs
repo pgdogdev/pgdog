@@ -16,13 +16,13 @@ use crate::backend::replication::logical::publisher::replication_progress::{
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
 use crate::util::{safe_interval, safe_sleep};
+use tokio::time::MissedTickBehavior;
 
 /// Runs the replication stream from a single shard (slot)
 /// to the destination cluster.
 #[derive(Debug)]
 pub(crate) struct ReplicationStream {
-    // W: maybe remove it
-    source: Cluster,
+    source_name: String,
     dest_cluster: Cluster,
     updater: ReplicationProgressShardUpdater,
 }
@@ -34,7 +34,7 @@ impl ReplicationStream {
         updater: ReplicationProgressShardUpdater,
     ) -> Self {
         Self {
-            source: source.clone(),
+            source_name: source.name().to_owned(),
             dest_cluster: dest.clone(),
             updater,
         }
@@ -46,14 +46,14 @@ impl ReplicationStream {
 
     pub(crate) async fn run(
         &self,
-        mut slot: ReplicationSlot,
+        slot: &mut ReplicationSlot,
         tables: Vec<Table>,
         stop: &CancellationToken,
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest_cluster, tables);
         stream.set_current_lsn(slot.lsn().lsn);
         self.updater.update(|p| p.applied_lsn = Some(slot.lsn()));
-        let result = self.replicate(&mut slot, &mut stream, stop).await;
+        let result = self.replicate(slot, &mut stream, stop).await;
         let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
         let missed = stream.missed_rows();
         self.updater.update(|p| {
@@ -79,7 +79,7 @@ impl ReplicationStream {
         if missed.non_zero() {
             warn!(
                 "replication {} => {} has missing rows: {}",
-                self.source.name(),
+                self.source_name,
                 self.dest_cluster.name(),
                 missed
             );
@@ -94,6 +94,7 @@ impl ReplicationStream {
         stop: &CancellationToken,
     ) -> Result<(), Error> {
         let mut check_lag = safe_interval(Duration::from_secs(1));
+        check_lag.set_missed_tick_behavior(MissedTickBehavior::Delay);
         slot.start_replication().await?;
 
         let progress = Progress::new_stream();
@@ -103,16 +104,20 @@ impl ReplicationStream {
         let delay = self.dest_cluster.resharding_replication_retry_min_delay();
 
         let mut attempt = 0usize;
-        let mut stopping = false;
 
         loop {
+            let stopping = slot.stopped();
+
             select! {
+                biased;
+
                 _ = stop.cancelled(), if !stopping => {
-                    // trigger the stop replication and enable the stopped flag
-                    // to not call stop again but still drain the messages from
-                    // slot to stream until the source closed by itself.
-                    slot.stop_replication().await?;
-                    stopping = true;
+                    if let Err(err) = slot.stop_replication().await {
+                        warn!(
+                            "[replication] stop request failed for slot \"{}\": {err}",
+                            slot.name()
+                        );
+                    }
                 }
 
                 replication_data = slot.replicate(Duration::MAX) => {
@@ -121,8 +126,6 @@ impl ReplicationStream {
                     // to the single retry/abort site below.
                     let done: Result<bool, Error> = async {
                         let Some(replication_data) = replication_data? else {
-                            // no data - drop the slot and mark it as done
-                            slot.drop_slot().await?;
                             return Ok(true);
                         };
                         match replication_data {
@@ -149,13 +152,13 @@ impl ReplicationStream {
                                     debug!(
                                         "origin at lsn {} [{}]",
                                         Lsn::from_i64(ka.wal_end),
-                                        slot.server()?.addr()
+                                        slot.addr()
                                     );
                                     progress.update(stream.bytes_sharded(), ka.wal_end);
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
+                                        let applied = Lsn::from_i64(su.last_applied);
                                         slot.status_update(su).await?;
-                                        let applied = Lsn::from_i64(stream.status_update().last_applied);
                                         self.updater.update(|p| {
                                             p.last_transaction = Some(Instant::now());
                                             p.applied_lsn = Some(applied);
@@ -175,8 +178,7 @@ impl ReplicationStream {
                         Ok(true) => break,
                         Ok(false) => {}
                         Err(err)
-                            if !stopping
-                                && err.is_retryable()
+                            if err.is_retryable()
                                 && (max_attempts == 0 || attempt < max_attempts) =>
                         {
                             attempt += 1;
@@ -204,7 +206,12 @@ impl ReplicationStream {
                 }
 
                 _ = check_lag.tick() => {
-                    self.update_progress(slot, stream).await?;
+                    if let Err(err) = self.update_progress(slot, stream).await {
+                        warn!(
+                            "[replication] progress update failed for slot \"{}\": {err}",
+                            slot.name()
+                        );
+                    }
                 }
             }
         }
@@ -299,7 +306,9 @@ mod tests {
             let replication = Arc::clone(&self.replication);
             let stop = self.stop.clone();
             self.worker = Some(tokio::spawn(async move {
-                Box::pin(replication.run(slot, tables, &stop)).await
+                let result = Box::pin(replication.run(&mut slot, tables, &stop)).await;
+                let dropped = slot.drop_slot().await;
+                result.and(dropped)
             }));
             Ok(())
         }

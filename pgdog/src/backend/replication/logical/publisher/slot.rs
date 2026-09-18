@@ -396,19 +396,35 @@ impl ReplicationSlot {
 
     /// Drop the source connection and reconnect, restarting replication from the
     /// last confirmed position (`self.lsn`, kept in sync by `status_update`).
+    /// A stream that was already asked to stop is asked again.
     pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
+        let stopped = self.stopped;
         self.server = None;
         self.connect().await?;
-        self.start_replication().await
+        self.start_replication().await?;
+
+        if stopped {
+            self.stop_replication().await?;
+        }
+
+        Ok(())
     }
 
     /// Ask remote to close stream.
     pub(crate) async fn stop_replication(&mut self) -> Result<(), Error> {
+        if self.stopped {
+            return Ok(());
+        }
+
+        self.stopped = true;
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
-        self.stopped = true;
 
         Ok(())
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Current slot LSN.

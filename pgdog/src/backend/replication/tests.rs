@@ -3,24 +3,25 @@ use std::time::Duration;
 use pgdog_config::{ConfigAndUsers, Database, ShardedTableConfig, User};
 use tokio_util::sync::CancellationToken;
 
+use super::logical::orchestrator::Orchestrator;
 use super::logical::publisher::replication_progress::ReplicationProgress;
-use super::logical::publisher::replication_stream::ReplicationStream;
-use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
+use super::logical::{Error, data_sync::DataSync};
 use crate::{
     api::{
-        replication::ReplicationShardTask,
+        replication::{ReplicationClusterStop, ReplicationClusterTask},
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
         task::{TaskError, TaskWaiter},
     },
     backend::{
-        Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
+        ConnectReason, Error as BackendError, Server, ServerOptions, databases,
         pool::{Address, Request},
         schema::sync::SchemaSyncError,
         server::test::test_server,
     },
     config::{config, set},
 };
+use pgdog_stats::ReplicationDirection;
 #[tokio::test]
 async fn wait_for_replication_finishes_with_unrelated_writes()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -28,7 +29,6 @@ async fn wait_for_replication_finishes_with_unrelated_writes()
     let destination = "unrelated_writes_test_dest";
     let original_config = config();
     let mut admin = test_server().await;
-    let mut publisher = Publisher::new(schema, schema.into());
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
@@ -50,9 +50,13 @@ async fn wait_for_replication_finishes_with_unrelated_writes()
             ))
             .await?;
 
-        let stop = CancellationToken::new();
-        publisher.prepare_replication(&source, &stop).await?;
-        let (_, tasks) = start_replication(&mut publisher, &source, &dest, &stop).await?;
+        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
+        orchestrator
+            .publisher()
+            .await
+            .prepare_replication(&source, &CancellationToken::new())
+            .await?;
+        let (task, stop) = start_replication(&orchestrator);
         let result = async {
             server
                 .execute_checked(format!(
@@ -66,24 +70,15 @@ async fn wait_for_replication_finishes_with_unrelated_writes()
         }
         .await;
 
-        stop.cancel();
-        let mut drained = Ok(());
-        for task in tasks {
-            drained = drained.and(task.await);
-        }
-        result?;
+        stop.stop(None);
+        let drained = drain_replication(task).await;
         drained?;
+        result?;
         Ok::<_, Box<dyn std::error::Error>>(())
     }
     .await;
 
-    cleanup_replication_test(
-        &mut publisher,
-        &mut admin,
-        &original_config,
-        [schema, destination],
-    )
-    .await?;
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
     result
 }
 
@@ -122,28 +117,22 @@ async fn setup_replication_test(
     Ok(())
 }
 
-async fn start_replication(
-    publisher: &mut Publisher,
-    source: &Cluster,
-    destination: &Cluster,
-    stop: &CancellationToken,
-) -> Result<(ReplicationProgress, Vec<TaskWaiter<(), Error>>), Error> {
-    let progress = ReplicationProgress::new(source.shards().len());
-    let tasks = (0..source.shards().len())
-        .map(|source_shard| {
-            let tables = publisher.pop_tables(source_shard)?;
-            let slot = publisher.pop_slot(source_shard)?;
-            let updater = progress.updater_for_shard(source_shard);
-            Ok(ReplicationShardTask::builder()
-                .source_shard(source_shard)
-                .slot(slot)
-                .tables(tables)
-                .replication_stream(ReplicationStream::new(source, destination, updater))
-                .stop(stop.clone())
-                .build())
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok((progress, tasks.into_iter().map(run_task).collect()))
+fn start_replication(
+    orchestrator: &Orchestrator,
+) -> (TaskWaiter<(), Error>, ReplicationClusterStop) {
+    let progress = ReplicationProgress::new(orchestrator.source.shards().len());
+    let (cluster, stop) = ReplicationClusterTask::new(
+        orchestrator.clone(),
+        ReplicationDirection::Forward,
+        progress,
+    );
+
+    (run_task(cluster), stop)
+}
+
+async fn drain_replication(task: TaskWaiter<(), Error>) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(60), task).await??;
+    Ok(())
 }
 
 async fn wait_for_slot(
@@ -173,36 +162,27 @@ async fn wait_for_slot(
 }
 
 async fn replicate_until_caught_up(
-    publisher: &mut Publisher,
-    source: &Cluster,
-    destination: &Cluster,
+    orchestrator: &Orchestrator,
     slot_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut server = source.primary(0, &Request::default()).await?;
-    let stop = CancellationToken::new();
-    publisher.prepare_replication(source, &stop).await?;
-    let (_, handles) = start_replication(publisher, source, destination, &stop).await?;
+    let mut server = orchestrator.source.primary(0, &Request::default()).await?;
+    let (task, stop) = start_replication(orchestrator);
 
     let caught_up = wait_for_slot(&mut server, &format!("{slot_name}_0")).await;
 
-    stop.cancel();
-    let mut drained = Ok(());
-    for handle in handles {
-        drained = drained.and(handle.await);
-    }
-    caught_up?;
+    stop.stop(None);
+    let drained = drain_replication(task).await;
     drained?;
+    caught_up?;
     Ok(())
 }
 
 async fn cleanup_replication_test(
-    publisher: &mut Publisher,
     admin: &mut Server,
     original_config: &ConfigAndUsers,
     test_databases: [&str; 2],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cleanup = Box::pin(async {
-        publisher.cleanup().await?;
         for database in test_databases {
             let slots: Vec<String> = admin
                 .fetch_all(format!(
@@ -266,7 +246,6 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
     let child = format!("{schema}.children");
     let original_config = config();
     let mut admin = test_server().await;
-    let mut publisher = Publisher::new(&schema, schema.clone());
     let result = async {
         setup_replication_test(&mut admin, &schema, &destination).await?;
         let source = databases::databases().schema_owner(&schema)?;
@@ -298,17 +277,25 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
         let source = databases::databases().schema_owner(&schema)?;
         let dest = databases::databases().schema_owner(&destination)?;
         let cancel = CancellationToken::new();
-        publisher.sync_tables(true, &source).await?;
-        publisher.create_slots(&source, &cancel).await?;
-        let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
-        let child_table = tables
-            .iter()
-            .find(|table| table.table.name == "children")
-            .ok_or(Error::MissingData)?;
-        let parent_table = tables
-            .iter()
-            .find(|table| table.table.name == "parents")
-            .ok_or(Error::MissingData)?;
+        let orchestrator = Orchestrator::new(&schema, &destination, &schema, Some(schema.clone()))?;
+        let (child_table, parent_table) = {
+            let mut publisher = orchestrator.publisher().await;
+            publisher.sync_tables(true, &source).await?;
+            publisher.create_slots(&source, &cancel).await?;
+            let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
+            let child_table = tables
+                .iter()
+                .find(|table| table.table.name == "children")
+                .ok_or(Error::MissingData)?
+                .clone();
+            let parent_table = tables
+                .iter()
+                .find(|table| table.table.name == "parents")
+                .ok_or(Error::MissingData)?
+                .clone();
+
+            (child_table, parent_table)
+        };
         let sync = DataSync {
             source: &source,
             dest: &dest,
@@ -316,7 +303,7 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
         };
         // copy the child table first, so it won't have updates we'll do during copy
         let child_table = sync
-            .copy_table(child_table, source_server.addr(), &cancel, |_| {})
+            .copy_table(&child_table, source_server.addr(), &cancel, |_| {})
             .await?;
 
         // update the fk related data, so it would be present
@@ -352,14 +339,17 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
         // that should have an updated snapshot already with the queries
         // executed above.
         let parent_table = sync
-            .copy_table(parent_table, source_server.addr(), &cancel, |_| {})
+            .copy_table(&parent_table, source_server.addr(), &cancel, |_| {})
             .await?;
-        publisher.post_data_sync([(0, vec![child_table, parent_table])].into());
+        orchestrator
+            .publisher()
+            .await
+            .post_data_sync([(0, vec![child_table, parent_table])].into());
         drop(source_server);
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
 
         // run the replication and wait for all data to be copied
-        replicate_until_caught_up(&mut publisher, &source, &dest, &schema).await?;
+        replicate_until_caught_up(&orchestrator, &schema).await?;
         run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await?;
         Ok::<_, Box<dyn std::error::Error>>(dest)
     }
@@ -383,13 +373,7 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
     }
     .await;
 
-    cleanup_replication_test(
-        &mut publisher,
-        &mut admin,
-        &original_config,
-        [&schema, &destination],
-    )
-    .await?;
+    cleanup_replication_test(&mut admin, &original_config, [&schema, &destination]).await?;
     let (parents, children, parent_ids) = validation?;
     assert_eq!(parents, [2, 3]);
     assert_eq!(children, [2, 3, 4]);
@@ -407,7 +391,6 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
     let destination = "fk_copy_test_dest";
     let original_config = config();
     let mut admin = test_server().await;
-    let mut publisher = Publisher::new(schema, schema.into());
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
@@ -437,17 +420,25 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
         let source = databases::databases().schema_owner(schema)?;
         let dest = databases::databases().schema_owner(destination)?;
         let cancel = CancellationToken::new();
-        publisher.sync_tables(true, &source).await?;
-        publisher.create_slots(&source, &cancel).await?;
-        let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
-        let child = tables
-            .iter()
-            .find(|table| table.table.name == "children")
-            .ok_or(Error::MissingData)?;
-        let parent = tables
-            .iter()
-            .find(|table| table.table.name == "parents")
-            .ok_or(Error::MissingData)?;
+        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
+        let (child, parent) = {
+            let mut publisher = orchestrator.publisher().await;
+            publisher.sync_tables(true, &source).await?;
+            publisher.create_slots(&source, &cancel).await?;
+            let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
+            let child = tables
+                .iter()
+                .find(|table| table.table.name == "children")
+                .ok_or(Error::MissingData)?
+                .clone();
+            let parent = tables
+                .iter()
+                .find(|table| table.table.name == "parents")
+                .ok_or(Error::MissingData)?
+                .clone();
+
+            (child, parent)
+        };
         let sync = DataSync {
             source: &source,
             dest: &dest,
@@ -456,14 +447,17 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
 
         // copy the child table first, while the parent data is not yet present
         let child = sync
-            .copy_table(child, server.addr(), &cancel, |_| {})
+            .copy_table(&child, server.addr(), &cancel, |_| {})
             .await?;
 
         // and now copy the parent table
         let parent = sync
-            .copy_table(parent, server.addr(), &cancel, |_| {})
+            .copy_table(&parent, server.addr(), &cancel, |_| {})
             .await?;
-        publisher.post_data_sync([(0, vec![child, parent])].into());
+        orchestrator
+            .publisher()
+            .await
+            .post_data_sync([(0, vec![child, parent])].into());
 
         // add rows after copy so replication must deliver them
         server
@@ -477,7 +471,7 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
         drop(server);
 
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
-        replicate_until_caught_up(&mut publisher, &source, &dest, schema).await?;
+        replicate_until_caught_up(&orchestrator, schema).await?;
         run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await?;
         Ok::<_, Box<dyn std::error::Error>>(dest)
     }
@@ -502,13 +496,7 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
     }
     .await;
 
-    cleanup_replication_test(
-        &mut publisher,
-        &mut admin,
-        &original_config,
-        [schema, destination],
-    )
-    .await?;
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
     let (parents, children) = validation?;
     assert_eq!(parents, ["1:1", "2:1"]);
     assert_eq!(children, ["1:1:1", "2:1:2"]);
@@ -524,7 +512,6 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
     let destination = "trigger_copy_test_dest";
     let original_config = config();
     let mut admin = test_server().await;
-    let mut publisher = Publisher::new(schema, schema.into());
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
@@ -563,17 +550,25 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
         let source = databases::databases().schema_owner(schema)?;
         let dest = databases::databases().schema_owner(destination)?;
         let cancel = CancellationToken::new();
-        publisher.sync_tables(true, &source).await?;
-        publisher.create_slots(&source, &cancel).await?;
-        let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
-        let child = tables
-            .iter()
-            .find(|table| table.table.name == "children")
-            .ok_or(Error::MissingData)?;
-        let parent = tables
-            .iter()
-            .find(|table| table.table.name == "parents")
-            .ok_or(Error::MissingData)?;
+        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
+        let (child, parent) = {
+            let mut publisher = orchestrator.publisher().await;
+            publisher.sync_tables(true, &source).await?;
+            publisher.create_slots(&source, &cancel).await?;
+            let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
+            let child = tables
+                .iter()
+                .find(|table| table.table.name == "children")
+                .ok_or(Error::MissingData)?
+                .clone();
+            let parent = tables
+                .iter()
+                .find(|table| table.table.name == "parents")
+                .ok_or(Error::MissingData)?
+                .clone();
+
+            (child, parent)
+        };
         let sync = DataSync {
             source: &source,
             dest: &dest,
@@ -581,12 +576,15 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
         };
         // copy the child first, while its parent is still missing
         let child = sync
-            .copy_table(child, server.addr(), &cancel, |_| {})
+            .copy_table(&child, server.addr(), &cancel, |_| {})
             .await?;
         let parent = sync
-            .copy_table(parent, server.addr(), &cancel, |_| {})
+            .copy_table(&parent, server.addr(), &cancel, |_| {})
             .await?;
-        publisher.post_data_sync([(0, vec![child, parent])].into());
+        orchestrator
+            .publisher()
+            .await
+            .post_data_sync([(0, vec![child, parent])].into());
 
         // add rows after copy so replication must deliver them
         server
@@ -599,7 +597,7 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
             .await?;
         drop(server);
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
-        replicate_until_caught_up(&mut publisher, &source, &dest, schema).await?;
+        replicate_until_caught_up(&orchestrator, schema).await?;
         run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await?;
         Ok::<_, Box<dyn std::error::Error>>(dest)
     }
@@ -621,13 +619,7 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
     }
     .await;
 
-    cleanup_replication_test(
-        &mut publisher,
-        &mut admin,
-        &original_config,
-        [schema, destination],
-    )
-    .await?;
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
     let (parents, children) = validation?;
     assert_eq!(parents, [1, 2]);
     assert_eq!(children, [1, 2]);
@@ -645,7 +637,6 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
     let destination = "fk_post_copy_test_dest";
     let original_config = config();
     let mut admin = test_server().await;
-    let mut publisher = Publisher::new(schema, schema.into());
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
         let source = databases::databases().schema_owner(schema)?;
@@ -673,25 +664,33 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Pre).build()).await?;
         let source = databases::databases().schema_owner(schema)?;
         let cancel = CancellationToken::new();
-        publisher.sync_tables(true, &source).await?;
-        publisher.create_slots(&source, &cancel).await?;
+        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
         let dest = databases::databases().schema_owner(destination)?;
-        let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
-        let child = tables
-            .iter()
-            .find(|table| table.table.name == "children")
-            .ok_or(Error::MissingData)?;
-        let parent = tables
-            .iter()
-            .find(|table| table.table.name == "parents")
-            .ok_or(Error::MissingData)?;
+        let (child, parent) = {
+            let mut publisher = orchestrator.publisher().await;
+            publisher.sync_tables(true, &source).await?;
+            publisher.create_slots(&source, &cancel).await?;
+            let tables = publisher.tables.get(&0).ok_or(Error::MissingData)?;
+            let child = tables
+                .iter()
+                .find(|table| table.table.name == "children")
+                .ok_or(Error::MissingData)?
+                .clone();
+            let parent = tables
+                .iter()
+                .find(|table| table.table.name == "parents")
+                .ok_or(Error::MissingData)?
+                .clone();
+
+            (child, parent)
+        };
         let sync = DataSync {
             source: &source,
             dest: &dest,
             format: config().config.general.resharding_copy_format,
         };
         let child = sync
-            .copy_table(child, server.addr(), &cancel, |_| {})
+            .copy_table(&child, server.addr(), &cancel, |_| {})
             .await?;
         let mut destination_server = dest.primary(0, &Request::default()).await?;
         // leave an orphan that replication cannot repair
@@ -700,9 +699,12 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
             .await?;
         drop(destination_server);
         let parent = sync
-            .copy_table(parent, server.addr(), &cancel, |_| {})
+            .copy_table(&parent, server.addr(), &cancel, |_| {})
             .await?;
-        publisher.post_data_sync([(0, vec![child, parent])].into());
+        orchestrator
+            .publisher()
+            .await
+            .post_data_sync([(0, vec![child, parent])].into());
 
         // add valid rows that must arrive through replication
         server
@@ -718,7 +720,7 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
 
         // wait for the valid source rows to arrive without repairing the orphan
-        replicate_until_caught_up(&mut publisher, &source, &dest, schema).await?;
+        replicate_until_caught_up(&orchestrator, schema).await?;
 
         // cutover should reject the orphan left on the destination
         let cutover = run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await;
@@ -741,13 +743,7 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
     }
     .await;
 
-    cleanup_replication_test(
-        &mut publisher,
-        &mut admin,
-        &original_config,
-        [schema, destination],
-    )
-    .await?;
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
     let (parents, children, cutover) = validation?;
     assert_eq!(parents, [1, 2]);
     assert_eq!(children, [1, 2, 999]);

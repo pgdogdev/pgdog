@@ -63,7 +63,7 @@ impl CutoverPolicy {
     /// Resolves when replication_lag reaches the value less than
     /// configured [CutoverConfig::traffic_stop_threshold].
     /// After this source should stop any write activity and
-    /// [`CutoverPolicy::wait_for_cutover`] should be started.
+    /// [`CutoverPolicy::wait_for_catchup`] should be started.
     pub(crate) async fn wait_for_stop_threshold(&self) -> Result<(), Error> {
         let traffic_stop = self.config.traffic_stop_threshold;
 
@@ -124,16 +124,13 @@ impl CutoverPolicy {
     /// Wait until cutover conditions are met depending on the
     /// [`CutoverConfig`] settings
     pub(crate) async fn wait_for_catchup(&self) -> Result<CutoverReason, Error> {
-        let cutover_threshold = self.config.replication_lag_threshold;
-        let last_transaction_delay = self.config.last_transaction_delay;
-        let cutover_timeout = self.config.timeout;
         let cutover_timeout_action = self.config.timeout_action;
 
         info!(
             "[cutover] waiting for first cutover threshold: timeout={}, transaction={}, lag={}",
-            human_duration(cutover_timeout),
-            human_duration(last_transaction_delay),
-            format_bytes(cutover_threshold)
+            human_duration(self.config.timeout),
+            human_duration(self.config.last_transaction_delay),
+            format_bytes(self.config.replication_lag_threshold)
         );
 
         let mut check = safe_interval(Duration::from_millis(50));
@@ -164,25 +161,26 @@ impl CutoverPolicy {
             let elapsed = start.elapsed();
 
             match self.should_cutover(elapsed) {
-                CutoverAction::Go(CutoverReason::Timeout) => {
-                    if cutover_timeout_action == CutoverTimeoutAction::Abort {
+                CutoverAction::Go(CutoverReason::Timeout) => match cutover_timeout_action {
+                    CutoverTimeoutAction::Abort => {
                         warn!("[cutover] abort timeout reached, resuming traffic");
                         return Err(Error::AbortTimeout);
-                    } else {
+                    }
+                    CutoverTimeoutAction::Cutover => {
                         info!(
                             "[cutover] performing cutover now, reason: {}",
                             CutoverReason::Timeout
                         );
                         return Ok(CutoverReason::Timeout);
                     }
+                },
+                CutoverAction::Go(reason) => {
+                    info!("[cutover] performing cutover now, reason: {reason}");
+                    return Ok(reason);
                 }
                 CutoverAction::NoGo(data) => {
                     cutover_data = Some(data);
                     continue;
-                }
-                CutoverAction::Go(reason) => {
-                    info!("[cutover] performing cutover now, reason: {reason}");
-                    return Ok(reason);
                 }
             }
         }
@@ -242,8 +240,7 @@ mod tests {
             CutoverAction::Go(CutoverReason::Lag)
         );
 
-        let result = waiter.wait_for_catchup().await;
-        assert!(result.is_ok());
+        assert_eq!(waiter.wait_for_catchup().await.unwrap(), CutoverReason::Lag);
     }
 
     #[tokio::test]
@@ -267,8 +264,53 @@ mod tests {
             CutoverAction::Go(CutoverReason::LastTransaction)
         );
 
-        let result = waiter.wait_for_catchup().await;
-        assert!(result.is_ok());
+        assert_eq!(
+            waiter.wait_for_catchup().await.unwrap(),
+            CutoverReason::LastTransaction
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cutover_timeout_aborts_when_configured() {
+        let config = CutoverConfig {
+            timeout: Duration::ZERO,
+            timeout_action: CutoverTimeoutAction::Abort,
+            ..cutover_config()
+        };
+
+        let progress = ReplicationProgress::new(1);
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(5000));
+
+        let waiter = CutoverPolicy::new(config, progress);
+
+        assert_eq!(
+            waiter.should_cutover(Duration::ZERO),
+            CutoverAction::Go(CutoverReason::Timeout)
+        );
+        assert_matches!(waiter.wait_for_catchup().await, Err(Error::AbortTimeout));
+    }
+
+    #[tokio::test]
+    async fn test_cutover_timeout_cuts_over_when_configured() {
+        let config = CutoverConfig {
+            timeout: Duration::ZERO,
+            timeout_action: CutoverTimeoutAction::Cutover,
+            ..cutover_config()
+        };
+
+        let progress = ReplicationProgress::new(1);
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(5000));
+
+        let waiter = CutoverPolicy::new(config, progress);
+
+        assert_eq!(
+            waiter.wait_for_catchup().await.unwrap(),
+            CutoverReason::Timeout
+        );
     }
 
     #[tokio::test]

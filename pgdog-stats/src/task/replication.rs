@@ -25,7 +25,9 @@ pub enum ReplicationDirection {
 }
 
 /// Why the replication task stopped waiting and cut traffic over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplicationCutoverReason {
     /// Replication lag reached the configured threshold.
@@ -37,6 +39,11 @@ pub enum ReplicationCutoverReason {
     /// The configured wait expired before the other conditions were met.
     #[display("timeout")]
     Timeout,
+    /// A reason this build does not know.
+    #[default]
+    #[display("unknown")]
+    #[serde(other)]
+    Unknown,
 }
 
 /// The migration one replication task drives, including every cutover it
@@ -107,6 +114,7 @@ pub enum ReplicationClusterStatus {
 /// and how long ago the newest transaction was applied.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationProgress {
+    // W: add info something like updates speed, bytes speed, smth like for copy-data
     pub lag_bytes: Option<u64>,
     pub last_transaction_ms: Option<u64>,
 }
@@ -147,8 +155,14 @@ pub struct ReplicationShardStatus {
 impl fmt::Display for ReplicationShardStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.lag_bytes {
-            Some(b) => write!(f, "lag {} bytes at {}", b, self.lsn),
-            None => write!(f, "lag unknown at {}", self.lsn),
+            Some(b) => write!(f, "lag {} bytes at {}", b, self.lsn)?,
+            None => write!(f, "lag unknown at {}", self.lsn)?,
         }
+
+        if self.missed_rows.non_zero() {
+            write!(f, ", missed {}", self.missed_rows)?;
+        }
+
+        Ok(())
     }
 }

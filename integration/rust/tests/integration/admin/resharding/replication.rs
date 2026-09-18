@@ -201,6 +201,7 @@ async fn test_cutover_starts_reverse_replication() {
     poll(
         "the post-cutover row to replicate back to the old source",
         || async {
+            fail_if_task_errored(&admin, task_id).await;
             let value: Option<String> = sqlx::query_scalar(&format!(
                 "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
             ))
@@ -216,6 +217,6 @@ async fn test_cutover_starts_reverse_replication() {
         .execute(format!("STOP_TASK {task_id}").as_str())
         .await
         .expect("the migration task must stop");
-    wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
+    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
     cleanup(&admin, &direct).await;
 }

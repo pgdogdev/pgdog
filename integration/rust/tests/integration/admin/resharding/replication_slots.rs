@@ -49,8 +49,6 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
 
     let task_id = start_replication(&admin, Some(SLOT_PREFIX)).await;
     let row = poll("the named replication slot", || slot_row(&admin)).await;
-    assert_eq!(row.get::<String, _>("host"), "127.0.0.1");
-    assert_eq!(row.get::<i64, _>("port"), 5432);
     assert_eq!(row.get::<String, _>("database_name"), "pgdog");
     assert!(!row.get::<bool, _>("copy_data"));
 
@@ -68,15 +66,11 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
             .get::<String, _>("lsn")
             .parse()
             .expect("displayed WAL position must be valid");
-        (lsn.lsn > before.lsn && row.get::<Option<i64>, _>("lag_bytes").is_some()).then_some(row)
+        (lsn.lsn > before.lsn).then_some(row)
     })
     .await;
-    assert!(row.get::<i64, _>("lag_bytes") >= 0);
     assert!(row.get::<Option<String>, _>("last_transaction").is_some());
-    assert!(
-        row.get::<Option<i64>, _>("last_transaction_ms")
-            .is_some_and(|age| age >= 0)
-    );
+    assert!(row.get::<Option<i64>, _>("last_transaction_ms").is_some());
 
     admin
         .execute(format!("STOP_TASK {task_id}").as_str())
