@@ -8,7 +8,7 @@ use super::logical::publisher::replication_stream::ReplicationStream;
 use super::logical::{Error, data_sync::DataSync, publisher::publisher_impl::Publisher};
 use crate::{
     api::{
-        replication::ReplicationStreamTask,
+        replication::ReplicationShardTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
         task::{TaskError, TaskWaiter},
@@ -134,7 +134,7 @@ async fn start_replication(
             let tables = publisher.pop_tables(source_shard)?;
             let slot = publisher.pop_slot(source_shard)?;
             let updater = progress.updater_for_shard(source_shard);
-            Ok(ReplicationStreamTask::builder()
+            Ok(ReplicationShardTask::builder()
                 .source_shard(source_shard)
                 .slot(slot)
                 .tables(tables)

@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db, connections_sqlx};
+use crate::setup::{
+    admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db, connections_sqlx,
+};
 use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres, Row};
 use tokio::time::{sleep, timeout};
@@ -164,9 +166,16 @@ async fn test_cutover_starts_reverse_replication() {
         task_status_line(&admin, task_id).await
     );
 
-    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
-
     let connections = connections_sqlx().await;
+    poll("traffic to switch to the destination", || async {
+        fail_if_task_errored(&admin, task_id).await;
+        let database = sqlx::query_scalar::<_, String>("SELECT current_database()")
+            .fetch_one(&connections[0])
+            .await
+            .ok()?;
+        matches!(database.as_str(), "shard_0" | "shard_1").then_some(())
+    })
+    .await;
     connections[0]
         .execute(
             format!(
@@ -189,16 +198,24 @@ async fn test_cutover_starts_reverse_replication() {
         assert_eq!(value, "written_after_cutover");
     }
 
-    poll("the post-cutover row to replicate back to the old source", || async {
-        let value: Option<String> = sqlx::query_scalar(&format!(
-            "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
-        ))
-        .fetch_optional(&direct)
-        .await
-        .expect("the old source must remain readable");
-        (value.as_deref() == Some("written_after_cutover")).then_some(())
-    })
+    poll(
+        "the post-cutover row to replicate back to the old source",
+        || async {
+            let value: Option<String> = sqlx::query_scalar(&format!(
+                "SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id = 1001"
+            ))
+            .fetch_optional(&direct)
+            .await
+            .expect("the old source must remain readable");
+            (value.as_deref() == Some("written_after_cutover")).then_some(())
+        },
+    )
     .await;
 
+    admin
+        .execute(format!("STOP_TASK {task_id}").as_str())
+        .await
+        .expect("the migration task must stop");
+    wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
     cleanup(&admin, &direct).await;
 }

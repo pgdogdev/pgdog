@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use super::super::Error;
 use super::replication_progress::ReplicationProgress;
 use crate::util::{format_bytes, human_duration, safe_interval};
+use pgdog_stats::ReplicationCutoverReason as CutoverReason;
 
 #[derive(Debug)]
 pub(crate) struct CutoverConfig {
@@ -39,14 +40,6 @@ impl From<&ConfigAndUsers> for CutoverConfig {
 pub(crate) struct CutoverPolicy {
     config: CutoverConfig,
     progress: ReplicationProgress,
-}
-
-#[derive(Debug, Display, Clone, PartialEq, Eq, Copy)]
-#[display(rename_all = "snake_case")]
-pub(crate) enum CutoverReason {
-    Lag,
-    Timeout,
-    LastTransaction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
@@ -130,7 +123,7 @@ impl CutoverPolicy {
 
     /// Wait until cutover conditions are met depending on the
     /// [`CutoverConfig`] settings
-    pub(crate) async fn wait_for_catchup(&self) -> Result<(), Error> {
+    pub(crate) async fn wait_for_catchup(&self) -> Result<CutoverReason, Error> {
         let cutover_threshold = self.config.replication_lag_threshold;
         let last_transaction_delay = self.config.last_transaction_delay;
         let cutover_timeout = self.config.timeout;
@@ -180,7 +173,7 @@ impl CutoverPolicy {
                             "[cutover] performing cutover now, reason: {}",
                             CutoverReason::Timeout
                         );
-                        break;
+                        return Ok(CutoverReason::Timeout);
                     }
                 }
                 CutoverAction::NoGo(data) => {
@@ -188,13 +181,11 @@ impl CutoverPolicy {
                     continue;
                 }
                 CutoverAction::Go(reason) => {
-                    info!("[cutover] performing cutover now, reason: {}", reason);
-                    break;
+                    info!("[cutover] performing cutover now, reason: {reason}");
+                    return Ok(reason);
                 }
             }
         }
-
-        Ok(())
     }
 }
 

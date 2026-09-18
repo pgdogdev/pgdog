@@ -23,21 +23,11 @@ use crate::backend::{
 use crate::config::config;
 use crate::util::{safe_interval, safe_timeout};
 use pgdog_stats::{
-    Lsn, MissedRows, ReplicationDefinition, ReplicationStatus, ReplicationStreamDefinition,
-    ReplicationStreamStatus, TaskDefinition,
+    Lsn, MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus,
+    ReplicationCutoverReason, ReplicationDefinition, ReplicationDirection,
+    ReplicationShardDefinition, ReplicationShardStatus, ReplicationStatus, TaskDefinition,
 };
-use tracing::{info, warn};
-
-/// Direction of a replication task: the initial migration (`Forward`) or the
-/// post-cutover reverse stream that backs a rollback (`Reverse`). A `CUTOVER`
-/// on a `Reverse` task is therefore a rollback. Affects reported status only,
-/// not control flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Direction {
-    #[default]
-    Forward,
-    Reverse,
-}
+use tracing::warn;
 
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationTask {
@@ -46,11 +36,21 @@ pub(crate) struct ReplicationTask {
     /// of waiting for an operator `CUTOVER`.
     #[builder(default)]
     pub(crate) auto_cutover: bool,
-    /// Replication direction. `Reverse` marks the post-cutover stream that
-    /// backs a rollback; it only affects reported status, not control flow.
-    #[builder(default)]
-    pub(crate) direction: Direction,
     pub(crate) schema_sync: SchemaSyncTask,
+}
+
+macro_rules! return_if_cancelled {
+    ($ctx:expr, $direction:expr) => {
+        if $ctx.cancellation_token().is_cancelled() {
+            return match $direction {
+                // if it's forward direction, the cancellation means this was actually cancelled
+                ReplicationDirection::Forward => Err(Error::DataSyncAborted),
+                // and for reverse application the cancellation means we cancel the reverse replication
+                // and the whole replication process was successful
+                ReplicationDirection::Reverse => Ok(()),
+            };
+        }
+    };
 }
 
 impl Task for ReplicationTask {
@@ -68,212 +68,145 @@ impl Task for ReplicationTask {
     fn definition(&self) -> impl Into<TaskDefinition> {
         ReplicationDefinition {
             databases: self.orchestrator.databases(),
-            reverse: self.direction == Direction::Reverse,
             auto_cutover: self.auto_cutover,
         }
     }
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
-        let source_shard_count = self.orchestrator.source.shards().len();
-        let task_cancel = ctx.cancellation_token();
-        let streams_stop = CancellationToken::new();
-        let guard = self.orchestrator.publication_guard();
-        let mut streams = ReplicationStreams::new();
-        let progress = ReplicationProgress::new(source_shard_count);
+        let Self {
+            mut orchestrator,
+            mut schema_sync,
+            auto_cutover,
+        } = self;
+        // we always start with forward direction and then create the reverse
+        // direction, and reverse(reverse) = forward
+        let mut direction = ReplicationDirection::Forward;
         // W: maybe simplier?
-        let mut _resume = None;
+        let mut maintenance =
+            Self::replicate_until_cutover(&ctx, &orchestrator, direction, auto_cutover).await?;
 
-        let result = async {
-            ctx.set_status(ReplicationStatus::InitializingReplicationStreams);
-            self.create_replication_stream_tasks(&ctx, &streams_stop, &mut streams, &progress)
-                .await?;
-            ctx.set_status(ReplicationStatus::Replicating);
-            select! {
-                biased;
-                _ = task_cancel.cancelled() => {
-                    return Ok(());
-                }
-                // if any of streams exit early, stop the process
-                result = streams.next() => {
-                    if let Some(child) = result {
-                        child??;
-                    }
-                    return Err(Error::ReplicationStreamStopped);
-                }
-                result = async {
-                    self.wait_for_cutover_signal(&ctx).await;
-                    _resume = Some(ResumeTraffic);
-                    self.prepare_cutover(&ctx, progress).await
-                } => result?,
-            }
-            Ok(())
+        loop {
+            return_if_cancelled!(ctx, direction);
+            ctx.set_status(ReplicationStatus::SyncingSchema);
+            ctx.run(schema_sync).await?;
+
+            // start the cutover only if there is no errors so far
+            // and the task is not canceled.
+            // after that we can't cancel the task.
+            return_if_cancelled!(ctx, direction);
+            Self::cutover(&ctx, &mut orchestrator, direction).await?;
+            maintenance.resume_traffic();
+
+            return_if_cancelled!(ctx, direction);
+            maintenance =
+                Self::replicate_until_cutover(&ctx, &orchestrator, direction, false).await?;
+            schema_sync = SchemaSyncTask::builder()
+                .databases(orchestrator.databases())
+                .publication(orchestrator.publication.clone())
+                .phase(SchemaSyncPhase::Cutover)
+                .ignore_errors(true)
+                .build();
+            direction = match direction {
+                ReplicationDirection::Forward => ReplicationDirection::Reverse,
+                ReplicationDirection::Reverse => ReplicationDirection::Forward,
+            };
         }
-        .await;
-
-        // stop all the stream and make sure they are drained.
-        // If there were error on some stream it should stop other streams.
-        streams_stop.cancel();
-        let drained = Self::drain_streams(&mut streams).await;
-
-        let result = async {
-            result.and(drained)?;
-
-            if !task_cancel.is_cancelled() {
-                // start the cutover only if there is no errors so far
-                // and the task is not canceled.
-                // after that we can't cancel the task.
-                self.cutover(&ctx).await
-            } else {
-                Ok(())
-            }
-        }
-        .await;
-
-        let cleanup = guard.cleanup().await;
-        result.and(cleanup)
     }
 }
 
 impl ReplicationTask {
-    async fn cutover(self, ctx: &TaskContext<Self>) -> Result<(), Error> {
-        ctx.set_status(ReplicationStatus::SyncingSchema);
-        ctx.run(self.schema_sync).await?;
+    async fn replicate_until_cutover(
+        ctx: &TaskContext<Self>,
+        orchestrator: &Orchestrator,
+        direction: ReplicationDirection,
+        auto_cutover: bool,
+    ) -> Result<MaintenanceMode, Error> {
+        let task_cancel = ctx.cancellation_token();
+        let cutover = Self::register_cutover(ctx.root_id());
+        let progress = ReplicationProgress::new(orchestrator.source.shards().len());
+        let (cluster, stop_cluster_replication) =
+            ReplicationClusterTask::new(orchestrator.clone(), direction, progress.clone());
+        let mut maintenance = MaintenanceMode::new();
+        let mut cutover_reason = None;
+        ctx.set_status(ReplicationStatus::Replicating);
+        let cluster_run = ctx.run(cluster);
+        tokio::pin!(cluster_run);
+        let result = select! {
+            biased;
+            _ = task_cancel.cancelled() => Ok(()),
+            result = &mut cluster_run => {
+                result?;
+                // error, since this should not happen, without our cutover signaling
+                return Err(Error::ReplicationStreamStopped);
+            }
+            result = async {
+                if !auto_cutover {
+                    cutover.requested().await;
+                }
+                Self::prepare_cutover(ctx, orchestrator, progress, &mut maintenance).await
+            } => result.map(|reason| cutover_reason = Some(reason)),
+        };
+
+        // stop the cluster replication and wait until it gracefully finishes,
+        // we should stop it despite if we succeed or not at this moment
+        stop_cluster_replication.stop(cutover_reason);
+        let drained = safe_timeout(Self::cancel_timeout(), &mut cluster_run)
+            .await
+            .unwrap_or(Err(Error::ReplicationTimeout));
+        result.and(drained)?;
+
+        Ok(maintenance)
+    }
+
+    async fn cutover(
+        ctx: &TaskContext<Self>,
+        orchestrator: &mut Orchestrator,
+        direction: ReplicationDirection,
+    ) -> Result<(), Error> {
         ctx.set_status(ReplicationStatus::PreparingReverseReplication);
-        let reverse_orchestrator = Orchestrator::new(
-            &self.orchestrator.source.identifier().database,
-            &self.orchestrator.destination.identifier().database,
-            &self.orchestrator.publication,
-            Some(self.orchestrator.replication_slot().to_owned()),
-        )?;
-        let guard = reverse_orchestrator.publication_guard();
+        orchestrator.refresh_publisher();
+        let guard = orchestrator.publication_guard();
         let result = async {
-            reverse_orchestrator
+            orchestrator
                 .publisher()
                 .await
-                .create_slots(&reverse_orchestrator.destination, &CancellationToken::new())
+                // W: should we cancellation token from ctx?
+                .create_slots(&orchestrator.destination, &CancellationToken::new())
                 .await?;
-            ctx.set_status(match self.direction {
-                Direction::Forward => ReplicationStatus::CuttingOver,
-                Direction::Reverse => ReplicationStatus::RollingBack,
+            ctx.set_status(match direction {
+                ReplicationDirection::Forward => ReplicationStatus::CuttingOver,
+                ReplicationDirection::Reverse => ReplicationStatus::RollingBack,
             });
             cutover(
-                &self.orchestrator.source.identifier().database,
-                &self.orchestrator.destination.identifier().database,
+                &orchestrator.source.identifier().database,
+                &orchestrator.destination.identifier().database,
             )
             .await?;
-            let next_direction = match self.direction {
-                Direction::Forward => Direction::Reverse,
-                Direction::Reverse => Direction::Forward,
-            };
-            Self::create_reverse_replication(reverse_orchestrator, next_direction).await?;
-            info!("[cutover] complete, resuming traffic");
             Ok(())
         }
         .await;
-        if result.is_err()
-            && let Err(cleanup) = guard.cleanup().await
-        {
-            warn!("failed to clean up reverse replication slots: {cleanup}");
-        }
-        result
-    }
-
-    async fn create_replication_stream_tasks(
-        &self,
-        ctx: &TaskContext<Self>,
-        stop: &CancellationToken,
-        streams: &mut ReplicationStreams,
-        progress: &ReplicationProgress,
-    ) -> Result<(), Error> {
-        let mut publisher = self.orchestrator.publisher().await;
-        publisher
-            .prepare_replication(&self.orchestrator.source, &ctx.cancellation_token())
-            .await?;
-        for source_shard in 0..self.orchestrator.source.shards().len() {
-            let tables = publisher.pop_tables(source_shard)?;
-            let slot = publisher.pop_slot(source_shard)?;
-            let updater = progress.updater_for_shard(source_shard);
-            let replication_stream = ReplicationStream::new(
-                &self.orchestrator.source,
-                &self.orchestrator.destination,
-                updater,
-            );
-            let task = ReplicationStreamTask::builder()
-                .source_shard(source_shard)
-                .slot(slot)
-                .tables(tables)
-                .replication_stream(replication_stream)
-                .stop(stop.clone())
-                .build();
-            let child = ctx.run(task);
-            streams.push(AbortOnDropHandle::new(tokio::spawn(child)));
-        }
-        Ok(())
-    }
-
-    /// Drain all the streams - make sure they are drained and generated no errors
-    async fn drain_streams(streams: &mut ReplicationStreams) -> Result<(), Error> {
-        let result = safe_timeout(Self::cancel_timeout(), async {
-            let mut result = Ok(());
-            while let Some(child) = streams.next().await {
-                result = result.and(child.map_err(Error::from).and_then(|result| result));
-            }
-            result
-        })
-        .await
-        .unwrap_or(Err(Error::ReplicationTimeout));
         if result.is_err() {
-            streams.clear();
+            if let Err(cleanup) = guard.cleanup().await {
+                warn!("failed to clean up reverse replication slots: {cleanup}");
+            }
+            return result;
         }
-        result
-    }
-
-    async fn wait_for_cutover_signal(&self, ctx: &TaskContext<Self>) {
-        if self.auto_cutover {
-            return;
-        }
-
-        let cutover = Self::register_cutover(ctx.root_id());
-        cutover.requested().await;
+        orchestrator.refresh()
     }
 
     async fn prepare_cutover(
-        &self,
         ctx: &TaskContext<Self>,
+        orchestrator: &Orchestrator,
         progress: ReplicationProgress,
-    ) -> Result<(), Error> {
+        maintenance: &mut MaintenanceMode,
+    ) -> Result<ReplicationCutoverReason, Error> {
         let cutover_policy = CutoverPolicy::new(config().as_ref().into(), progress);
         cutover_policy.wait_for_stop_threshold().await?;
         ctx.set_status(ReplicationStatus::StoppingTraffic);
-        maintenance_mode::start(None);
-        cancel_all(&self.orchestrator.source.identifier().database).await?;
+        maintenance.stop_traffic();
+        cancel_all(&orchestrator.source.identifier().database).await?;
         ctx.set_status(ReplicationStatus::WaitingForCatchUp);
         cutover_policy.wait_for_catchup().await
-    }
-
-    async fn create_reverse_replication(
-        mut orchestrator: Orchestrator,
-        direction: Direction,
-    ) -> Result<(), Error> {
-        orchestrator.refresh()?;
-        info!("[cutover] setting up reverse replication");
-
-        // W: do we need the schema on reverse?
-        let schema_sync = SchemaSyncTask::builder()
-            .databases(orchestrator.databases())
-            .publication(orchestrator.publication.clone())
-            .phase(SchemaSyncPhase::Cutover)
-            .ignore_errors(true)
-            .build();
-        crate::api::run_task(
-            Self::builder()
-                .auto_cutover(false)
-                .orchestrator(orchestrator)
-                .direction(direction)
-                .schema_sync(schema_sync)
-                .build(),
-        );
-        Ok(())
     }
 
     /// Trigger a cutover on a running replication task.
@@ -305,8 +238,174 @@ impl ReplicationTask {
     }
 }
 
+/// Handle that stops one replication cluster, with the cutover reason when
+/// the parent task stopped it to cut traffic over.
+#[derive(Debug)]
+pub(crate) struct ReplicationClusterStop {
+    sender: tokio::sync::oneshot::Sender<Option<ReplicationCutoverReason>>,
+}
+
+impl ReplicationClusterStop {
+    fn stop(self, cutover_reason: Option<ReplicationCutoverReason>) {
+        let _ = self.sender.send(cutover_reason);
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ReplicationClusterTask {
+    orchestrator: Orchestrator,
+    progress: ReplicationProgress,
+    direction: ReplicationDirection,
+    stop: tokio::sync::oneshot::Receiver<Option<ReplicationCutoverReason>>,
+}
+
+impl ReplicationClusterTask {
+    fn new(
+        orchestrator: Orchestrator,
+        direction: ReplicationDirection,
+        progress: ReplicationProgress,
+    ) -> (Self, ReplicationClusterStop) {
+        let (sender, stop) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                orchestrator,
+                progress,
+                direction,
+                stop,
+            },
+            ReplicationClusterStop { sender },
+        )
+    }
+}
+
+impl Task for ReplicationClusterTask {
+    type Status = ReplicationClusterStatus;
+    type Output = ();
+    type Error = Error;
+
+    fn cancel_timeout() -> Duration {
+        Duration::from_secs(600)
+    }
+
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        ReplicationClusterDefinition {
+            databases: self.orchestrator.databases(),
+            direction: self.direction,
+        }
+    }
+
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
+        let Self {
+            orchestrator,
+            progress,
+            stop,
+            ..
+        } = self;
+        let task_cancel = ctx.cancellation_token();
+        let mut streams = ReplicationStreams::new();
+        let streams_stop = CancellationToken::new();
+        let guard = orchestrator.publication_guard();
+
+        ctx.set_status(ReplicationClusterStatus::InitializingReplicationStreams);
+        let init_result = Self::create_replication_stream_tasks(
+            &orchestrator,
+            &ctx,
+            &progress,
+            &streams_stop,
+            &mut streams,
+        )
+        .await;
+
+        let mut report = safe_interval(Duration::from_secs(1));
+        let mut stop = stop;
+        let result = async {
+            init_result?;
+            loop {
+                ctx.set_status(ReplicationClusterStatus::Replicating {
+                    progress: progress.snapshot(),
+                });
+                select! {
+                    biased;
+                    _ = task_cancel.cancelled() => return Ok(()),
+                    stopped = &mut stop => {
+                        if let Ok(Some(reason)) = stopped {
+                            ctx.set_status(ReplicationClusterStatus::StoppedForCutover { reason });
+                        }
+                        return Ok(());
+                    }
+                    // if any of streams exit early, stop the process
+                    result = streams.next() => {
+                        if let Some(child) = result {
+                            child??;
+                        }
+                        return Err(Error::ReplicationStreamStopped);
+                    }
+                    _ = report.tick() => {}
+                }
+            }
+        }
+        .await;
+
+        // stop all the stream and make sure they are drained.
+        // If there were error on some stream it should stop other streams.
+        streams_stop.cancel();
+        let drained = Self::drain_streams(&mut streams).await;
+        let cleanup = guard.cleanup().await;
+        result.and(drained).and(cleanup)
+    }
+}
+
+impl ReplicationClusterTask {
+    async fn create_replication_stream_tasks(
+        orchestrator: &Orchestrator,
+        ctx: &TaskContext<Self>,
+        progress: &ReplicationProgress,
+        stop: &CancellationToken,
+        streams: &mut ReplicationStreams,
+    ) -> Result<(), Error> {
+        let mut publisher = orchestrator.publisher().await;
+        publisher
+            .prepare_replication(&orchestrator.source, &ctx.cancellation_token())
+            .await?;
+        for source_shard in 0..orchestrator.source.shards().len() {
+            let tables = publisher.pop_tables(source_shard)?;
+            let slot = publisher.pop_slot(source_shard)?;
+            let updater = progress.updater_for_shard(source_shard);
+            let replication_stream =
+                ReplicationStream::new(&orchestrator.source, &orchestrator.destination, updater);
+            let task = ReplicationShardTask::builder()
+                .source_shard(source_shard)
+                .slot(slot)
+                .tables(tables)
+                .replication_stream(replication_stream)
+                .stop(stop.clone())
+                .build();
+            let child = ctx.run(task);
+            streams.push(AbortOnDropHandle::new(tokio::spawn(child)));
+        }
+        Ok(())
+    }
+
+    /// Drain all the streams - make sure they are drained and generated no errors
+    async fn drain_streams(streams: &mut ReplicationStreams) -> Result<(), Error> {
+        let result = safe_timeout(Self::cancel_timeout(), async {
+            let mut result = Ok(());
+            while let Some(child) = streams.next().await {
+                result = result.and(child.map_err(Error::from).and_then(|result| result));
+            }
+            result
+        })
+        .await
+        .unwrap_or(Err(Error::ReplicationTimeout));
+        if result.is_err() {
+            streams.clear();
+        }
+        result
+    }
+}
+
 #[derive(Debug, bon::Builder)]
-pub(crate) struct ReplicationStreamTask {
+pub(crate) struct ReplicationShardTask {
     pub(crate) slot: ReplicationSlot,
     pub(crate) source_shard: usize,
     pub(crate) tables: Vec<Table>,
@@ -314,8 +413,8 @@ pub(crate) struct ReplicationStreamTask {
     pub(crate) stop: CancellationToken,
 }
 
-impl Task for ReplicationStreamTask {
-    type Status = ReplicationStreamStatus;
+impl Task for ReplicationShardTask {
+    type Status = ReplicationShardStatus;
     type Output = ();
     type Error = Error;
 
@@ -324,7 +423,7 @@ impl Task for ReplicationStreamTask {
     }
 
     fn definition(&self) -> impl Into<TaskDefinition> {
-        ReplicationStreamDefinition {
+        ReplicationShardDefinition {
             slot: self.slot.name().to_owned(),
             host: self.slot.addr().host.clone(),
             port: self.slot.addr().port,
@@ -348,7 +447,7 @@ impl Task for ReplicationStreamTask {
         let stream_stop = stop.child_token();
 
         let initial_lsn = slot.lsn();
-        ctx.set_status(ReplicationStreamStatus {
+        ctx.set_status(ReplicationShardStatus {
             lsn: initial_lsn,
             lag_bytes: None,
             missed_rows: MissedRows::default(),
@@ -378,9 +477,9 @@ impl Task for ReplicationStreamTask {
     }
 }
 
-fn stream_status(replication: &ReplicationStream, fallback_lsn: Lsn) -> ReplicationStreamStatus {
+fn stream_status(replication: &ReplicationStream, fallback_lsn: Lsn) -> ReplicationShardStatus {
     let info = replication.progress();
-    ReplicationStreamStatus {
+    ReplicationShardStatus {
         lsn: info.applied_lsn.unwrap_or(fallback_lsn),
         lag_bytes: info.replication_lag,
         missed_rows: info.missed_rows,
@@ -389,11 +488,32 @@ fn stream_status(replication: &ReplicationStream, fallback_lsn: Lsn) -> Replicat
 
 type ReplicationStreams = FuturesUnordered<AbortOnDropHandle<Result<(), Error>>>;
 
-struct ResumeTraffic;
+struct MaintenanceMode {
+    stopped_traffic: bool,
+}
 
-impl Drop for ResumeTraffic {
+impl MaintenanceMode {
+    fn new() -> Self {
+        Self {
+            stopped_traffic: false,
+        }
+    }
+
+    fn stop_traffic(&mut self) {
+        maintenance_mode::start(None);
+        self.stopped_traffic = true;
+    }
+
+    fn resume_traffic(self) {
+        drop(self);
+    }
+}
+
+impl Drop for MaintenanceMode {
     fn drop(&mut self) {
-        maintenance_mode::stop(None);
+        if self.stopped_traffic {
+            maintenance_mode::stop(None);
+        }
     }
 }
 

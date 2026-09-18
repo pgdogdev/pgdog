@@ -7,6 +7,8 @@ use tokio::time::Instant;
 use crate::backend::replication::publisher::Lsn;
 use pgdog_stats::MissedRows;
 
+/// Tracks the progress of replication for
+/// a single source shard
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ReplicationShardProgress {
     pub(crate) replication_lag: Option<i64>,
@@ -15,6 +17,7 @@ pub(crate) struct ReplicationShardProgress {
     pub(crate) missed_rows: MissedRows,
 }
 
+/// Tracks the progress for all of the source shards
 #[derive(Clone, Debug)]
 pub(crate) struct ReplicationProgress {
     shards: Arc<[Mutex<ReplicationShardProgress>]>,
@@ -26,6 +29,7 @@ impl ReplicationProgress {
         Self { shards }
     }
 
+    /// Returns the entity to update the progress for a single source shard
     pub(crate) fn updater_for_shard(&self, shard: usize) -> ReplicationProgressShardUpdater {
         ReplicationProgressShardUpdater {
             shards: self.shards.clone(),
@@ -33,6 +37,8 @@ impl ReplicationProgress {
         }
     }
 
+    /// Calculate the combined replication lag for all the shards stream.
+    /// None is returned if some of the progress was not yet updated
     pub(crate) fn replication_lag(&self) -> Option<u64> {
         let mut max: Option<i64> = None;
         for shard in self.shards.iter() {
@@ -42,6 +48,7 @@ impl ReplicationProgress {
         max.map(|l| l as u64)
     }
 
+    /// Get the time elapsed from most recent transaction update for a progress
     pub(crate) fn last_transaction(&self) -> Option<Duration> {
         self.shards
             .iter()
@@ -49,8 +56,19 @@ impl ReplicationProgress {
             .max()
             .map(|t| t.elapsed())
     }
+
+    /// Get the pgdog_stats representation for progress
+    pub(crate) fn snapshot(&self) -> pgdog_stats::ReplicationProgress {
+        pgdog_stats::ReplicationProgress {
+            lag_bytes: self.replication_lag(),
+            last_transaction_ms: self
+                .last_transaction()
+                .map(|elapsed| elapsed.as_millis() as u64),
+        }
+    }
 }
 
+/// Used to update the progress of a single source shard stream.
 #[derive(Clone, Debug)]
 pub(crate) struct ReplicationProgressShardUpdater {
     shards: Arc<[Mutex<ReplicationShardProgress>]>,

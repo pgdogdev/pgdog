@@ -17,10 +17,13 @@ use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
 use crate::util::{safe_interval, safe_sleep};
 
+/// Runs the replication stream from a single shard (slot)
+/// to the destination cluster.
 #[derive(Debug)]
 pub(crate) struct ReplicationStream {
+    // W: maybe remove it
     source: Cluster,
-    dest: Cluster,
+    dest_cluster: Cluster,
     updater: ReplicationProgressShardUpdater,
 }
 
@@ -32,7 +35,7 @@ impl ReplicationStream {
     ) -> Self {
         Self {
             source: source.clone(),
-            dest: dest.clone(),
+            dest_cluster: dest.clone(),
             updater,
         }
     }
@@ -47,7 +50,7 @@ impl ReplicationStream {
         tables: Vec<Table>,
         stop: &CancellationToken,
     ) -> Result<(), Error> {
-        let mut stream = StreamSubscriber::new(&self.dest, tables);
+        let mut stream = StreamSubscriber::new(&self.dest_cluster, tables);
         stream.set_current_lsn(slot.lsn().lsn);
         self.updater.update(|p| p.applied_lsn = Some(slot.lsn()));
         let result = self.replicate(&mut slot, &mut stream, stop).await;
@@ -77,7 +80,7 @@ impl ReplicationStream {
             warn!(
                 "replication {} => {} has missing rows: {}",
                 self.source.name(),
-                self.dest.name(),
+                self.dest_cluster.name(),
                 missed
             );
         }
@@ -94,8 +97,10 @@ impl ReplicationStream {
         slot.start_replication().await?;
 
         let progress = Progress::new_stream();
-        let max_attempts = self.dest.resharding_replication_retry_max_attempts();
-        let delay = self.dest.resharding_replication_retry_min_delay();
+        let max_attempts = self
+            .dest_cluster
+            .resharding_replication_retry_max_attempts();
+        let delay = self.dest_cluster.resharding_replication_retry_min_delay();
 
         let mut attempt = 0usize;
         let mut stopping = false;
