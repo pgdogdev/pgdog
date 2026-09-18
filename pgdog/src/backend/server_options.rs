@@ -53,9 +53,12 @@ impl ServerOptions {
     }
 
     pub(crate) fn new_resharding(config: &Config) -> Self {
-        let mut options = Self::default();
-        // This can't be set via startup parameters for some mysterious reason.
-        options.session_replication_role = true;
+        let mut options = Self {
+            // This can't be set via startup parameters for some mysterious reason.
+            session_replication_role: true,
+            ..Default::default()
+        };
+
         options.add(Parameter {
             name: "statement_timeout".into(),
             value: "0".into(),
