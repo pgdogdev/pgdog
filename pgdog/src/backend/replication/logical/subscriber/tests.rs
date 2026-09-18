@@ -87,7 +87,7 @@ async fn resharding_connection_rejects_unprivileged_user() -> Result<(), Box<dyn
     assert!(matches!(
         error,
         Error::ReshardingPermissionDenied { source, .. }
-            if matches!(source.as_ref(), BackendError::ConnectionError(response) if response.code == "42501")
+            if matches!(source.as_ref(), BackendError::ExecutionError(response) if response.code == "42501")
     ));
     Ok(())
 }

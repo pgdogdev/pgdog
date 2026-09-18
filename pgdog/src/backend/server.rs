@@ -201,6 +201,9 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
+                    if options.session_replication_role {
+                        server.set_session_replication_role().await?;
+                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -886,6 +889,16 @@ impl Server {
     #[inline]
     pub(crate) fn params(&self) -> &Parameters {
         &self.params
+    }
+
+    /// Manually set the session_replication_role setting via SET
+    /// since apparently we can't do this via startup parameters.
+    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
+        self.execute_checked("SET session_replication_role TO replica")
+            .await?;
+        self.params.insert("session_replication_role", "replica");
+
+        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
