@@ -16,7 +16,9 @@ pub(crate) mod insert;
 pub(crate) mod nextval;
 pub(crate) mod non_deterministic_funcs;
 pub(crate) mod offset;
+pub(crate) mod order_by;
 pub(crate) mod plan;
+pub(crate) mod projection;
 pub(crate) mod simple_prepared;
 pub(crate) mod unique_id;
 pub(crate) mod update;
@@ -201,8 +203,7 @@ impl<'a> StatementRewrite<'a> {
             return Err(err);
         }
 
-        if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
-            self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+        if let NodeMut::SelectStmt(select) = stmt.stmt_mut() {
             self.limit_offset(&select, &mut plan);
         }
 

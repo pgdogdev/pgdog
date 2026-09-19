@@ -2,9 +2,7 @@ use super::super::ee;
 use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
-use super::{
-    Error, InsertSplit, PrepareExecute, ShardingKeyUpdate, aggregate::AggregateRewritePlan,
-};
+use super::{Error, InsertSplit, PrepareExecute, ShardingKeyUpdate};
 use crate::frontend::client::QueryTimestamps;
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
@@ -63,10 +61,6 @@ pub(crate) struct RewritePlan {
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
 
-    /// Position in the result where the count(*) or count(name)
-    /// functions are added.
-    pub(crate) aggregates: AggregateRewritePlan,
-
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
     pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
@@ -83,11 +77,18 @@ pub(crate) enum RewriteResult {
 }
 
 impl RewriteResult {
-    pub(crate) fn apply_after_parser(&self, request: &mut ClientRequest) -> Result<(), Error> {
+    pub(crate) fn offset_plan(&self) -> Option<&OffsetPlan> {
+        match self {
+            Self::InPlace { offset } => offset.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn apply_after_route(&self, request: &mut ClientRequest) -> Result<(), Error> {
         match self {
             Self::InPlace {
                 offset: Some(offset),
-            } => offset.apply_after_parser(request),
+            } => offset.apply_after_route(request),
             _ => Ok(()),
         }
     }
@@ -104,10 +105,8 @@ impl RewritePlan {
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
-            && self.aggregates.is_noop()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
-        // TODO: Check here.
     }
 
     /// Append generated unique IDs and sequence values to a Bind message.
