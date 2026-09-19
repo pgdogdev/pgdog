@@ -1,10 +1,6 @@
-use lru::LruCache;
-use std::{
-    collections::VecDeque,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, sync::Arc};
 
+use crate::net::ErrorResponse;
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
@@ -14,43 +10,40 @@ use crate::{
     },
     state::State,
 };
-use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
 use pgdog_config::prepared_statements::PreparedStatementsConfig;
 
+use super::local_cache::{Access, LocalCache, LocalStatementStatus};
 use super::{Error, Oids};
 use super::{
     protocol::{ProtocolState, state::Action},
     state::ExecutionCode,
 };
 
-/// Rough size of one local cache entry. Ignores the LRU node itself,
-/// so it undercounts a little.
-#[inline]
-fn entry_mem(s: &str) -> usize {
-    s.len() + std::mem::size_of::<String>() + std::mem::size_of::<LocalStatement>()
+/// A statement Postgres is preparing now, waiting on the reply that puts it in the local cache.
+#[derive(Debug)]
+struct InFlightStatement {
+    name: String,
+
+    /// Executions to add to the entry when the reply arrives. Holds the Binds waiting on this
+    /// Parse plus whatever a re-prepare's Close took down with the old entry.
+    executions: u32,
 }
 
-/// A statement info prepared on this connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LocalStatement {
-    /// When this statement should be replanned
-    deadline: Option<Instant>,
-}
-
-impl LocalStatement {
-    fn new(ttl: Option<Duration>, jitter: Duration) -> Self {
+impl InFlightStatement {
+    fn new(name: impl Into<String>) -> Self {
         Self {
-            deadline: ttl.map(|ttl| deadline(ttl, jitter)),
+            name: name.into(),
+            executions: 0,
         }
     }
 
-    /// Check for expired
-    ///
-    /// If the check is called and deadline is not set then it's marked as expired
-    /// to cover the case when the TTL was set after the statement creation
-    fn expired(&self, now: Instant) -> bool {
-        self.deadline.is_none_or(|deadline| deadline <= now)
+    /// A Parse with an execution waiting on it, so the statement arrives executed once.
+    fn executed(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            executions: 1,
+        }
     }
 }
 
@@ -98,16 +91,15 @@ pub(super) enum HandleResult {
 #[derive(Debug)]
 pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
-    local_cache: LruCache<String, LocalStatement>,
+    local_cache: LocalCache,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    parses: VecDeque<InFlightStatement>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
     parameter_describes: VecDeque<String>,
     config: PreparedStatementsConfig,
-    memory_used: usize,
     oids: Arc<Oids>,
     server_state: State,
     // Client parameter count of the unnamed statement being rewritten
@@ -126,13 +118,12 @@ impl PreparedStatements {
     pub(crate) fn new(oids: Arc<Oids>) -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::unbounded(),
+            local_cache: LocalCache::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
             parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
-            memory_used: 0,
             oids,
             server_state: State::Idle,
             anonymous_client_params: None,
@@ -180,14 +171,19 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
-                    let message = self.check_prepared(bind.statement())?;
+                    let message = self.check_prepared(bind.statement(), Access::Execution)?;
                     match message {
                         Some(mut message) => {
-                            if message.close.is_some() {
+                            let in_flight = if message.close.is_some() {
                                 self.state.add_ignore('3');
-                            }
+                                // check_prepared already counted this Bind against the
+                                // entry, and the CloseComplete carries that count over.
+                                InFlightStatement::new(bind.statement())
+                            } else {
+                                InFlightStatement::executed(bind.statement())
+                            };
                             self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
+                            self.parses.push_back(in_flight);
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
@@ -222,7 +218,7 @@ impl PreparedStatements {
                 }
 
                 if !describe.anonymous() {
-                    let message = self.check_prepared(describe.statement())?;
+                    let message = self.check_prepared(describe.statement(), Access::Lookup)?;
 
                     match message {
                         Some(mut message) => {
@@ -230,7 +226,8 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(describe.statement().to_string());
+                            self.parses
+                                .push_back(InFlightStatement::new(describe.statement()));
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
@@ -297,7 +294,7 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.parses.push_back(parse.name().to_string());
+                        self.parses.push_back(InFlightStatement::new(parse.name()));
                     }
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
@@ -347,40 +344,43 @@ impl PreparedStatements {
                     );
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(prepare.name().to_owned());
+                    self.parses
+                        .push_back(InFlightStatement::new(prepare.name()));
                     self.state.add(ExecutionCode::ReadyForQuery);
                 }
             }
             ProtocolMessage::EnsurePrepared(prepare) => {
                 let name = prepare.name();
-                if self.contains(name) {
-                    let entry = self.local_cache.get(name);
-                    let expired = self.config.ttl.is_some()
-                        && entry.is_some_and(|entry| entry.expired(Instant::now()));
-
-                    if expired {
+                match self.statement_status(name, Access::Execution) {
+                    LocalStatementStatus::Expired => {
                         // Reached TTL limit for the given statement. Close it and re-Prepare on Postgres.
 
                         self.state.add_ignore(ExecutionCode::CloseComplete); // (the Close)
                         self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
                         self.state.add_ignore(ExecutionCode::ReadyForQuery);
 
-                        self.parses.push_back(name.to_owned());
+                        // statement_status already counted this EXECUTE against the entry.
+                        self.parses.push_back(InFlightStatement::new(name));
 
                         // This will do Close => Prepare
                         return Ok(HandleResult::PrependProtocolMessage(
                             ProtocolMessage::Close(Close::named(name)),
                         ));
-                    } else {
+                    }
+
+                    LocalStatementStatus::Fresh => {
                         return Ok(HandleResult::Drop);
                     }
-                } else {
-                    self.parses.push_back(prepare.name().to_string());
-                    self.state.add_ignore('C');
 
-                    // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
-                    self.state.add_ignore(ExecutionCode::ReadyForQuery);
-                    return Ok(HandleResult::Forward);
+                    LocalStatementStatus::Missing => {
+                        self.parses
+                            .push_back(InFlightStatement::executed(prepare.name()));
+                        self.state.add_ignore('C');
+
+                        // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
+                        self.state.add_ignore(ExecutionCode::ReadyForQuery);
+                        return Ok(HandleResult::Forward);
+                    }
                 }
             }
             ProtocolMessage::CopyDone(_) => {
@@ -438,8 +438,13 @@ impl PreparedStatements {
             }
 
             '1' | 'C' => {
-                if let Some(name) = self.parses.pop_front() {
-                    self.prepared(&name);
+                if let Some(in_flight) = self.parses.pop_front() {
+                    self.prepared(&in_flight.name);
+
+                    // A client that re-Parses a name without closing it first leaves the entry,
+                    // and its count, in place.
+                    self.local_cache
+                        .add_executions(&in_flight.name, in_flight.executions);
                 }
             }
 
@@ -449,9 +454,15 @@ impl PreparedStatements {
             '3' if matches!(action, Action::Ignore) => {
                 // ok, pop_front -> push_front just to avoid borrowing issues
                 // and not to copy the name just to remove by name
-                if let Some(name) = self.parses.pop_front() {
-                    self.remove(&name);
-                    self.parses.push_front(name);
+                if let Some(mut in_flight) = self.parses.pop_front() {
+                    // The remove below drops the entry, so its count has to move onto the
+                    // Parse that is about to put the statement back.
+                    in_flight.executions = in_flight
+                        .executions
+                        .saturating_add(self.local_cache.executions(&in_flight.name).unwrap_or(0));
+
+                    self.remove(&in_flight.name);
+                    self.parses.push_front(in_flight);
                 }
             }
 
@@ -507,19 +518,21 @@ impl PreparedStatements {
 
     /// Check the prepared state to identify if we need
     /// to run something before actual client's requests
-    fn check_prepared(&mut self, name: &str) -> Result<Option<Prepare>, Error> {
+    fn check_prepared(&mut self, name: &str, access: Access) -> Result<Option<Prepare>, Error> {
         // Ignore if we already have a Parse in progress.
-        if self.parses.iter().any(|s| s == name) {
+        if let Some(in_flight) = self.parses.iter_mut().find(|parse| parse.name == name) {
+            if access.is_execution() {
+                in_flight.executions = in_flight.executions.saturating_add(1);
+            }
+
             return Ok(None);
         }
 
-        let entry = self.local_cache.get(name);
-        let expired =
-            self.config.ttl.is_some() && entry.is_some_and(|entry| entry.expired(Instant::now()));
-
-        if entry.is_some() && !expired {
-            return Ok(None);
-        }
+        let expired = match self.statement_status(name, access) {
+            LocalStatementStatus::Fresh => return Ok(None),
+            LocalStatementStatus::Expired => true,
+            LocalStatementStatus::Missing => false,
+        };
 
         // Nothing to prepare it from, so leave whatever is there alone.
         let Some(parse) = self.parse(name) else {
@@ -539,29 +552,32 @@ impl PreparedStatements {
         }))
     }
 
-    /// The server has prepared this statement already.
-    pub(crate) fn contains(&mut self, name: &str) -> bool {
-        self.local_cache.promote(name)
+    fn statement_status(&mut self, name: &str, access: Access) -> LocalStatementStatus {
+        self.local_cache.status(name, access, &self.config)
     }
 
-    #[cfg(test)]
-    fn statement(&self, name: &str) -> Option<&LocalStatement> {
-        self.local_cache.peek(name)
+    /// Whether the server has prepared this statement already.
+    pub(crate) fn contains(&mut self, name: &str) -> bool {
+        self.local_cache.contains(name, &self.config)
     }
 
     pub(crate) fn prepared(&mut self, name: &str) {
-        let statement = LocalStatement::new(self.config.ttl, self.config.ttl_jitter);
-
-        // Cache is unbounded, so anything handed back is the old entry
-        // for this same name, never an eviction. Only new names cost us.
-        if self.local_cache.push(name.to_owned(), statement).is_none() {
-            self.memory_used += entry_mem(name);
-        }
+        self.local_cache.prepared(name, &self.config);
     }
 
     /// How much memory is used by this structure, approx.
     pub(crate) fn memory_used(&self) -> usize {
-        self.memory_used
+        self.local_cache.memory_used()
+    }
+
+    #[cfg(test)]
+    fn executions(&self, name: &str) -> Option<u32> {
+        self.local_cache.executions(name)
+    }
+
+    #[cfg(test)]
+    fn expired(&self, name: &str) -> Option<bool> {
+        self.local_cache.expired(name)
     }
 
     /// Get the Parse message stored in the global prepared statements
@@ -589,19 +605,13 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        if self.local_cache.pop(name).is_some() {
-            self.memory_used = self.memory_used.saturating_sub(entry_mem(name));
-            true
-        } else {
-            false
-        }
+        self.local_cache.remove(name)
     }
 
     /// Indicate all prepared statements have been removed
     /// from the server connection.
     pub(crate) fn clear(&mut self) {
         self.local_cache.clear();
-        self.memory_used = 0;
     }
 
     /// Get current extended protocol state.
@@ -627,17 +637,7 @@ impl PreparedStatements {
     /// what's actually inside Postgres.
     #[must_use]
     pub(crate) fn ensure_capacity(&mut self) -> Vec<Close> {
-        let mut close = vec![];
-        while self.local_cache.len() > self.config.limit {
-            let candidate = self.local_cache.pop_lru();
-
-            if let Some((name, _)) = candidate {
-                close.push(Close::named(&name));
-                self.memory_used = self.memory_used.saturating_sub(entry_mem(&name));
-            }
-        }
-
-        close
+        self.local_cache.ensure_capacity(&self.config)
     }
 
     pub(crate) fn replace_oids(&mut self, oids: &Arc<Oids>) {
@@ -711,12 +711,17 @@ impl PreparedStatements {
 
 #[cfg(test)]
 pub(crate) mod test {
+    use std::time::Duration;
+
+    use pgdog_config::PreparedStatementsEviction;
+
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
         Bind, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
-        Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
-        messages::ReadyForQuery,
+        Prepare as SimplePrepare, ProtocolMessage, Query, Sync,
+        bind::Parameter,
+        messages::{BindComplete, ReadyForQuery},
     };
     use pgdog_config::PreparedStatementsLevel;
 
@@ -745,6 +750,15 @@ pub(crate) mod test {
         let mut ps = new_extended();
         ps.configure(PreparedStatementsConfig {
             ttl: Some(TTL),
+            ..ps.config()
+        });
+        ps
+    }
+
+    fn new_with_limit(limit: usize) -> PreparedStatements {
+        let mut ps = new_extended();
+        ps.configure(PreparedStatementsConfig {
+            limit,
             ..ps.config()
         });
         ps
@@ -826,7 +840,7 @@ pub(crate) mod test {
         ps.prepared(&name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+        assert_eq!(ps.expired(&name), Some(true));
 
         ps.configure(PreparedStatementsConfig {
             ttl: Some(TTL),
@@ -843,7 +857,7 @@ pub(crate) mod test {
         prepare_expired(&mut ps, &name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+        assert_eq!(ps.expired(&name), Some(true));
 
         assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
         assert!(ps.contains(&name));
@@ -1427,5 +1441,303 @@ pub(crate) mod test {
             let result = ps.handle(&ProtocolMessage::Sync(Sync)).unwrap();
             assert!(matches!(result, HandleResult::Forward));
         }
+    }
+
+    // -------------------------------------------------------
+    // Local cache eviction
+    // -------------------------------------------------------
+
+    #[test]
+    fn check_prepared_keeps_a_statement_out_of_the_next_eviction() {
+        let mut ps = new_with_limit(2);
+        for name in ["a", "b", "c"] {
+            ps.prepared(name);
+        }
+
+        assert!(ps.check_prepared("a", Access::Execution).unwrap().is_none());
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+        assert!(ps.contains("a"));
+    }
+
+    // -------------------------------------------------------
+    // Least frequently used eviction
+    // -------------------------------------------------------
+
+    fn new_with_eviction(limit: usize, eviction: PreparedStatementsEviction) -> PreparedStatements {
+        let mut ps = new_with_limit(limit);
+        ps.configure(PreparedStatementsConfig {
+            eviction,
+            ..ps.config()
+        });
+        ps
+    }
+
+    /// Execute a statement already in the cache `times` more times. Each Bind is answered
+    /// so the state comes back empty, which a later re-prepare needs to see its own CloseComplete.
+    fn use_statement(ps: &mut PreparedStatements, name: &str, times: usize) {
+        for _ in 0..times {
+            assert_eq!(
+                ps.handle(&bind(name)).unwrap(),
+                HandleResult::Forward,
+                "{name} should be cached and fresh"
+            );
+
+            let mut bind_complete = Message::new(BindComplete.to_bytes());
+            assert!(ps.forward(&mut bind_complete).unwrap());
+        }
+    }
+
+    #[test]
+    fn ensure_capacity_evicts_the_least_used_statement_not_the_least_recent() {
+        // "a" is both the most used and the least recent, so the policies have to
+        // disagree about which name goes.
+        fn warmed(eviction: PreparedStatementsEviction) -> PreparedStatements {
+            let mut ps = new_with_eviction(2, eviction);
+            ps.prepared("a");
+            use_statement(&mut ps, "a", 3);
+            ps.prepared("b");
+            use_statement(&mut ps, "b", 2);
+            ps.prepared("c");
+            ps
+        }
+
+        assert_eq!(
+            warmed(PreparedStatementsEviction::LeastFrequentlyUsed).ensure_capacity(),
+            [Close::named("c")]
+        );
+        assert_eq!(
+            warmed(PreparedStatementsEviction::LeastRecentlyUsed).ensure_capacity(),
+            [Close::named("a")]
+        );
+    }
+
+    #[test]
+    fn ensure_capacity_breaks_a_tie_on_the_least_recent_statement_under_lfu() {
+        let mut ps = new_with_eviction(2, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        use_statement(&mut ps, "a", 5);
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 1);
+        ps.prepared("c");
+        use_statement(&mut ps, "c", 1);
+
+        // "a" is the least recent of the three and survives on its use count, so the
+        // tie between "b" and "c" is the only thing left to settle.
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+    }
+
+    #[test]
+    fn a_repeated_parse_is_not_a_use_under_lfu() {
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        use_statement(&mut ps, "a", 1);
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 2);
+
+        // PgDog answers the redundant Parse itself, so nothing executed. A driver that
+        // re-Parses before every Bind would otherwise count each one twice.
+        let parse = ProtocolMessage::Parse(Parse::named("a", "SELECT 1"));
+        assert_eq!(ps.handle(&parse).unwrap(), HandleResult::Drop);
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("a")]);
+    }
+
+    #[test]
+    fn a_bind_counts_as_a_use_under_lfu() {
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 1);
+
+        assert_eq!(ps.handle(&bind("a")).unwrap(), HandleResult::Forward);
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+    }
+
+    #[test]
+    fn a_bind_that_prepares_counts_its_own_use_under_lfu() {
+        let cold = insert_global("lfu_first_use", "SELECT $1::bigint");
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("warm");
+        use_statement(&mut ps, "warm", 1);
+
+        // The Bind that prepares a statement executes it too, and check_prepared sees no
+        // entry to count against, so the count has to ride the Parse back.
+        assert_parse_without_close!(ps.handle(&bind(&cold)).unwrap());
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("warm")]);
+    }
+
+    #[test]
+    fn a_bind_waiting_on_a_parse_still_counts_under_lfu() {
+        let cold = insert_global("lfu_in_flight", "SELECT $1::bigint");
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("warm");
+        use_statement(&mut ps, "warm", 1);
+
+        // The Describe prepares it, so the Bind behind it finds the Parse already in
+        // flight and bails out before reaching the cache.
+        let describe = ProtocolMessage::Describe(Describe::new_statement(&cold));
+        assert_parse_without_close!(ps.handle(&describe).unwrap());
+        assert_eq!(ps.handle(&bind(&cold)).unwrap(), HandleResult::Forward);
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("warm")]);
+    }
+
+    #[test]
+    fn a_describe_is_not_a_use_under_lfu() {
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        use_statement(&mut ps, "a", 1);
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 2);
+
+        let describe = ProtocolMessage::Describe(Describe::new_statement("a"));
+        assert_eq!(ps.handle(&describe).unwrap(), HandleResult::Forward);
+
+        // A Describe reads the statement's shape without executing it, so a driver that
+        // describes before every Bind cannot outrank one that only binds.
+        assert_eq!(ps.ensure_capacity(), [Close::named("a")]);
+    }
+
+    #[test]
+    fn ensure_prepared_counts_as_a_use_under_lfu() {
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 1);
+
+        let prepare =
+            ProtocolMessage::EnsurePrepared(SimplePrepare::new("a", "PREPARE a AS SELECT 1"));
+        assert_eq!(ps.handle(&prepare).unwrap(), HandleResult::Drop);
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b")]);
+    }
+
+    #[test]
+    fn ensure_prepared_counts_one_use_not_two_under_lfu() {
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+        ps.prepared("a");
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 2);
+
+        let prepare =
+            ProtocolMessage::EnsurePrepared(SimplePrepare::new("a", "PREPARE a AS SELECT 1"));
+        assert_eq!(ps.handle(&prepare).unwrap(), HandleResult::Drop);
+
+        // One EXECUTE leaves "a" behind "b". Reading the cache twice on this path
+        // would draw it level and close "b" instead, which no recency test can see.
+        assert_eq!(ps.ensure_capacity(), [Close::named("a")]);
+    }
+
+    #[test]
+    fn ensure_capacity_evicts_every_statement_over_the_limit_under_lfu() {
+        let mut ps = new_with_eviction(3, PreparedStatementsEviction::LeastFrequentlyUsed);
+        for (name, executions) in [("a", 4), ("b", 0), ("c", 3), ("d", 1), ("e", 2)] {
+            ps.prepared(name);
+            use_statement(&mut ps, name, executions);
+        }
+
+        assert_eq!(ps.ensure_capacity(), [Close::named("b"), Close::named("d")]);
+        assert_eq!(ps.len(), 3);
+        for name in ["a", "c", "e"] {
+            assert!(ps.contains(name), "{name} should have survived");
+        }
+    }
+
+    #[test]
+    fn switching_to_lfu_spares_the_statement_lru_would_have_closed() {
+        let mut ps = new_with_eviction(2, PreparedStatementsEviction::LeastRecentlyUsed);
+        ps.prepared("a");
+        use_statement(&mut ps, "a", 3);
+        ps.prepared("b");
+        use_statement(&mut ps, "b", 2);
+        ps.prepared("c");
+
+        ps.configure(PreparedStatementsConfig {
+            eviction: PreparedStatementsEviction::LeastFrequentlyUsed,
+            ..ps.config()
+        });
+
+        // "a" is what lru would have closed, and it has to still be here.
+        assert_eq!(ps.ensure_capacity(), [Close::named("c")]);
+        assert_eq!(ps.len(), 2);
+        assert!(ps.contains("a"));
+    }
+
+    /// The second Bind reaches the in-flight Parse rather than the entry, so a test that
+    /// binds once passes whether or not the CloseComplete adds the two counts together.
+    #[test]
+    fn a_bind_pipelined_behind_a_re_prepare_still_counts_under_lfu() {
+        let hot = insert_global("lfu_pipelined_reprepare", "SELECT $1::bigint");
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+
+        ps.prepared(&hot);
+        use_statement(&mut ps, &hot, 2);
+
+        // Executed more than "hot" so far, so "hot" only wins on the pipelined pair.
+        ps.prepared("cold");
+        use_statement(&mut ps, "cold", 3);
+
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(TTL),
+            ..ps.config()
+        });
+
+        assert_close_and_parse!(ps.handle(&bind(&hot)).unwrap(), &hot);
+        assert_eq!(ps.handle(&bind(&hot)).unwrap(), HandleResult::Forward);
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        assert_eq!(ps.executions(&hot), Some(4));
+        assert_eq!(ps.ensure_capacity(), [Close::named("cold")]);
+    }
+
+    /// A count reset by the re-prepare still closes exactly one statement and leaves
+    /// the cache the right size. Only the name in the Close separates the two.
+    #[test]
+    fn a_re_prepared_statement_keeps_its_execution_count_under_lfu() {
+        // A limit of one forces the eviction to choose between the two, and the
+        // TTL is what drives the re-prepare.
+        let hot = insert_global("ttl_lfu_hot", "SELECT $1::bigint");
+        let mut ps = new_with_eviction(1, PreparedStatementsEviction::LeastFrequentlyUsed);
+
+        ps.prepared(&hot);
+        use_statement(&mut ps, &hot, 5);
+
+        // Fresher than "hot" but executed less, so recency and frequency pull
+        // opposite ways.
+        ps.prepared("cold");
+        use_statement(&mut ps, "cold", 2);
+
+        // Neither carries a deadline, so turning the TTL on expires both and the
+        // next Bind on "hot" closes and prepares it again.
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(TTL),
+            ..ps.config()
+        });
+
+        // "hot" leaves the cache on the CloseComplete and comes back on the
+        // ParseComplete.
+        assert_close_and_parse!(ps.handle(&bind(&hot)).unwrap(), &hot);
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        // "hot" outranks "cold" only if the round trip carried its count back.
+        assert_eq!(ps.ensure_capacity(), [Close::named("cold")]);
+        assert!(ps.contains(&hot));
     }
 }

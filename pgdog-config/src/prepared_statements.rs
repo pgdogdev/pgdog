@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationMilliSeconds, serde_as};
 
-use crate::PreparedStatementsLevel;
+use crate::{PreparedStatementsEviction, PreparedStatementsLevel};
 
 /// How a server connection handles prepared statements.
 #[serde_as]
@@ -16,6 +16,8 @@ pub struct PreparedStatementsConfig {
     pub level: PreparedStatementsLevel,
     /// Maximum prepared statements per connection.
     pub limit: usize,
+    /// Which statement the connection closes once it reaches `limit`.
+    pub eviction: PreparedStatementsEviction,
     /// How long a statement can keep a cached plan. `None` never expires.
     #[serde_as(as = "Option<DurationMilliSeconds>")]
     pub ttl: Option<Duration>,
@@ -29,6 +31,7 @@ impl Default for PreparedStatementsConfig {
         Self {
             level: PreparedStatementsLevel::default(),
             limit: i64::MAX as usize,
+            eviction: PreparedStatementsEviction::default(),
             ttl: None,
             ttl_jitter: Duration::ZERO,
         }

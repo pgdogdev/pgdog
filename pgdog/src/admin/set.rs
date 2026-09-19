@@ -102,6 +102,10 @@ impl Command for Set {
                 config.config.general.prepared_statements = Self::from_json(&self.value)?;
             }
 
+            "prepared_statements_eviction" => {
+                config.config.general.prepared_statements_eviction = Self::from_json(&self.value)?;
+            }
+
             "cross_shard_disabled" => {
                 config.config.general.cross_shard_disabled = Self::from_json(&self.value)?;
             }
