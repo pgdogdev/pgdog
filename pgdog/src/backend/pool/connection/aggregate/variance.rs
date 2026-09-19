@@ -57,9 +57,14 @@ impl Variance {
         // Naive algorithm for computing variance without mean
         // σ² = (∑xᵢ² − (∑xᵢ)²/N) / N
         // ref https://open.maricopa.edu/haasstatistics/chapter/4-4-calculating-variance/
+        let count = self.count.finalize_i64();
+        // Empty shards return NULL sums. Sample variance also needs two values,
+        // even when the only value is NaN.
+        if count == 0 || (self.sample && count == 1) {
+            return Ok(Datum::Null);
+        }
         let sumsq = self.sumsq.finalize();
         let sum = self.sum.finalize();
-        let count = self.count.finalize_i64();
 
         match (sumsq, sum) {
             (Datum::Numeric(sumsq), Datum::Numeric(sum)) => {
@@ -114,7 +119,7 @@ fn compute_variance(
     sqrt: bool,
 ) -> Option<Decimal> {
     if count <= 1 {
-        return None;
+        return (count == 1 && !sample).then_some(Decimal::ZERO);
     }
 
     let sumsq = sumsq.normalize();
@@ -156,18 +161,58 @@ fn test_var_pop() {
 
 #[test]
 fn test_empty_variance() {
-    let mut state = Variance::new(0, 0, 0, false, false);
-    state
-        .accumulate(dec!(0).into(), dec!(0).into(), 0i64.into())
-        .unwrap();
-    assert_eq!(Datum::Null, state.finalize().unwrap());
+    for sample in [false, true] {
+        for sqrt in [false, true] {
+            let mut state = Variance::new(0, 0, 0, sample, sqrt);
+            for _ in 0..2 {
+                state
+                    .accumulate(Datum::Null, Datum::Null, 0i64.into())
+                    .expect("accumulate empty shard");
+            }
+            assert_eq!(Datum::Null, state.finalize().expect("empty variance"));
+        }
+    }
 }
 
 #[test]
 fn test_single_item_variance() {
-    let mut state = Variance::new(0, 0, 0, false, false);
-    state
-        .accumulate(dec!(1).into(), dec!(1).into(), 1i64.into())
-        .unwrap();
-    assert_eq!(Datum::Null, state.finalize().unwrap());
+    use pgdog_postgres_types::Float;
+
+    let cases: [(Datum, Datum); 4] = [
+        (dec!(42).into(), dec!(0).into()),
+        (42i64.into(), dec!(0).into()),
+        (42f64.into(), 0f64.into()),
+        (Datum::Float(Float(42.0)), 0f64.into()),
+    ];
+    for (sum, zero) in cases {
+        for sample in [false, true] {
+            for sqrt in [false, true] {
+                let mut state = Variance::new(0, 0, 0, sample, sqrt);
+                state
+                    .accumulate(Datum::Null, Datum::Null, 0i64.into())
+                    .expect("accumulate empty shard");
+                state
+                    .accumulate(dec!(1764).into(), sum.clone(), 1i64.into())
+                    .expect("accumulate singleton shard");
+                let expected = if sample { Datum::Null } else { zero.clone() };
+                assert_eq!(expected, state.finalize().expect("singleton variance"));
+            }
+        }
+    }
+}
+
+#[test]
+fn test_single_nan_variance() {
+    for nan in [Datum::Numeric(Numeric::nan()), f64::NAN.into()] {
+        for sample in [false, true] {
+            for sqrt in [false, true] {
+                let mut state = Variance::new(0, 0, 0, sample, sqrt);
+                state
+                    .accumulate(Datum::Numeric(Numeric::nan()), nan.clone(), 1i64.into())
+                    .expect("accumulate NaN");
+                let expected = if sample { Datum::Null } else { nan.clone() };
+                assert_eq!(expected, state.finalize().expect("NaN variance"));
+            }
+        }
+    }
 }
