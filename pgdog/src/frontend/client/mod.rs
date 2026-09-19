@@ -523,11 +523,16 @@ impl Client {
             let query_engine_done = query_engine.can_disconnect();
 
             // If query engine is idle and we requested shutdown, we're done.
-            if query_engine_done && offline {
+            if query_engine_done && offline && !self.request_in_progress() {
                 // Send shutdown notification to client.
                 self.stream
                     .send_flush(&ErrorResponse::shutting_down())
                     .await?;
+                let (user, _) = user_database_from_params(&self.params);
+                debug!(
+                    r#"shutdown notice sent to client "{}" [{}]"#,
+                    user, self.addr
+                );
                 break;
             }
 
@@ -536,9 +541,7 @@ impl Client {
             let cancellation_token = query_engine.cancellation_token();
 
             select! {
-                _ = shutdown.cancelled(), if !offline => {
-                    continue; // Wake up task.
-                }
+                biased;
 
                 // Async messages.
                 message = query_engine.read_backend() => {
@@ -561,10 +564,20 @@ impl Client {
                         BufferEvent::HaveRequest => (),
                     }
                 }
+
+                _ = shutdown.cancelled(), if !offline => {
+                    continue; // Wake up task.
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// The client has sent bytes we haven't acted on yet, so it's not
+    /// safe to disconnect it even if the backend is idle.
+    fn request_in_progress(&self) -> bool {
+        !self.stream_buffer.is_empty() || self.client_request.is_partial()
     }
 
     async fn server_message(
@@ -651,7 +664,9 @@ impl Client {
         state: State,
         cancellation_token: &CancellationToken,
     ) -> Result<BufferEvent, Error> {
-        self.client_request.clear();
+        if self.client_request.is_complete() {
+            self.client_request.clear();
+        }
 
         // Check config once per request.
         let config = config::config();
