@@ -57,4 +57,7 @@ pub enum Error {
 
     #[error("cannot cast from {from} to {to}")]
     InvalidCast { from: DataType, to: DataType },
+
+    #[error("value out of range for {0}")]
+    NumericOutOfRange(DataType),
 }
