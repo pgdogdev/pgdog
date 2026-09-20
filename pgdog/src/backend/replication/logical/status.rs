@@ -3,7 +3,7 @@ use std::{ops::Deref, sync::Arc, time::SystemTime};
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use pgdog_stats::{Lsn, SchemaStatementTask};
+use pgdog_stats::{Lsn, SchemaStatementTask, TaskId};
 
 use crate::backend::pool::Address;
 use crate::backend::replication::ee::{
@@ -43,6 +43,7 @@ impl ReplicationSlot {
                 lag: 0,
                 address: address.clone().into(),
                 last_transaction: None,
+                task_id: None,
             },
         };
 
@@ -65,6 +66,13 @@ impl ReplicationSlot {
         if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
             slot.lag = lag;
             replication_slot_update(&slot.inner);
+        }
+    }
+
+    pub(crate) fn set_task_id(&mut self, task_id: TaskId) {
+        self.inner.task_id = Some(task_id);
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+            slot.task_id = Some(task_id);
         }
     }
 

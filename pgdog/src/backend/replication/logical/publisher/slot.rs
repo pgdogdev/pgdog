@@ -17,6 +17,7 @@ use std::{fmt::Display, str::FromStr, time::Duration};
 use tracing::{debug, info, trace, warn};
 
 pub(crate) use pgdog_stats::Lsn;
+use pgdog_stats::TaskId;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Snapshot {
@@ -98,6 +99,12 @@ impl ReplicationSlot {
             kind: SlotKind::DataSync,
             server_meta: None,
             tracker: None,
+        }
+    }
+
+    pub(crate) fn set_task_id(&mut self, task_id: TaskId) {
+        if let Some(tracker) = &mut self.tracker {
+            tracker.set_task_id(task_id);
         }
     }
 

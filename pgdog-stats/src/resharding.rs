@@ -4,7 +4,7 @@ use derive_more::Display;
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
 
-use crate::{Lsn, User};
+use crate::{Lsn, TaskId, User};
 
 /// Replication slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +15,7 @@ pub struct ReplicationSlot {
     pub copy_data: bool,
     pub address: Address,
     pub last_transaction: Option<SystemTime>,
+    pub task_id: Option<TaskId>,
 }
 
 /// Server address.

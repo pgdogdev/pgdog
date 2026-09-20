@@ -495,6 +495,7 @@ impl Task for ReplicationShardTask {
         // signal to stream to stop - due to cutover or fail in other streams
         let stream_stop = stop.child_token();
 
+        slot.set_task_id(ctx.id());
         let initial_lsn = slot.lsn();
         ctx.set_status(ReplicationShardStatus {
             lsn: initial_lsn,

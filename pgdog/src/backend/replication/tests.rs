@@ -1,25 +1,30 @@
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::Duration;
 
 use pgdog_config::{ConfigAndUsers, Database, ShardedTableConfig, User};
 use tokio_util::sync::CancellationToken;
 
+use super::logical::Error;
 use super::logical::orchestrator::Orchestrator;
+use super::logical::publisher::Table;
 use super::logical::publisher::replication_progress::ReplicationProgress;
-use super::logical::{Error, data_sync::DataSync};
 use crate::{
     api::{
+        copy_data::TableDataSyncTask,
         replication::{ReplicationClusterStop, ReplicationClusterTask},
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
         task::{TaskError, TaskWaiter},
     },
     backend::{
-        ConnectReason, Error as BackendError, Server, ServerOptions, databases,
+        Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
         pool::{Address, Request},
         schema::sync::SchemaSyncError,
         server::test::test_server,
     },
     config::{config, set},
+    util::sync::WorkerPool,
 };
 use pgdog_stats::ReplicationDirection;
 
@@ -116,6 +121,30 @@ async fn replicate_until_caught_up(
     drained?;
     caught_up?;
     Ok(())
+}
+
+async fn copy_table(
+    source: &Cluster,
+    dest: &Cluster,
+    table: &Table,
+    address: &Address,
+) -> Result<Table, Box<dyn std::error::Error>> {
+    let pool = Arc::new(WorkerPool::new(
+        vec![address.clone()],
+        NonZeroUsize::new(1).unwrap(),
+    )?);
+    let table = run_task(
+        TableDataSyncTask::builder()
+            .pool(pool)
+            .table(table.clone())
+            .source(source.clone())
+            .dest(dest.clone())
+            .format(config().config.general.resharding_copy_format)
+            .source_shard(0)
+            .build(),
+    )
+    .await?;
+    Ok(table)
 }
 
 async fn cleanup_replication_test(
@@ -297,15 +326,8 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
 
             (child_table, parent_table)
         };
-        let sync = DataSync {
-            source: &source,
-            dest: &dest,
-            format: config().config.general.resharding_copy_format,
-        };
         // copy the child table first, so it won't have updates we'll do during copy
-        let child_table = sync
-            .copy_table(&child_table, source_server.addr(), &cancel, |_| {})
-            .await?;
+        let child_table = copy_table(&source, &dest, &child_table, source_server.addr()).await?;
 
         // update the fk related data, so it would be present
         // only in parent table snapshot
@@ -339,16 +361,13 @@ async fn test_replication_fk_conflicts_after_delete_during_copy()
         // and now start the copy of parent table.
         // that should have an updated snapshot already with the queries
         // executed above.
-        let parent_table = sync
-            .copy_table(&parent_table, source_server.addr(), &cancel, |_| {})
-            .await?;
+        let parent_table = copy_table(&source, &dest, &parent_table, source_server.addr()).await?;
         orchestrator
             .publisher()
             .await
             .post_data_sync([(0, vec![child_table, parent_table])].into());
         drop(source_server);
         run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
-
         // run the replication and wait for all data to be copied
         replicate_until_caught_up(&orchestrator, &schema).await?;
         run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await?;
@@ -440,21 +459,11 @@ async fn test_replication_fk_constraints_after_copy_child_before_parent()
 
             (child, parent)
         };
-        let sync = DataSync {
-            source: &source,
-            dest: &dest,
-            format: config().config.general.resharding_copy_format,
-        };
-
         // copy the child table first, while the parent data is not yet present
-        let child = sync
-            .copy_table(&child, server.addr(), &cancel, |_| {})
-            .await?;
+        let child = copy_table(&source, &dest, &child, server.addr()).await?;
 
         // and now copy the parent table
-        let parent = sync
-            .copy_table(&parent, server.addr(), &cancel, |_| {})
-            .await?;
+        let parent = copy_table(&source, &dest, &parent, server.addr()).await?;
         orchestrator
             .publisher()
             .await
@@ -570,18 +579,9 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
 
             (child, parent)
         };
-        let sync = DataSync {
-            source: &source,
-            dest: &dest,
-            format: config().config.general.resharding_copy_format,
-        };
         // copy the child first, while its parent is still missing
-        let child = sync
-            .copy_table(&child, server.addr(), &cancel, |_| {})
-            .await?;
-        let parent = sync
-            .copy_table(&parent, server.addr(), &cancel, |_| {})
-            .await?;
+        let child = copy_table(&source, &dest, &child, server.addr()).await?;
+        let parent = copy_table(&source, &dest, &parent, server.addr()).await?;
         orchestrator
             .publisher()
             .await
@@ -685,23 +685,14 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
 
             (child, parent)
         };
-        let sync = DataSync {
-            source: &source,
-            dest: &dest,
-            format: config().config.general.resharding_copy_format,
-        };
-        let child = sync
-            .copy_table(&child, server.addr(), &cancel, |_| {})
-            .await?;
+        let child = copy_table(&source, &dest, &child, server.addr()).await?;
         let mut destination_server = dest.primary(0, &Request::default()).await?;
         // leave an orphan that replication cannot repair
         destination_server
             .execute_checked(format!("INSERT INTO {schema}.children VALUES (42, 1, 999)"))
             .await?;
         drop(destination_server);
-        let parent = sync
-            .copy_table(&parent, server.addr(), &cancel, |_| {})
-            .await?;
+        let parent = copy_table(&source, &dest, &parent, server.addr()).await?;
         orchestrator
             .publisher()
             .await

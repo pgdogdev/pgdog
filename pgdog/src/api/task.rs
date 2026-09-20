@@ -428,6 +428,10 @@ impl<T: Task> TaskContext<T> {
         }
     }
 
+    pub(crate) fn id(&self) -> TaskId {
+        self.task.id
+    }
+
     pub(crate) fn root_id(&self) -> TaskId {
         self.task.root_id
     }
