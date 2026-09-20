@@ -36,6 +36,7 @@ impl Ord for Timestamp {
         use std::cmp::Ordering;
 
         match (self.special, other.special) {
+            (Some(left), Some(right)) => left.cmp(&right),
             (None, None) => self
                 .year
                 .cmp(&other.year)
@@ -61,6 +62,10 @@ impl ToDataRowColumn for Timestamp {
 
 impl Display for Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(positive) = self.special {
+            return f.write_str(if positive { "infinity" } else { "-infinity" });
+        }
+
         write!(
             f,
             "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
@@ -183,6 +188,11 @@ impl FromDataType for Timestamp {
         match encoding {
             Format::Text => {
                 let s = String::decode(bytes, Format::Text)?;
+                match s.as_str() {
+                    "infinity" => return Ok(Self::infinity()),
+                    "-infinity" => return Ok(Self::neg_infinity()),
+                    _ => (),
+                }
                 let mut result = Timestamp {
                     special: None,
                     ..Default::default()
@@ -774,5 +784,41 @@ mod test {
         assert_eq!(decoded.minute, ts.minute);
         assert_eq!(decoded.second, ts.second);
         assert_eq!(decoded.micros, ts.micros);
+    }
+
+    #[test]
+    fn test_timestamp_infinity_text_roundtrip() {
+        for (text, timestamp) in [
+            (b"infinity".as_slice(), Timestamp::infinity()),
+            (b"-infinity".as_slice(), Timestamp::neg_infinity()),
+        ] {
+            assert_eq!(
+                Timestamp::decode(text, Format::Text).expect("valid PostgreSQL timestamp"),
+                timestamp
+            );
+            assert_eq!(timestamp.encode(Format::Text).expect("text encoding"), text);
+            let binary = timestamp.encode(Format::Binary).expect("binary encoding");
+            assert_eq!(
+                Timestamp::decode(&binary, Format::Binary).expect("binary decoding"),
+                timestamp
+            );
+        }
+    }
+
+    #[test]
+    fn test_timestamp_infinity_total_order() {
+        use std::cmp::Ordering;
+
+        let values = [
+            Timestamp::neg_infinity(),
+            Timestamp::from_pg_epoch_micros(0).expect("PostgreSQL epoch"),
+            Timestamp::infinity(),
+        ];
+        for (left_index, left) in values.iter().enumerate() {
+            for (right_index, right) in values.iter().enumerate() {
+                assert_eq!(left.cmp(right), left_index.cmp(&right_index));
+                assert_eq!(left.cmp(right) == Ordering::Equal, left == right);
+            }
+        }
     }
 }
