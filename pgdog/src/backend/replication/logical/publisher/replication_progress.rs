@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::time::Instant;
@@ -15,6 +14,23 @@ pub(crate) struct ReplicationShardProgress {
     pub(crate) last_transaction: Option<Instant>,
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
+}
+
+impl ReplicationShardProgress {
+    pub(crate) fn advance_applied_lsn(&mut self, applied: Lsn) {
+        self.applied_lsn = Some(
+            self.applied_lsn
+                .map_or(applied, |current| current.max(applied)),
+        );
+    }
+
+    pub(crate) fn snapshot(&self, fallback_lsn: Lsn) -> pgdog_stats::ReplicationShardStatus {
+        pgdog_stats::ReplicationShardStatus {
+            lsn: self.applied_lsn.unwrap_or(fallback_lsn),
+            lag_bytes: self.replication_lag,
+            missed_rows: self.missed_rows,
+        }
+    }
 }
 
 /// Tracks the progress for all of the source shards
@@ -43,33 +59,32 @@ impl ReplicationProgress {
         }
     }
 
-    /// Calculate the combined replication lag for all the shards stream.
-    /// None is returned if some of the progress was not yet updated
-    pub(crate) fn replication_lag(&self) -> Option<u64> {
-        let mut max: Option<i64> = None;
-        for shard in self.shards.iter() {
-            let lag = shard.lock().replication_lag?;
-            max = Some(max.map_or(lag, |m| m.max(lag)));
-        }
-        max.map(|l| l.max(0) as u64)
-    }
-
-    /// Get the time elapsed from most recent transaction update for a progress
-    pub(crate) fn last_transaction(&self) -> Option<Duration> {
-        self.shards
-            .iter()
-            .filter_map(|shard| shard.lock().last_transaction)
-            .max()
-            .map(|t| t.elapsed())
-    }
-
-    /// Get the pgdog_stats representation for progress
+    /// The combined progress of every shard, as reported to `SHOW TASKS` and
+    /// read by the cutover policy. `lag_bytes` stays `None` until every shard
+    /// has reported one.
     pub(crate) fn snapshot(&self) -> pgdog_stats::ReplicationProgress {
+        let mut lag: Option<i64> = None;
+        let mut every_shard_reported = true;
+        let mut last_transaction: Option<Instant> = None;
+
+        for shard in self.shards.iter() {
+            let shard = *shard.lock();
+            match shard.replication_lag {
+                Some(shard_lag) => lag = Some(lag.map_or(shard_lag, |max| max.max(shard_lag))),
+                None => every_shard_reported = false,
+            }
+            if let Some(applied) = shard.last_transaction {
+                last_transaction = Some(last_transaction.map_or(applied, |max| max.max(applied)));
+            }
+        }
+
         pgdog_stats::ReplicationProgress {
-            lag_bytes: self.replication_lag(),
-            last_transaction_ms: self
-                .last_transaction()
-                .map(|elapsed| elapsed.as_millis() as u64),
+            lag_bytes: every_shard_reported
+                .then_some(lag)
+                .flatten()
+                .map(|lag| lag.max(0) as u64),
+            last_transaction_ms: last_transaction
+                .map(|applied| applied.elapsed().as_millis() as u64),
         }
     }
 }
@@ -100,22 +115,22 @@ mod tests {
     fn lag_none_until_all_shards_report() {
         let progress = ReplicationProgress::new(3);
 
-        assert_eq!(progress.replication_lag(), None);
+        assert_eq!(progress.snapshot().lag_bytes, None);
 
         progress
             .updater_for_shard(0)
             .update(|p| p.replication_lag = Some(100));
-        assert_eq!(progress.replication_lag(), None);
+        assert_eq!(progress.snapshot().lag_bytes, None);
 
         progress
             .updater_for_shard(1)
             .update(|p| p.replication_lag = Some(200));
-        assert_eq!(progress.replication_lag(), None);
+        assert_eq!(progress.snapshot().lag_bytes, None);
 
         progress
             .updater_for_shard(2)
             .update(|p| p.replication_lag = Some(150));
-        assert_eq!(progress.replication_lag(), Some(200));
+        assert_eq!(progress.snapshot().lag_bytes, Some(200));
     }
 
     #[test]
@@ -155,7 +170,7 @@ mod tests {
     async fn last_transaction_returns_most_recent_across_shards() {
         let progress = ReplicationProgress::new(2);
 
-        assert_eq!(progress.last_transaction(), None);
+        assert_eq!(progress.snapshot().last_transaction_ms, None);
 
         let older = tokio::time::Instant::now() - Duration::from_millis(300);
         progress
@@ -168,9 +183,6 @@ mod tests {
             .updater_for_shard(1)
             .update(|p| p.last_transaction = Some(recent));
 
-        let elapsed = progress
-            .last_transaction()
-            .expect("at least one shard has a transaction");
-        assert_eq!(elapsed, Duration::ZERO);
+        assert_eq!(progress.snapshot().last_transaction_ms, Some(0));
     }
 }

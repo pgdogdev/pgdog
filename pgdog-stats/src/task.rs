@@ -556,15 +556,14 @@ mod test {
             );
         }
 
-        // Only the reverse stream is marked; the forward one reads plainly.
         for (direction, expected) in [
             (
                 ReplicationDirection::Forward,
-                "replication prod -> prod_sharded",
+                "replication stream prod -> prod_sharded (forward)",
             ),
             (
                 ReplicationDirection::Reverse,
-                "replication prod -> prod_sharded (reverse)",
+                "replication stream prod -> prod_sharded (reverse)",
             ),
         ] {
             assert_eq!(

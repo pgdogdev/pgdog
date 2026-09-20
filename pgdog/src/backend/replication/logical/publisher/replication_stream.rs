@@ -1,22 +1,19 @@
 use std::time::Duration;
 
 use tokio::select;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio::try_join;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::progress::Progress;
+use super::replication_progress::{ReplicationProgressShardUpdater, ReplicationShardProgress};
 use super::{Lsn, ReplicationData, ReplicationSlot, Table};
 use crate::backend::Cluster;
 use crate::backend::replication::logical::Error;
-use crate::backend::replication::logical::publisher::replication_progress::{
-    ReplicationProgressShardUpdater, ReplicationShardProgress,
-};
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
 use crate::util::{safe_interval, safe_sleep};
-use tokio::time::MissedTickBehavior;
 
 /// Runs the replication stream from a single shard (slot)
 /// to the destination cluster.
@@ -52,12 +49,12 @@ impl ReplicationStream {
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest_cluster, tables);
         stream.set_current_lsn(slot.lsn().lsn);
-        self.updater.update(|p| p.applied_lsn = Some(slot.lsn()));
+        self.updater.update(|p| p.advance_applied_lsn(slot.lsn()));
         let result = self.replicate(slot, &mut stream, stop).await;
         let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
         let missed = stream.missed_rows();
         self.updater.update(|p| {
-            p.applied_lsn = Some(final_lsn);
+            p.advance_applied_lsn(final_lsn);
             p.missed_rows.merge(missed);
         });
         result
@@ -73,7 +70,7 @@ impl ReplicationStream {
         let applied = Lsn::from_i64(stream.status_update().last_applied);
         self.updater.update(|p| {
             p.replication_lag = Some(lag);
-            p.applied_lsn = Some(applied);
+            p.advance_applied_lsn(applied);
             p.missed_rows.merge(missed);
         });
         if missed.non_zero() {
@@ -161,7 +158,7 @@ impl ReplicationStream {
                                         slot.status_update(su).await?;
                                         self.updater.update(|p| {
                                             p.last_transaction = Some(Instant::now());
-                                            p.applied_lsn = Some(applied);
+                                            p.advance_applied_lsn(applied);
                                         });
                                     }
                                     attempt = 0;

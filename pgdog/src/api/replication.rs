@@ -26,9 +26,9 @@ use crate::config::config;
 use crate::tasks;
 use crate::util::{safe_interval, safe_timeout};
 use pgdog_stats::{
-    Lsn, MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus,
-    ReplicationCutoverReason, ReplicationDefinition, ReplicationDirection,
-    ReplicationShardDefinition, ReplicationShardStatus, ReplicationStatus, TaskDefinition,
+    MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus, ReplicationCutoverReason,
+    ReplicationDefinition, ReplicationDirection, ReplicationShardDefinition,
+    ReplicationShardStatus, ReplicationStatus, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -185,7 +185,7 @@ impl ReplicationTask {
         stop_cluster_replication.stop(cutover_reason);
         let drained = safe_timeout(ReplicationClusterTask::drain_timeout(), &mut cluster_run)
             .await
-            .unwrap_or(Err(Error::ReplicationTimeout));
+            .unwrap_or(Err(Error::DrainTimeout));
         result.and(drained)?;
 
         Ok(maintenance)
@@ -224,9 +224,6 @@ impl ReplicationTask {
         direction: ReplicationDirection,
     ) -> Result<(), Error> {
         ctx.set_status(ReplicationStatus::PreparingReverseReplication);
-
-        // W: do we need this?
-        orchestrator.refresh_publisher();
 
         async {
             // create the slots to the source before making actual cutover
@@ -352,8 +349,8 @@ impl Task for ReplicationClusterTask {
 
         ctx.set_status(ReplicationClusterStatus::InitializingReplicationStreams);
         let init_result = Self::create_replication_shard_tasks(
-            &orchestrator,
             &ctx,
+            &orchestrator,
             &progress,
             &streams_stop,
             &mut streams,
@@ -402,11 +399,10 @@ impl Task for ReplicationClusterTask {
 
 impl ReplicationClusterTask {
     /// Create [`ReplicationShardTask`] for every source shard in the cluster
-    /// and track it's status.
+    /// and track its status.
     async fn create_replication_shard_tasks(
-        // W: ctx is always first
-        orchestrator: &Orchestrator,
         ctx: &TaskContext<Self>,
+        orchestrator: &Orchestrator,
         progress: &ReplicationProgress,
         stop: &CancellationToken,
         streams: &mut ReplicationStreams,
@@ -453,7 +449,7 @@ impl ReplicationClusterTask {
             result
         })
         .await
-        .unwrap_or(Err(Error::ReplicationTimeout))
+        .unwrap_or(Err(Error::DrainTimeout))
     }
 }
 
@@ -519,12 +515,12 @@ impl Task for ReplicationShardTask {
                     break result;
                 }
                 _ = report.tick() => {
-                    ctx.set_status(stream_status(&replication_stream, initial_lsn));
+                    ctx.set_status(replication_stream.progress().snapshot(initial_lsn));
                 }
             }
         };
 
-        ctx.set_status(stream_status(&replication_stream, initial_lsn));
+        ctx.set_status(replication_stream.progress().snapshot(initial_lsn));
         drop(replication_run);
 
         if let Err(err) = slot.drop_slot().await {
@@ -532,15 +528,6 @@ impl Task for ReplicationShardTask {
         }
 
         result
-    }
-}
-
-fn stream_status(replication: &ReplicationStream, fallback_lsn: Lsn) -> ReplicationShardStatus {
-    let info = replication.progress();
-    ReplicationShardStatus {
-        lsn: info.applied_lsn.unwrap_or(fallback_lsn),
-        lag_bytes: info.replication_lag,
-        missed_rows: info.missed_rows,
     }
 }
 

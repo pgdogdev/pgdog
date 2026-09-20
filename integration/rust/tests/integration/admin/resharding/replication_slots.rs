@@ -22,6 +22,7 @@ const SHOW_REPLICATION_SLOTS_LAYOUT: &[(&str, &str)] = &[
     ("copy_data", "BOOL"),
     ("last_transaction", "TEXT"),
     ("last_transaction_ms", "INT8"),
+    ("task_id", "INT8"),
 ];
 
 async fn slot_row(admin: &Pool<Postgres>) -> Option<PgRow> {
@@ -71,6 +72,7 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
     .await;
     assert!(row.get::<Option<String>, _>("last_transaction").is_some());
     assert!(row.get::<Option<i64>, _>("last_transaction_ms").is_some());
+    assert!(row.get::<Option<i64>, _>("task_id").is_some());
 
     admin
         .execute(format!("STOP_TASK {task_id}").as_str())

@@ -131,6 +131,9 @@ pub(crate) enum Error {
     #[error("replication timeout")]
     ReplicationTimeout,
 
+    #[error("replication streams did not drain in time")]
+    DrainTimeout,
+
     #[error("replication stream stopped before shutdown was requested")]
     ReplicationStreamStopped,
 

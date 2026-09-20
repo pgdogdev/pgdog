@@ -115,7 +115,6 @@ impl Task for CopyDataTask {
                 let ctx = ctx.clone();
                 let shard_number = shard.number();
                 let format = self.format;
-                // W: should we even use tasks for it?
                 handles.push(tasks::spawn("tables copy", async move {
                     let table_sync_task = TableDataSyncTask {
                         pool,
@@ -159,7 +158,6 @@ struct TableDataSyncTask {
 impl Task for TableDataSyncTask {
     type Status = TableCopyStatus;
 
-    // W: table?
     type Output = Table;
 
     type Error = Error;

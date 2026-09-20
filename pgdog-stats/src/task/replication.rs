@@ -86,7 +86,7 @@ pub enum ReplicationStatus {
 /// traffic over. `databases` always names the migration's original source and
 /// destination; `direction` says which of them the changes flow from.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("replication {databases}{}", if matches!(direction, ReplicationDirection::Reverse) { " (reverse)" } else { "" })]
+#[display("replication stream {databases} ({direction})")]
 pub struct ReplicationClusterDefinition {
     pub databases: Databases,
     pub direction: ReplicationDirection,

@@ -86,8 +86,8 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Replace the publisher entirely (discards LSN state).  Only valid
-    /// when starting a fresh replication phase, e.g. after cutover.
+    /// Replace the publisher entirely (discards LSN state). Only valid
+    /// before any replication slot exists, e.g. after the pre-data schema sync.
     pub(crate) fn refresh_publisher(&mut self) {
         let publisher = Publisher::new(&self.publication, self.replication_slot.clone());
         self.publisher = Arc::new(Mutex::new(publisher));

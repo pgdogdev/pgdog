@@ -414,6 +414,11 @@ impl<T: Task> TaskContext<T> {
 
                     Ok(output)
                 }
+                Err(err) if ctx.task.cancellation_token.is_cancelled() => {
+                    ctx.transition(TaskProgress::Cancelled);
+
+                    Err(err)
+                }
                 Err(err) => {
                     ctx.transition(TaskProgress::error(err.to_string()));
 
@@ -1743,10 +1748,7 @@ mod tests {
 
         let subtasks = root.subtasks();
         assert_eq!(subtasks.len(), 1);
-        assert!(matches!(
-            subtasks[0].state().progress,
-            TaskProgress::Error { .. }
-        ));
+        assert_eq!(subtasks[0].state().progress, TaskProgress::Cancelled);
     }
 
     #[test]

@@ -22,65 +22,6 @@ use crate::{
     config::{config, set},
 };
 use pgdog_stats::ReplicationDirection;
-#[tokio::test]
-async fn wait_for_replication_finishes_with_unrelated_writes()
--> Result<(), Box<dyn std::error::Error>> {
-    let schema = "unrelated_writes_test";
-    let destination = "unrelated_writes_test_dest";
-    let original_config = config();
-    let mut admin = test_server().await;
-    let result = async {
-        setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY); \
-                 CREATE TABLE {schema}.noise (id BIGINT, payload TEXT); \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
-            ))
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        dest_server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY)"
-            ))
-            .await?;
-
-        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
-        orchestrator
-            .publisher()
-            .await
-            .prepare_replication(&source, &CancellationToken::new())
-            .await?;
-        let (task, stop) = start_replication(&orchestrator);
-        let result = async {
-            server
-                .execute_checked(format!(
-                    "INSERT INTO {schema}.noise \
-                     SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 64)) \
-                     FROM generate_series(1, 5000) g"
-                ))
-                .await?;
-            wait_for_slot(&mut server, &format!("{schema}_0")).await?;
-            Ok::<_, Box<dyn std::error::Error>>(())
-        }
-        .await;
-
-        stop.stop(None);
-        let drained = drain_replication(task).await;
-        drained?;
-        result?;
-        Ok::<_, Box<dyn std::error::Error>>(())
-    }
-    .await;
-
-    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
-    result
-}
 
 async fn setup_replication_test(
     admin: &mut Server,
@@ -226,6 +167,66 @@ async fn cleanup_replication_test(
             .await?;
     }
     cleanup
+}
+
+#[tokio::test]
+async fn wait_for_replication_finishes_with_unrelated_writes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema = "unrelated_writes_test";
+    let destination = "unrelated_writes_test_dest";
+    let original_config = config();
+    let mut admin = test_server().await;
+    let result = async {
+        setup_replication_test(&mut admin, schema, destination).await?;
+        let source = databases::databases().schema_owner(schema)?;
+        let dest = databases::databases().schema_owner(destination)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY); \
+                 CREATE TABLE {schema}.noise (id BIGINT, payload TEXT); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
+            ))
+            .await?;
+        let mut dest_server = dest.primary(0, &Request::default()).await?;
+        dest_server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY)"
+            ))
+            .await?;
+
+        let orchestrator = Orchestrator::new(schema, destination, schema, Some(schema.into()))?;
+        orchestrator
+            .publisher()
+            .await
+            .prepare_replication(&source, &CancellationToken::new())
+            .await?;
+        let (task, stop) = start_replication(&orchestrator);
+        let result = async {
+            server
+                .execute_checked(format!(
+                    "INSERT INTO {schema}.noise \
+                     SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 64)) \
+                     FROM generate_series(1, 5000) g"
+                ))
+                .await?;
+            wait_for_slot(&mut server, &format!("{schema}_0")).await?;
+            Ok::<_, Box<dyn std::error::Error>>(())
+        }
+        .await;
+
+        stop.stop(None);
+        let drained = drain_replication(task).await;
+        drained?;
+        result?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
+    result
 }
 
 // Verify the case when the data related to fk update happened during tables

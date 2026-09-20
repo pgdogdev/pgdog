@@ -77,7 +77,7 @@ impl CutoverPolicy {
         loop {
             check.tick().await;
 
-            let Some(lag) = self.progress.replication_lag() else {
+            let Some(lag) = self.progress.snapshot().lag_bytes else {
                 info!("[cutover] replication lag is not calculated for all shards, yet");
                 continue;
             };
@@ -102,8 +102,9 @@ impl CutoverPolicy {
         let cutover_threshold = self.config.replication_lag_threshold;
         let last_transaction_delay = self.config.last_transaction_delay;
 
-        let lag = self.progress.replication_lag();
-        let last_transaction = self.progress.last_transaction();
+        let progress = self.progress.snapshot();
+        let lag = progress.lag_bytes;
+        let last_transaction = progress.last_transaction_ms.map(Duration::from_millis);
         let cutover_timeout_exceeded = elapsed >= cutover_timeout;
 
         if cutover_timeout_exceeded {
@@ -407,13 +408,13 @@ mod tests {
         let waiter = CutoverPolicy::new(config, progress.clone());
         let elapsed = Duration::from_millis(100);
 
-        assert_eq!(progress.replication_lag(), None);
+        assert_eq!(progress.snapshot().lag_bytes, None);
         assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
         progress
             .updater_for_shard(0)
             .update(|s| s.replication_lag = Some(500));
-        assert_eq!(progress.replication_lag(), None);
+        assert_eq!(progress.snapshot().lag_bytes, None);
         assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
         progress
