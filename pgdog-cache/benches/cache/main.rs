@@ -14,16 +14,20 @@ use adapters::*;
 type Group<'a> = BenchmarkGroup<'a, WallTime>;
 
 struct Workload {
+    /// Every name the run can ask for, as pgdog mints them: `__pgdog_<counter>`.
+    /// Index `i` holds `__pgdog_{i + 1}`.
+    names: Vec<Key>,
+
     /// Every key in `0..n`, in random order.
-    shuffled: Vec<Key>,
+    shuffled: Vec<usize>,
 
     /// `n` keys drawn uniformly from `0..n`.
-    uniform: Vec<Key>,
+    uniform: Vec<usize>,
 
     /// Zipf-distributed requests over `1..=n * 10`, where lower keys are hotter.
     /// The first `n` warm the cache [`Workload::cache`] builds,
     /// and the rest are the requests [`bench_traffic`] serves.
-    zipf: Vec<Key>,
+    zipf: Vec<usize>,
 }
 
 impl Workload {
@@ -31,23 +35,27 @@ impl Workload {
         // Fixed seed so runs stay comparable.
         let mut rng = StdRng::seed_from_u64(0x5eed);
 
-        let mut shuffled: Vec<Key> = (0..n as Key).collect();
+        let mut shuffled: Vec<usize> = (0..n).collect();
         shuffled.shuffle(&mut rng);
 
-        let uniform = iter::repeat_with(|| rng.random_range(0..n as Key))
+        let uniform = iter::repeat_with(|| rng.random_range(0..n))
             .take(n)
             .collect();
 
         // Ten times the cache, so most of the keyspace can't fit and misses keep coming.
         let distribution = Zipf::new((n * 10) as f64, 1.0).expect("zipf parameters are valid");
-        let zipf = iter::repeat_with(|| rng.sample(distribution) as Key)
+        let zipf = iter::repeat_with(|| rng.sample(distribution) as usize - 1)
             // `n` to warm a cache with, then ten passes for bench_traffic to serve.
             // Rebuilding the cache in setup costs about twice one pass over it, so the
             // measured region has to be several passes long to keep that out of the numbers.
             .take(n * 11)
             .collect();
 
+        // Built once so the measured loops only ever clone a name, never format one.
+        let names = (1..=n * 10).map(|c| format!("__pgdog_{c}")).collect();
+
         Self {
+            names,
             shuffled,
             uniform,
             zipf,
@@ -58,24 +66,29 @@ impl Workload {
         self.shuffled.len()
     }
 
+    /// The name at `index`.
+    fn name(&self, index: usize) -> &Key {
+        &self.names[index]
+    }
+
     /// Returns a full cache, warmed with Zipf requests so LFU entries don't all tie on use count.
     fn cache<C: Cache>(&self) -> C {
         let n = self.entries();
         let mut cache = C::new(n);
 
-        for key in 0..n as Key {
-            cache.insert(key, key);
+        for index in 0..n {
+            cache.insert(self.name(index).clone(), Value::new());
         }
 
-        for key in &self.zipf[..n] {
-            cache.get(key);
+        for &index in &self.zipf[..n] {
+            cache.get(self.name(index));
         }
 
         cache
     }
 
     /// The requests [`bench_traffic`] serves, drawn after the ones [`Workload::cache`] warms with.
-    fn traffic(&self) -> &[Key] {
+    fn traffic(&self) -> &[usize] {
         &self.zipf[self.entries()..]
     }
 }
@@ -103,8 +116,8 @@ fn bench_insert(c: &mut Criterion) {
             b.iter_batched_ref(
                 || C::new(workload.entries()),
                 |cache| {
-                    for &key in &workload.shuffled {
-                        cache.insert(key, key);
+                    for &index in &workload.shuffled {
+                        cache.insert(workload.name(index).clone(), Value::new());
                     }
                 },
                 BatchSize::LargeInput,
@@ -134,8 +147,8 @@ fn bench_get(c: &mut Criterion) {
             b.iter_batched_ref(
                 || workload.cache::<C>(),
                 |cache| {
-                    for key in &workload.uniform {
-                        black_box(cache.get(key));
+                    for &index in &workload.uniform {
+                        black_box(cache.get(workload.name(index)));
                     }
                 },
                 BatchSize::LargeInput,
@@ -165,8 +178,8 @@ fn bench_peek(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new(C::NAME, workload.entries()), |b| {
             b.iter(|| {
-                for key in &workload.uniform {
-                    black_box(cache.peek(key));
+                for &index in &workload.uniform {
+                    black_box(cache.peek(workload.name(index)));
                 }
             });
         });
@@ -194,8 +207,8 @@ fn bench_remove(c: &mut Criterion) {
             b.iter_batched_ref(
                 || workload.cache::<C>(),
                 |cache| {
-                    for key in &workload.shuffled {
-                        black_box(cache.remove(key));
+                    for &index in &workload.shuffled {
+                        black_box(cache.remove(workload.name(index)));
                     }
                 },
                 BatchSize::LargeInput,
@@ -265,9 +278,11 @@ fn bench_traffic(c: &mut Criterion) {
             b.iter_batched_ref(
                 || workload.cache::<C>(),
                 |cache| {
-                    for &key in requests {
-                        if cache.get(&key).is_none() {
-                            cache.insert(key, key);
+                    for &index in requests {
+                        let key = workload.name(index);
+
+                        if cache.get(key).is_none() {
+                            cache.insert(key.clone(), Value::new());
                             cache.evict_to(n);
                         }
                     }

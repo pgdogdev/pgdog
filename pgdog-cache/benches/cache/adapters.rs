@@ -1,10 +1,29 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc, time::Instant};
 
 use cachekit::traits::Cache as _;
 use pgdog_cache::CachePolicy;
 
-pub type Key = u64;
-pub type Value = u64;
+/// A prepared statement name, as pgdog mints them: `__pgdog_<counter>`.
+pub type Key = String;
+
+/// What pgdog keeps per prepared statement on a server connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Value {
+    /// When the statement should be replanned.
+    pub deadline: Option<Instant>,
+
+    /// Whether this connection has prepared the statement.
+    pub prepared: bool,
+}
+
+impl Value {
+    pub fn new() -> Self {
+        Self {
+            deadline: None,
+            prepared: true,
+        }
+    }
+}
 
 /// A cache under benchmark.
 pub trait Cache {
