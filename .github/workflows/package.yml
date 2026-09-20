@@ -3,6 +3,7 @@ on:
   push:
     branches: ["main", "main-ent"]
     paths:
+      - "Dockerfile"
       - "**/*.rs"
       - "**/Cargo.toml"
   release:

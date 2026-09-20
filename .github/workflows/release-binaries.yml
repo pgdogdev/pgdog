@@ -45,6 +45,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # ARM64 Linux kernels use 4K, 16K, or 64K pages. jemalloc's compile-time
+      # page size must cover the largest runtime page size.
+      - name: Configure jemalloc for ARM64 Linux
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: echo 'JEMALLOC_SYS_WITH_LG_PAGE=16' >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p pgdog
 
