@@ -14,6 +14,8 @@ pub(crate) struct ReplicationShardProgress {
     pub(crate) last_transaction: Option<Instant>,
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
+    pub(crate) bytes_sharded: usize,
+    pub(crate) origin_lsn: Lsn,
 }
 
 impl ReplicationShardProgress {

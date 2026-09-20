@@ -6,7 +6,6 @@ use tokio::try_join;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use super::progress::Progress;
 use super::replication_progress::{ReplicationProgressShardUpdater, ReplicationShardProgress};
 use super::{Lsn, ReplicationData, ReplicationSlot, Table};
 use crate::backend::Cluster;
@@ -68,10 +67,14 @@ impl ReplicationStream {
         let lag = slot.replication_lag().await?;
         let missed = stream.missed_rows();
         let applied = Lsn::from_i64(stream.status_update().last_applied);
+        let bytes_sharded = stream.bytes_sharded();
+        let origin_lsn = Lsn::from_i64(stream.lsn());
         self.updater.update(|p| {
             p.replication_lag = Some(lag);
             p.advance_applied_lsn(applied);
             p.missed_rows.merge(missed);
+            p.bytes_sharded = bytes_sharded;
+            p.origin_lsn = origin_lsn;
         });
         if missed.non_zero() {
             warn!(
@@ -94,7 +97,6 @@ impl ReplicationStream {
         check_lag.set_missed_tick_behavior(MissedTickBehavior::Delay);
         slot.start_replication().await?;
 
-        let progress = Progress::new_stream();
         let max_attempts = self
             .dest_cluster
             .resharding_replication_retry_max_attempts();
@@ -151,7 +153,6 @@ impl ReplicationStream {
                                         Lsn::from_i64(ka.wal_end),
                                         slot.addr()
                                     );
-                                    progress.update(stream.bytes_sharded(), ka.wal_end);
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
                                         let applied = Lsn::from_i64(su.last_applied);
@@ -162,7 +163,6 @@ impl ReplicationStream {
                                         });
                                     }
                                     attempt = 0;
-                                    progress.update(stream.bytes_sharded(), stream.lsn());
                                 }
                                 Ok(false)
                             }

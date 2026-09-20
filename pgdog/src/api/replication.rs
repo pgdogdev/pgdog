@@ -487,7 +487,7 @@ impl Task for ReplicationShardTask {
             tables,
             replication_stream,
             stop,
-            ..
+            source_shard,
         } = self;
 
         // task got cancelled
@@ -496,6 +496,8 @@ impl Task for ReplicationShardTask {
         let stream_stop = stop.child_token();
 
         slot.set_task_id(ctx.id());
+        let slot_name = slot.name().to_owned();
+        let slot_addr = slot.addr().clone();
         let initial_lsn = slot.lsn();
         ctx.set_status(ReplicationShardStatus {
             lsn: initial_lsn,
@@ -505,7 +507,9 @@ impl Task for ReplicationShardTask {
 
         let mut replication_run = Box::pin(replication_stream.run(&mut slot, tables, &stream_stop));
 
-        let mut report = safe_interval(Duration::from_secs(1));
+        let report_interval = Duration::from_secs(1);
+        let mut report = safe_interval(report_interval);
+        let mut logged_bytes = 0usize;
 
         let result = loop {
             select! {
@@ -516,7 +520,19 @@ impl Task for ReplicationShardTask {
                     break result;
                 }
                 _ = report.tick() => {
-                    ctx.set_status(replication_stream.progress().snapshot(initial_lsn));
+                    let progress = replication_stream.progress();
+                    let status = progress.snapshot(initial_lsn);
+                    info!(
+                        "[replication] shard={source_shard} slot=\"{slot_name}\" replicated {:.3} MB position {} [{:.3} MB/sec], {status} [{slot_addr}]",
+                        progress.bytes_sharded as f64 / 1024.0 / 1024.0,
+                        progress.origin_lsn,
+                        (progress.bytes_sharded - logged_bytes) as f64
+                            / report_interval.as_secs_f64()
+                            / 1024.0
+                            / 1024.0
+                    );
+                    logged_bytes = progress.bytes_sharded;
+                    ctx.set_status(status);
                 }
             }
         };

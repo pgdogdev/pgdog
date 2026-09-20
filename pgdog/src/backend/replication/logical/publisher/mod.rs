@@ -5,7 +5,6 @@ pub(crate) mod slot;
 pub(crate) use slot::*;
 pub(crate) mod copy;
 pub(crate) mod cutover_policy;
-pub(crate) mod progress;
 pub(crate) mod publisher_impl;
 pub(crate) mod queries;
 pub(crate) mod replication_progress;
