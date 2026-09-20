@@ -30,6 +30,12 @@ pub struct Node<T> {
 
     bucket: BucketIndex,
 
+    /// Where the item's key sat in the cache's table when it was inserted,
+    /// so eviction can find it without hashing. A rehash moves keys between
+    /// buckets, so a reader has to check before trusting it.
+    /// Meaningless when `kind` is not `Item`.
+    table_hint: u32,
+
     kind: NodeKind<T>,
 }
 
@@ -139,11 +145,13 @@ impl<T> EvictionQueue<T> {
     }
 
     /// Returns the first node in eviction order, or `None` if the queue is empty.
+    #[inline]
     pub fn front(&self) -> Option<NodeIndex> {
         self.first_bucket.map(|bucket| self[bucket.head].next)
     }
 
     /// Returns a reference to the item at `node`.
+    #[inline]
     pub fn get(&self, node: NodeIndex) -> &T {
         match &self[node].kind {
             NodeKind::Item(item) => item,
@@ -153,6 +161,7 @@ impl<T> EvictionQueue<T> {
     }
 
     /// Returns a mutable reference to the item at `node`.
+    #[inline]
     pub fn get_mut(&mut self, node: NodeIndex) -> &mut T {
         match &mut self[node].kind {
             NodeKind::Item(item) => item,
@@ -161,7 +170,14 @@ impl<T> EvictionQueue<T> {
         }
     }
 
+    /// Returns the [`Node::table_hint`] of the item at `node`.
+    #[inline]
+    pub fn table_hint_mut(&mut self, node: NodeIndex) -> &mut u32 {
+        &mut self[node].table_hint
+    }
+
     /// Adds `item` with a use count of 1, after every other item at that count.
+    #[inline]
     pub fn push(&mut self, item: T) -> NodeIndex {
         let bucket = match self.first_bucket {
             Some(bucket) if self[bucket].count == 1 => bucket,
@@ -173,6 +189,7 @@ impl<T> EvictionQueue<T> {
             prev: index,
             next: index,
             bucket,
+            table_hint: 0,
         });
 
         self.link_to_back(bucket, node);
@@ -181,6 +198,7 @@ impl<T> EvictionQueue<T> {
     }
 
     /// Removes the item at `node` and returns it.
+    #[inline]
     pub fn remove(&mut self, node: NodeIndex) -> T {
         self.detach(node);
 
@@ -275,6 +293,7 @@ impl<T> EvictionQueue<T> {
             prev: index,
             next: index,
             bucket: BucketIndex { head: index },
+            table_hint: 0,
             kind: NodeKind::Bucket(Bucket { count, prev, next }),
         });
 
@@ -288,6 +307,8 @@ impl<T> EvictionQueue<T> {
 
     /// Removes `bucket`.
     /// Only valid once its items have all been removed or moved to another bucket.
+    #[cold]
+    #[inline(never)]
     fn remove_bucket(&mut self, bucket: BucketIndex) {
         let head = bucket.head;
         let Bucket { prev, next, .. } = self[bucket];
@@ -338,6 +359,7 @@ impl<T> EvictionQueue<T> {
 
     /// Splices `node` out of its list, leaving its own links stale.
     /// Does not remove a bucket if it becomes empty.
+    #[inline]
     fn unlink(&mut self, node: NodeIndex) {
         let Node { prev, next, .. } = self[node];
 
@@ -350,6 +372,7 @@ impl<T> EvictionQueue<T> {
     }
 
     /// Unlinks `node` from its list and removes the bucket if it becomes empty.
+    #[inline]
     fn detach(&mut self, node: NodeIndex) {
         let bucket = self[node].bucket;
         self.unlink(node);
@@ -361,6 +384,7 @@ impl<T> EvictionQueue<T> {
 
     /// Allocates a [`Node`], reusing a freed node if available.
     /// `node` is given its own index so a bucket head can link to itself.
+    #[inline]
     fn allocate(&mut self, node: impl FnOnce(NodeIndex) -> Node<T>) -> NodeIndex {
         match self.free_nodes.pop() {
             Some(index) => {
@@ -377,6 +401,7 @@ impl<T> EvictionQueue<T> {
     }
 
     /// Frees `node` for reuse by `allocate`, returning what it held.
+    #[inline]
     fn free(&mut self, node: NodeIndex) -> NodeKind<T> {
         // A double free would hand the same node to two later allocations.
         debug_assert!(!matches!(self[node].kind, NodeKind::Vacant));

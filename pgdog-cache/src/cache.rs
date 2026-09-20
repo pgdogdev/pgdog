@@ -106,7 +106,10 @@ impl<K: Hash + Eq, V> Cache<K, V> {
             }
 
             Entry::Vacant(entry) => {
-                entry.insert(self.queue.push((key, value)));
+                let node = self.queue.push((key, value));
+                let index = entry.insert(node).bucket_index();
+
+                *self.queue.table_hint_mut(node) = index as u32;
 
                 None
             }
@@ -175,13 +178,24 @@ impl<K: Hash + Eq, V> Cache<K, V> {
     /// Removes and returns the next entry in [`CachePolicy`] eviction order.
     pub fn pop(&mut self) -> Option<(K, V)> {
         let node = self.queue.front()?;
-        let hash = self.hasher.hash_one(&self.queue.get(node).0);
+        let hint = *self.queue.table_hint_mut(node) as usize;
 
-        // The node is known so match by its index to skip the key comparison.
-        self.table
-            .find_entry(hash, |&index| index == node)
-            .expect("queued node should be in the table")
-            .remove();
+        let entry = if self.table.get_bucket(hint) == Some(&node) {
+            // No two live entries share a node index.
+            // A bucket holding this one is ours to erase.
+            self.table.get_bucket_entry(hint)
+        } else {
+            // The table has resized since, moving keys between buckets.
+            // Fallback to hashing the key to find the entry.
+            let hash = self.hasher.hash_one(&self.queue.get(node).0);
+            self.table.find_entry(hash, |&found| found == node)
+        };
+
+        let Ok(entry) = entry else {
+            unreachable!("queued node should be in the table")
+        };
+
+        entry.remove();
 
         Some(self.queue.remove(node))
     }
@@ -294,5 +308,28 @@ mod tests {
 
         assert!(cache.is_empty());
         assert_eq!(cache.pop(), None);
+    }
+
+    #[test]
+    fn pop_removes_after_the_table_grows() {
+        let mut cache = Cache::new();
+
+        // Past the initial capacity several times over, so entries move more
+        // than once, with removals mixed in to leave tombstones behind too.
+        for key in 0..1024u32 {
+            cache.insert(key, key);
+
+            if key % 3 == 0 {
+                assert_eq!(cache.remove(&key), Some(key));
+            }
+        }
+
+        let expected: Vec<u32> = (0..1024u32).filter(|key| key % 3 != 0).collect();
+        let popped: Vec<u32> = from_fn(|| cache.pop()).map(|(key, _)| key).collect();
+
+        // Every key comes back exactly once, in insertion order.
+        // No pop erased a neighbour's entry.
+        assert_eq!(popped, expected);
+        assert!(cache.is_empty());
     }
 }
