@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pgdog_cache::Cache;
+use pgdog_cache::{Cache, CachePolicy};
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
@@ -17,7 +17,7 @@ use crate::{
 };
 use crate::{net::ErrorResponse, util::time::deadline};
 use parking_lot::RwLock;
-use pgdog_config::prepared_statements::PreparedStatementsConfig;
+use pgdog_config::{PreparedStatementsEviction, prepared_statements::PreparedStatementsConfig};
 
 use super::{Error, Oids};
 use super::{
@@ -153,6 +153,10 @@ impl PreparedStatements {
     #[inline]
     pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+        self.local_cache.configure(match config.eviction {
+            PreparedStatementsEviction::LeastRecentlyUsed => CachePolicy::LeastRecentlyUsed,
+            PreparedStatementsEviction::LeastFrequentlyUsed => CachePolicy::LeastFrequentlyUsed,
+        });
     }
 
     /// Number of parameters the client wrote in the unnamed statement this request rewrites.
@@ -744,7 +748,6 @@ pub(crate) mod test {
         Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
         messages::ReadyForQuery,
     };
-    use pgdog_cache::CachePolicy;
     use pgdog_config::PreparedStatementsLevel;
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
@@ -1006,10 +1009,9 @@ pub(crate) mod test {
 
         // Under LRU a dropped and reinserted entry lands where a promote would,
         // so only LFU can see the uses go missing.
-        ps.local_cache.configure(CachePolicy::LeastFrequentlyUsed);
-
         ps.configure(PreparedStatementsConfig {
             limit: 1,
+            eviction: PreparedStatementsEviction::LeastFrequentlyUsed,
             ..ps.config()
         });
 

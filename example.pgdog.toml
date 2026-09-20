@@ -201,6 +201,16 @@ query_parser = "on"
 # Default: unlimited
 #
 prepared_statements_limit = 1_000
+# Which statement a Postgres server connection closes once it reaches
+# prepared_statements_limit.
+#
+# Available options:
+# - lru (the statement unused the longest)
+# - lfu (the statement used the fewest times)
+#
+# Default: lru
+#
+prepared_statements_eviction = "lru"
 # How long a prepared statement can stay prepared on a Postgres server
 # connection. Expired statements are closed and prepared again the next
 # time they are used, so execution plans don't get stale.
