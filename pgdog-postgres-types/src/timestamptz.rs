@@ -65,6 +65,20 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_timestamptz_infinity_roundtrip() {
+        for text in [b"infinity".as_slice(), b"-infinity".as_slice()] {
+            let timestamp = TimestampTz::decode(text, Format::Text)
+                .expect("valid PostgreSQL timestamp with time zone");
+            assert_eq!(timestamp.encode(Format::Text).expect("text encoding"), text);
+            let binary = timestamp.encode(Format::Binary).expect("binary encoding");
+            let decoded = TimestampTz::decode(&binary, Format::Binary).expect("binary decoding");
+            assert_eq!(timestamp, decoded);
+            assert_eq!(timestamp.cmp(&decoded), std::cmp::Ordering::Equal);
+            assert_eq!(decoded.encode(Format::Text).expect("text encoding"), text);
+        }
+    }
+
+    #[test]
     fn test_timestamptz() {
         let ts = "2025-03-05 14:55:02.436109-08".as_bytes();
         let ts = TimestampTz::decode(ts, Format::Text).unwrap();
