@@ -210,7 +210,12 @@ impl FromDataType for Timestamp {
                         if let Some(micros) = micros {
                             let neg = micros.find('-').is_some();
                             let mut parts = micros.split(&['-', '+']);
-                            assign!(result, micros, parts);
+                            let fraction = parts.next().ok_or(Error::InvalidTimestamp)?;
+                            if fraction.is_empty() || fraction.len() > 6 {
+                                return Err(Error::InvalidTimestamp);
+                            }
+                            result.micros =
+                                fraction.parse::<i32>()? * 10_i32.pow(6 - fraction.len() as u32);
                             if let Some(offset) = parts.next() {
                                 let offset: i8 = bigint(offset)?
                                     .try_into()
@@ -277,6 +282,42 @@ impl FromDataType for Timestamp {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_timestamp_fractional_seconds() {
+        for (fraction, micros) in [
+            ("0", 0),
+            ("000000", 0),
+            ("1", 100_000),
+            ("01", 10_000),
+            ("001", 1_000),
+            ("0001", 100),
+            ("00001", 10),
+            ("000001", 1),
+            ("12345", 123_450),
+            ("123456", 123_456),
+        ] {
+            for offset in ["", "+00", "-08"] {
+                let input = format!("2025-03-05 14:51:42.{fraction}{offset}");
+                let timestamp = Timestamp::decode(input.as_bytes(), Format::Text)
+                    .expect("valid PostgreSQL timestamp");
+                assert_eq!(timestamp.micros, micros, "{input}");
+                assert_eq!(
+                    timestamp.to_pg_epoch_micros().expect("valid timestamp") % 1_000_000,
+                    i64::from(micros),
+                    "{input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_timestamp_rejects_invalid_fraction() {
+        for fraction in ["", "0000000", "1234567", "abc"] {
+            let input = format!("2025-03-05 14:51:42.{fraction}");
+            assert!(Timestamp::decode(input.as_bytes(), Format::Text).is_err());
+        }
+    }
 
     #[test]
     fn test_timestamp() {
