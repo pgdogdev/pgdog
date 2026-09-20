@@ -330,9 +330,23 @@ pub(crate) fn reload() -> Result<(), Error> {
     Ok(())
 }
 
+fn load_certificate_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>, Error> {
+    let certificates = CertificateDer::pem_file_iter(path)?.collect::<Result<Vec<_>, _>>()?;
+    if certificates.is_empty() {
+        return Err(invalid_data(format!(
+            "no PEM certificates found in certificate file {}",
+            path.display()
+        )));
+    }
+    Ok(certificates)
+}
+
 fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsListener, Error> {
-    let pem = CertificateDer::from_pem_file(cert)?;
-    let server_end_point = tls_server_end_point(&pem);
+    let certificates = load_certificate_chain(cert)?;
+    let leaf = certificates
+        .first()
+        .expect("certificate chain is non-empty");
+    let server_end_point = tls_server_end_point(leaf);
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let builder = rustls::ServerConfig::builder();
@@ -343,7 +357,7 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
         }
         None => builder.with_no_client_auth(),
     }
-    .with_single_cert(vec![pem], key)?;
+    .with_single_cert(certificates, key)?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
@@ -512,12 +526,12 @@ fn build_client_config(
     client_auth: Option<(&Path, &Path)>,
 ) -> Result<ClientConfig, Error> {
     match client_auth {
-        // Load the leaf certificate and key the same way `build_acceptor`
+        // Load the certificate chain and key the same way `build_acceptor`
         // loads PgDog's own server certificate.
         Some((cert_path, key_path)) => {
-            let cert = CertificateDer::from_pem_file(cert_path)?;
+            let certificates = load_certificate_chain(cert_path)?;
             let key = PrivateKeyDer::from_pem_file(key_path)?;
-            Ok(builder.with_client_auth_cert(vec![cert], key)?)
+            Ok(builder.with_client_auth_cert(certificates, key)?)
         }
         None => Ok(builder.with_no_client_auth()),
     }
@@ -706,7 +720,83 @@ impl ServerCertVerifier for NoHostnameVerifier {
 mod tests {
     use super::*;
     use crate::config::TlsVerifyMode;
-    use std::sync::Arc;
+    use rustls::pki_types::ServerName;
+    use std::{sync::Arc, time::Duration};
+
+    #[tokio::test]
+    async fn certificate_chains_are_sent_to_tls_peers() {
+        crate::logger();
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain");
+        let chain = fixtures.join("chain.pem");
+        let key = fixtures.join("leaf-key.pem");
+        let root = fixtures.join("root.pem");
+        let leaf = CertificateDer::from_pem_file(&chain).expect("leaf certificate");
+
+        for mutual_tls in [false, true] {
+            let listener = build_acceptor(&chain, &key, mutual_tls.then_some(root.as_path()))
+                .expect("server TLS configuration");
+            assert_eq!(
+                listener.server_end_point(),
+                tls_server_end_point(&leaf).as_deref(),
+                "channel binding must continue to use the leaf certificate"
+            );
+            let roots = load_ca_bundle(&root, "test root").expect("root CA");
+            let client = build_client_config(
+                ClientConfig::builder().with_root_certificates(roots),
+                mutual_tls.then_some((chain.as_path(), key.as_path())),
+            )
+            .expect("client TLS configuration");
+            let connector = TlsConnector::from(Arc::new(client));
+            let name = ServerName::try_from("localhost").expect("server name");
+            let (server_io, client_io) = tokio::io::duplex(16 * 1024);
+            let (server, client) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(
+                    listener.acceptor.accept(server_io),
+                    connector.connect(name, client_io)
+                )
+            })
+            .await
+            .expect("TLS handshake completed")
+            .expect("certificate chain verifies against its root CA");
+            assert_eq!(
+                client
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .expect("server chain")
+                    .len(),
+                2
+            );
+            if mutual_tls {
+                assert_eq!(
+                    server
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .expect("client chain")
+                        .len(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_certificate_chains_are_rejected() {
+        crate::logger();
+        let directory = tempfile::tempdir().expect("temporary certificate directory");
+        let empty = directory.path().join("empty.pem");
+        std::fs::write(&empty, "").expect("empty certificate bundle");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain/leaf-key.pem");
+        assert!(build_acceptor(&empty, &key, None).is_err());
+        assert!(
+            build_client_config(
+                ClientConfig::builder().with_root_certificates(rustls::RootCertStore::empty()),
+                Some((&empty, &key)),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn acceptor_reuse_snapshot() {
