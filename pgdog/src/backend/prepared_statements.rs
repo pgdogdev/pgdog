@@ -1,9 +1,10 @@
-use lru::LruCache;
 use std::{
     collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+use pgdog_cache::Cache;
 
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
@@ -36,12 +37,21 @@ fn entry_mem(s: &str) -> usize {
 struct LocalStatement {
     /// When this statement should be replanned
     deadline: Option<Instant>,
+
+    /// Whether this connection has prepared this statement.
+    ///
+    /// Starts as `true` and is cleared by a confirmed Close.
+    ///
+    /// This is neccessary because when the deadline expires and the statement is replanned,
+    /// the Parse that re-prepares it needs to keep the eviction order and use count it earned.
+    prepared: bool,
 }
 
 impl LocalStatement {
     fn new(ttl: Option<Duration>, jitter: Duration) -> Self {
         Self {
             deadline: ttl.map(|ttl| deadline(ttl, jitter)),
+            prepared: true,
         }
     }
 
@@ -98,7 +108,7 @@ pub(super) enum HandleResult {
 #[derive(Debug)]
 pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
-    local_cache: LruCache<String, LocalStatement>,
+    local_cache: Cache<String, LocalStatement>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
@@ -126,7 +136,7 @@ impl PreparedStatements {
     pub(crate) fn new(oids: Arc<Oids>) -> Self {
         Self {
             global_cache: frontend::PreparedStatements::global(),
-            local_cache: LruCache::unbounded(),
+            local_cache: Cache::new(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
@@ -353,10 +363,8 @@ impl PreparedStatements {
             }
             ProtocolMessage::EnsurePrepared(prepare) => {
                 let name = prepare.name();
-                if self.contains(name) {
-                    let entry = self.local_cache.get(name);
-                    let expired = self.config.ttl.is_some()
-                        && entry.is_some_and(|entry| entry.expired(Instant::now()));
+                if let Some(entry) = self.statement(name).copied() {
+                    let expired = self.config.ttl.is_some() && entry.expired(Instant::now());
 
                     if expired {
                         // Reached TTL limit for the given statement. Close it and re-Prepare on Postgres.
@@ -419,6 +427,15 @@ impl PreparedStatements {
                 // are syntactically valid.
                 self.describes.clear();
                 self.parameter_describes.clear();
+
+                // Remove cache entries for statements we've already closed.
+                // There's at most one and it's at the front.
+                while let Some(name) = self.parses.pop_front()
+                    && self.local_cache.peek(&name).is_some_and(|s| !s.prepared)
+                {
+                    self.remove(&name);
+                }
+
                 self.parses.clear();
             }
 
@@ -444,14 +461,12 @@ impl PreparedStatements {
             }
 
             // The close statement that is ignored and we have the parse for
-            // means we're repreparing the statement right now, so
-            // drop from cache first and let it be readded later on ParseComplete
+            // means we're repreparing the statement right now.
             '3' if matches!(action, Action::Ignore) => {
-                // ok, pop_front -> push_front just to avoid borrowing issues
-                // and not to copy the name just to remove by name
-                if let Some(name) = self.parses.pop_front() {
-                    self.remove(&name);
-                    self.parses.push_front(name);
+                if let Some(name) = self.parses.front()
+                    && let Some(statement) = self.local_cache.peek_mut(name)
+                {
+                    statement.prepared = false;
                 }
             }
 
@@ -513,7 +528,7 @@ impl PreparedStatements {
             return Ok(None);
         }
 
-        let entry = self.local_cache.get(name);
+        let entry = self.statement(name).copied();
         let expired =
             self.config.ttl.is_some() && entry.is_some_and(|entry| entry.expired(Instant::now()));
 
@@ -541,11 +556,15 @@ impl PreparedStatements {
 
     /// The server has prepared this statement already.
     pub(crate) fn contains(&mut self, name: &str) -> bool {
-        self.local_cache.promote(name)
+        self.statement(name).is_some()
+    }
+
+    fn statement(&mut self, name: &str) -> Option<&LocalStatement> {
+        self.local_cache.get(name).filter(|s| s.prepared)
     }
 
     #[cfg(test)]
-    fn statement(&self, name: &str) -> Option<&LocalStatement> {
+    fn peek_statement(&self, name: &str) -> Option<&LocalStatement> {
         self.local_cache.peek(name)
     }
 
@@ -554,8 +573,15 @@ impl PreparedStatements {
 
         // Cache is unbounded, so anything handed back is the old entry
         // for this same name, never an eviction. Only new names cost us.
-        if self.local_cache.push(name.to_owned(), statement).is_none() {
-            self.memory_used += entry_mem(name);
+        match self.local_cache.peek_mut(name) {
+            Some(entry) => {
+                *entry = statement;
+            }
+
+            None => {
+                self.local_cache.insert(name.to_owned(), statement);
+                self.memory_used += entry_mem(name);
+            }
         }
     }
 
@@ -589,7 +615,7 @@ impl PreparedStatements {
     /// This should only be done when a statement has been closed,
     /// or failed to parse.
     pub(crate) fn remove(&mut self, name: &str) -> bool {
-        if self.local_cache.pop(name).is_some() {
+        if self.local_cache.remove(name).is_some() {
             self.memory_used = self.memory_used.saturating_sub(entry_mem(name));
             true
         } else {
@@ -629,7 +655,7 @@ impl PreparedStatements {
     pub(crate) fn ensure_capacity(&mut self) -> Vec<Close> {
         let mut close = vec![];
         while self.local_cache.len() > self.config.limit {
-            let candidate = self.local_cache.pop_lru();
+            let candidate = self.local_cache.pop();
 
             if let Some((name, _)) = candidate {
                 close.push(Close::named(&name));
@@ -718,6 +744,7 @@ pub(crate) mod test {
         Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
         messages::ReadyForQuery,
     };
+    use pgdog_cache::CachePolicy;
     use pgdog_config::PreparedStatementsLevel;
 
     /// Build a PreparedStatements instance configured for ExtendedAnonymous mode.
@@ -826,7 +853,7 @@ pub(crate) mod test {
         ps.prepared(&name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+        assert!(ps.peek_statement(&name).unwrap().expired(Instant::now()));
 
         ps.configure(PreparedStatementsConfig {
             ttl: Some(TTL),
@@ -843,7 +870,7 @@ pub(crate) mod test {
         prepare_expired(&mut ps, &name);
 
         assert_eq!(ps.config().ttl, None);
-        assert!(ps.statement(&name).unwrap().expired(Instant::now()));
+        assert!(ps.peek_statement(&name).unwrap().expired(Instant::now()));
 
         assert_eq!(ps.handle(&bind(&name)).unwrap(), HandleResult::Forward);
         assert!(ps.contains(&name));
@@ -900,6 +927,8 @@ pub(crate) mod test {
 
         // The name is gone from the server, so the cache must not claim it.
         assert!(!ps.contains(&name));
+        assert_eq!(ps.len(), 0);
+        assert_eq!(ps.memory_used(), 0);
     }
 
     #[test]
@@ -943,6 +972,68 @@ pub(crate) mod test {
 
         // Postgres still holds the statement, so the cache must too.
         assert!(ps.contains(&name));
+    }
+
+    #[test]
+    fn a_close_marks_only_the_statement_it_belongs_to() {
+        let first = insert_global("ttl_close_order_first", "SELECT $1::bigint, 'first'");
+        let second = insert_global("ttl_close_order_second", "SELECT $1::bigint, 'second'");
+        let mut ps = new_with_ttl();
+        prepare_expired(&mut ps, &first);
+        prepare_expired(&mut ps, &second);
+
+        // Both are past their TTL, so two names are queued when the first Close comes back.
+        assert_close_and_parse!(ps.handle(&bind(&first)).unwrap(), &first);
+        assert_close_and_parse!(ps.handle(&bind(&second)).unwrap(), &second);
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+
+        assert!(!ps.contains(&first));
+        assert!(ps.contains(&second));
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        assert!(ps.contains(&first));
+        assert!(ps.contains(&second));
+    }
+
+    #[test]
+    fn a_re_prepared_statement_keeps_the_uses_it_earned() {
+        let hot = insert_global("ttl_lfu_reprepare", "SELECT $1::bigint");
+        let mut ps = new_with_ttl();
+
+        // Under LRU a dropped and reinserted entry lands where a promote would,
+        // so only LFU can see the uses go missing.
+        ps.local_cache.configure(CachePolicy::LeastFrequentlyUsed);
+
+        ps.configure(PreparedStatementsConfig {
+            limit: 1,
+            ..ps.config()
+        });
+
+        prepare_expired(&mut ps, &hot);
+        for _ in 0..5 {
+            assert!(ps.contains(&hot));
+        }
+
+        ps.prepared("lfu_cold");
+        for _ in 0..2 {
+            assert!(ps.contains("lfu_cold"));
+        }
+
+        assert_close_and_parse!(ps.handle(&bind(&hot)).unwrap(), &hot);
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+
+        assert!(ps.contains(&hot));
+
+        assert_eq!(ps.ensure_capacity(), vec![Close::named("lfu_cold")]);
     }
 
     /// Insert a prepared statement into the global cache so check_prepared can find it.

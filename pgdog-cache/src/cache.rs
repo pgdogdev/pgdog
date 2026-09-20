@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    fmt::{self, Debug, Formatter},
     hash::{BuildHasher, Hash},
     mem,
 };
@@ -26,6 +27,15 @@ impl<K, V> Default for Cache<K, V> {
             table: HashTable::default(),
             queue: EvictionQueue::default(),
         }
+    }
+}
+
+impl<K, V> Debug for Cache<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cache")
+            .field("policy", &self.queue.policy())
+            .field("len", &self.len())
+            .finish_non_exhaustive()
     }
 }
 

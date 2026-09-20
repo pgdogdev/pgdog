@@ -3342,6 +3342,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_raw_parse",
+ "pgdog-cache",
  "pgdog-config",
  "pgdog-macros",
  "pgdog-plugin",

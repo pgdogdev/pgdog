@@ -98,6 +98,11 @@ impl<T> EvictionQueue<T> {
         }
     }
 
+    /// Returns the current eviction policy.
+    pub fn policy(&self) -> CachePolicy {
+        self.policy
+    }
+
     /// Sets the eviction policy, keeping the current eviction order.
     pub fn configure(&mut self, policy: CachePolicy) {
         if mem::replace(&mut self.policy, policy) == policy {
