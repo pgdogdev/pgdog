@@ -278,6 +278,22 @@ impl PreparedStatements {
                 self.state.add(ExecutionCode::ExecutionCompleted);
             }
 
+            ProtocolMessage::ExecutePrepare { prepare, .. } => {
+                if self.contains(prepare.name()) {
+                    // SQL statements use global names too, so another client may
+                    // already have prepared this query on the pooled connection.
+                    let reply = if self.server_state == State::TransactionError {
+                        ErrorResponse::in_failed_transaction().message()
+                    } else {
+                        crate::net::CommandComplete::from_str("PREPARE").message()
+                    };
+                    self.state.add_simulated(reply);
+                    return Ok(HandleResult::Drop);
+                }
+                self.parses.push_back(prepare.name().to_owned());
+                self.state.add(ExecutionCode::ExecutionCompleted);
+            }
+
             ProtocolMessage::Sync(_) => {
                 self.state.add(ExecutionCode::ReadyForQuerySync);
             }
@@ -991,6 +1007,27 @@ pub(crate) mod test {
         assert_eq!(
             describe_parameters(&mut ps, &name, vec![23, 25]),
             vec![23, 25]
+        );
+    }
+
+    #[test]
+    fn extended_sql_prepare_tracks_completion_without_ready_for_query() {
+        let mut ps = new_extended();
+        let name = "__stmt_extended_prepare";
+        let execute = ProtocolMessage::ExecutePrepare {
+            execute: crate::net::Execute::new(),
+            prepare: SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1"),
+        };
+
+        assert_eq!(ps.handle(&execute).expect("execute"), HandleResult::Forward);
+        assert!(!ps.contains(name));
+        let mut complete = CommandComplete::from_str("PREPARE").message();
+        assert!(ps.forward(&mut complete).expect("command complete"));
+        assert!(ps.contains(name));
+        assert!(ps.done());
+        assert_eq!(
+            ps.handle(&execute).expect("cached prepare"),
+            HandleResult::Drop
         );
     }
 

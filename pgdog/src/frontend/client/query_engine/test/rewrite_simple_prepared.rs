@@ -67,6 +67,38 @@ fn rewritten_query(messages: &[ProtocolMessage]) -> String {
 }
 
 #[tokio::test]
+async fn test_rewrite_extended_prepare_preserves_protocol() {
+    load_test();
+    change_config(|general| {
+        general.prepared_statements = PreparedStatementsLevel::Full;
+    });
+    let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
+    let messages = run_test(
+        &mut client,
+        &[
+            Parse::named("outer", "PREPARE inner_stmt AS SELECT 1").into(),
+            Bind::new_statement("outer").into(),
+            Describe::new_portal("").into(),
+            Execute::new().into(),
+            Sync::new().into(),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        messages.iter().map(Protocol::code).collect::<String>(),
+        "PBDES"
+    );
+    assert!(
+        matches!(&messages[0], ProtocolMessage::Parse(parse) if parse.query().starts_with("PREPARE __pgdog_"))
+    );
+    assert!(matches!(
+        &messages[3],
+        ProtocolMessage::ExecutePrepare { .. }
+    ));
+}
+
+#[tokio::test]
 async fn test_reprepare_releases_previous_statement() {
     load_test();
 

@@ -216,8 +216,25 @@ impl RewritePlan {
                 .iter()
                 .for_each(|prepare| match prepare {
                     PrepareExecute::Prepare(prepare) => {
-                        request.messages.clear();
-                        request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        if request
+                            .messages
+                            .iter()
+                            .any(|message| matches!(message, ProtocolMessage::Query(_)))
+                        {
+                            request.messages.clear();
+                            request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        } else {
+                            // Keep Parse/Bind/Describe/Sync and their corresponding replies.
+                            // Preparing the outer statement must not execute the SQL PREPARE.
+                            for message in &mut request.messages {
+                                if let ProtocolMessage::Execute(execute) = message {
+                                    *message = ProtocolMessage::ExecutePrepare {
+                                        execute: execute.clone(),
+                                        prepare: prepare.clone(),
+                                    };
+                                }
+                            }
+                        }
                     }
                     PrepareExecute::Execute(prepare) => {
                         request
