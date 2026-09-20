@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS sql_regression_samples;
+CREATE TABLE sql_regression_samples (id BIGINT PRIMARY KEY, value INTEGER[]);
+INSERT INTO sql_regression_samples VALUES (1, '{NULL,1}');
+INSERT INTO sql_regression_samples VALUES (101, '{NULL,2}');
+INSERT INTO sql_regression_samples VALUES (2, '{1,NULL}');
+INSERT INTO sql_regression_samples VALUES (102, '{1,2}');
+INSERT INTO sql_regression_samples VALUES (3, '{NULL}');
+INSERT INTO sql_regression_samples VALUES (103, '{NULL,NULL}');
+INSERT INTO sql_regression_samples VALUES (4, '{2}');
+INSERT INTO sql_regression_samples VALUES (104, '{}');
+INSERT INTO sql_regression_samples VALUES (5, '{NULL,1}');
+INSERT INTO sql_regression_samples VALUES (105, NULL);
