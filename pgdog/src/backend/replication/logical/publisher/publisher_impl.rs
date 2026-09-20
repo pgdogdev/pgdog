@@ -303,15 +303,16 @@ impl Publisher {
 
     /// Drop the replication slots created during data sync.
     ///
-    /// Idempotent: the slot map is taken out up front, so repeated calls — or a
-    /// call after replication already took the slots over — are no-ops. Every
-    /// slot is attempted even if one fails; the first error is returned.
+    /// Keep each slot registered until its cleanup attempt finishes, so aborting
+    /// this future leaves unfinished slots available for retry. Every slot is
+    /// attempted even if one fails; the first error is returned.
     pub(crate) async fn cleanup(&mut self) -> Result<(), Error> {
         let mut error = None;
-        for (_, mut slot) in std::mem::take(&mut self.slots) {
+        while let Some((&shard, slot)) = self.slots.iter_mut().next() {
             if let Err(err) = slot.drop_slot().await {
                 error.get_or_insert(err);
             }
+            self.slots.remove(&shard);
         }
 
         error.map_or(Ok(()), Err)

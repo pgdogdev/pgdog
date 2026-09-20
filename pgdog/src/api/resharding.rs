@@ -63,7 +63,7 @@ impl Task for ReshardTask {
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         // Take the cancellation token so a `STOP_TASK` winds the children down
         // cooperatively (they'd otherwise outlive this task).
-        let _token = ctx.cancellation_token();
+        let cancel = ctx.cancellation_token();
         let mut orchestrator = self.orchestrator;
         let schema_sync = SchemaSyncTask::builder()
             .databases(orchestrator.databases())
@@ -86,9 +86,9 @@ impl Task for ReshardTask {
 
         // From the data copy onward the orchestrator may hold replication slots
         // (created during data_sync, kept until replication takes them over).
-        // Awaiting this guard on every exit drops whatever the publisher still
-        // owns — a no-op once replication has claimed the slots — so a failed or
-        // aborted migration doesn't leave them lingering on the source.
+        // The guard cleans up on failure or cancellation, including when the
+        // task is force-aborted before it can reach the cleanup below. Once
+        // replication claims the slots, publisher cleanup becomes a no-op.
         let guard = orchestrator.publication_guard();
         let result: Result<(), MigrationError> = async {
             // Copy the data, unless replicate-only.
@@ -144,10 +144,12 @@ impl Task for ReshardTask {
 
         // Drop any replication slots the publisher still owns only when the
         // migration failed or was aborted mid-copy.
-        if result.is_err()
-            && let Err(err) = guard.cleanup().await
-        {
-            warn!("failed to clean up replication slots after migration: {err}");
+        if result.is_err() || cancel.is_cancelled() {
+            if let Err(err) = guard.cleanup().await {
+                warn!("failed to clean up replication slots after migration: {err}");
+            }
+        } else {
+            guard.disarm();
         }
 
         result

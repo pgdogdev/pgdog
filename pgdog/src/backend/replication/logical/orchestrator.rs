@@ -7,6 +7,7 @@ use crate::{
         databases::{cancel_all, cutover},
         maintenance_mode,
     },
+    tasks,
     util::{format_bytes, human_duration, random_string},
 };
 use pgdog_config::{ConfigAndUsers, CutoverTimeoutAction};
@@ -35,15 +36,37 @@ pub(crate) struct Orchestrator {
 /// A handle to a publication's replication slots, decoupled from the rest of
 /// the orchestrator. Awaiting [`PublicationGuard::cleanup`] drops every slot
 /// the publisher still owns — a no-op once `replicate` has handed them off to
-/// the streaming tasks.
+/// the streaming tasks. Dropping an armed guard schedules cleanup when its
+/// owning task is aborted; successful migrations must disarm it.
 pub(crate) struct PublicationGuard {
-    publisher: Arc<Mutex<Publisher>>,
+    publisher: Option<Arc<Mutex<Publisher>>>,
 }
 
 impl PublicationGuard {
     /// Drop any replication slots the publisher still owns.
-    pub(crate) async fn cleanup(self) -> Result<(), Error> {
-        Box::pin(self.publisher.lock().await.cleanup()).await
+    pub(crate) async fn cleanup(mut self) -> Result<(), Error> {
+        let publisher = self.publisher.as_ref().expect("publication guard is armed");
+        let result = Box::pin(publisher.lock().await.cleanup()).await;
+        self.publisher.take();
+        result
+    }
+
+    /// Preserve the slots when a migration completes successfully.
+    pub(crate) fn disarm(mut self) {
+        self.publisher.take();
+    }
+}
+
+impl Drop for PublicationGuard {
+    fn drop(&mut self) {
+        let Some(publisher) = self.publisher.take() else {
+            return;
+        };
+        tasks::spawn("replication slot cleanup", async move {
+            if let Err(err) = Box::pin(publisher.lock().await.cleanup()).await {
+                warn!("failed to clean up replication slots after an aborted migration: {err}");
+            }
+        });
     }
 }
 
@@ -99,7 +122,7 @@ impl Orchestrator {
     /// Take a [`PublicationGuard`] over this orchestrator's replication slots.
     pub(crate) fn publication_guard(&self) -> PublicationGuard {
         PublicationGuard {
-            publisher: self.publisher.clone(),
+            publisher: Some(self.publisher.clone()),
         }
     }
 
