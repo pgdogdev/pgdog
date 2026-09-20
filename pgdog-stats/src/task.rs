@@ -664,6 +664,7 @@ mod test {
             }),
             TaskStatus::Replication(ReplicationStatus::Replicating),
             TaskStatus::ReplicationCluster(ReplicationClusterStatus::Replicating {
+                direction: ReplicationDirection::Reverse,
                 progress: ReplicationProgress {
                     lag_bytes: Some(2048),
                     last_transaction_ms: Some(150),

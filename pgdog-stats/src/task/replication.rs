@@ -62,6 +62,10 @@ pub enum ReplicationStatus {
     /// Streaming changes to catch the destination up.
     #[display("replicating")]
     Replicating,
+    /// Streaming changes back to the original source after a cutover, so a
+    /// rollback stays possible.
+    #[display("reverse replicating")]
+    ReverseReplicating,
     #[display("stopping traffic")]
     StoppingTraffic,
     #[display("waiting for catch-up")]
@@ -99,8 +103,11 @@ pub enum ReplicationClusterStatus {
     #[display("initializing replication streams")]
     InitializingReplicationStreams,
     /// Streaming changes to catch the destination up.
-    #[display("replicating, {progress}")]
-    Replicating { progress: ReplicationProgress },
+    #[display("{direction} replicating, {progress}")]
+    Replicating {
+        direction: ReplicationDirection,
+        progress: ReplicationProgress,
+    },
     /// Stopped streaming so the parent task can cut traffic over.
     #[display("stopped for cutover ({reason})")]
     StoppedForCutover { reason: ReplicationCutoverReason },
@@ -155,8 +162,8 @@ pub struct ReplicationShardDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationShardStatus {
     pub lsn: Lsn,
-    /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
-    pub lag_bytes: Option<i64>,
+    /// `pg_current_wal_lsn() - confirmed_flush_lsn`, clamped to zero.
+    pub lag_bytes: Option<u64>,
     pub missed_rows: MissedRows,
     pub rows: u64,
     pub bytes: u64,

@@ -415,6 +415,7 @@ impl<T: Task> TaskContext<T> {
                     Ok(output)
                 }
                 Err(err) if ctx.task.cancellation_token.is_cancelled() => {
+                    info!("task cancelled: {err}");
                     ctx.transition(TaskProgress::Cancelled);
 
                     Err(err)
@@ -514,6 +515,7 @@ impl TaskStorage {
                     let _ = sender.send(Ok(res));
                 }
                 Ok(Err(err)) if cancellation_token.is_cancelled() => {
+                    info!("task cancelled: {err}");
                     ctx.transition(TaskProgress::Cancelled);
                     let _ = sender.send(Err(TaskError::Failed(err)));
                 }

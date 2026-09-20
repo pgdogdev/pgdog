@@ -67,14 +67,12 @@ impl ReplicationStream {
         slot: &mut ReplicationSlot,
         stream: &mut StreamSubscriber,
     ) -> Result<(), Error> {
-        let lag = slot.replication_lag().await?;
         let missed = stream.missed_rows();
         let applied = Lsn::from_i64(stream.status_update().last_applied);
         let bytes_sharded = stream.bytes_sharded();
         let rows_sharded = stream.rows_sharded();
         let origin_lsn = Lsn::from_i64(stream.lsn());
         self.updater.update(|p| {
-            p.replication_lag = Some(lag);
             p.advance_applied_lsn(applied);
             p.missed_rows.merge(missed);
             p.bytes_sharded = bytes_sharded;
@@ -89,6 +87,8 @@ impl ReplicationStream {
                 missed
             );
         }
+        let lag = slot.replication_lag().await?;
+        self.updater.update(|p| p.replication_lag = Some(lag));
         Ok(())
     }
 
@@ -116,9 +116,14 @@ impl ReplicationStream {
                 biased;
 
                 _ = stop.cancelled(), if !stopping => {
-                    if let Err(err) = slot.stop_replication().await {
+                    slot.stop_replication().await?;
+                }
+
+                _ = check_lag.tick() => {
+                    if let Err(err) = self.update_progress(slot, stream).await {
+                        self.updater.update(|p| p.replication_lag = None);
                         warn!(
-                            "[replication] stop request failed for slot \"{}\": {err}",
+                            "[replication] progress update failed for slot \"{}\": {err}",
                             slot.name()
                         );
                     }
@@ -145,6 +150,7 @@ impl ReplicationStream {
                                     // Since it's unrelated we can advance our progress and
                                     // consider that lag replication
                                     let advanced = !stream.in_transaction()
+                                        && ka.wal_end > stream.lsn()
                                         && stream.set_current_lsn(ka.wal_end);
 
                                     // Reply to walsender if it asked for reply or
@@ -204,15 +210,6 @@ impl ReplicationStream {
                             }
                         }
                         Err(err) => return Err(err),
-                    }
-                }
-
-                _ = check_lag.tick() => {
-                    if let Err(err) = self.update_progress(slot, stream).await {
-                        warn!(
-                            "[replication] progress update failed for slot \"{}\": {err}",
-                            slot.name()
-                        );
                     }
                 }
             }

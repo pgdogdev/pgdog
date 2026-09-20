@@ -6,7 +6,10 @@ pub mod resharding;
 pub mod schema_sync;
 pub mod table_copies;
 
+use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::time::Duration;
+
+use futures_util::FutureExt;
 
 use crate::setup::connection_sqlx_direct_db;
 use sqlx::{Executor, Pool, Postgres, Row};
@@ -105,19 +108,49 @@ async fn drop_test_slots(direct: &Pool<Postgres>) {
         .await;
 }
 
+async fn test_slot_names(pool: &Pool<Postgres>) -> Vec<String> {
+    sqlx::query_scalar(&format!(
+        "SELECT slot_name FROM pg_replication_slots WHERE {SLOT_FILTER} ORDER BY slot_name"
+    ))
+    .fetch_all(pool)
+    .await
+    .expect("replication slots must be readable")
+}
+
+async fn drop_all_test_slots(direct: &Pool<Postgres>) {
+    drop_test_slots(direct).await;
+    for db in &["shard_0", "shard_1"] {
+        drop_test_slots(&connection_sqlx_direct_db(db).await).await;
+    }
+}
+
 async fn cleanup(admin: &Pool<Postgres>, direct: &Pool<Postgres>) {
     drain_tasks(admin).await;
 
     let _ = admin.execute("RELOAD").await;
     sleep(Duration::from_millis(500)).await;
 
-    drop_test_slots(direct).await;
+    drop_all_test_slots(direct).await;
 
     let _ = direct
         .execute(format!("DROP PUBLICATION IF EXISTS {TEST_PUB}").as_str())
         .await;
 
     drop_test_schemas(direct).await;
+}
+
+async fn with_cleanup(
+    admin: &Pool<Postgres>,
+    direct: &Pool<Postgres>,
+    body: impl Future<Output = ()>,
+) {
+    let result = AssertUnwindSafe(body).catch_unwind().await;
+
+    cleanup(admin, direct).await;
+
+    if let Err(panic) = result {
+        resume_unwind(panic);
+    }
 }
 
 async fn wait_for_task_status(admin: &Pool<Postgres>, task_id: i64, status: TaskProgress) {

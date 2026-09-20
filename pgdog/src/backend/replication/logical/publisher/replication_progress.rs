@@ -34,12 +34,16 @@ impl ReplicationShardProgress {
             .and_then(|started| average_rate(count, started.into_std()))
     }
 
+    fn lag_bytes(&self) -> Option<u64> {
+        self.replication_lag.map(|lag| lag.max(0) as u64)
+    }
+
     pub(crate) fn snapshot(&self, fallback_lsn: Lsn) -> pgdog_stats::ReplicationShardStatus {
         let rows = self.rows_sharded as u64;
         let bytes = self.bytes_sharded as u64;
         pgdog_stats::ReplicationShardStatus {
             lsn: self.applied_lsn.unwrap_or(fallback_lsn),
-            lag_bytes: self.replication_lag,
+            lag_bytes: self.lag_bytes(),
             missed_rows: self.missed_rows,
             rows,
             bytes,
@@ -79,7 +83,7 @@ impl ReplicationProgress {
     /// read by the cutover policy. `lag_bytes` stays `None` until every shard
     /// has reported one.
     pub(crate) fn snapshot(&self) -> pgdog_stats::ReplicationProgress {
-        let mut lag: Option<i64> = None;
+        let mut lag: Option<u64> = None;
         let mut every_shard_reported = true;
         let mut last_transaction: Option<Instant> = None;
         let mut rows = 0;
@@ -89,7 +93,7 @@ impl ReplicationProgress {
 
         for shard in self.shards.iter() {
             let shard = *shard.lock();
-            match shard.replication_lag {
+            match shard.lag_bytes() {
                 Some(shard_lag) => lag = Some(lag.map_or(shard_lag, |max| max.max(shard_lag))),
                 None => every_shard_reported = false,
             }
@@ -105,10 +109,7 @@ impl ReplicationProgress {
         }
 
         pgdog_stats::ReplicationProgress {
-            lag_bytes: every_shard_reported
-                .then_some(lag)
-                .flatten()
-                .map(|lag| lag.max(0) as u64),
+            lag_bytes: every_shard_reported.then_some(lag).flatten(),
             last_transaction_ms: last_transaction
                 .map(|applied| applied.elapsed().as_millis() as u64),
             rows,

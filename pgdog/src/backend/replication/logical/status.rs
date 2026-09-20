@@ -14,9 +14,10 @@ use crate::net::ErrorResponse;
 static REPLICATION_SLOTS: Lazy<ReplicationSlots> = Lazy::new(ReplicationSlots::default);
 
 /// Replication slot.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ReplicationSlot {
     inner: pgdog_stats::ReplicationSlot,
+    key: String,
 }
 
 impl Deref for ReplicationSlot {
@@ -45,9 +46,10 @@ impl ReplicationSlot {
                 last_transaction: None,
                 task_id: None,
             },
+            key: format!("{}@{}", name, address),
         };
 
-        ReplicationSlots::get().insert(name.to_owned(), slot.clone());
+        ReplicationSlots::get().insert(slot.key.clone(), slot.inner.clone());
 
         replication_slot_create(&slot.inner);
 
@@ -55,29 +57,30 @@ impl ReplicationSlot {
     }
 
     pub(crate) fn update_lsn(&self, lsn: &Lsn) {
-        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.key) {
             slot.lsn = *lsn;
             slot.last_transaction = Some(SystemTime::now());
-            replication_slot_update(&slot.inner);
+            replication_slot_update(&slot);
         }
     }
 
     pub(crate) fn update_lag(&self, lag: i64) {
-        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.key) {
             slot.lag = lag;
-            replication_slot_update(&slot.inner);
+            replication_slot_update(&slot);
         }
     }
 
     pub(crate) fn set_task_id(&mut self, task_id: TaskId) {
         self.inner.task_id = Some(task_id);
-        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.name) {
+        if let Some(mut slot) = ReplicationSlots::get().get_mut(&self.key) {
             slot.task_id = Some(task_id);
+            replication_slot_update(&slot);
         }
     }
 
     pub(crate) fn dropped(&self) {
-        ReplicationSlots::get().remove(&self.name);
+        ReplicationSlots::get().remove(&self.key);
         replication_slot_drop(&self.inner);
     }
 
@@ -88,18 +91,13 @@ impl ReplicationSlot {
 
 impl Drop for ReplicationSlot {
     fn drop(&mut self) {
-        // The slot is dropped automatically by the connection,
-        // and we don't call fn dropped manually, so we need to do that here
-        // to track the slot is gone.
-        if self.copy_data {
-            self.dropped();
-        }
+        self.dropped();
     }
 }
 
 #[derive(Default, Clone, Debug)]
 pub(crate) struct ReplicationSlots {
-    slots: Arc<DashMap<String, ReplicationSlot>>,
+    slots: Arc<DashMap<String, pgdog_stats::ReplicationSlot>>,
 }
 
 impl ReplicationSlots {
@@ -109,7 +107,7 @@ impl ReplicationSlots {
 }
 
 impl Deref for ReplicationSlots {
-    type Target = Arc<DashMap<String, ReplicationSlot>>;
+    type Target = Arc<DashMap<String, pgdog_stats::ReplicationSlot>>;
 
     fn deref(&self) -> &Self::Target {
         &self.slots

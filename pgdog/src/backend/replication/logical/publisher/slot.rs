@@ -143,6 +143,16 @@ impl ReplicationSlot {
 
     /// Replication lag in bytes for this slot.
     pub(crate) async fn replication_lag(&mut self) -> Result<i64, Error> {
+        let lag = self.query_replication_lag().await;
+
+        if lag.is_err() {
+            self.server_meta = None;
+        }
+
+        lag
+    }
+
+    async fn query_replication_lag(&mut self) -> Result<i64, Error> {
         let query = format!(
             "SELECT pg_current_wal_lsn() - confirmed_flush_lsn \
              FROM pg_replication_slots \
@@ -155,7 +165,7 @@ impl ReplicationSlot {
             .pop()
             .ok_or(Error::MissingReplicationSlot(self.name.clone()))?;
 
-        if let Some(ref tracker) = self.tracker {
+        if let Some(tracker) = &self.tracker {
             tracker.update_lag(lag);
         }
 
@@ -171,6 +181,7 @@ impl ReplicationSlot {
         if self.server.is_none() {
             self.connect().await?;
         }
+        drop(self.tracker.take());
 
         debug!(
             "creating replication slot \"{}\" [{}]",
@@ -283,6 +294,10 @@ impl ReplicationSlot {
 
     /// Drop the slot.
     pub(crate) async fn drop_slot(&mut self) -> Result<(), Error> {
+        if !self.server.as_ref().is_some_and(Server::in_sync) {
+            self.server = None;
+            self.connect().await?;
+        }
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
@@ -423,9 +438,9 @@ impl ReplicationSlot {
             return Ok(());
         }
 
-        self.stopped = true;
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
+        self.stopped = true;
 
         Ok(())
     }

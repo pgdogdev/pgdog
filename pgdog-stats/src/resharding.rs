@@ -98,6 +98,16 @@ impl MissedRows {
         self.updates += other.updates;
         self.deletes += other.deletes;
     }
+
+    pub fn record(&mut self, tag: &str) {
+        if tag.starts_with("INSERT") {
+            self.inserts += 1;
+        } else if tag.starts_with("UPDATE") {
+            self.updates += 1;
+        } else if tag.starts_with("DELETE") {
+            self.deletes += 1;
+        }
+    }
 }
 
 impl std::fmt::Display for MissedRows {

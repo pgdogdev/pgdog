@@ -64,7 +64,7 @@ impl CutoverPolicy {
     /// configured [CutoverConfig::traffic_stop_threshold].
     /// After this source should stop any write activity and
     /// [`CutoverPolicy::wait_for_catchup`] should be started.
-    pub(crate) async fn wait_for_stop_threshold(&self) -> Result<(), Error> {
+    pub(crate) async fn wait_for_stop_threshold(&self) {
         let traffic_stop = self.config.traffic_stop_threshold;
 
         info!(
@@ -93,8 +93,6 @@ impl CutoverPolicy {
                 break;
             }
         }
-
-        Ok(())
     }
 
     fn should_cutover(&self, elapsed: Duration) -> CutoverAction {
@@ -111,7 +109,7 @@ impl CutoverPolicy {
             CutoverAction::Go(CutoverReason::Timeout)
         } else if lag.is_some_and(|lag| lag <= cutover_threshold) {
             CutoverAction::Go(CutoverReason::Lag)
-        } else if last_transaction.is_none_or(|t| t > last_transaction_delay) {
+        } else if last_transaction.is_some_and(|t| t > last_transaction_delay) {
             CutoverAction::Go(CutoverReason::LastTransaction)
         } else {
             CutoverAction::NoGo(CutoverData {
@@ -192,6 +190,7 @@ impl CutoverPolicy {
 mod tests {
     use super::*;
     use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
+    use crate::util::safe_timeout;
     use std::assert_matches;
     use tokio::time::Instant;
 
@@ -218,8 +217,10 @@ mod tests {
             .update(|s| s.replication_lag = Some(500));
 
         let waiter = CutoverPolicy::new(config, progress);
-        let result = waiter.wait_for_stop_threshold().await;
-        assert!(result.is_ok());
+
+        safe_timeout(Duration::from_secs(5), waiter.wait_for_stop_threshold())
+            .await
+            .expect("the wait must exit once every shard is below the threshold");
     }
 
     #[tokio::test]
@@ -315,7 +316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_should_cutover_when_no_transaction() {
+    async fn test_should_not_cutover_when_no_transaction_was_applied() {
         let config = CutoverConfig {
             replication_lag_threshold: 10,
             last_transaction_delay: Duration::from_millis(100),
@@ -329,10 +330,10 @@ mod tests {
 
         let waiter = CutoverPolicy::new(config, progress);
 
-        assert_eq!(
+        assert!(matches!(
             waiter.should_cutover(Duration::from_millis(100)),
-            CutoverAction::Go(CutoverReason::LastTransaction)
-        );
+            CutoverAction::NoGo(_)
+        ));
     }
 
     #[tokio::test]

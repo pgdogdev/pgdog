@@ -134,6 +134,9 @@ pub(crate) enum Error {
     #[error("replication streams did not drain in time")]
     DrainTimeout,
 
+    #[error("replication slot \"{0}\" was not dropped in time")]
+    SlotDropTimeout(String),
+
     #[error("replication stream stopped before shutdown was requested")]
     ReplicationStreamStopped,
 
@@ -169,6 +172,9 @@ pub(crate) enum Error {
 
     #[error("data sync has been aborted")]
     DataSyncAborted,
+
+    #[error("replication has been aborted")]
+    ReplicationAborted,
 
     #[error("cutover abort timeout")]
     AbortTimeout,

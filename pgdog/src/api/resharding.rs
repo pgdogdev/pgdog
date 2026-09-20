@@ -125,7 +125,7 @@ impl Task for ReshardTask {
 
                 // `auto_cutover` (reshard) cuts over on its own; otherwise the
                 // task runs until an operator `CUTOVER`/`STOP_TASK`. A stop in
-                // a forward phase resolves to `Err(DataSyncAborted)` and runs
+                // a forward phase resolves to `Err(ReplicationAborted)` and runs
                 // the cleanup below; a stop in a reverse phase resolves to
                 // `Ok`, because the migration is already complete.
                 ctx.run(

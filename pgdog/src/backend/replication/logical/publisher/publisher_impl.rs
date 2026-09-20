@@ -98,20 +98,19 @@ impl Publisher {
     ) -> Result<(), Error> {
         for (number, shard) in source.shards().iter().enumerate() {
             if cancel.is_cancelled() {
-                return Err(Error::DataSyncAborted);
+                return Err(Error::ReplicationAborted);
             }
 
             let addr = shard.primary(&Request::default()).await?.addr().clone();
 
-            let mut slot = ReplicationSlot::replication(
+            let slot = ReplicationSlot::replication(
                 &self.publication,
                 &addr,
                 Some(self.slot_name.clone()),
                 number,
             );
+            let slot = self.slots.entry(number).or_insert(slot);
             Box::pin(slot.create_slot()).await?;
-
-            self.slots.insert(number, slot);
         }
 
         Ok(())
@@ -189,7 +188,7 @@ mod test {
         let result = publisher.create_slots(&source, &cancel).await;
 
         assert!(
-            matches!(result, Err(Error::DataSyncAborted)),
+            matches!(result, Err(Error::ReplicationAborted)),
             "slot creation must abort on a cancelled token; got: {result:?}"
         );
 
