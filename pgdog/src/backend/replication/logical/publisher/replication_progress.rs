@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::backend::replication::publisher::Lsn;
+use crate::util::stats::average_rate;
 use pgdog_stats::MissedRows;
 
 /// Tracks the progress of replication for
@@ -15,7 +16,9 @@ pub(crate) struct ReplicationShardProgress {
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
     pub(crate) bytes_sharded: usize,
+    pub(crate) rows_sharded: usize,
     pub(crate) origin_lsn: Lsn,
+    pub(crate) started: Option<Instant>,
 }
 
 impl ReplicationShardProgress {
@@ -26,11 +29,22 @@ impl ReplicationShardProgress {
         );
     }
 
+    fn rate(&self, count: u64) -> Option<u64> {
+        self.started
+            .and_then(|started| average_rate(count, started.into_std()))
+    }
+
     pub(crate) fn snapshot(&self, fallback_lsn: Lsn) -> pgdog_stats::ReplicationShardStatus {
+        let rows = self.rows_sharded as u64;
+        let bytes = self.bytes_sharded as u64;
         pgdog_stats::ReplicationShardStatus {
             lsn: self.applied_lsn.unwrap_or(fallback_lsn),
             lag_bytes: self.replication_lag,
             missed_rows: self.missed_rows,
+            rows,
+            bytes,
+            rows_per_sec: self.rate(rows),
+            bytes_per_sec: self.rate(bytes),
         }
     }
 }
@@ -68,6 +82,10 @@ impl ReplicationProgress {
         let mut lag: Option<i64> = None;
         let mut every_shard_reported = true;
         let mut last_transaction: Option<Instant> = None;
+        let mut rows = 0;
+        let mut bytes = 0;
+        let mut rows_per_sec = None;
+        let mut bytes_per_sec = None;
 
         for shard in self.shards.iter() {
             let shard = *shard.lock();
@@ -78,6 +96,12 @@ impl ReplicationProgress {
             if let Some(applied) = shard.last_transaction {
                 last_transaction = Some(last_transaction.map_or(applied, |max| max.max(applied)));
             }
+            let shard_rows = shard.rows_sharded as u64;
+            let shard_bytes = shard.bytes_sharded as u64;
+            rows += shard_rows;
+            bytes += shard_bytes;
+            rows_per_sec = sum_rates(rows_per_sec, shard.rate(shard_rows));
+            bytes_per_sec = sum_rates(bytes_per_sec, shard.rate(shard_bytes));
         }
 
         pgdog_stats::ReplicationProgress {
@@ -87,7 +111,18 @@ impl ReplicationProgress {
                 .map(|lag| lag.max(0) as u64),
             last_transaction_ms: last_transaction
                 .map(|applied| applied.elapsed().as_millis() as u64),
+            rows,
+            bytes,
+            rows_per_sec,
+            bytes_per_sec,
         }
+    }
+}
+
+fn sum_rates(total: Option<u64>, rate: Option<u64>) -> Option<u64> {
+    match (total, rate) {
+        (None, None) => None,
+        (total, rate) => Some(total.unwrap_or(0) + rate.unwrap_or(0)),
     }
 }
 

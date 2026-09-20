@@ -667,6 +667,10 @@ mod test {
                 progress: ReplicationProgress {
                     lag_bytes: Some(2048),
                     last_transaction_ms: Some(150),
+                    rows: 10,
+                    bytes: 4096,
+                    rows_per_sec: Some(5),
+                    bytes_per_sec: Some(2048),
                 },
             }),
             TaskStatus::ReplicationShard(ReplicationShardStatus {
@@ -681,6 +685,10 @@ mod test {
                     updates: 2,
                     deletes: 3,
                 },
+                rows: 0,
+                bytes: 0,
+                rows_per_sec: None,
+                bytes_per_sec: None,
             }),
             TaskStatus::Other,
         ];

@@ -503,13 +503,18 @@ impl Task for ReplicationShardTask {
             lsn: initial_lsn,
             lag_bytes: None,
             missed_rows: MissedRows::default(),
+            rows: 0,
+            bytes: 0,
+            rows_per_sec: None,
+            bytes_per_sec: None,
         });
 
         let mut replication_run = Box::pin(replication_stream.run(&mut slot, tables, &stream_stop));
 
         let report_interval = Duration::from_secs(1);
         let mut report = safe_interval(report_interval);
-        let mut logged_bytes = 0usize;
+        let mut logged_rows = 0u64;
+        let mut logged_bytes = 0u64;
 
         let result = loop {
             select! {
@@ -522,16 +527,16 @@ impl Task for ReplicationShardTask {
                 _ = report.tick() => {
                     let progress = replication_stream.progress();
                     let status = progress.snapshot(initial_lsn);
+                    let window = report_interval.as_secs_f64();
                     info!(
-                        "[replication] shard={source_shard} slot=\"{slot_name}\" replicated {:.3} MB position {} [{:.3} MB/sec], {status} [{slot_addr}]",
-                        progress.bytes_sharded as f64 / 1024.0 / 1024.0,
+                        "[replication] shard={source_shard} slot=\"{slot_name}\" origin at {}, {status}, over the last {}s: {:.0} rows/sec, {:.3} MB/sec [{slot_addr}]",
                         progress.origin_lsn,
-                        (progress.bytes_sharded - logged_bytes) as f64
-                            / report_interval.as_secs_f64()
-                            / 1024.0
-                            / 1024.0
+                        report_interval.as_secs(),
+                        (status.rows - logged_rows) as f64 / window,
+                        (status.bytes - logged_bytes) as f64 / window / 1024.0 / 1024.0,
                     );
-                    logged_bytes = progress.bytes_sharded;
+                    logged_rows = status.rows;
+                    logged_bytes = status.bytes;
                     ctx.set_status(status);
                 }
             }

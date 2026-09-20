@@ -48,7 +48,10 @@ impl ReplicationStream {
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest_cluster, tables);
         stream.set_current_lsn(slot.lsn().lsn);
-        self.updater.update(|p| p.advance_applied_lsn(slot.lsn()));
+        self.updater.update(|p| {
+            p.advance_applied_lsn(slot.lsn());
+            p.started = Some(Instant::now());
+        });
         let result = self.replicate(slot, &mut stream, stop).await;
         let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
         let missed = stream.missed_rows();
@@ -68,12 +71,14 @@ impl ReplicationStream {
         let missed = stream.missed_rows();
         let applied = Lsn::from_i64(stream.status_update().last_applied);
         let bytes_sharded = stream.bytes_sharded();
+        let rows_sharded = stream.rows_sharded();
         let origin_lsn = Lsn::from_i64(stream.lsn());
         self.updater.update(|p| {
             p.replication_lag = Some(lag);
             p.advance_applied_lsn(applied);
             p.missed_rows.merge(missed);
             p.bytes_sharded = bytes_sharded;
+            p.rows_sharded = rows_sharded;
             p.origin_lsn = origin_lsn;
         });
         if missed.non_zero() {

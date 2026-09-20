@@ -111,12 +111,16 @@ pub enum ReplicationClusterStatus {
 }
 
 /// How far the whole cluster has replicated: the largest lag of its shards,
-/// and how long ago the newest transaction was applied.
+/// how long ago the newest transaction was applied, and the rows and bytes
+/// applied by every shard together.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationProgress {
-    // W: add info something like updates speed, bytes speed, smth like for copy-data
     pub lag_bytes: Option<u64>,
     pub last_transaction_ms: Option<u64>,
+    pub rows: u64,
+    pub bytes: u64,
+    pub rows_per_sec: Option<u64>,
+    pub bytes_per_sec: Option<u64>,
 }
 
 impl fmt::Display for ReplicationProgress {
@@ -127,6 +131,10 @@ impl fmt::Display for ReplicationProgress {
         }
         if let Some(age) = self.last_transaction_ms {
             write!(f, ", last transaction {age}ms ago")?;
+        }
+        write!(f, ", applied {} rows {} bytes", self.rows, self.bytes)?;
+        if let (Some(rows), Some(bytes)) = (self.rows_per_sec, self.bytes_per_sec) {
+            write!(f, " [since start: {rows} rows/sec, {bytes} bytes/sec]")?;
         }
         Ok(())
     }
@@ -150,6 +158,10 @@ pub struct ReplicationShardStatus {
     /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
     pub lag_bytes: Option<i64>,
     pub missed_rows: MissedRows,
+    pub rows: u64,
+    pub bytes: u64,
+    pub rows_per_sec: Option<u64>,
+    pub bytes_per_sec: Option<u64>,
 }
 
 impl fmt::Display for ReplicationShardStatus {
@@ -163,6 +175,10 @@ impl fmt::Display for ReplicationShardStatus {
             write!(f, ", missed {}", self.missed_rows)?;
         }
 
+        write!(f, ", applied {} rows {} bytes", self.rows, self.bytes)?;
+        if let (Some(rows), Some(bytes)) = (self.rows_per_sec, self.bytes_per_sec) {
+            write!(f, " [since start: {rows} rows/sec, {bytes} bytes/sec]")?;
+        }
         Ok(())
     }
 }

@@ -129,6 +129,7 @@ pub(crate) struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
+    rows_sharded: usize,
 
     missed_rows: MissedRows,
 }
@@ -158,6 +159,7 @@ impl StreamSubscriber {
             committed_lsn: 0,
             lsn: 0, // Unknown,
             bytes_sharded: 0,
+            rows_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
             keys: HashMap::default(),
@@ -845,9 +847,18 @@ impl StreamSubscriber {
             && let Some(payload) = xlog.payload()
         {
             match payload {
-                XLogPayload::Insert(insert) => self.insert(insert).await?,
-                XLogPayload::Update(update) => self.update(update).await?,
-                XLogPayload::Delete(delete) => self.delete(delete).await?,
+                XLogPayload::Insert(insert) => {
+                    self.insert(insert).await?;
+                    self.rows_sharded += 1;
+                }
+                XLogPayload::Update(update) => {
+                    self.update(update).await?;
+                    self.rows_sharded += 1;
+                }
+                XLogPayload::Delete(delete) => {
+                    self.delete(delete).await?;
+                    self.rows_sharded += 1;
+                }
                 XLogPayload::Commit(commit) => {
                     self.commit(commit).await?;
                     self.capture_missed_rows();
@@ -882,6 +893,11 @@ impl StreamSubscriber {
     /// Number of bytes processed.
     pub(crate) fn bytes_sharded(&self) -> usize {
         self.bytes_sharded
+    }
+
+    /// Number of rows applied.
+    pub(crate) fn rows_sharded(&self) -> usize {
+        self.rows_sharded
     }
 
     /// Advance both LSN fields. Call after commit and on publisher init.
