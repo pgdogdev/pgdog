@@ -11,6 +11,7 @@ members = [
   "pgdog-postgres-types",
   "pgdog-stats",
   "pgdog-vector",
+  "pgdog-cache",
   "plugins/pgdog-example-plugin", "plugins/pgdog-primary-only-tables",
   "scripts/*",
 ]
@@ -34,6 +35,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 parking_lot = "0.12"
 futures-util = "0.3.32"
+hashbrown = "0.17.1"
 
 # [patch.crates-io]
 # tokio = { path = "../tokio/tokio" }
