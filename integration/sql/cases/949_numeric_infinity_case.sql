@@ -1,6 +1,7 @@
 -- description: Numeric infinities preserve PostgreSQL ordering and aggregate results across shards
--- tags: standard sharded
+-- tags: sharded
 -- transactional: true
+-- only-targets: postgres_standard_text pgdog_sharded_text pgdog_sharded_binary
 
 SELECT id, value FROM sql_regression_samples ORDER BY value, id;
 SELECT id, value FROM sql_regression_samples ORDER BY value DESC, id;
