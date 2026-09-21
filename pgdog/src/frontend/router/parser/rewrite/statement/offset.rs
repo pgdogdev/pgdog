@@ -168,12 +168,15 @@ impl OffsetPlan {
         let new_execute = new_execute.deref();
         let new_execute_sql = deparse(new_execute)?;
 
-        // `ExecuteStmt` will be a Query, because this is simple-protocol.
-        // Replace with our re-written `ExecuteStmt`
-        // (replacing limit/offset with proper multi-shard vlaues)
+        // SQL EXECUTE can also arrive through the extended protocol. Update its
+        // internal Parse so cached outer statements receive the current limits.
         for message in request.messages.iter_mut() {
-            if let ProtocolMessage::Query(query) = message {
-                query.set_query(new_execute_sql.as_str());
+            match message {
+                ProtocolMessage::Query(query) => query.set_query(new_execute_sql.as_str()),
+                ProtocolMessage::Parse(parse) | ProtocolMessage::EnsureParsed(parse) => {
+                    parse.set_query(new_execute_sql.as_str());
+                }
+                _ => {}
             }
         }
 

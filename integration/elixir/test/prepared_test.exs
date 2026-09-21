@@ -1,6 +1,27 @@
 defmodule Pgdog.PreparedTest do
   use ExUnit.Case, async: false
 
+  test "SQL PREPARE and EXECUTE preserve the extended protocol" do
+    for options <- [[], [prepare: :unnamed]] do
+      conn = Pgdog.connect(options)
+      name = "elixir_sql_#{System.unique_integer([:positive])}"
+
+      try do
+        prepare = Postgrex.prepare!(conn, "prepare_command", "PREPARE #{name} AS SELECT $1::bigint * 2")
+        assert %Postgrex.Result{command: :prepare} = Postgrex.execute!(conn, prepare, [])
+        execute = Postgrex.prepare!(conn, "execute_command", "EXECUTE #{name}(21)")
+
+        for _ <- 1..3 do
+          assert Pgdog.one(Postgrex.execute!(conn, execute, [])) == 42
+        end
+
+        assert Pgdog.one(Postgrex.query!(conn, "SELECT 1", [])) == 1
+      after
+        GenServer.stop(conn)
+      end
+    end
+  end
+
   test "a named statement is reusable across many executions" do
     conn = Pgdog.connect()
     query = Postgrex.prepare!(conn, "elixir_echo", "SELECT $1::bigint")

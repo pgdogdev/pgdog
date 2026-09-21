@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
 require_relative '../rspec_helper'
+require_relative '../sql_prepare_examples'
 
 describe 'prepared_statements = full' do
   after { ensure_done }
+
+  it_behaves_like 'SQL PREPARE over extended protocol', 'pgdog'
 
   # Mirror of disabled suite: anonymous statements carry no per-backend state,
   # so they work identically regardless of the prepared_statements setting.

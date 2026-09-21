@@ -1,11 +1,14 @@
 # frozen_string_literal: true
 
 require_relative '../rspec_helper'
+require_relative '../sql_prepare_examples'
 
 # With prepared_statements = "disabled" pgdog forwards protocol messages as-is
 # without rewriting or caching.
 describe 'prepared_statements = disabled' do
   after { ensure_done }
+
+  it_behaves_like 'SQL PREPARE over extended protocol', 'pgdog_session'
 
   # Anonymous statements (empty name) are a single Parse+Bind+Execute+Sync
   # cycle on one backend — no state needs to survive across cycles.

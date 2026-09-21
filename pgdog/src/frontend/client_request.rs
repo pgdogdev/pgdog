@@ -133,10 +133,10 @@ impl ClientRequest {
                 ProtocolMessage::Query(query) => {
                     return Ok(Some(BufferedQuery::Query(query.clone())));
                 }
-                ProtocolMessage::Parse(parse) => {
+                ProtocolMessage::Parse(parse) | ProtocolMessage::EnsureParsed(parse) => {
                     return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                 }
-                ProtocolMessage::Bind(bind) => {
+                ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) => {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .read()
@@ -188,7 +188,7 @@ impl ClientRequest {
     /// If this buffer contains bound parameters, retrieve them.
     pub(crate) fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
-            if let ProtocolMessage::Bind(bind) = message {
+            if let ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) = message {
                 return Ok(Some(bind));
             }
         }
@@ -278,7 +278,7 @@ impl ClientRequest {
         let mut references_anonymous = false;
         for message in &self.messages {
             match message {
-                ProtocolMessage::Parse(_) => return false,
+                ProtocolMessage::Parse(_) | ProtocolMessage::EnsureParsed(_) => return false,
                 ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
                         return false;

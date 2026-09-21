@@ -101,7 +101,9 @@ pub(crate) struct PreparedStatements {
     local_cache: LruCache<String, LocalStatement>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    // Anonymous parses occupy a slot too, so their replies cannot complete a
+    // later named preparation in the same request.
+    parses: VecDeque<Option<String>>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
@@ -169,6 +171,7 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Parse(_) => {
                 self.state.add_ignore('1');
+                self.parses.push_back(None);
                 Ok(())
             }
             _ => Err(Error::UnsupportedHandleIgnore(request.code())),
@@ -178,6 +181,18 @@ impl PreparedStatements {
     /// Handle extended protocol message.
     pub(super) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
+            ProtocolMessage::EnsureParsed(parse) => {
+                debug_assert!(parse.anonymous());
+                self.state.add_ignore('1');
+                self.parses.push_back(None);
+                let mut parse = parse.clone();
+                if self.rewrite_parse_data_types(&mut parse) {
+                    return Ok(HandleResult::Rewrite(ProtocolMessage::EnsureParsed(parse)));
+                }
+            }
+            ProtocolMessage::BindAnonymous(_) => {
+                self.state.add('2');
+            }
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
                     let message = self.check_prepared(bind.statement())?;
@@ -187,7 +202,7 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
+                            self.parses.push_back(Some(bind.statement().to_string()));
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
@@ -230,7 +245,8 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(describe.statement().to_string());
+                            self.parses
+                                .push_back(Some(describe.statement().to_string()));
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
@@ -290,7 +306,7 @@ impl PreparedStatements {
                     self.state.add_simulated(reply);
                     return Ok(HandleResult::Drop);
                 }
-                self.parses.push_back(prepare.name().to_owned());
+                self.parses.push_back(Some(prepare.name().to_owned()));
                 self.state.add(ExecutionCode::ExecutionCompleted);
             }
 
@@ -313,7 +329,7 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.parses.push_back(parse.name().to_string());
+                        self.parses.push_back(Some(parse.name().to_string()));
                     }
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
@@ -322,6 +338,8 @@ impl PreparedStatements {
                         parse.anonymize();
                         rewritten = true;
                     }
+                } else {
+                    self.parses.push_back(None);
                 }
 
                 self.state.add('1');
@@ -363,7 +381,7 @@ impl PreparedStatements {
                     );
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(prepare.name().to_owned());
+                    self.parses.push_back(Some(prepare.name().to_owned()));
                     self.state.add(ExecutionCode::ReadyForQuery);
                 }
             }
@@ -381,7 +399,7 @@ impl PreparedStatements {
                         self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
                         self.state.add_ignore(ExecutionCode::ReadyForQuery);
 
-                        self.parses.push_back(name.to_owned());
+                        self.parses.push_back(Some(name.to_owned()));
 
                         // This will do Close => Prepare
                         return Ok(HandleResult::PrependProtocolMessage(
@@ -391,7 +409,7 @@ impl PreparedStatements {
                         return Ok(HandleResult::Drop);
                     }
                 } else {
-                    self.parses.push_back(prepare.name().to_string());
+                    self.parses.push_back(Some(prepare.name().to_string()));
                     self.state.add_ignore('C');
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
@@ -454,7 +472,7 @@ impl PreparedStatements {
             }
 
             '1' | 'C' => {
-                if let Some(name) = self.parses.pop_front() {
+                if let Some(Some(name)) = self.parses.pop_front() {
                     self.prepared(&name);
                 }
             }
@@ -465,9 +483,9 @@ impl PreparedStatements {
             '3' if matches!(action, Action::Ignore) => {
                 // ok, pop_front -> push_front just to avoid borrowing issues
                 // and not to copy the name just to remove by name
-                if let Some(name) = self.parses.pop_front() {
+                if let Some(Some(name)) = self.parses.pop_front() {
                     self.remove(&name);
-                    self.parses.push_front(name);
+                    self.parses.push_front(Some(name));
                 }
             }
 
@@ -525,7 +543,7 @@ impl PreparedStatements {
     /// to run something before actual client's requests
     fn check_prepared(&mut self, name: &str) -> Result<Option<Prepare>, Error> {
         // Ignore if we already have a Parse in progress.
-        if self.parses.iter().any(|s| s == name) {
+        if self.parses.iter().any(|s| s.as_deref() == Some(name)) {
             return Ok(None);
         }
 
@@ -1008,6 +1026,32 @@ pub(crate) mod test {
             describe_parameters(&mut ps, &name, vec![23, 25]),
             vec![23, 25]
         );
+    }
+
+    #[test]
+    fn internal_parse_does_not_complete_a_later_named_parse() {
+        let mut ps = new_extended();
+        let internal = ProtocolMessage::EnsureParsed(Parse::named("", "SELECT 1"));
+        let named = ProtocolMessage::Parse(Parse::named("later_named", "SELECT 2"));
+        assert_eq!(
+            ps.handle(&internal).expect("internal parse"),
+            HandleResult::Forward
+        );
+        assert_eq!(
+            ps.handle(&named).expect("named parse"),
+            HandleResult::Forward
+        );
+        assert!(
+            !ps.forward(&mut ParseComplete.message())
+                .expect("internal reply")
+        );
+        assert!(!ps.contains("later_named"));
+        assert!(
+            ps.forward(&mut ParseComplete.message())
+                .expect("named reply")
+        );
+        assert!(ps.contains("later_named"));
+        assert!(ps.done());
     }
 
     #[test]

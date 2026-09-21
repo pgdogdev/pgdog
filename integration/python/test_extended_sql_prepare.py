@@ -15,6 +15,13 @@ def full_prepared_statements():
             connection.execute("RELOAD")
 
 
+@pytest.fixture
+def rewritten_prepared_statements(full_prepared_statements):
+    with admin() as connection:
+        connection.execute("SET rewrite_enabled TO true")
+    yield
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("connect", [normal_async, sharded_async])
 @pytest.mark.parametrize("extended_prepare", [False, True])
@@ -56,3 +63,74 @@ async def test_extended_sql_prepare_error_recovers(full_prepared_statements):
         no_out_of_sync()
     finally:
         await connection.close(timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extended_prepare", [False, True])
+async def test_extended_execute_limit_offset(extended_prepare, rewritten_prepared_statements):
+    connection = await sharded_async()
+    schema = "extended_limit_" + uuid.uuid4().hex
+    try:
+        await connection.execute(f'CREATE SCHEMA "{schema}"')
+        await connection.execute(f'CREATE TABLE "{schema}".sharded (id BIGINT PRIMARY KEY)')
+        for value in range(1, 56):
+            await connection.execute(f'INSERT INTO "{schema}".sharded VALUES ($1)', value)
+        cases = [
+            ("", "LIMIT 5 OFFSET $1", "(10)", list(range(45, 40, -1))),
+            ("", "LIMIT $2 OFFSET $1", "(5, 10)", list(range(50, 40, -1))),
+            ("", "LIMIT $1 OFFSET $2", "(5, 10)", list(range(45, 40, -1))),
+            ("", "LIMIT 10 OFFSET 5", "", list(range(50, 40, -1))),
+            ("WHERE id < $2", "LIMIT $3 OFFSET $1", "(5, 25, 10)", list(range(19, 9, -1))),
+            ("WHERE id = 35", "LIMIT 1 OFFSET 0", "", [35]),
+        ]
+        for index, (predicate, clause, arguments, expected) in enumerate(cases):
+            name = f"{schema}_{index}"
+            sql = f'PREPARE {name} AS SELECT id FROM "{schema}".sharded {predicate} ORDER BY id DESC {clause}'
+            if extended_prepare:
+                prepare = await connection.prepare(sql, timeout=5)
+                await prepare.fetch(timeout=5)
+            else:
+                await connection.execute(sql, timeout=5)
+            execute = await connection.prepare(f"EXECUTE {name}{arguments}", timeout=5)
+            for _ in range(3):
+                assert [row[0] for row in await execute.fetch(timeout=5)] == expected
+        no_out_of_sync()
+    finally:
+        await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await connection.close(timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extended_prepare", [False, True])
+async def test_extended_execute_generated_values(extended_prepare, rewritten_prepared_statements):
+    connection = await sharded_async()
+    name = "extended_id_" + uuid.uuid4().hex
+    try:
+        sql = f"PREPARE {name} AS SELECT pgdog.unique_id()"
+        if extended_prepare:
+            prepare = await connection.prepare(sql, timeout=5)
+            await prepare.fetch(timeout=5)
+        else:
+            await connection.execute(sql, timeout=5)
+        execute = await connection.prepare(f"EXECUTE {name}", timeout=5)
+        values = [await execute.fetchval(timeout=5) for _ in range(10)]
+        assert len(set(values)) == len(values), "each execution must generate a fresh ID"
+        assert all(isinstance(value, int) for value in values)
+        no_out_of_sync()
+    finally:
+        await connection.close(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_sql_prepare_registers_each_clients_name(full_prepared_statements):
+    connections = [await normal_async(), await normal_async()]
+    name = "shared_sql_" + uuid.uuid4().hex
+    try:
+        for value, connection in enumerate(connections):
+            prepare = await connection.prepare(f"PREPARE {name} AS SELECT $1::integer", timeout=5)
+            await prepare.fetch(timeout=5)
+            execute = await connection.prepare(f"EXECUTE {name}({value})", timeout=5)
+            assert await execute.fetchval(timeout=5) == value
+    finally:
+        for connection in connections:
+            await connection.close(timeout=5)

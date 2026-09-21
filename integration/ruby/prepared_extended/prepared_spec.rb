@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../rspec_helper'
+require_relative '../sql_prepare_examples'
 
 # Uses the main integration pgdog.toml which sets prepared_statements = "extended".
 # "extended" rewrites and replays named extended-protocol statements (Parse/Bind)
@@ -9,6 +10,8 @@ require_relative '../rspec_helper'
 
 describe 'prepared_statements = extended' do
   after { ensure_done }
+
+  it_behaves_like 'SQL PREPARE over extended protocol', 'pgdog_session'
 
   # Anonymous statements (empty name) are a single Parse+Bind+Execute+Sync
   # cycle on one backend — no state needs to survive across cycles.

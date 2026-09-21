@@ -60,7 +60,7 @@ impl QueryEngine {
 
         // Set response format.
         for msg in context.client_request.messages.iter() {
-            if let ProtocolMessage::Bind(bind) = msg {
+            if let ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) = msg {
                 self.backend.bind(bind)?
             }
         }
