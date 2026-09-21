@@ -42,7 +42,6 @@ impl Drop for RewriteConfigGuard {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sharded_multi_row_insert_rejected() {
     let admin = admin_sqlx().await;
     let _guard = RewriteConfigGuard::enable(admin.clone()).await;
@@ -116,6 +115,87 @@ async fn split_inserts_rewrite_moves_rows_across_shards() {
     sqlx::query(&format!(
         "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (11, 'eleven')"
     ))
+    .execute(&pool)
+    .await
+    .expect("split insert should succeed");
+
+    let shard0: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 1"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch shard 0 row");
+    let shard1: Option<String> = sqlx::query_scalar(&format!(
+        "SELECT value FROM {SHARDED_INSERT_TABLE} WHERE id = 11"
+    ))
+    .fetch_optional(&pool)
+    .await
+    .expect("fetch shard 1 row");
+
+    assert_eq!(shard0.as_deref(), Some("one"), "expected row on shard 0");
+    assert_eq!(shard1.as_deref(), Some("eleven"), "expected row on shard 1");
+
+    cleanup_split_table(&pool).await;
+}
+
+#[tokio::test]
+async fn split_inserts_behave_transactionally() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    admin
+        .execute("SET rewrite_split_inserts TO rewrite")
+        .await
+        .expect("enable split insert rewrite");
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_split_table(&pool).await;
+
+    sqlx::query(&format!(
+        "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES (1, 'one'), (11, 'eleven'), (1, 'oops')"
+    ))
+    .execute(&pool)
+    .await
+    .expect_err("duplicate primary key should not succeed");
+
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as(&format!("SELECT id, value FROM {SHARDED_INSERT_TABLE}"))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        Vec::<(i64, String)>::new(),
+        rows,
+        "No rows should have been inserted if any failed"
+    );
+
+    cleanup_split_table(&pool).await;
+}
+
+#[tokio::test]
+async fn split_inserts_rewrite_moves_rows_across_shards_binds() {
+    let admin = admin_sqlx().await;
+    let _guard = RewriteConfigGuard::enable(admin.clone()).await;
+
+    admin
+        .execute("SET rewrite_split_inserts TO rewrite")
+        .await
+        .expect("enable split insert rewrite");
+
+    let mut pools = connections_sqlx().await;
+    let pool = pools.swap_remove(1);
+
+    prepare_split_table(&pool).await;
+
+    sqlx::query(&format!(
+        "INSERT INTO {SHARDED_INSERT_TABLE} (id, value) VALUES ($1, $2), ($3, $4)"
+    ))
+    .bind(1)
+    .bind("one")
+    .bind(11)
+    .bind("11")
     .execute(&pool)
     .await
     .expect("split insert should succeed");
