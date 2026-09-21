@@ -330,11 +330,24 @@ pub(crate) fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-fn load_certificate_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>, Error> {
-    let certificates = CertificateDer::pem_file_iter(path)?.collect::<Result<Vec<_>, _>>()?;
+fn load_certificate_chain(path: &Path, label: &str) -> Result<Vec<CertificateDer<'static>>, Error> {
+    let certificates = CertificateDer::pem_file_iter(path)
+        .map_err(|e| {
+            invalid_data(format!(
+                "failed to read {label} file {}: {e}",
+                path.display()
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            invalid_data(format!(
+                "failed to parse {label} from {}: {e}",
+                path.display()
+            ))
+        })?;
     if certificates.is_empty() {
         return Err(invalid_data(format!(
-            "no PEM certificates found in certificate file {}",
+            "no PEM certificates found in {label} file {}",
             path.display()
         )));
     }
@@ -342,11 +355,8 @@ fn load_certificate_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>, E
 }
 
 fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsListener, Error> {
-    let certificates = load_certificate_chain(cert)?;
-    let leaf = certificates
-        .first()
-        .expect("certificate chain is non-empty");
-    let server_end_point = tls_server_end_point(leaf);
+    let certificates = load_certificate_chain(cert, "certificate")?;
+    let server_end_point = certificates.first().and_then(tls_server_end_point);
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let builder = rustls::ServerConfig::builder();
@@ -386,27 +396,7 @@ fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifi
 fn load_ca_bundle(path: &Path, label: &str) -> Result<rustls::RootCertStore, Error> {
     debug!("loading {label} bundle from {}", path.display());
 
-    let certs = CertificateDer::pem_file_iter(path)
-        .map_err(|e| {
-            invalid_data(format!(
-                "failed to read {label} file {}: {e}",
-                path.display()
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            invalid_data(format!(
-                "failed to parse {label} from {}: {e}",
-                path.display()
-            ))
-        })?;
-
-    if certs.is_empty() {
-        return Err(invalid_data(format!(
-            "no PEM certificates found in {label} file {}",
-            path.display()
-        )));
-    }
+    let certs = load_certificate_chain(path, label)?;
 
     let total = certs.len();
     let mut roots = rustls::RootCertStore::empty();
@@ -529,7 +519,7 @@ fn build_client_config(
         // Load the certificate chain and key the same way `build_acceptor`
         // loads PgDog's own server certificate.
         Some((cert_path, key_path)) => {
-            let certificates = load_certificate_chain(cert_path)?;
+            let certificates = load_certificate_chain(cert_path, "client certificate")?;
             let key = PrivateKeyDer::from_pem_file(key_path)?;
             Ok(builder.with_client_auth_cert(certificates, key)?)
         }
@@ -788,14 +778,69 @@ mod tests {
         let empty = directory.path().join("empty.pem");
         std::fs::write(&empty, "").expect("empty certificate bundle");
         let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain/leaf-key.pem");
-        assert!(build_acceptor(&empty, &key, None).is_err());
-        assert!(
+        assert_invalid_certificate_error(
+            build_acceptor(&empty, &key, None)
+                .err()
+                .expect("empty server chain rejected"),
+            &format!(
+                "no PEM certificates found in certificate file {}",
+                empty.display()
+            ),
+        );
+        assert_invalid_certificate_error(
             build_client_config(
                 ClientConfig::builder().with_root_certificates(rustls::RootCertStore::empty()),
                 Some((&empty, &key)),
             )
-            .is_err()
+            .err()
+            .expect("empty client chain rejected"),
+            &format!(
+                "no PEM certificates found in client certificate file {}",
+                empty.display()
+            ),
         );
+    }
+
+    fn assert_invalid_certificate_error(error: Error, expected: &str) {
+        let Error::Io(error) = error else {
+            panic!("expected InvalidData, got {error}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), expected);
+    }
+
+    #[test]
+    fn certificate_file_errors_include_the_path() {
+        let directory = tempfile::tempdir().expect("temporary certificate directory");
+        let path = directory.path().join("certificate.pem");
+        for (contents, operation) in [
+            (None, "read"),
+            (
+                Some("-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n"),
+                "parse",
+            ),
+        ] {
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).expect("invalid certificate bundle");
+            }
+            let error = load_certificate_chain(&path, "certificate")
+                .expect_err("invalid certificate file rejected");
+            let Error::Io(error) = error else {
+                panic!("expected InvalidData, got {error}");
+            };
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            let prefix = if operation == "read" {
+                "failed to read certificate file"
+            } else {
+                "failed to parse certificate from"
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("{prefix} {}:", path.display())),
+                "{error}"
+            );
+        }
     }
 
     #[test]
