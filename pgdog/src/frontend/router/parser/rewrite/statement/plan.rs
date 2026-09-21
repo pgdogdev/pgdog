@@ -252,15 +252,13 @@ impl RewritePlan {
                     anonymous_client_params = self.apply_parse(parse);
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
-                ProtocolMessage::Bind(bind) => {
-                    // Only ordinary statements need generated values appended to Bind.
-                    // A nonempty prepare_rewrites means SQL PREPARE/EXECUTE: in
-                    // `PREPARE foo AS INSERT INTO t VALUES ($1)`, $1 is supplied by
-                    // a later EXECUTE, not this Bind. EXECUTE's generated values
-                    // are already written into its SQL arguments.
-                    if self.prepare_rewrites.is_empty() {
-                        self.apply_bind(bind, timezone, timestamps).await?
-                    }
+                // Only ordinary statements need generated values appended to Bind.
+                // A nonempty prepare_rewrites means SQL PREPARE/EXECUTE: in
+                // `PREPARE foo AS INSERT INTO t VALUES ($1)`, $1 is supplied by
+                // a later EXECUTE, not this Bind. EXECUTE's generated values
+                // are already written into its SQL arguments.
+                ProtocolMessage::Bind(bind) if self.prepare_rewrites.is_empty() => {
+                    self.apply_bind(bind, timezone, timestamps).await?
                 }
                 _ => {}
             }
