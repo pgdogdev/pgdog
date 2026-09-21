@@ -67,7 +67,7 @@ async fn test_session_lock_tracked_outside_transaction() {
 async fn test_session_lock_cleanup_resets_role_before_backend_reuse() {
     load_single_connection_test_pool();
     let mut source = TestClient::new(Parameters::default()).await;
-    let role = format!("pgdog_cleanup_role_{}", std::process::id());
+    let role = format!("pgdog_cleanup_role_{}_advisory", std::process::id());
 
     source
         .send_simple(Query::new(format!("CREATE ROLE {role}")))
@@ -87,6 +87,86 @@ async fn test_session_lock_cleanup_resets_role_before_backend_reuse() {
         (before.1.as_str(), before.2.as_str()),
         ("pgdog", role.as_str())
     );
+    drop(source.leak_pool());
+
+    let mut peer = TestClient::new(Parameters::default()).await;
+    let after = identity(&mut peer).await;
+    assert_eq!(after.0, before.0, "physical backend should be reused");
+    assert_eq!((after.1.as_str(), after.2.as_str()), ("pgdog", "pgdog"));
+
+    peer.send_simple(Query::new(format!("DROP ROLE {role}")))
+        .await;
+    peer.read_until('Z').await.unwrap();
+}
+
+#[tokio::test]
+async fn test_deferred_role_cleanup_before_backend_reuse() {
+    load_single_connection_test_pool();
+    let mut source = TestClient::new(Parameters::default()).await;
+    let role = format!("pgdog_cleanup_role_{}_deferred", std::process::id());
+
+    source
+        .send_simple(Query::new(format!("CREATE ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+    source
+        .send_simple(Query::new(format!("SET ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+    assert!(
+        !source.backend_connected(),
+        "SET ROLE should be deferred until a query checks out a backend"
+    );
+
+    let before = identity(&mut source).await;
+    assert_eq!(
+        (before.1.as_str(), before.2.as_str()),
+        ("pgdog", role.as_str())
+    );
+    assert!(!source.backend_connected());
+    drop(source.leak_pool());
+
+    let mut peer = TestClient::new(Parameters::default()).await;
+    let after = identity(&mut peer).await;
+    assert_eq!(after.0, before.0, "physical backend should be reused");
+    assert_eq!((after.1.as_str(), after.2.as_str()), ("pgdog", "pgdog"));
+
+    peer.send_simple(Query::new(format!("DROP ROLE {role}")))
+        .await;
+    peer.read_until('Z').await.unwrap();
+}
+
+#[tokio::test]
+async fn test_deferred_transaction_role_cleanup_before_backend_reuse() {
+    load_single_connection_test_pool();
+    let mut source = TestClient::new(Parameters::default()).await;
+    let role = format!("pgdog_cleanup_role_{}_transaction", std::process::id());
+
+    source
+        .send_simple(Query::new(format!("CREATE ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+    source.send_simple(Query::new("BEGIN")).await;
+    source.read_until('Z').await.unwrap();
+    source
+        .send_simple(Query::new(format!("SET ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+    assert!(
+        !source.backend_connected(),
+        "BEGIN and SET ROLE should remain deferred until the first query"
+    );
+
+    let before = identity(&mut source).await;
+    assert_eq!(
+        (before.1.as_str(), before.2.as_str()),
+        ("pgdog", role.as_str())
+    );
+    assert!(source.backend_connected());
+
+    source.send_simple(Query::new("COMMIT")).await;
+    source.read_until('Z').await.unwrap();
+    assert!(!source.backend_connected());
     drop(source.leak_pool());
 
     let mut peer = TestClient::new(Parameters::default()).await;
