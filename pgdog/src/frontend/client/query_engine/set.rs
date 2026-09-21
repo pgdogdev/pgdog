@@ -10,6 +10,7 @@ use super::*;
 /// queries route to a different shard than the one we're pinned to, so they may
 /// only be set before any query connects to a backend.
 const SHARD_TARGETING_PARAMS: [&str; 2] = [PGDOG_SHARD, PGDOG_SHARDING_KEY];
+const SESSION_IDENTITY_PARAMS: [&str; 2] = ["role", "session_authorization"];
 
 impl QueryEngine {
     /// Handle a `SET` statement or equivalent `SELECT set_config([...])` query.
@@ -58,6 +59,13 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            if params.iter().any(|param| {
+                SESSION_IDENTITY_PARAMS
+                    .iter()
+                    .any(|name| param.name.eq_ignore_ascii_case(name))
+            }) {
+                self.backend.mark_dirty();
+            }
             self.execute(context, None).await?;
         } else {
             let fake_response = set_config

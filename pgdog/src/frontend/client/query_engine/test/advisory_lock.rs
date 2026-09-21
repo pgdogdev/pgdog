@@ -1,4 +1,39 @@
+use crate::{
+    backend::databases::reload_from_existing,
+    config::{config, load_test, set},
+    expect_message,
+    net::{CommandComplete, DataRow, ReadyForQuery, RowDescription},
+};
+
 use super::prelude::*;
+
+fn load_single_connection_test_pool() {
+    load_test();
+
+    let mut config = (*config()).clone();
+    config.config.general.default_pool_size = 1;
+    config.config.general.min_pool_size = 0;
+    set(config).unwrap();
+    reload_from_existing().unwrap();
+}
+
+async fn identity(client: &mut TestClient) -> (i64, String, String) {
+    client
+        .send_simple(Query::new(
+            "SELECT pg_backend_pid(), session_user, current_user",
+        ))
+        .await;
+    expect_message!(client.read().await, RowDescription);
+    let row = expect_message!(client.read().await, DataRow);
+    expect_message!(client.read().await, CommandComplete);
+    expect_message!(client.read().await, ReadyForQuery);
+
+    (
+        row.get_int(0, true).expect("backend pid"),
+        row.get_text(1).expect("session_user"),
+        row.get_text(2).expect("current_user"),
+    )
+}
 
 #[tokio::test]
 async fn test_session_lock_tracked_outside_transaction() {
@@ -26,6 +61,42 @@ async fn test_session_lock_tracked_outside_transaction() {
     assert!(client.backend_connected());
     assert!(client.backend_locked());
     assert!(client.engine.advisory_locks().contains(101));
+}
+
+#[tokio::test]
+async fn test_session_lock_cleanup_resets_role_before_backend_reuse() {
+    load_single_connection_test_pool();
+    let mut source = TestClient::new(Parameters::default()).await;
+    let role = format!("pgdog_cleanup_role_{}", std::process::id());
+
+    source
+        .send_simple(Query::new(format!("CREATE ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+    source
+        .send_simple(Query::new("SELECT pg_advisory_lock(707519)"))
+        .await;
+    source.read_until('Z').await.unwrap();
+    source
+        .send_simple(Query::new(format!("SET ROLE {role}")))
+        .await;
+    source.read_until('Z').await.unwrap();
+
+    let before = identity(&mut source).await;
+    assert_eq!(
+        (before.1.as_str(), before.2.as_str()),
+        ("pgdog", role.as_str())
+    );
+    drop(source.leak_pool());
+
+    let mut peer = TestClient::new(Parameters::default()).await;
+    let after = identity(&mut peer).await;
+    assert_eq!(after.0, before.0, "physical backend should be reused");
+    assert_eq!((after.1.as_str(), after.2.as_str()), ("pgdog", "pgdog"));
+
+    peer.send_simple(Query::new(format!("DROP ROLE {role}")))
+        .await;
+    peer.read_until('Z').await.unwrap();
 }
 
 #[tokio::test]
