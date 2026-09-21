@@ -63,8 +63,8 @@ impl Variance {
         if count == 0 || (self.sample && count == 1) {
             return Ok(Datum::Null);
         }
-        let sumsq = self.sumsq.finalize();
-        let sum = self.sum.finalize();
+        let sumsq = self.sumsq.finalize()?;
+        let sum = self.sum.finalize()?;
 
         match (sumsq, sum) {
             (Datum::Numeric(sumsq), Datum::Numeric(sum)) => {

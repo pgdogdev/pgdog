@@ -276,6 +276,16 @@ impl ErrorResponse {
         } else if let FrontendError::AdminTermination = err {
             // Allows us to set a custom code (to identically represent the same Postgres error)
             ErrorResponse::admin_termination()
+        } else if let FrontendError::Backend(BackendError::Type(
+            pgdog_postgres_types::Error::NumericOutOfRange(_),
+        )) = err
+        {
+            Self {
+                severity: "FATAL".into(),
+                code: "22003".into(),
+                message: err.to_string(),
+                ..Default::default()
+            }
         } else {
             Self {
                 severity: "FATAL".into(),
