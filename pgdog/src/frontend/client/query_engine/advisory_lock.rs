@@ -1,6 +1,8 @@
 use fnv::FnvHashSet;
 
-use crate::frontend::router::parser::statement::{AdvisoryLocks as ParserAdvisoryLocks, LockScope};
+use crate::frontend::router::parser::statement::{
+    AdvisoryLocks as ParserAdvisoryLocks, LockAction, LockScope,
+};
 
 /// Tracks advisory locks held by the current client across requests.
 #[derive(Default, Debug)]
@@ -11,17 +13,20 @@ pub(crate) struct AdvisoryLocks {
 impl AdvisoryLocks {
     pub(crate) fn merge(&mut self, locks: &ParserAdvisoryLocks) {
         for lock in locks.iter() {
-            if lock.unlock {
-                if let Some(id) = lock.id {
+            match lock.action {
+                LockAction::UnlockAll => self.locks.clear(),
+                LockAction::Unlock if let Some(id) = lock.id => {
                     self.locks.remove(&id);
-                } else {
-                    // pg_advisory_unlock_all() clears every advisory lock.
-                    self.locks.clear();
                 }
-            } else if let Some(id) = lock.id
-                && lock.scope == LockScope::Session
-            {
-                self.locks.insert(id);
+                LockAction::Lock
+                    if let Some(id) = lock.id
+                        && lock.scope == LockScope::Session =>
+                {
+                    self.locks.insert(id);
+                }
+                // An individual unlock with an unknown or NULL key cannot
+                // prove that any of the client's tracked locks were released.
+                _ => {}
             }
         }
     }

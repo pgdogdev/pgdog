@@ -21,22 +21,22 @@ fn advisory_locks_from_func_call(
     }
     let name = name_parts.next().unwrap();
 
-    let (unlock, scope) = match name {
+    let (action, scope) = match name {
         "pg_advisory_lock"
         | "pg_advisory_lock_shared"
         | "pg_try_advisory_lock"
-        | "pg_try_advisory_lock_shared" => (false, LockScope::Session),
+        | "pg_try_advisory_lock_shared" => (LockAction::Lock, LockScope::Session),
         "pg_advisory_xact_lock"
         | "pg_advisory_xact_lock_shared"
         | "pg_try_advisory_xact_lock"
-        | "pg_try_advisory_xact_lock_shared" => (false, LockScope::Transaction),
+        | "pg_try_advisory_xact_lock_shared" => (LockAction::Lock, LockScope::Transaction),
         // Session-scoped unlocks. xact locks can't be released by name;
         // Postgres drops them automatically at COMMIT/ROLLBACK.
-        "pg_advisory_unlock" => (true, LockScope::Session),
+        "pg_advisory_unlock" => (LockAction::Unlock, LockScope::Session),
         "pg_advisory_unlock_all" => {
             return vec![AdvisoryLock {
                 id: None,
-                unlock: true,
+                action: LockAction::UnlockAll,
                 scope: LockScope::Session,
             }];
         }
@@ -46,7 +46,7 @@ fn advisory_locks_from_func_call(
     let Some(arg) = func.args().into_iter().next() else {
         return vec![AdvisoryLock {
             id: None,
-            unlock,
+            action,
             scope,
         }];
     };
@@ -55,7 +55,7 @@ fn advisory_locks_from_func_call(
     if let Some(id) = integer_arg(arg, bind) {
         return vec![AdvisoryLock {
             id: Some(id),
-            unlock,
+            action,
             scope,
         }];
     }
@@ -80,7 +80,7 @@ fn advisory_locks_from_func_call(
             .filter(|v| bind.is_some() || !is_param_ref(**v))
             .map(|v| AdvisoryLock {
                 id: integer_arg(*v, bind),
-                unlock,
+                action,
                 scope,
             })
             .collect();
@@ -88,7 +88,7 @@ fn advisory_locks_from_func_call(
 
     vec![AdvisoryLock {
         id: None,
-        unlock,
+        action,
         scope,
     }]
 }
@@ -175,14 +175,23 @@ pub(crate) enum LockScope {
     Transaction,
 }
 
+/// The requested operation, independent of whether its key can be resolved.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub(crate) enum LockAction {
+    Lock,
+    Unlock,
+    UnlockAll,
+}
+
 /// A pg_advisory_lock / pg_advisory_unlock call observed in a statement.
 ///
 /// `id` is `None` when the key isn't a literal we can resolve (parameter placeholder,
 /// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
+/// Only `LockAction::UnlockAll` releases every tracked lock.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct AdvisoryLock {
     pub(crate) id: Option<i64>,
-    pub(crate) unlock: bool,
+    pub(crate) action: LockAction,
     pub(crate) scope: LockScope,
 }
 
@@ -204,7 +213,7 @@ impl AdvisoryLocks {
     /// True if any advisory lock (pg_advisory_lock, etc.) was taken.
     #[cfg(test)]
     pub(crate) fn has_lock(&self) -> bool {
-        self.locks.iter().any(|l| !l.unlock)
+        self.locks.iter().any(|l| l.action == LockAction::Lock)
     }
 }
 
@@ -2987,14 +2996,18 @@ mod test {
             let stmt = raw.stmts().next().unwrap();
             let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
             let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
-            v.sort_by_key(|l| (l.id, l.unlock));
+            v.sort_by_key(|l| (l.id, l.action));
             v
         }
 
         fn session(id: Option<i64>, unlock: bool) -> AdvisoryLock {
             AdvisoryLock {
                 id,
-                unlock,
+                action: match (id, unlock) {
+                    (None, true) => LockAction::UnlockAll,
+                    (_, true) => LockAction::Unlock,
+                    (_, false) => LockAction::Lock,
+                },
                 scope: LockScope::Session,
             }
         }
@@ -3002,9 +3015,44 @@ mod test {
         fn xact(id: Option<i64>, unlock: bool) -> AdvisoryLock {
             AdvisoryLock {
                 id,
-                unlock,
+                action: if unlock {
+                    LockAction::Unlock
+                } else {
+                    LockAction::Lock
+                },
                 scope: LockScope::Transaction,
             }
+        }
+
+        fn unlock_all() -> AdvisoryLock {
+            AdvisoryLock {
+                id: None,
+                action: LockAction::UnlockAll,
+                scope: LockScope::Session,
+            }
+        }
+
+        #[test]
+        fn unresolved_unlock_is_distinct_from_unlock_all() {
+            let null_bind = Bind::new_params("", &[Parameter::new_null()]);
+            let expected = AdvisoryLock {
+                id: None,
+                action: LockAction::Unlock,
+                scope: LockScope::Session,
+            };
+            for query in [
+                "SELECT pg_advisory_unlock(NULL::bigint)",
+                "SELECT pg_advisory_unlock($1::bigint)",
+                "SELECT pg_advisory_unlock((SELECT 123::bigint))",
+                "SELECT pg_advisory_unlock(value) FROM (VALUES (NULL::bigint)) AS t(value)",
+            ] {
+                assert_eq!(
+                    locks_with_bind(query, Some(&null_bind)),
+                    vec![expected],
+                    "{query}"
+                );
+            }
+            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()]);
         }
 
         #[test]
@@ -3083,10 +3131,7 @@ mod test {
         #[test]
         fn unlock_all_without_bind() {
             // unlock_all takes no arguments, so it always applies.
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock_all()"),
-                vec![session(None, true)],
-            );
+            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()],);
         }
 
         #[test]
@@ -3179,7 +3224,7 @@ mod test {
                      pg_advisory_unlock(30), pg_advisory_unlock_all()",
                 ),
                 vec![
-                    session(None, true),
+                    unlock_all(),
                     session(Some(10), false),
                     xact(Some(20), false),
                     session(Some(30), true),
