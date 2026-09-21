@@ -16,10 +16,10 @@ fn advisory_locks_from_func_call(
 ) -> Vec<AdvisoryLock> {
     let mut name_parts = func.funcname().into_iter().filter_map(Node::as_str);
 
-    if func.funcname().len() != 1 {
-        return Vec::new();
-    }
-    let name = name_parts.next().unwrap();
+    let name = match (name_parts.next(), name_parts.next(), name_parts.next()) {
+        (Some(name), None, None) | (Some("pg_catalog"), Some(name), None) => name,
+        _ => return Vec::new(),
+    };
 
     let (unlock, scope) = match name {
         "pg_advisory_lock"
@@ -3016,6 +3016,42 @@ mod test {
             assert_eq!(
                 locks("SELECT pg_advisory_unlock(42)"),
                 vec![session(Some(42), true)],
+            );
+        }
+
+        #[test]
+        fn pg_catalog_qualified_advisory_calls() {
+            let bind = Bind::new_params("", &[Parameter::new(b"123")]);
+            for function in [
+                "pg_advisory_lock",
+                "pg_advisory_lock_shared",
+                "pg_try_advisory_lock",
+                "pg_try_advisory_lock_shared",
+                "pg_advisory_xact_lock",
+                "pg_advisory_xact_lock_shared",
+                "pg_try_advisory_xact_lock",
+                "pg_try_advisory_xact_lock_shared",
+                "pg_advisory_unlock",
+            ] {
+                for argument in ["123", "$1::bigint"] {
+                    let unqualified = format!("SELECT {function}({argument})");
+                    let expected = locks_with_bind(&unqualified, Some(&bind));
+                    assert!(!expected.is_empty(), "{unqualified}");
+                    for schema in ["pg_catalog", "\"pg_catalog\""] {
+                        let qualified = format!("SELECT {schema}.{function}({argument})");
+                        assert_eq!(
+                            locks_with_bind(&qualified, Some(&bind)),
+                            expected,
+                            "{qualified}"
+                        );
+                    }
+                    let custom = format!("SELECT other.{function}({argument})");
+                    assert!(locks_with_bind(&custom, Some(&bind)).is_empty(), "{custom}");
+                }
+            }
+            assert_eq!(
+                locks("SELECT pg_catalog.pg_advisory_unlock_all()"),
+                vec![session(None, true)],
             );
         }
 

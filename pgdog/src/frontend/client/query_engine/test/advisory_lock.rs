@@ -1,6 +1,29 @@
 use super::prelude::*;
 
 #[tokio::test]
+async fn test_pg_catalog_advisory_lock_pins_until_qualified_unlock() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    client
+        .send_simple(Query::new("SELECT pg_catalog.pg_advisory_lock(2026092101)"))
+        .await;
+    client.read_until('Z').await.expect("acquire advisory lock");
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("SELECT 1")).await;
+    client.read_until('Z').await.expect("follow-up query");
+    assert!(client.backend_locked());
+
+    client
+        .send_simple(Query::new(
+            "SELECT pg_catalog.pg_advisory_unlock(2026092101)",
+        ))
+        .await;
+    client.read_until('Z').await.expect("release advisory lock");
+    assert!(!client.backend_locked());
+    assert_eq!(client.engine.advisory_locks().len(), 0);
+}
+
+#[tokio::test]
 async fn test_session_lock_tracked_outside_transaction() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
