@@ -792,8 +792,7 @@ mod tests {
                 ClientConfig::builder().with_root_certificates(rustls::RootCertStore::empty()),
                 Some((&empty, &key)),
             )
-            .err()
-            .expect("empty client chain rejected"),
+            .expect_err("empty client chain rejected"),
             &format!(
                 "no PEM certificates found in client certificate file {}",
                 empty.display()
