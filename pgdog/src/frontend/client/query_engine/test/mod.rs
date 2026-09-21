@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod advisory_lock;
+mod advisory_unlock;
 mod close_parse;
 mod close_parse_global_cache;
 mod cross_shard_disabled;
