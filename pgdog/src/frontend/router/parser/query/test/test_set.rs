@@ -80,6 +80,29 @@ fn test_set_comment() {
 }
 
 #[test]
+fn test_set_role_is_tracked_as_parameter() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SET ROLE other_user").into()]);
+
+    match command {
+        Command::Set {
+            params, set_config, ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "role");
+            assert_eq!(
+                params[0].value,
+                Some(ParameterValue::String("other_user".into()))
+            );
+            assert!(!params[0].local);
+            assert!(!set_config);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
 fn test_set_config_null_value() {
     let mut test = QueryParserTest::new();
 

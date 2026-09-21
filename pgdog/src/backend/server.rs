@@ -718,6 +718,7 @@ impl Server {
         let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
             let tracked = params.tracked_and_different(&self.client_params);
+            let sets_role = tracked.get("role").is_some();
             // Construct RESET queries to reset any current params
             // to their default values.
             let mut queries = self.client_params.reset_queries(params);
@@ -732,6 +733,9 @@ impl Server {
                 debug!("syncing {} params", queries.len());
 
                 self.execute_batch(&queries).await?;
+                if sets_role {
+                    self.mark_dirty(true);
+                }
                 clear_params = true;
             }
 
@@ -2477,6 +2481,7 @@ pub(crate) mod test {
             .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 1);
+        assert!(!server.dirty());
 
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
@@ -2497,6 +2502,25 @@ pub(crate) mod test {
                 .await?;
             assert_eq!(changed, 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_link_client_marks_server_dirty_when_setting_role()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut params = Parameters::default();
+        params.insert("role", "pgdog");
+
+        let mut server = test_server().await;
+        assert!(!server.dirty());
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await?;
+
+        assert_eq!(changed, 1);
+        assert!(server.dirty());
 
         Ok(())
     }
