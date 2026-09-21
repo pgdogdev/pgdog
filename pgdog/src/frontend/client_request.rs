@@ -82,6 +82,8 @@ impl ClientRequest {
 
     /// Remove any saved state from the request.
     pub(crate) fn clear(&mut self) {
+        // Client keeps the original unnamed Parse for later requests; this
+        // request's copy may have been rewritten for a particular backend.
         // We drop `last_parse` once the client has executed it. The gate is
         // `is_executable` (Bind/Execute/Query present), not the presence of
         // Sync: lib/pq sends Parse, Describe, Sync to learn parameter/row

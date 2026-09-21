@@ -30,7 +30,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ProtocolMessage, Stream, parameter::Parameters};
+use crate::net::{MessageBuffer, Parse, ProtocolMessage, Stream, parameter::Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
@@ -85,6 +85,9 @@ pub(crate) struct Client {
     // This can be a query or just a `Parse` and `Flush`, but in either case, the client
     // will expect a response immediately and we need to handle it.
     client_request: ClientRequest,
+    // Keep the client's original unnamed statement across executions. The
+    // request's copy can be rewritten for whichever backend receives it.
+    unnamed_parse: Option<Parse>,
     // Raw buffer of messages the client sent. We keep them here to avoid memory allocations
     // down the line (using [`bytes::Bytes`]).
     stream_buffer: MessageBuffer,
@@ -430,6 +433,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
             client_request: ClientRequest::default(),
+            unnamed_parse: None,
             stream_buffer: MessageBuffer::new(
                 config.config.memory.message_buffer,
                 config.config.general.frontend_query_size_limit_block(),
@@ -469,6 +473,7 @@ impl Client {
             transaction: None,
             timeouts: Timeouts::from_config(&config().config.general),
             client_request: ClientRequest::default(),
+            unnamed_parse: None,
             stream_buffer: MessageBuffer::new(
                 4096,
                 config().config.general.frontend_query_size_limit_block(),
@@ -652,6 +657,7 @@ impl Client {
         cancellation_token: &CancellationToken,
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
+        self.client_request.last_parse = self.unnamed_parse.clone();
 
         // Check config once per request.
         let config = config::config();
@@ -709,6 +715,16 @@ impl Client {
                 return Ok(BufferEvent::DisconnectGraceful);
             } else {
                 let message = ProtocolMessage::from_bytes(message.to_bytes())?;
+                match &message {
+                    ProtocolMessage::Parse(parse) if parse.anonymous() => {
+                        self.unnamed_parse = Some(parse.clone());
+                    }
+                    ProtocolMessage::Query(_) => self.unnamed_parse = None,
+                    ProtocolMessage::Close(close) if close.is_statement() && close.anonymous() => {
+                        self.unnamed_parse = None;
+                    }
+                    _ => {}
+                }
                 self.client_request.push(message);
             }
         }
@@ -779,6 +795,8 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
+            + std::mem::size_of::<Option<Parse>>()
+            + self.unnamed_parse.as_ref().map_or(0, Parse::len)
     }
 }
 

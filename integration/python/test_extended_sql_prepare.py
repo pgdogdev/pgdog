@@ -134,3 +134,16 @@ async def test_sql_prepare_registers_each_clients_name(full_prepared_statements)
     finally:
         for connection in connections:
             await connection.close(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_repeated_unnamed_sql_execute(full_prepared_statements):
+    connection = await normal_async()
+    name = "unnamed_sql_" + uuid.uuid4().hex
+    try:
+        await connection.execute(f"PREPARE {name} AS SELECT 42::integer")
+        execute = await connection.prepare(f"EXECUTE {name}", name="", timeout=5)
+        for _ in range(3):
+            assert await execute.fetchval(timeout=5) == 42
+    finally:
+        await connection.close(timeout=5)

@@ -5,10 +5,10 @@ shared_examples 'SQL PREPARE over extended protocol' do |user|
     conn = connect('pgdog', user)
     name = "sql_extended_#{SecureRandom.hex(6)}"
     conn.prepare('prepare_command', "PREPARE #{name} AS SELECT $1::bigint * 2 AS val")
-    expect(conn.exec_prepared('prepare_command').cmd_status).to eq('PREPARE')
+    expect(conn.exec_prepared('prepare_command', []).cmd_status).to eq('PREPARE')
     conn.prepare('execute_command', "EXECUTE #{name}(21)")
     3.times do
-      expect(conn.exec_prepared('execute_command')[0]['val'].to_i).to eq(42)
+      expect(conn.exec_prepared('execute_command', [])[0]['val'].to_i).to eq(42)
     end
     expect(conn.exec('SELECT 1')[0].values).to eq(['1'])
   ensure
