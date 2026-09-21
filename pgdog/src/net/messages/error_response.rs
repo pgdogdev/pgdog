@@ -271,15 +271,20 @@ impl ErrorResponse {
 
     pub(crate) fn from_client_err(err: &FrontendError) -> Self {
         use crate::backend::Error as BackendError;
+        use crate::backend::pool::connection::multi_shard::Error as MultiShardError;
+        use pgdog_postgres_types::Error as TypeError;
         if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
             *(err.clone())
         } else if let FrontendError::AdminTermination = err {
             // Allows us to set a custom code (to identically represent the same Postgres error)
             ErrorResponse::admin_termination()
-        } else if let FrontendError::Backend(BackendError::Type(
-            pgdog_postgres_types::Error::NumericOutOfRange(_),
-        )) = err
-        {
+        } else if matches!(
+            err,
+            FrontendError::Backend(BackendError::Type(TypeError::NumericOutOfRange(_)))
+                | FrontendError::Backend(BackendError::MultiShard(MultiShardError::Type(
+                    TypeError::NumericOutOfRange(_)
+                )))
+        ) {
             Self {
                 severity: "FATAL".into(),
                 code: "22003".into(),
@@ -442,5 +447,36 @@ impl ToBytes for ErrorResponse {
 impl Protocol for ErrorResponse {
     fn code(&self) -> char {
         'E'
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{
+        Error as BackendError, pool::connection::multi_shard::Error as MultiShardError,
+    };
+    use pgdog_postgres_types::{DataType, Error as TypeError};
+
+    #[test]
+    fn integer_overflow_keeps_sqlstate_through_multi_shard_errors() {
+        for data_type in [DataType::SmallInt, DataType::Integer, DataType::Bigint] {
+            let error = BackendError::Type(TypeError::NumericOutOfRange(data_type));
+            let error = BackendError::from(MultiShardError::from(error));
+            let response = ErrorResponse::from_client_err(&FrontendError::from(error));
+            assert_eq!(response.code, "22003");
+            assert!(response.message.contains(&data_type.to_string()));
+        }
+    }
+
+    #[test]
+    fn unrelated_type_errors_keep_their_error_class() {
+        let error = BackendError::Type(TypeError::InvalidOperation {
+            op: "add",
+            ty: DataType::Text,
+        });
+        let error = BackendError::from(MultiShardError::from(error));
+        let response = ErrorResponse::from_client_err(&FrontendError::from(error));
+        assert_eq!(response.code, "58000");
     }
 }
