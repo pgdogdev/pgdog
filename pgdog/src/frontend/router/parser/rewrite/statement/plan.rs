@@ -252,10 +252,15 @@ impl RewritePlan {
                     anonymous_client_params = self.apply_parse(parse);
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
-                ProtocolMessage::Bind(bind) if self.prepare_rewrites.is_empty() => {
-                    // SQL PREPARE's placeholders belong to the inner statement.
-                    // SQL EXECUTE already has its generated values in the SQL text.
-                    self.apply_bind(bind, timezone, timestamps).await?
+                ProtocolMessage::Bind(bind) => {
+                    // Only ordinary statements need generated values appended to Bind.
+                    // A nonempty prepare_rewrites means SQL PREPARE/EXECUTE: in
+                    // `PREPARE foo AS INSERT INTO t VALUES ($1)`, $1 is supplied by
+                    // a later EXECUTE, not this Bind. EXECUTE's generated values
+                    // are already written into its SQL arguments.
+                    if self.prepare_rewrites.is_empty() {
+                        self.apply_bind(bind, timezone, timestamps).await?
+                    }
                 }
                 _ => {}
             }
@@ -274,28 +279,28 @@ impl RewritePlan {
             .prepare_rewrites
             .iter()
             .any(|rewrite| matches!(rewrite, PrepareExecute::Execute(_)))
-            && let Some(bind_index) = request
-                .messages
-                .iter()
-                .position(|message| matches!(message, ProtocolMessage::Bind(_)))
             && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
         {
-            // A cached outer EXECUTE can contain per-execution values and shard-
-            // dependent LIMIT/OFFSET. Parse it again without adding cache entries.
-            // Keep the original Bind name for the cross-shard result decoder.
-            parse.anonymize();
-            request.anonymous_client_params = self.apply_parse(&mut parse);
-            for message in &mut request.messages {
+            let mut bind_index = None;
+            for (index, message) in request.messages.iter_mut().enumerate() {
                 if let ProtocolMessage::Bind(bind) = message {
+                    bind_index.get_or_insert(index);
+                    // Keep the original Bind name for the cross-shard result decoder.
                     *message = ProtocolMessage::BindAnonymous(bind.clone());
                 }
             }
-            request.last_parse = None;
-            // EnsurePrepared is a simple Query and destroys unnamed statements,
-            // so the internal Parse must follow it and precede Bind.
-            request
-                .messages
-                .insert(bind_index, ProtocolMessage::EnsureParsed(parse));
+            if let Some(bind_index) = bind_index {
+                // A cached outer EXECUTE can contain per-execution values and shard-
+                // dependent LIMIT/OFFSET. Parse it again without adding cache entries.
+                parse.anonymize();
+                request.anonymous_client_params = self.apply_parse(&mut parse);
+                request.last_parse = None;
+                // EnsurePrepared is a simple Query and destroys unnamed statements,
+                // so the internal Parse must follow it and precede Bind.
+                request
+                    .messages
+                    .insert(bind_index, ProtocolMessage::EnsureParsed(parse));
+            }
         }
 
         self.apply_after_messages(request)

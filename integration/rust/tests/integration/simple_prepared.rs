@@ -34,7 +34,6 @@ async fn test_simple_prepared_ttl() {
 }
 
 /// <https://github.com/pgdogdev/pgdog/issues/1383>
-/// TODO: will need to support extended-protocol `Bind`s later for the re-write
 #[tokio::test]
 async fn test_simple_prepared_limit() {
     let mut conn =

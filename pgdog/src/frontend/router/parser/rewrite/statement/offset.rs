@@ -168,8 +168,9 @@ impl OffsetPlan {
         let new_execute = new_execute.deref();
         let new_execute_sql = deparse(new_execute)?;
 
-        // SQL EXECUTE can also arrive through the extended protocol. Update its
-        // internal Parse so cached outer statements receive the current limits.
+        // Replace SQL EXECUTE's LIMIT/OFFSET arguments with the values each shard
+        // needs (limit + offset, 0). Update Query for simple protocol and Parse
+        // or EnsureParsed for extended protocol, including cached statements.
         for message in request.messages.iter_mut() {
             match message {
                 ProtocolMessage::Query(query) => query.set_query(new_execute_sql.as_str()),
