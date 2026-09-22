@@ -60,6 +60,59 @@ impl QueryParser {
             (parser.extract_advisory_locks(), parser.is_all_omnisharded())
         };
 
+        // If there's an advisory lock function in this query, we must always route it
+        // to a deterministic `Shard`.
+        //
+        // If, specifically, it's advisory_lock_unlock_all(), broadcast to all shards.
+        if !advisory_locks.is_empty() && context.shards > 1 {
+            let unlock_all = advisory_locks
+                .iter()
+                .exactly_one()
+                .map(|adv_lock| adv_lock.unlock_all)
+                .unwrap_or(false);
+
+            let shard_override = if unlock_all {
+                // pg_advisory_unlock_all
+                ShardWithPriority::new_override_cross_shard_function()
+            } else {
+                // Very simplistic direct-to-shard hashing: abs(lock_id) % shard_count
+                //
+                // Since advisory locks are stored in memory, we don't have to worry
+                // about accounting for resharding / changing shard_count later in time
+                //
+                // Advisory lock can be None when an inner function is used, e.g., hashtext
+                // Since we don't parse that explicitly, they're deterministically always hashed
+                // to the first shard. TODO: if an app exclusively uses this, could cause issues
+                let hashed_shard: usize = match advisory_locks
+                    .iter()
+                    .map(|lock| lock.id.unwrap_or(0).unsigned_abs() as usize % context.shards)
+                    .all_equal_value()
+                {
+                    Ok(singular_shard) => {
+                        // Either we got a singular lock, or all locks hashed to the same shard.
+                        singular_shard
+                    }
+                    Err(_) => {
+                        // 2+ different shards. In this case, we error to the client,
+                        // as otherwise, we'd need to do something like INSERT split, where we
+                        // break apart the Client's statement, route to separate shards,
+                        // and put together a response for them (+ consider deadlocks, etc).
+                        // Kinda complex!
+                        //
+                        // Since this is not common in production, I opted to defer this
+                        // in favor of quickly correcting the functionality for most common cases.
+                        // TODO: eventually support something that works better
+                        return Err(Error::CrossShardAdvisoryLockAttempt);
+                    }
+                };
+
+                ShardWithPriority::new_override_advisory_lock(Shard::Direct(hashed_shard))
+            };
+
+            // Overrides Comment / Set / etc, since ShardSource::Override(..) sorts above them.
+            context.shards_calculator.push(shard_override);
+        }
+
         mutates |= !advisory_locks.is_empty();
         // Write override because of conservative read/write split.
         let writes = self.write_override || mutates;
