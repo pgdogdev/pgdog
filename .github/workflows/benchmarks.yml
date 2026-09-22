@@ -6,30 +6,34 @@ on:
 
 jobs:
   bench:
-    runs-on: blacksmith-12vcpu-macos-latest
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
-      - name: Build
-        run: cargo build --release --bin pgdog
-      - name: Setup PostgreSQL
+      - name: Build base
         run: |
-          brew install postgresql@18
-          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
-          export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
-          brew services start postgresql@18
-          until pg_isready -q; do sleep 1; done
-          createdb
-          bash integration/setup.sh || (brew services restart postgresql@18 && until pg_isready -q; do sleep 1; done && bash integration/setup.sh)
+          git fetch --depth=1 origin ${{ github.event.pull_request.base.sha || 'main' }}
+          git checkout FETCH_HEAD
+          cargo build --release --bin pgdog
+          cp target/release/pgdog ${{ runner.temp }}/pgdog-base
+          git checkout ${{ github.sha }}
+      - name: Build head
+        run: |
+          cargo build --release --bin pgdog
+          cp target/release/pgdog ${{ runner.temp }}/pgdog-head
+      - name: Setup PostgreSQL
+        run: bash integration/ci/setup.sh
       - name: Run benchmarks
-        env:
-          PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
         shell: bash
         run: |
           for name in pooler lb sharding; do
-            bash benches/perf/run.sh $name | tee ${{ runner.temp }}/$name.txt
+            for rev in base head; do
+              PGDOG_BIN=${{ runner.temp }}/pgdog-$rev bash benches/perf/run.sh $name | tee ${{ runner.temp }}/$name-$rev.txt
+            done
           done
       - name: TPS
-        run: grep '^tps' ${{ runner.temp }}/{pooler,lb,sharding}.txt
+        run: grep '^tps' ${{ runner.temp }}/{pooler,lb,sharding}-{base,head}.txt
