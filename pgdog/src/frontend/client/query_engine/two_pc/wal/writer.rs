@@ -90,6 +90,14 @@ impl WalWriter {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) async fn rotate(&self) -> Result<(), Error> {
+        let mut next_segment_id = self.next_segment_id.lock().await;
+        let segment_id = *next_segment_id;
+        *next_segment_id += 1;
+        self.swap(segment_id).await
+    }
+
     /// Create new WAL writer at segment position.
     ///
     /// Segment IDs are monotonically increasing, just like the Postgres LSN.

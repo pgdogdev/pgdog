@@ -43,6 +43,10 @@ async fn checkpointer_recycles_wal_segments(wal_segment_size: usize) {
     .await
     .expect("clients should generate multiple WAL segments");
 
+    // A live phase record can retain an older identity segment even after its
+    // transaction completes. Close that segment before expecting full recycling.
+    client.rotate_wal().await;
+
     timeout(Duration::from_secs(5), async {
         loop {
             if SegmentRegistry::get().len() == 1 {

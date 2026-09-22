@@ -108,6 +108,16 @@ impl Manager {
         self.inner.lock().transactions.get(transaction).cloned()
     }
 
+    #[cfg(test)]
+    pub(super) async fn rotate_wal(&self) {
+        self.wal
+            .load_full()
+            .expect("test WAL enabled")
+            .rotate()
+            .await
+            .expect("rotate test WAL");
+    }
+
     /// Get all active two-phase transactions.
     pub(crate) fn transactions(&self) -> HashMap<TwoPcTransaction, TransactionInfo> {
         self.inner.lock().transactions.clone()
