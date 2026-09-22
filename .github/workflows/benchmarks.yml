@@ -1,0 +1,30 @@
+name: benchmarks
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: build-v1
+      - name: Build
+        run: cargo build --release --bin pgdog
+      - name: Setup PostgreSQL
+        run: bash integration/ci/setup.sh
+      - name: Run benchmarks
+        env:
+          PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
+        shell: bash
+        run: |
+          for name in pooler lb sharding; do
+            bash benches/perf/run.sh $name | tee ${{ runner.temp }}/$name.txt
+          done
+      - name: TPS
+        run: grep '^tps' ${{ runner.temp }}/{pooler,lb,sharding}.txt
