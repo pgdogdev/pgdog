@@ -11,14 +11,14 @@ use super::order_by;
 use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{Aggregate, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
-use crate::net::ProtocolMessage;
+use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AggregateHelper {
     pub(crate) target_column: usize,
-    pub(crate) projected_column: usize,
     pub(crate) distinct: bool,
     pub(crate) kind: HelperKind,
     pub(crate) alias: String,
@@ -28,7 +28,7 @@ pub(crate) struct AggregateHelper {
 pub(crate) struct OrderByHelper {
     pub(crate) sort_position: usize,
     pub(crate) source: OrderBySource,
-    pub(crate) projected_column: usize,
+    pub(crate) alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,8 +52,8 @@ impl OrderByHelper {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ProjectionRewritePlan {
-    aggregate_helpers: Vec<AggregateHelper>,
-    order_by_helpers: Vec<OrderByHelper>,
+    pub(crate) aggregate_helpers: Vec<AggregateHelper>,
+    pub(crate) order_by_helpers: Vec<OrderByHelper>,
 }
 
 impl ProjectionRewritePlan {
@@ -61,49 +61,24 @@ impl ProjectionRewritePlan {
         self.aggregate_helpers.is_empty() && self.order_by_helpers.is_empty()
     }
 
-    pub(crate) fn drop_columns(&self) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn drop_columns(&self, row_description: &RowDescription) -> BTreeSet<usize> {
         self.aggregate_helpers
             .iter()
-            .map(|helper| helper.projected_column)
+            .map(|helper| helper.alias.as_str())
             .chain(
                 self.order_by_helpers
                     .iter()
-                    .map(|helper| helper.projected_column),
+                    .map(|helper| helper.alias.as_str()),
             )
+            .filter_map(|alias| row_description.field_index(alias))
+            .collect()
     }
-
-    pub(crate) fn aggregate_helpers(&self) -> &[AggregateHelper] {
-        &self.aggregate_helpers
-    }
-
-    pub(crate) fn order_by_helpers(&self) -> &[OrderByHelper] {
-        &self.order_by_helpers
-    }
-
-    pub(crate) fn add_aggregate_helper(&mut self, helper: AggregateHelper) {
-        self.aggregate_helpers.push(helper);
-    }
-
-    pub(crate) fn add_order_by_helper(&mut self, helper: OrderByHelper) {
-        self.order_by_helpers.push(helper);
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub(crate) struct RewriteOutput {
-    pub(crate) plan: ProjectionRewritePlan,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
     plan: ProjectionRewritePlan,
-}
-
-impl RewriteOutput {
-    pub(crate) fn new(plan: ProjectionRewritePlan) -> Self {
-        Self { plan }
-    }
 }
 
 pub(crate) fn finalize_after_route(
@@ -168,9 +143,9 @@ pub(crate) fn finalize_after_route(
     if !rewrite.plan.is_noop()
         && let Some(route) = request.route.as_mut()
     {
-        route.set_projection_rewrite_plan(rewrite.plan.clone());
+        route.projection_rewrite_plan = rewrite.plan.clone();
         let mut order_by = route.order_by().to_vec();
-        for helper in rewrite.plan.order_by_helpers() {
+        for helper in &rewrite.plan.order_by_helpers {
             // Prefer the structural position. The source fallback handles a
             // bind-dependent vector sort omitted from this execution's route.
             let position = order_by
@@ -182,9 +157,9 @@ pub(crate) fn finalize_after_route(
                 continue;
             };
             *sort = if sort.asc() {
-                OrderBy::Asc(helper.projected_column + 1)
+                OrderBy::AscColumn(helper.alias.clone())
             } else {
-                OrderBy::Desc(helper.projected_column + 1)
+                OrderBy::DescColumn(helper.alias.clone())
             };
         }
         route.set_order_by(order_by);
@@ -211,7 +186,7 @@ fn build(
     let rewritten = make::owned(|mem| {
         let mut select = mem.make_unique(select);
         if !aggregate.is_empty() {
-            plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate).plan;
+            plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate);
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
         if rewrite_offset {
@@ -234,22 +209,26 @@ mod tests {
     #[test]
     fn projection_plan_tracks_helpers() {
         let mut plan = ProjectionRewritePlan::default();
-        plan.add_aggregate_helper(AggregateHelper {
+        plan.aggregate_helpers.push(AggregateHelper {
             target_column: 0,
-            projected_column: 1,
             distinct: false,
             kind: HelperKind::Count,
             alias: "__pgdog_count_col0".into(),
         });
-        plan.add_order_by_helper(OrderByHelper {
+        plan.order_by_helpers.push(OrderByHelper {
             sort_position: 0,
             source: OrderBySource::Column("created_at".into()),
-            projected_column: 2,
+            alias: "__pgdog_order_col0".into(),
         });
 
         assert!(!plan.is_noop());
-        assert_eq!(plan.drop_columns().collect::<Vec<_>>(), [1, 2]);
-        assert_eq!(plan.aggregate_helpers().len(), 1);
-        assert_eq!(plan.order_by_helpers().len(), 1);
+        let row_description = RowDescription::new(&[
+            crate::net::Field::double("avg"),
+            crate::net::Field::bigint("__pgdog_count_col0"),
+            crate::net::Field::timestamp("__pgdog_order_col0"),
+        ]);
+        assert_eq!(plan.drop_columns(&row_description), BTreeSet::from([1, 2]));
+        assert_eq!(plan.aggregate_helpers.len(), 1);
+        assert_eq!(plan.order_by_helpers.len(), 1);
     }
 }

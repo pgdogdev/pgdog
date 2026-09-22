@@ -1,5 +1,3 @@
-use crate::frontend::router::parser::cache::Ast;
-
 use super::*;
 use pg_raw_parse::walk;
 use pg_raw_parse::{Node, nodes};
@@ -16,7 +14,6 @@ impl QueryParser {
     ///
     pub(super) fn select(
         &mut self,
-        _cached_ast: &Ast,
         stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {

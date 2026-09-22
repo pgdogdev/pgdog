@@ -156,12 +156,12 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan) {
+    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
         if plan.is_noop() {
             return;
         }
 
-        let drop = plan.drop_columns().collect();
+        let drop = plan.drop_columns(decoder.row_description());
 
         for row in self.buffer.iter_mut() {
             row.drop_columns(&drop);

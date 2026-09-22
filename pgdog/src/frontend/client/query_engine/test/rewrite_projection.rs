@@ -55,7 +55,7 @@ async fn direct_aggregate_keeps_base_sql() {
         context
             .client_request
             .route()
-            .projection_rewrite_plan()
+            .projection_rewrite_plan
             .is_noop()
     );
 }
@@ -88,8 +88,8 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
         context
             .client_request
             .route()
-            .projection_rewrite_plan()
-            .aggregate_helpers()
+            .projection_rewrite_plan
+            .aggregate_helpers
             .len(),
         1
     );
@@ -236,14 +236,14 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     assert!(query.query().contains("price AS __pgdog_order_col0"));
     assert_eq!(
         context.client_request.route().order_by(),
-        &[OrderBy::Asc(2)]
+        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
     );
     assert_eq!(
         context
             .client_request
             .route()
-            .projection_rewrite_plan()
-            .order_by_helpers()
+            .projection_rewrite_plan
+            .order_by_helpers
             .len(),
         1
     );
@@ -270,7 +270,10 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     };
     assert!(first_query.query().contains("__pgdog_order_col0"));
     assert!(first_query.query().contains("__pgdog_order_col1"));
-    assert_eq!(first.route().order_by(), &[OrderBy::Asc(3)]);
+    assert_eq!(
+        first.route().order_by(),
+        &[OrderBy::AscColumn("__pgdog_order_col1".into())]
+    );
 
     let mut second = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
     second.ast = Some(ast);
@@ -288,7 +291,10 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     projection::finalize_after_route(&mut second, &Schema::default(), None).unwrap();
     assert_eq!(
         second.route().order_by(),
-        &[OrderBy::Asc(2), OrderBy::Asc(3)]
+        &[
+            OrderBy::AscColumn("__pgdog_order_col0".into()),
+            OrderBy::AscColumn("__pgdog_order_col1".into())
+        ]
     );
 }
 
@@ -312,7 +318,10 @@ fn helper_replaces_the_matching_duplicate_order_by_position() {
 
     assert_eq!(
         request.route().order_by(),
-        &[OrderBy::AscColumn("price".into()), OrderBy::Asc(2)]
+        &[
+            OrderBy::AscColumn("price".into()),
+            OrderBy::AscColumn("__pgdog_order_col1".into())
+        ]
     );
 }
 
@@ -356,13 +365,17 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     assert!(!query.query().contains("OFFSET"));
 
     let route = context.client_request.route();
-    assert_eq!(route.order_by(), &[OrderBy::Asc(3)]);
     assert_eq!(
-        route
-            .projection_rewrite_plan()
-            .drop_columns()
-            .collect::<Vec<_>>(),
-        [1, 2]
+        route.order_by(),
+        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+    );
+    assert_eq!(
+        route.projection_rewrite_plan.aggregate_helpers[0].alias,
+        "__pgdog_count_col0"
+    );
+    assert_eq!(
+        route.projection_rewrite_plan.order_by_helpers[0].alias,
+        "__pgdog_order_col0"
     );
     assert_eq!(
         route.limit(),

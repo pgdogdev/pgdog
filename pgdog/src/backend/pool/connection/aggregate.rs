@@ -262,7 +262,7 @@ impl<'a> Aggregates<'a> {
             }
         }
 
-        for helper in plan.aggregate_helpers() {
+        for helper in &plan.aggregate_helpers {
             let Some(index) = decoder.row_description().field_index(&helper.alias) else {
                 continue;
             };

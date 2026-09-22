@@ -4,14 +4,19 @@ pub(crate) use super::projection::AggregateHelper;
 
 pub(crate) use engine::AggregatesRewrite;
 
+/// Type of aggregate function added to the result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HelperKind {
+    /// `COUNT(*)` or `COUNT(column)`.
     Count,
+    /// `SUM(column)`.
     Sum,
+    /// `SUM(POWER(column, 2))`.
     SumSquares,
 }
 
 impl HelperKind {
+    /// Suffix used in the projected helper's internal alias.
     pub(crate) fn alias_suffix(self) -> &'static str {
         match self {
             Self::Count => "count",

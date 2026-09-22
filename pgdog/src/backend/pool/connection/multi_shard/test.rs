@@ -64,25 +64,29 @@ fn test_inconsistent_data_rows() {
 }
 
 #[test]
-fn test_order_by_helper_is_dropped_after_sorting() {
+fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
     let mut plan = ProjectionRewritePlan::default();
-    plan.add_order_by_helper(OrderByHelper {
+    plan.order_by_helpers.push(OrderByHelper {
         sort_position: 0,
         source: OrderBySource::Column("price".into()),
-        projected_column: 1,
+        alias: "__pgdog_order_col0".into(),
     });
     let mut route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
-        vec![OrderBy::Asc(2)],
+        vec![OrderBy::AscColumn("__pgdog_order_col0".into())],
         Default::default(),
         Default::default(),
         None,
     );
-    route.set_projection_rewrite_plan(plan);
+    route.projection_rewrite_plan = plan;
     let mut multi_shard = MultiShard::new(vec![0, 1], &route);
 
-    let row_description =
-        RowDescription::new(&[Field::bigint("id"), Field::bigint("__pgdog_order_col0")]);
+    let row_description = RowDescription::new(&[
+        Field::bigint("id"),
+        Field::text("value"),
+        Field::timestamp("created_at"),
+        Field::bigint("__pgdog_order_col0"),
+    ]);
     assert!(
         multi_shard
             .handle_server_message(row_description.message())
@@ -93,17 +97,28 @@ fn test_order_by_helper_is_dropped_after_sorting() {
         .handle_server_message(row_description.message())
         .unwrap()
         .unwrap();
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
     assert_eq!(
-        RowDescription::from_bytes(client_description.to_bytes())
-            .unwrap()
-            .len(),
-        1
+        client_description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["id", "value", "created_at"]
     );
 
     let mut first = DataRow::new();
-    first.add(1_i64).add(20_i64);
+    first
+        .add(1_i64)
+        .add("first")
+        .add("2026-01-01 00:00:00")
+        .add(20_i64);
     let mut second = DataRow::new();
-    second.add(2_i64).add(10_i64);
+    second
+        .add(2_i64)
+        .add("second")
+        .add("2026-01-02 00:00:00")
+        .add(10_i64);
     multi_shard.handle_server_message(first.message()).unwrap();
     multi_shard.handle_server_message(second.message()).unwrap();
 
@@ -116,7 +131,7 @@ fn test_order_by_helper_is_dropped_after_sorting() {
     for expected in [2_i64, 1_i64] {
         let message = multi_shard.get_server_message().unwrap();
         let row = DataRow::from_bytes(message.to_bytes()).unwrap();
-        assert_eq!(row.len(), 1);
+        assert_eq!(row.len(), 3);
         assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), expected);
     }
 }

@@ -111,7 +111,7 @@ pub(crate) struct Route {
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
     /// Temporary columns projected for cross-shard result processing.
-    projection_rewrite_plan: ProjectionRewritePlan,
+    pub(crate) projection_rewrite_plan: ProjectionRewritePlan,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
     explain: Option<ExplainTrace>,
@@ -402,14 +402,6 @@ impl Route {
 
     pub(crate) fn should_2pc(&self) -> bool {
         self.is_cross_shard() && self.is_write()
-    }
-
-    pub(crate) fn projection_rewrite_plan(&self) -> &ProjectionRewritePlan {
-        &self.projection_rewrite_plan
-    }
-
-    pub(crate) fn set_projection_rewrite_plan(&mut self, plan: ProjectionRewritePlan) {
-        self.projection_rewrite_plan = plan;
     }
 
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
