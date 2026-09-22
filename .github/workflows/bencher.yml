@@ -79,6 +79,7 @@ jobs:
             --error-on-alert \
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
             --ci-id ${{ matrix.suite }} \
+            --ci-only-on-alert \
             --adapter json \
             --image $IMAGE \
             "bash benches/perf/bencher.sh ${{ matrix.suite }}"
