@@ -73,10 +73,15 @@ impl QueryEngine {
         }
 
         // 2pc is used only for writes and is not needed for rollbacks.
+        // A transaction bound to a single server commits atomically on
+        // its own: a shard-pinned write on a sharded cluster binds
+        // direct (which has no 2pc path), so it takes the regular
+        // COMMIT below.
         let two_pc = cluster.two_pc_enabled()
             && context.client_request.route().is_write()
             && !rollback
-            && context.transaction().map(|t| t.write()).unwrap_or(false);
+            && context.transaction().map(|t| t.write()).unwrap_or(false)
+            && self.backend.connected_servers() > 1;
 
         self.temp_tables.finish_transaction(rollback);
 
