@@ -15,4 +15,4 @@ COPY benches/perf benches/perf
 # This happens here because we don't have network access in Bencher.
 RUN bash integration/ci/setup.sh && pg_ctlcluster 18 main stop
 
-CMD ["bash", "benches/perf/bencher.sh"]
+CMD ["bash", "benches/perf/bencher.sh", "pooler", "lb", "sharding"]
