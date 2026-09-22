@@ -17,12 +17,8 @@ env:
   IMAGE: registry.bencher.dev/pgdog:${{ github.sha }}
 
 jobs:
-  bench:
+  image:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      checks: write
-      pull-requests: write
-
     # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
     # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -43,13 +39,24 @@ jobs:
           echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
           docker push $IMAGE
 
+  bench:
+    needs: image
+    permissions:
+      checks: write
+      pull-requests: write
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [pooler, lb, sharding]
+    steps:
+      - uses: actions/checkout@v6
       - uses: bencherdev/bencher@main
-      - name: Run on Bencher bare metal
+      - name: Run ${{ matrix.suite }} on Bencher bare metal
         env:
-          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
-
-        # This will run all three tests, back-to-back. It'll error if a test's throughput is more than 3%
-        # BELOW the mean of the baseline's previous runs (main)
+          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds', github.base_ref, github.event.pull_request.base.sha) || '' }}
+        # This will run one test per job (all in parallel).
+        # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
         #
         # After testing 5x back-to-back, variance was <1%. This should be enough
         # of a difference, unless something goes on with their servers in the future.
@@ -71,6 +78,7 @@ jobs:
             --thresholds-reset \
             --error-on-alert \
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            --ci-id ${{ matrix.suite }} \
             --adapter json \
             --image $IMAGE \
-            "bash benches/perf/bencher.sh"
+            "bash benches/perf/bencher.sh ${{ matrix.suite }}"

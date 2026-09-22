@@ -14,7 +14,7 @@ pg_ctlcluster 18 main start
 # This assembles into "Bencher Metric Format"; required because we don't use something like criterion here,
 # we have our own custom runtime scripts
 json=""
-for name in pooler lb sharding; do
+for name in "$@"; do
     bash benches/perf/run.sh $name > $name.txt 2>&1
     cat $name.txt >&2
     tps=$(awk '/^tps/ {print $3}' $name.txt)
