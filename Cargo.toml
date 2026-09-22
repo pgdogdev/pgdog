@@ -35,6 +35,15 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 parking_lot = "0.12"
 futures-util = "0.3.32"
 
+# This ensures that our fork of smithy-rs is used for all of the AWS SDK.
+[patch.crates-io]
+aws-sigv4 = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+aws-credential-types = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+aws-smithy-async = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+aws-smithy-http = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+aws-smithy-runtime-api = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+aws-smithy-types = { git = "https://github.com/pgdogdev/smithy-rs", branch = "jk-sigv4-fips" }
+
 # [patch.crates-io]
 # tokio = { path = "../tokio/tokio" }
 

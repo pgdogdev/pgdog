@@ -11,7 +11,7 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
-fips = ["tokio-rustls/fips"]
+fips = ["tokio-rustls/fips", "aws-sigv4/fips"]
 
 [dependencies]
 bon.workspace = true
@@ -69,6 +69,8 @@ moka = { version = "0.12", features = ["sync"] }
 derive_builder = "0.20.2"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-rds = { version = "1", default-features = false }
+aws-sigv4 = "1"
+
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }
