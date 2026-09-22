@@ -4,6 +4,29 @@ use crate::frontend::router::parser::Column;
 
 use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
 
+impl OrderBySource {
+    fn name(&self) -> &str {
+        match self {
+            Self::Column(name) | Self::Vector(name) => name,
+        }
+    }
+}
+
+fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
+    column
+        .fields()
+        .into_iter()
+        .next_back()
+        .and_then(Node::as_str)
+}
+
+fn is_star(column: &nodes::ColumnRef) -> bool {
+    matches!(
+        column.fields().into_iter().next_back(),
+        Some(Node::A_Star(_))
+    )
+}
+
 /// Compare complete column references so `a.price` and `b.price` remain distinct.
 fn same_column(left: &nodes::ColumnRef, right: &nodes::ColumnRef) -> bool {
     left.fields()
@@ -34,25 +57,106 @@ fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
                         .map(Node::as_str))))
 }
 
-/// Whether the SELECT list already returns the value needed for this sort.
-fn projects_column(select: &nodes::SelectStmtMut<'_, '_>, column: &nodes::ColumnRef) -> bool {
-    let fields = column.fields();
-    let unqualified = fields.len() == 1;
-    let name = fields.into_iter().next_back().and_then(Node::as_str);
-
-    select.target_list().iter().any(|target| {
-        (unqualified && target.name() == name)
-            || matches!(target.val(), Node::ColumnRef(projected)
-                if star_covers(projected, column)
-                    || same_column(projected, column)
-                    || (unqualified
-                        && projected.fields().into_iter().next_back().and_then(Node::as_str)
-                            == name))
-    })
+fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
+    if let Some(alias) = target.name() {
+        return Some(alias);
+    }
+    match target.val() {
+        Node::ColumnRef(column) if !is_star(column) => column_name(column),
+        _ => None,
+    }
 }
 
-/// Project missing sort values so PgDog can merge shard results. Helpers use
-/// aliases rather than AST target positions because `*` expands only in Postgres.
+fn single_relation(select: &nodes::SelectStmtMut<'_, '_>) -> bool {
+    let from = select.from_clause();
+    from.len() == 1 && matches!(from.first(), Some(Node::RangeVar(_)))
+}
+
+fn explicit_output_name(
+    target: &nodes::ResTarget,
+    column: &nodes::ColumnRef,
+    name: &str,
+    unqualified: bool,
+) -> Option<String> {
+    if unqualified && target.name() == Some(name) {
+        return Some(name.to_owned());
+    }
+    let Node::ColumnRef(projected) = target.val() else {
+        return None;
+    };
+    if is_star(projected) {
+        return None;
+    }
+    if same_column(projected, column) || (unqualified && column_name(projected) == Some(name)) {
+        Some(target.name().unwrap_or(name).to_owned())
+    } else {
+        None
+    }
+}
+
+/// Cross-shard sort looks up a RowDescription name. Reuse a projected column
+/// only when that name is unique; stars and duplicate names get a helper.
+fn unique_output_name(
+    select: &nodes::SelectStmtMut<'_, '_>,
+    column: &nodes::ColumnRef,
+) -> Option<String> {
+    let name = column_name(column)?;
+    let unqualified = column.fields().len() == 1;
+
+    let mut star_match = false;
+    let mut output = None;
+    for target in select.target_list() {
+        if let Some(found) = explicit_output_name(target, column, name, unqualified) {
+            output = Some(found);
+            star_match = false;
+            break;
+        }
+        if matches!(target.val(), Node::ColumnRef(projected) if star_covers(projected, column)) {
+            star_match = true;
+        }
+    }
+    let output = output.or_else(|| star_match.then(|| name.to_owned()))?;
+
+    let mut sources = 0;
+    let mut unqualified_star = false;
+    for target in select.target_list() {
+        if let Node::ColumnRef(projected) = target.val()
+            && is_star(projected)
+        {
+            sources += 1;
+            if projected.fields().len() == 1 {
+                unqualified_star = true;
+            }
+        } else if target_output_name(target) == Some(output.as_str()) {
+            sources += 1;
+        }
+    }
+
+    if sources == 1 && (!unqualified_star || single_relation(select)) {
+        Some(output)
+    } else {
+        None
+    }
+}
+
+fn push_helper(
+    plan: &mut ProjectionRewritePlan,
+    sort_position: usize,
+    source: OrderBySource,
+    alias: String,
+    injected: bool,
+) {
+    plan.order_by_helpers.push(OrderByHelper {
+        sort_position,
+        source,
+        alias,
+        injected,
+    });
+}
+
+/// Project missing or ambiguous sort values so PgDog can merge shard results.
+/// Helpers use aliases rather than AST target positions because `*` expands
+/// only in Postgres.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
@@ -63,12 +167,9 @@ pub(super) fn rewrite_select<'a>(
     for sort in select.sort_clause() {
         let node = sort.node();
         let source = match node {
-            Node::ColumnRef(column) => column
-                .fields()
-                .into_iter()
-                .next_back()
-                .and_then(Node::as_str)
-                .map(|name| OrderBySource::Column(name.to_owned())),
+            Node::ColumnRef(column) => {
+                column_name(column).map(|name| OrderBySource::Column(name.to_owned()))
+            }
             Node::A_Expr(expr)
                 if expr.name().iter().next().and_then(Node::as_str) == Some("<->") =>
             {
@@ -89,26 +190,49 @@ pub(super) fn rewrite_select<'a>(
         let current_sort_position = sort_position;
         sort_position += 1;
 
-        let needs_helper = match node {
-            Node::ColumnRef(column) => !projects_column(select, column),
-            Node::A_Expr(_) => source.is_some(),
-            _ => false,
-        };
-        if !needs_helper {
-            continue;
+        match node {
+            Node::ColumnRef(column) => match unique_output_name(select, column) {
+                Some(name) if source.as_ref().is_some_and(|source| source.name() == name) => {}
+                Some(name) => push_helper(
+                    plan,
+                    current_sort_position,
+                    source.expect("column sorts always have a source"),
+                    name,
+                    false,
+                ),
+                None => {
+                    let alias = format!("__pgdog_order_col{current_sort_position}");
+                    helpers.push(mem.make_res_target(
+                        Some(&alias),
+                        mem.empty(),
+                        mem.make_unique(node).uncast(),
+                    ));
+                    push_helper(
+                        plan,
+                        current_sort_position,
+                        source.expect("column sorts always have a source"),
+                        alias,
+                        true,
+                    );
+                }
+            },
+            Node::A_Expr(_) if source.is_some() => {
+                let alias = format!("__pgdog_order_col{current_sort_position}");
+                helpers.push(mem.make_res_target(
+                    Some(&alias),
+                    mem.empty(),
+                    mem.make_unique(node).uncast(),
+                ));
+                push_helper(
+                    plan,
+                    current_sort_position,
+                    source.expect("vector sorts always have a source"),
+                    alias,
+                    true,
+                );
+            }
+            _ => {}
         }
-
-        let alias = format!("__pgdog_order_col{current_sort_position}");
-        helpers.push(mem.make_res_target(
-            Some(&alias),
-            mem.empty(),
-            mem.make_unique(node).uncast(),
-        ));
-        plan.order_by_helpers.push(OrderByHelper {
-            sort_position: current_sort_position,
-            source: source.expect("only columns and vector expressions need helpers"),
-            alias,
-        });
     }
 
     if !helpers.is_empty() {
@@ -150,6 +274,7 @@ mod tests {
         assert!(sql.contains("price AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers.len(), 1);
         assert_eq!(plan.order_by_helpers[0].alias, "__pgdog_order_col0");
+        assert!(plan.order_by_helpers[0].injected);
     }
 
     #[test]
@@ -158,6 +283,63 @@ mod tests {
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn remaps_aliased_projected_sort_column() {
+        let (sql, plan) = rewrite("SELECT price AS item_price FROM products ORDER BY price");
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert_eq!(plan.order_by_helpers.len(), 1);
+        assert_eq!(plan.order_by_helpers[0].alias, "item_price");
+        assert!(!plan.order_by_helpers[0].injected);
+    }
+
+    #[test]
+    fn skips_sort_by_output_alias() {
+        let (sql, plan) = rewrite("SELECT price AS item_price FROM products ORDER BY item_price");
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn injects_helper_for_duplicate_output_names() {
+        let (sql, plan) =
+            rewrite("SELECT a.price, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
+
+        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert_eq!(plan.order_by_helpers.len(), 1);
+        assert!(plan.order_by_helpers[0].injected);
+    }
+
+    #[test]
+    fn remaps_unique_alias_among_same_named_columns() {
+        let (sql, plan) = rewrite(
+            "SELECT a.price AS a_price, b.price AS b_price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price",
+        );
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert_eq!(plan.order_by_helpers.len(), 1);
+        assert_eq!(plan.order_by_helpers[0].alias, "b_price");
+        assert!(!plan.order_by_helpers[0].injected);
+    }
+
+    #[test]
+    fn injects_helper_when_star_can_collide() {
+        let (sql, plan) =
+            rewrite("SELECT a.*, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
+
+        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(plan.order_by_helpers[0].injected);
+    }
+
+    #[test]
+    fn injects_helper_for_unqualified_star_join() {
+        let (sql, plan) = rewrite("SELECT * FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
+
+        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(plan.order_by_helpers[0].injected);
     }
 
     #[test]
@@ -209,5 +391,6 @@ mod tests {
         assert!(sql.contains("embedding <-> $1"));
         assert!(sql.contains("AS __pgdog_order_col0"));
         assert_eq!(plan.order_by_helpers.len(), 1);
+        assert!(plan.order_by_helpers[0].injected);
     }
 }

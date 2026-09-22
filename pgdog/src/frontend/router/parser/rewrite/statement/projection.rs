@@ -29,6 +29,9 @@ pub(crate) struct OrderByHelper {
     pub(crate) sort_position: usize,
     pub(crate) source: OrderBySource,
     pub(crate) alias: String,
+    /// False when the SELECT list already has this unique name and we only
+    /// remap the route. Those columns must stay in the client result.
+    pub(crate) injected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +71,7 @@ impl ProjectionRewritePlan {
             .chain(
                 self.order_by_helpers
                     .iter()
+                    .filter(|helper| helper.injected)
                     .map(|helper| helper.alias.as_str()),
             )
             .filter_map(|alias| row_description.field_index(alias))
@@ -219,6 +223,7 @@ mod tests {
             sort_position: 0,
             source: OrderBySource::Column("created_at".into()),
             alias: "__pgdog_order_col0".into(),
+            injected: true,
         });
 
         assert!(!plan.is_noop());
@@ -230,5 +235,22 @@ mod tests {
         assert_eq!(plan.drop_columns(&row_description), BTreeSet::from([1, 2]));
         assert_eq!(plan.aggregate_helpers.len(), 1);
         assert_eq!(plan.order_by_helpers.len(), 1);
+    }
+
+    #[test]
+    fn remapped_order_by_alias_is_not_dropped() {
+        let mut plan = ProjectionRewritePlan::default();
+        plan.order_by_helpers.push(OrderByHelper {
+            sort_position: 0,
+            source: OrderBySource::Column("price".into()),
+            alias: "item_price".into(),
+            injected: false,
+        });
+
+        let row_description = RowDescription::new(&[
+            crate::net::Field::bigint("id"),
+            crate::net::Field::numeric("item_price"),
+        ]);
+        assert!(plan.drop_columns(&row_description).is_empty());
     }
 }

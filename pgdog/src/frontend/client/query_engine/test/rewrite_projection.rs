@@ -299,6 +299,59 @@ fn cached_projection_does_not_depend_on_first_route_order() {
 }
 
 #[test]
+fn aliased_projected_sort_column_remaps_route() {
+    let sql = "SELECT price AS item_price FROM products ORDER BY price";
+    let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::AscColumn("price".into())],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+
+    let query = match &request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert!(!query.query().contains("__pgdog_order_col"));
+    assert_eq!(
+        request.route().order_by(),
+        &[OrderBy::AscColumn("item_price".into())]
+    );
+    assert!(!request.route().projection_rewrite_plan.order_by_helpers[0].injected);
+}
+
+#[test]
+fn duplicate_sort_column_names_use_injected_helper() {
+    let sql = "SELECT a.price, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price";
+    let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.route = Some(Route::select(
+        ShardWithPriority::new_table(Shard::All),
+        vec![OrderBy::AscColumn("price".into())],
+        Default::default(),
+        Limit::default(),
+        None,
+    ));
+
+    projection::finalize_after_route(&mut request, &Schema::default(), None).unwrap();
+
+    let query = match &request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert!(query.query().contains("b.price AS __pgdog_order_col0"));
+    assert_eq!(
+        request.route().order_by(),
+        &[OrderBy::AscColumn("__pgdog_order_col0".into())]
+    );
+}
+
+#[test]
 fn helper_replaces_the_matching_duplicate_order_by_position() {
     let sql = "SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY a.price, b.price";
     let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);

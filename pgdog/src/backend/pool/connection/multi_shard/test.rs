@@ -70,6 +70,7 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
         sort_position: 0,
         source: OrderBySource::Column("price".into()),
         alias: "__pgdog_order_col0".into(),
+        injected: true,
     });
     let mut route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
