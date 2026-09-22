@@ -7,4 +7,4 @@ export PGPORT=6432
 
 psql -f ${SCRIPT_DIR}/setup.sql
 pgbench -i
-pgbench -c 10 -j 2 -T 30 -f ${SCRIPT_DIR}/script.sql -P 1 --protocol extended
+pgbench -c 10 -j 2 -T 150 -f ${SCRIPT_DIR}/script.sql -P 1 --protocol extended
