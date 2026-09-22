@@ -72,11 +72,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        // 2pc is used only for writes and is not needed for rollbacks.
-        // A transaction bound to a single server commits atomically on
-        // its own: a shard-pinned write on a sharded cluster binds
-        // direct (which has no 2pc path), so it takes the regular
-        // COMMIT below.
+        // 2pc is used for cross-shard writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
             && context.client_request.route().is_write()
             && !rollback
