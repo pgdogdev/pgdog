@@ -6,18 +6,23 @@ on:
 
 jobs:
   bench:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-12vcpu-macos-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
       - name: Build
         run: cargo build --release --bin pgdog
       - name: Setup PostgreSQL
-        run: bash integration/ci/setup.sh
+        run: |
+          brew install postgresql@18
+          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
+          export PATH="$(brew --prefix postgresql@18)/bin:$PATH"
+          brew services start postgresql@18
+          until pg_isready -q; do sleep 1; done
+          createdb
+          bash integration/setup.sh || (brew services restart postgresql@18 && until pg_isready -q; do sleep 1; done && bash integration/setup.sh)
       - name: Run benchmarks
         env:
           PGDOG_BIN: ${{ github.workspace }}/target/release/pgdog
