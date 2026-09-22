@@ -51,6 +51,10 @@ pub(crate) async fn tables_sync(
         return Err(Error::EmptyPublication(publication.to_owned()));
     }
 
+    for shard in source.shards() {
+        result.entry(shard.number()).or_default();
+    }
+
     Ok(result)
 }
 

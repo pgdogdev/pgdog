@@ -68,10 +68,9 @@ impl Command for Replicate {
             .ignore_errors(true)
             .build();
 
-        let waiter = orchestrator.replicate().await?;
         let task_id = run_task(
             ReplicationTask::builder()
-                .waiter(waiter)
+                .orchestrator(orchestrator)
                 .schema_sync(schema_sync)
                 .build(),
         )
