@@ -1,0 +1,76 @@
+# NOTE!!!: This does not work with forks right now, because this needs repository secrets.
+# It would be unsafe to allow them in this workflow.
+# Bencher has a documented 2-step workflow on how to accomplish this. I'll follow up with that in another PR.
+
+# TODO: I have some big plans for this file. Please contact @jkaczman before planning to modify with new tests.
+
+name: bencher
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+env:
+  IMAGE: registry.bencher.dev/pgdog:${{ github.sha }}
+
+jobs:
+  bench:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      checks: write
+      pull-requests: write
+
+    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
+    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: build-v1
+      - name: Build
+        run: cargo build --release --bin pgdog
+
+      - name: Build image
+        run: docker build --build-context bin=target/release -f benches/perf/Dockerfile -t $IMAGE .
+      - name: Push image
+        run: |
+          echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
+          docker push $IMAGE
+
+      - uses: bencherdev/bencher@main
+      - name: Run on Bencher bare metal
+        env:
+          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
+
+        # This will run all three tests, back-to-back. It'll error if a test's throughput is more than 3%
+        # BELOW the mean of the baseline's previous runs (main)
+        #
+        # After testing 5x back-to-back, variance was <1%. This should be enough
+        # of a difference, unless something goes on with their servers in the future.
+        # 
+        # TODO: we can re-evaluate a proper variance later
+        #
+        # Why --github-actions? This allows it to comment on the PR with the result.
+        # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
+        run: |
+          bencher run \
+            --project pgdog \
+            --key '${{ secrets.BENCHER_API_KEY }}' \
+            --branch '${{ github.head_ref || github.ref_name }}' \
+            $START_POINT \
+            --spec intel-v1 \
+            --threshold-measure throughput \
+            --threshold-test percentage \
+            --threshold-lower-boundary 0.03 \
+            --thresholds-reset \
+            --error-on-alert \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            --adapter json \
+            --image $IMAGE \
+            "bash benches/perf/bencher.sh"
