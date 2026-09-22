@@ -571,7 +571,7 @@ mod test {
                 );
                 rows.push_back(row);
             }
-            let plan = AggregateRewritePlan::default();
+            let plan = ProjectionRewritePlan::default();
             let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
                 .expect("count aggregate")
                 .aggregate()
