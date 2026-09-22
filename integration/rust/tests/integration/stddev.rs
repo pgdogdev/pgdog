@@ -1,6 +1,42 @@
-use crate::setup::{admin_sqlx, connections_sqlx};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connections_sqlx};
 use rust_decimal::prelude::*;
 use sqlx::{Executor, Pool, Postgres, Row};
+
+#[tokio::test]
+async fn test_variance_sparse_inputs() {
+    let conns = connections_sqlx().await;
+    let postgres = connection_sqlx_direct().await;
+    for data_type in ["int4", "int8", "numeric", "real", "float8"] {
+        let table = format!("test_variance_sparse_{data_type}");
+        setup_schema(&conns, &table, data_type).await;
+        let query = format!(
+            "SELECT var_pop(value), var_samp(value), stddev_pop(value), stddev_samp(value) FROM {table}"
+        );
+        for values in [&[][..], &["NULL"][..], &["42"][..], &["42", "NULL"][..]] {
+            setup_data(&conns, &table, values).await;
+            let expected = postgres
+                .fetch_one(&*query)
+                .await
+                .expect("PostgreSQL result");
+            let actual = conns[1].fetch_one(&*query).await.expect("sharded result");
+            for column in 0..4 {
+                if matches!(data_type, "real" | "float8") {
+                    assert_eq!(
+                        actual.get::<Option<f64>, _>(column),
+                        expected.get::<Option<f64>, _>(column),
+                        "{data_type}, {values:?}, column {column}"
+                    );
+                } else {
+                    assert_eq!(
+                        actual.get::<Option<Decimal>, _>(column),
+                        expected.get::<Option<Decimal>, _>(column),
+                        "{data_type}, {values:?}, column {column}"
+                    );
+                }
+            }
+        }
+    }
+}
 
 #[tokio::test]
 async fn test_variance_numeric() {

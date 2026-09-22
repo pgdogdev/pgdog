@@ -1,20 +1,26 @@
 //! Task identity, status and definition reports.
 
 use std::borrow::Cow;
-use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use indexmap::IndexMap;
 
 use derive_more::{Display, Error, From, FromStr};
-use pgdog_config::CopyFormat;
 use pgdog_postgres_types::ToDataRowColumn;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::{TimestampMilliSeconds, serde_as, skip_serializing_none};
 
-use crate::{Lsn, SyncState};
+pub mod copy_data;
+pub mod replication;
+pub mod reshard;
+pub mod schema_sync;
+
+pub use copy_data::*;
+pub use replication::*;
+pub use reshard::*;
+pub use schema_sync::*;
 
 /// Identity of a task in the registry. Ids are unique per registry.
 #[derive(
@@ -57,11 +63,12 @@ pub enum TaskStatus {
     // v1, in use
     SchemaSync(SchemaSyncStatus),
     SchemaShard(SchemaShardStatus),
-    // in progress, not used
     TableCopy(TableCopyStatus),
     CopyData(CopyDataStatus),
+    // in progress, not used
     Replication(ReplicationStatus),
-    ReplicationSlot(ReplicationSlotStatus),
+    ReplicationCluster(ReplicationClusterStatus),
+    ReplicationShard(ReplicationShardStatus),
     Reshard(ReshardStatus),
     /// Any other task status that is either doesn't report any status
     /// or is not compatible with other versions of tasks.
@@ -343,11 +350,12 @@ pub enum TaskDefinitionKind {
     // v1, in use
     SchemaSync(SchemaSyncDefinition),
     SchemaShard(SchemaShardDefinition),
-    // In progress, not used yet
     CopyData(CopyDataDefinition),
     TableCopy(TableCopyDefinition),
+    // In progress, not used yet
     Replication(ReplicationDefinition),
-    ReplicationSlot(ReplicationSlotDefinition),
+    ReplicationCluster(ReplicationClusterDefinition),
+    ReplicationShard(ReplicationShardDefinition),
     Reshard(ReshardDefinition),
     /// No detail beyond the name, or a `kind` this build does not know.
     #[default]
@@ -362,11 +370,12 @@ impl TaskDefinitionKind {
         match self {
             Self::Reshard(_) => "reshard",
             Self::CopyData(_) => "copy_data",
-            Self::SchemaSync(_) => "schema_sync",
-            Self::Replication(_) => "replication",
             Self::TableCopy(_) => "table_copy",
-            Self::ReplicationSlot(_) => "replication_slot",
+            Self::SchemaSync(_) => "schema_sync",
             Self::SchemaShard(_) => "schema_shard",
+            Self::Replication(_) => "replication",
+            Self::ReplicationCluster(_) => "replication_cluster",
+            Self::ReplicationShard(_) => "replication_shard",
             Self::Other => "other",
         }
     }
@@ -380,47 +389,6 @@ pub struct Databases {
     pub destination: String,
 }
 
-/// The full migration one reshard task runs, and which phases it was asked
-/// to skip.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("reshard {databases}")]
-pub struct ReshardDefinition {
-    pub databases: Databases,
-    pub skip_schema_sync: bool,
-    pub replicate_only: bool,
-    pub sync_only: bool,
-    pub auto_cutover: bool,
-}
-
-/// The bulk data copy one copy-data task runs.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("copy_data {databases}")]
-pub struct CopyDataDefinition {
-    pub databases: Databases,
-    pub format: CopyFormat,
-}
-
-/// The schema sync one schema-sync task runs, and at which stage.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("schema_sync({sync_state}) {databases}")]
-pub struct SchemaSyncDefinition {
-    pub databases: Databases,
-    pub sync_state: SyncState,
-    pub ignore_errors: bool,
-    pub dry_run: bool,
-}
-
-/// The replication stream one replication task drives.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("replication {databases}{}", if *reverse { " (reverse)" } else { "" })]
-pub struct ReplicationDefinition {
-    pub databases: Databases,
-    /// The post-cutover stream that backs a rollback, rather than the
-    /// initial migration.
-    pub reverse: bool,
-    pub auto_cutover: bool,
-}
-
 /// Generic "`done` of `total`" counter, reusable by any task that can count its
 /// work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
@@ -430,269 +398,11 @@ pub struct RatioProgress {
     pub total: u64,
 }
 
-/// Stages of the migration, reported as the task's status. The fine-grained
-/// schema-sync, copy, and replication stages live on the child tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ReshardStatus {
-    /// Running the pre-data schema-sync child task.
-    #[display("syncing schema")]
-    SchemaSync,
-    /// Running the data-copy child task.
-    #[display("syncing data")]
-    SyncingData,
-    /// Running the post-data schema-sync child task (indexes, constraints).
-    #[display("finalizing schema")]
-    FinalizingSchema,
-    /// Running the replication child task.
-    #[display("replicating")]
-    Replication,
-    /// A stage this build does not know.
-    #[display("")]
-    #[serde(other)]
-    Other,
-}
-
-/// Stages of a bulk data copy, reported as the task's status. Per-table
-/// progress lives on the [`TableCopyStatus`] child tasks.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{stage}")]
-pub struct CopyDataStatus {
-    pub stage: CopyDataStage,
-    pub tables_per_shard: Option<Vec<u64>>,
-}
-
-impl From<CopyDataStage> for CopyDataStatus {
-    fn from(stage: CopyDataStage) -> Self {
-        Self {
-            stage,
-            tables_per_shard: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum CopyDataStage {
-    /// Fetching table and column metadata from the source.
-    #[display("loading table metadata")]
-    LoadingTableMetadata,
-    /// Checking that every table has a usable replica identity.
-    #[display("validating tables")]
-    ValidatingTables,
-    /// Creating the replication slots the copy reads from.
-    #[display("creating slots")]
-    CreatingSlots,
-    /// Copying table data to the destination shards.
-    #[display("copying tables")]
-    CopyingTables,
-    /// A stage this build does not know.
-    #[display("")]
-    #[serde(other)]
-    Other,
-}
-
-/// One statement of a schema sync phase.
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{sql}")]
-pub struct SchemaSyncStatement {
-    pub sql: String,
-    /// The statement tolerates an "already exists" error from Postgres.
-    pub skip_if_exists: bool,
-}
-
-impl SchemaSyncStatement {
-    pub fn new(sql: impl Into<String>) -> Self {
-        Self {
-            sql: sql.into(),
-            skip_if_exists: false,
-        }
-    }
-
-    pub fn set_skip_if_exists(mut self) -> Self {
-        self.skip_if_exists = true;
-        self
-    }
-}
-
-/// Status of a schema sync. The phase it applies lives on
-/// [`SchemaSyncDefinition`]. The plan is reported once, by the parent task.
-/// Each shard subtask reports a cursor into it as a [`SchemaShardStatus`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum SchemaSyncStatus {
-    /// Dumping the schema from the source.
-    #[default]
-    #[display("loading schema")]
-    LoadingSchema,
-    /// The dump is loaded and the phase's statements are known.
-    #[display("applying {} statements", statements.len())]
-    ApplyingStatements {
-        #[serde(default)]
-        statements: Arc<Vec<SchemaSyncStatement>>,
-    },
-    /// A status this build does not know.
-    #[display("")]
-    #[serde(other)]
-    Other,
-}
-
-/// A statement one shard could not apply. `index` points into the plan the
-/// parent task reported, and `message` is the error Postgres returned. The
-/// display is one-based, to match the statement counter in the logs.
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("statement {}: {message}", index + 1)]
-pub struct SchemaStatementFailure {
-    pub index: u64,
-    pub message: String,
-}
-
-/// How far one destination shard got through the phase's statements. `applied`
-/// counts the statements this shard ran, and `failures` records the ones it
-/// could not.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
-pub struct SchemaShardStatus {
-    pub shard: u64,
-    pub total: u64,
-    pub applied: u64,
-    pub skipped: u64,
-    pub failures: Vec<SchemaStatementFailure>,
-}
-
-impl SchemaShardStatus {
-    pub fn new(shard: u64, total: u64) -> Self {
-        Self {
-            shard,
-            total,
-            ..Default::default()
-        }
-    }
-
-    pub fn done(&self) -> u64 {
-        self.applied + self.skipped + self.failures.len() as u64
-    }
-}
-
-impl fmt::Display for SchemaShardStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "shard {}: {}/{} statements",
-            self.shard,
-            self.done(),
-            self.total
-        )?;
-
-        if self.skipped > 0 {
-            write!(f, ", {} skipped", self.skipped)?;
-        }
-        if !self.failures.is_empty() {
-            write!(f, ", {} failed", self.failures.len())?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Stages of logical replication, reported as the task's status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ReplicationStatus {
-    /// Streaming changes to catch the destination up.
-    #[display("replicating")]
-    Replicating,
-    /// Cutting traffic over to the destination.
-    #[display("cutting over")]
-    CuttingOver,
-    /// Cutting traffic back to the original after a prior cutover (rollback).
-    #[display("rolling back")]
-    RollingBack,
-    /// Winding down on a stop request.
-    #[display("stopping")]
-    Stopping,
-    /// A stage this build does not know.
-    #[display("")]
-    #[serde(other)]
-    Other,
-}
-
-/// The slot one per-shard replication subtask streams from.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{slot} on {host}:{port}/{database_name}")]
-pub struct ReplicationSlotDefinition {
-    pub slot: String,
-    pub host: String,
-    pub port: u16,
-    pub database_name: String,
-    /// Temporary slot taken for an initial data copy, rather than a persistent
-    /// streaming slot.
-    pub copy_data: bool,
-}
-
-/// How far one replication slot has streamed.
-#[derive(Debug, Clone, Copy, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("lag {lag_bytes} bytes at {lsn}")]
-pub struct ReplicationSlotStatus {
-    pub lsn: Lsn,
-    /// `pg_current_wal_lsn() - confirmed_flush_lsn`.
-    pub lag_bytes: i64,
-    /// Epoch millis of the last transaction applied through this slot.
-    pub last_transaction: Option<i64>,
-}
-
-/// The table one copy subtask is copying.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{schema}.{table}")]
-pub struct TableCopyDefinition {
-    pub schema: String,
-    pub table: String,
-    pub source_shard: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum TableCopyStage {
-    #[display("estimating")]
-    Estimation,
-    #[display("waiting")]
-    WaitingForCopyHandler,
-    #[display("copy in progress")]
-    InProgress { rows: u64, bytes: u64 },
-    #[display("error backoff")]
-    ErrorBackoff,
-    #[display("")]
-    #[serde(other)]
-    Other,
-}
-
-/// How much of one table has been copied.
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("{stage}")]
-pub struct TableCopyStatus {
-    pub stage: TableCopyStage,
-    pub attempt: usize,
-    pub estimated_rows: Option<u64>,
-    pub estimated_bytes: Option<u64>,
-    pub rows_per_sec: Option<u64>,
-    pub bytes_per_sec: Option<u64>,
-    pub last_error: Option<String>,
-}
-
-/// The destination shard one schema-sync subtask restores into.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("shard {shard} of {databases} ({sync_state})")]
-pub struct SchemaShardDefinition {
-    pub shard: u64,
-    pub databases: Databases,
-    pub sync_state: SyncState,
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{Lsn, MissedRows, SyncState};
+    use pgdog_config::CopyFormat;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn table_copy() -> TableCopyDefinition {
@@ -712,7 +422,7 @@ mod test {
 
     /// One definition per kind. The exhaustive `match` in
     /// [`test_definition_round_trip`] forces a new kind into this list.
-    fn definitions() -> [TaskDefinition; 8] {
+    fn definitions() -> [TaskDefinition; 9] {
         [
             "test task".into(),
             ReshardDefinition {
@@ -735,19 +445,23 @@ mod test {
                 dry_run: false,
             }
             .into(),
+            table_copy().into(),
             ReplicationDefinition {
                 databases: databases(),
-                reverse: true,
                 auto_cutover: false,
             }
             .into(),
-            table_copy().into(),
-            ReplicationSlotDefinition {
+            ReplicationClusterDefinition {
+                databases: databases(),
+                direction: ReplicationDirection::Reverse,
+            }
+            .into(),
+            ReplicationShardDefinition {
                 slot: "pgdog_0".into(),
                 host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "prod".into(),
-                copy_data: false,
+                source_shard: 0,
             }
             .into(),
             SchemaShardDefinition {
@@ -778,11 +492,12 @@ mod test {
             match back.kind {
                 TaskDefinitionKind::Reshard(_)
                 | TaskDefinitionKind::CopyData(_)
-                | TaskDefinitionKind::SchemaSync(_)
-                | TaskDefinitionKind::Replication(_)
                 | TaskDefinitionKind::TableCopy(_)
-                | TaskDefinitionKind::ReplicationSlot(_)
+                | TaskDefinitionKind::SchemaSync(_)
                 | TaskDefinitionKind::SchemaShard(_)
+                | TaskDefinitionKind::Replication(_)
+                | TaskDefinitionKind::ReplicationCluster(_)
+                | TaskDefinitionKind::ReplicationShard(_)
                 | TaskDefinitionKind::Other => (),
             }
         }
@@ -841,16 +556,20 @@ mod test {
             );
         }
 
-        // Only the reverse stream is marked; the forward one reads plainly.
-        for (reverse, expected) in [
-            (false, "replication prod -> prod_sharded"),
-            (true, "replication prod -> prod_sharded (reverse)"),
+        for (direction, expected) in [
+            (
+                ReplicationDirection::Forward,
+                "replication stream prod -> prod_sharded (forward)",
+            ),
+            (
+                ReplicationDirection::Reverse,
+                "replication stream prod -> prod_sharded (reverse)",
+            ),
         ] {
             assert_eq!(
-                TaskDefinition::from(ReplicationDefinition {
+                TaskDefinition::from(ReplicationClusterDefinition {
                     databases: databases(),
-                    reverse,
-                    auto_cutover: false,
+                    direction,
                 })
                 .to_string(),
                 expected
@@ -944,14 +663,33 @@ mod test {
                 last_error: Some("connection reset".into()),
             }),
             TaskStatus::Replication(ReplicationStatus::Replicating),
-            TaskStatus::ReplicationSlot(ReplicationSlotStatus {
+            TaskStatus::ReplicationCluster(ReplicationClusterStatus::Replicating {
+                direction: ReplicationDirection::Reverse,
+                progress: ReplicationProgress {
+                    lag_bytes: Some(2048),
+                    last_transaction_ms: Some(150),
+                    rows: 10,
+                    bytes: 4096,
+                    rows_per_sec: Some(5),
+                    bytes_per_sec: Some(2048),
+                },
+            }),
+            TaskStatus::ReplicationShard(ReplicationShardStatus {
                 lsn: Lsn {
                     high: 0,
                     low: 16,
                     lsn: 16,
                 },
-                lag_bytes: 4096,
-                last_transaction: Some(1_700_000_000_000),
+                lag_bytes: Some(4096),
+                missed_rows: MissedRows {
+                    inserts: 1,
+                    updates: 2,
+                    deletes: 3,
+                },
+                rows: 0,
+                bytes: 0,
+                rows_per_sec: None,
+                bytes_per_sec: None,
             }),
             TaskStatus::Other,
         ];
@@ -969,7 +707,8 @@ mod test {
                 | TaskStatus::SchemaShard(_)
                 | TaskStatus::TableCopy(_)
                 | TaskStatus::Replication(_)
-                | TaskStatus::ReplicationSlot(_)
+                | TaskStatus::ReplicationCluster(_)
+                | TaskStatus::ReplicationShard(_)
                 | TaskStatus::Other => (),
             }
         }
@@ -1122,12 +861,12 @@ mod test {
             "public.users"
         );
         assert_eq!(
-            TaskDefinitionKind::from(ReplicationSlotDefinition {
+            TaskDefinitionKind::from(ReplicationShardDefinition {
                 slot: "pgdog_0".into(),
                 host: "127.0.0.1".into(),
                 port: 5432,
                 database_name: "prod".into(),
-                copy_data: false,
+                source_shard: 0,
             })
             .to_string(),
             "pgdog_0 on 127.0.0.1:5432/prod"

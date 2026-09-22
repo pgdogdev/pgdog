@@ -80,11 +80,6 @@ pub(crate) fn stop(database: Option<&str>) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn is_on(database: &str) -> bool {
-    MAINTENANCE_MODE.paused(database)
-}
-
 #[derive(Debug)]
 struct MaintenanceMode {
     state: ArcSwap<MaintenanceState>,

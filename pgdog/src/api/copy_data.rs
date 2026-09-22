@@ -115,16 +115,15 @@ impl Task for CopyDataTask {
                 let ctx = ctx.clone();
                 let shard_number = shard.number();
                 let format = self.format;
-                // W: should we even use tasks for it?
                 handles.push(tasks::spawn("tables copy", async move {
-                    let table_sync_task = TableDataSyncTask {
-                        pool,
-                        table,
-                        source,
-                        dest,
-                        format,
-                        source_shard: shard_number,
-                    };
+                    let table_sync_task = TableDataSyncTask::builder()
+                        .pool(pool)
+                        .table(table)
+                        .source(source)
+                        .dest(dest)
+                        .format(format)
+                        .source_shard(shard_number)
+                        .build();
 
                     let table = ctx.run(table_sync_task).await?;
 
@@ -146,20 +145,18 @@ impl Task for CopyDataTask {
     }
 }
 
-#[derive(Debug)]
-struct TableDataSyncTask {
-    pool: Arc<WorkerPool<Address>>,
-    table: Table,
-    source: Cluster,
-    dest: Cluster,
-    format: CopyFormat,
-    source_shard: usize,
+#[derive(Debug, bon::Builder)]
+pub(crate) struct TableDataSyncTask {
+    pub(crate) pool: Arc<WorkerPool<Address>>,
+    pub(crate) table: Table,
+    pub(crate) source: Cluster,
+    pub(crate) dest: Cluster,
+    pub(crate) format: CopyFormat,
+    pub(crate) source_shard: usize,
 }
 
 impl Task for TableDataSyncTask {
     type Status = TableCopyStatus;
-
-    // W: table?
     type Output = Table;
 
     type Error = Error;
@@ -180,6 +177,7 @@ impl Task for TableDataSyncTask {
             source: &self.source,
             dest: &self.dest,
             format: self.format,
+            task_id: ctx.id(),
         };
         let cancel = ctx.cancellation_token();
         let mut last_error = None;

@@ -34,6 +34,7 @@ impl Command for ShowReplicationSlots {
             Field::bool("copy_data"),
             Field::text("last_transaction"),
             Field::bigint("last_transaction_ms"),
+            Field::bigint("task_id"),
         ]);
         let mut messages = vec![rd.message()];
         let now = SystemTime::now();
@@ -59,13 +60,18 @@ impl Command for ShowReplicationSlots {
                 .add(format_bytes(slot.lag as u64).as_str())
                 .add(slot.lag)
                 .add(slot.copy_data)
-                .add(if let Some(ref s) = last_transaction_str {
+                .add(if let Some(s) = &last_transaction_str {
                     s.as_str().to_data_row_column()
                 } else {
                     Data::null()
                 })
                 .add(if let Some(ms) = last_transaction_ms {
                     ms.to_data_row_column()
+                } else {
+                    Data::null()
+                })
+                .add(if let Some(task_id) = slot.task_id {
+                    task_id.to_data_row_column()
                 } else {
                     Data::null()
                 });

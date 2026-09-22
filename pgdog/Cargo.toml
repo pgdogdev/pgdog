@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.58"
+version = "0.1.59"
 edition = "2024"
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -90,8 +90,8 @@ dyn-clone = "1.0.20"
 libc = "0.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.6"
-tikv-jemalloc-ctl = "0.6"
+tikv-jemallocator = "0.7"
+tikv-jemalloc-ctl = "0.7"
 
 
 [build-dependencies]

@@ -7,11 +7,13 @@ use crate::net::{Parameter, parameter::ParameterValue};
 #[derive(Debug, Clone)]
 pub(crate) struct ServerOptions {
     pub(crate) params: Vec<Parameter>,
+    pub(crate) session_replication_role: bool,
 }
 
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {
+            session_replication_role: false,
             params: vec![
                 Parameter {
                     name: "application_name".into(),
@@ -51,11 +53,12 @@ impl ServerOptions {
     }
 
     pub(crate) fn new_resharding(config: &Config) -> Self {
-        let mut options = Self::default();
-        options.add(Parameter {
-            name: "session_replication_role".into(),
-            value: "replica".into(),
-        });
+        let mut options = Self {
+            // This can't be set via startup parameters for some mysterious reason.
+            session_replication_role: true,
+            ..Default::default()
+        };
+
         options.add(Parameter {
             name: "statement_timeout".into(),
             value: "0".into(),

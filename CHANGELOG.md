@@ -4,6 +4,48 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.59
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.59` |
+
+#### Bug fixes
+- **[Breaking]** Manual bans are now carried over to new connection pools after `RELOAD`. They were previously discarded, allowing traffic to flow through prematurely after configuration reload. Breaking because this changes existing behavior and may require operators to adjust migration scripts to issue a separate `UNBAN` command after `RELOAD`. @levkk 
+- Schema reload was not triggered on certain DDL statements, e.g., `CREATE TYPE`, which caused incorrect `RowDescription` messages to be sent to clients for direct-to-shard and cross-shard queries which touched those new types. @levkk 
+- 2pc WAL checkpointer could cause WAL corruption by removing segments necessary for recovery. Fixed by storing relationships between segments containing data about the same transaction, preventing dependent segments from being removed prematurely. @levkk 
+- SCRAM authentication could cause DoS because it was moved to background Tokio threads, which were unbounded. Added `background_workers` setting (default 0, disabling this whole feature) to limit that concurrency. Moved SCRAM auth back to the Tokio async worker pool. @levkk 
+- Fix segfault in query normalization (only affected the Enterprise edition) caused by a bug in our parser. Added `pg_raw_parse::normalize` to our regression test suite to prevent recurrences. @levkk 
+- Setting `connection_recovery` to `drop` would cause connection churn for connection drivers using prepared statements. Fixed by ensuring we don't drop connections in this scenario. @levkk 
+- Disable triggers on destination shards during resharding (by setting `session_replication_role` to `replica`). This prevents triggers from running twice and also ensures we can copy tables that use foreign keys and which delete / update relationships during resharding. @meskill 
+- Prevent deadlock in extended protocol pipelines when a client sends a `Describe` out of a specific order @murex971 
+- Correctly handle omnisharded to sharded joins where the sharding key is present in omnisharded tables @ygxio @levkk 
+- Connections using `LISTEN` would incorrectly handle that command sent via extended protocol (returning `ReadyForQuery` prematurely) @murex971 
+- When using passthrough auth, reloading the config would not carry over any user-specific settings configured in `users.toml` @mehcode 
+- Role detection (`role = "auto"`) could cause deadlock in the pool for read-only clusters that served write transactions (e.g., `BEGIN`, _not_ `BEGIN READ ONLY`) @levkk 
+- Query router wouldn't handle nested typecasts correctly for shard key detection @sgrif 
+
+#### Performance
+- Improve performance of resharding copy data phase when using multiple replicas by more fairly distributing workloads between source databases @meskill 
+
+
+#### Features
+- Support `LIMIT` and `OFFSET` in cross-shard statements sent via `PREPARE` and `EXECUTE` @jkaczman 
+- Support cross-account RDS IAM authentication by using STS `assume-role` @lyupan-cb 
+- Add `total_wait_time` and `avg_wait_time` to OpenMetrics (and OTEL) @rimrakhimov 
+- Support Postgres foreign keys during resharding by disabling Postgres triggers during replication. This also ensures that triggers on the destination shards don't run, potentially causing double data insertion. @meskill 
+- Inject correct time (e.g. `timestamp`, `timestamptz`, etc.) and UUID values in cross-shard and omnisharded `INSERT` queries, to make sure the values are identical on all shards. This replaces database-generated defaults without changing the schema. Enable by turning on `rewrite.non_deterministic_functions = "rewrite"`. @jkaczman 
+- Add `checkout_timeout` metric to OpenMetrics (and OTEL) and admin database (`SHOW STATS`) which shows how many times clients hit the error for a particular pool @levkk 
+
+
+#### Code quality
+- Fix typo in config example @joshuaharry 
+- Refactor resharding copy data code to use the tasks API @meskill 
+- Cleanup of omnisharded table handling during copy data phase @meskill 
+- Remove redundant check in shard key update flow @sgrif 
+- CI now uses Postgres 18 (used to be 16) @jkaczman 
+- Make some tests more deterministic instead of relying on timing @dipeshbabu @ziomarco 
+
 ### v0.1.58
 
 | Application | Docker image                     |

@@ -201,6 +201,9 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
+                    if options.session_replication_role {
+                        server.set_session_replication_role().await?;
+                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -896,6 +899,16 @@ impl Server {
         &self.params
     }
 
+    /// Manually set the session_replication_role setting via SET
+    /// since apparently we can't do this via startup parameters.
+    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
+        self.execute_checked("SET session_replication_role TO replica")
+            .await?;
+        self.params.insert("session_replication_role", "replica");
+
+        Ok(())
+    }
+
     /// Execute a batch of queries and return all results.
     pub(crate) async fn execute_batch(
         &mut self,
@@ -1337,7 +1350,7 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub(crate) mod test {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use bytes::{BufMut, Bytes, BytesMut};
     use pgdog_config::prepared_statements::PreparedStatementsConfig;
@@ -1446,6 +1459,16 @@ pub(crate) mod test {
         (server, peer.await.unwrap())
     }
 
+    async fn wait_for_liveness(server: &mut Server, expected: Liveness) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while server.liveness() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("server socket did not reach expected liveness state");
+    }
+
     #[test]
     fn test_liveness_without_stream_is_closed() {
         let mut server = Server::default();
@@ -1460,9 +1483,8 @@ pub(crate) mod test {
         assert_eq!(server.liveness(), Liveness::Clean);
 
         drop(peer);
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::Closed);
+        wait_for_liveness(&mut server, Liveness::Closed).await;
     }
 
     #[tokio::test]
@@ -1471,9 +1493,8 @@ pub(crate) mod test {
 
         peer.write_all(b"E").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut server, Liveness::DataPending).await;
     }
 
     #[tokio::test]
