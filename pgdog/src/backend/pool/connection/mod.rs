@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
-    admin::server::AdminServer,
     backend::{
         PubSubClient,
         databases::{self, databases},
@@ -17,7 +16,7 @@ use crate::{
     config::{PoolerMode, User, config},
     frontend::{
         ClientRequest, Router,
-        router::{CopyRow, Route, parser::Shard},
+        router::{Route, parser::Shard},
     },
     net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
     state::State,
@@ -28,10 +27,7 @@ use super::{
     Address, Cluster, Request,
 };
 
-use std::{
-    ops::{Deref, DerefMut},
-    time::Duration,
-};
+use std::ops::{Deref, DerefMut};
 
 pub(crate) mod aggregate;
 pub(crate) mod binding;
@@ -42,9 +38,8 @@ pub(crate) mod mirror;
 pub(crate) mod multi_shard;
 
 use aggregate::Aggregates;
-use binding::Binding;
+use binding::{AdminBinding, Binding, BindingDirect, BindingMulti};
 use mirror::Mirror;
-use multi_shard::MultiShard;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
@@ -65,9 +60,9 @@ impl Connection {
     pub(crate) fn new(user: &str, database: &str, admin: bool) -> Result<Self, Error> {
         let mut conn = Self {
             binding: if admin {
-                Binding::Admin(AdminServer::new())
+                Binding::Admin(AdminBinding::new())
             } else {
-                Binding::NotConnected
+                Binding::default()
             },
             cluster: None,
             cancellation_token: CancellationToken::new(),
@@ -86,11 +81,7 @@ impl Connection {
 
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        let connect = match &self.binding {
-            Binding::NotConnected => true,
-            Binding::MultiShard(shards, _) => shards.is_empty(),
-            _ => false,
-        };
+        let connect = !self.binding.connected();
 
         if connect {
             match self.try_conn(request, route).await {
@@ -151,7 +142,7 @@ impl Connection {
                 server.reset = true;
             }
 
-            self.binding = Binding::Direct(server, *shard);
+            self.binding = Binding::Direct(BindingDirect::new(server));
         } else {
             let mut shards = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
@@ -173,9 +164,7 @@ impl Connection {
                 shards.push(server);
             }
 
-            let num_shards = shards.len();
-            self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
+            self.binding = Binding::MultiShard(Box::new(BindingMulti::new(shards, route)));
         }
 
         Ok(())
@@ -424,7 +413,7 @@ impl Connection {
 
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
-            Binding::MultiShard(_, ref mut state) => {
+            Binding::MultiShard(ref mut state) => {
                 state.push_bind(bind);
                 Ok(())
             }
@@ -465,7 +454,9 @@ impl Connection {
     pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Direct(ref server, ..) => vec![server.addr()],
-            Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
+            Binding::MultiShard(ref servers) => {
+                servers.servers().iter().map(|s| s.addr()).collect()
+            }
             _ => {
                 return Err(Error::NotConnected);
             }
@@ -476,7 +467,7 @@ impl Connection {
     pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
         let servers: Vec<&Guard> = match self.binding {
             Binding::Direct(ref server, ..) => vec![server],
-            Binding::MultiShard(ref servers, _) => servers.iter().collect(),
+            Binding::MultiShard(ref servers) => servers.servers().iter().collect(),
             _ => return Ok(()),
         };
 

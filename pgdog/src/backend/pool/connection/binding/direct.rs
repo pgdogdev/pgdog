@@ -38,10 +38,6 @@ impl BindingDirect {
         Self { server }
     }
 
-    pub(crate) fn disconnect(self) {
-        drop(self);
-    }
-
     pub(crate) fn connected(&self) -> bool {
         true
     }

@@ -10,7 +10,10 @@ use crate::{
     backend::Error,
     frontend::{
         ClientRequest,
-        client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
+        client::query_engine::{
+            TwoPcPhase,
+            two_pc::{TwoPcTransaction, statement::phase_control},
+        },
         router::{CopyRow, Route, parser::Shard},
     },
     net::{FrontendPid, Message, ProtocolMessage, Query, parameter::Parameters},
@@ -19,7 +22,6 @@ use crate::{
 };
 
 use super::super::{Guard, multi_shard::MultiShard};
-use super::binding_impl::Binding;
 
 #[derive(Debug)]
 pub(crate) struct BindingMulti {
@@ -45,6 +47,10 @@ impl BindingMulti {
     pub(crate) fn new(conns: Vec<Guard>, route: &Route) -> Self {
         let state = MultiShard::new(conns.len(), route);
         Self { conns, state }
+    }
+
+    pub(in super::super::super::connection) fn servers(&self) -> &[Guard] {
+        &self.conns
     }
 
     pub(crate) fn disconnect(&mut self) {
@@ -229,6 +235,39 @@ impl BindingMulti {
         Ok(messages)
     }
 
+    pub(crate) async fn two_pc_on_guards(
+        servers: &mut [Guard],
+        transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
+        ignore_missing: bool,
+    ) -> Result<(), Error> {
+        let mut futures = Vec::new();
+        for (shard, server) in servers.iter_mut().enumerate() {
+            let query = phase_control(transaction, shard, phase);
+            futures.push(server.execute(query));
+        }
+
+        let results = join_all(futures).await;
+
+        for (shard, result) in results.into_iter().enumerate() {
+            match result {
+                Err(Error::ExecutionError(err)) => {
+                    if !(ignore_missing && err.code == "42704") {
+                        return Err(Error::ExecutionError(err));
+                    }
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    if phase == TwoPcPhase::Phase2 {
+                        servers[shard].stats_mut().transaction_2pc();
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute two-phase commit transaction control statements.
     pub(crate) async fn two_pc(
         &mut self,
@@ -236,7 +275,7 @@ impl BindingMulti {
         phase: TwoPcPhase,
         ignore_missing: bool,
     ) -> Result<(), Error> {
-        Binding::two_pc_on_guards(&mut self.conns, transaction, phase, ignore_missing).await
+        Self::two_pc_on_guards(&mut self.conns, transaction, phase, ignore_missing).await
     }
 
     /// Link the client to every server, returning the maximum parameters synced.

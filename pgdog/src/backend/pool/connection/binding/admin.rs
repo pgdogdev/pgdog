@@ -37,9 +37,6 @@ impl AdminBinding {
         }
     }
 
-    /// Admin bindings stay connected for the lifetime of the client.
-    pub(crate) fn disconnect(&mut self) {}
-
     pub(crate) fn force_close(&mut self) {}
 
     pub(crate) fn connected(&self) -> bool {

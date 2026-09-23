@@ -2,22 +2,69 @@
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+
     use crate::{
         backend::{
             pool::{Pool, PoolConfig, connection::binding::Binding},
             server::test::test_server,
         },
         frontend::{
+            ClientRequest,
             client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
             router::{
                 Route,
                 parser::{Shard, ShardWithPriority},
             },
         },
+        net::{Protocol, Query},
     };
 
-    use super::super::multi_shard::MultiShard;
+    use super::super::binding::{AdminBinding, BindingDirect, BindingMulti};
     use tokio::time::Instant;
+
+    #[tokio::test]
+    async fn admin_disconnect_preserves_pending_messages() {
+        let mut binding = Binding::Admin(AdminBinding::new());
+        let request = ClientRequest::from(vec![Query::new("NOT AN ADMIN COMMAND").into()]);
+        binding.send(&request).await.expect("admin query is queued");
+
+        binding.disconnect();
+        binding.force_close();
+
+        assert!(matches!(binding, Binding::Admin(_)));
+        assert!(binding.connected());
+        assert!(binding.has_more_messages());
+        assert_eq!(binding.read().await.expect("error response").code(), 'E');
+        assert_eq!(binding.read().await.expect("ready response").code(), 'Z');
+        assert!(binding.done());
+    }
+
+    #[tokio::test]
+    async fn disconnected_binding_delegates_without_a_server() {
+        let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
+        let mut binding = Binding::MultiShard(Box::new(BindingMulti::new(Vec::new(), &route)));
+        binding.disconnect();
+
+        assert!(matches!(binding, Binding::NotConnected(_)));
+        assert!(!binding.connected());
+        assert_eq!(binding.connected_servers(), 0);
+        assert!(matches!(
+            binding.shards(),
+            Err(crate::backend::Error::NotConnected)
+        ));
+        assert!(matches!(
+            binding.send(&ClientRequest::from(Vec::new())).await,
+            Err(crate::backend::Error::NotConnected)
+        ));
+        assert!(matches!(
+            binding.send_copy(Vec::new()).await,
+            Err(crate::backend::Error::CopyNotConnected)
+        ));
+        assert!(futures::poll!(pin!(binding.read())).is_pending());
+        binding.force_close();
+        assert!(matches!(binding, Binding::NotConnected(_)));
+    }
 
     async fn create_multishard_binding() -> Binding {
         // Create multiple test servers and pools to simulate shards
@@ -49,9 +96,7 @@ mod tests {
         ];
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        let multishard = MultiShard::new(3, &route);
-
-        let mut binding = Binding::MultiShard(guards, Box::new(multishard));
+        let mut binding = Binding::MultiShard(Box::new(BindingMulti::new(guards, &route)));
 
         // Start transaction on all shards for two-phase commit tests
         let _result = binding
@@ -74,7 +119,7 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(guard, 0);
+        let mut binding = Binding::Direct(BindingDirect::new(guard));
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)
@@ -90,11 +135,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_two_pc_with_admin_binding_fails() {
-        use crate::admin::server::AdminServer;
-
         // Create an Admin binding
-        let admin_server = AdminServer::default();
-        let mut binding = Binding::Admin(admin_server);
+        let mut binding = Binding::Admin(AdminBinding::new());
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)

@@ -20,8 +20,6 @@ impl NotConnectedBinding {
         Self {}
     }
 
-    pub(crate) fn disconnect(&mut self) {}
-
     pub(crate) fn force_close(&mut self) {}
 
     pub(crate) fn connected(&self) -> bool {
