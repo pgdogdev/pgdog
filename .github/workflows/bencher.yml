@@ -41,9 +41,6 @@ jobs:
 
   bench:
     needs: image
-    permissions:
-      checks: write
-      pull-requests: write
     runs-on: blacksmith-2vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -77,7 +74,7 @@ jobs:
             --threshold-lower-boundary 0.03 \
             --thresholds-reset \
             --error-on-alert \
-            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            --github-actions '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
             --ci-id ${{ matrix.suite }} \
             --ci-only-on-alert \
             --adapter json \
