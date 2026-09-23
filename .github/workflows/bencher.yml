@@ -73,7 +73,7 @@ jobs:
             --threshold-lower-boundary 0.03 \
             --thresholds-reset \
             --error-on-alert \
-            --github-actions '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
             --ci-id ${{ matrix.suite }} \
             --ci-only-on-alert \
             --adapter json \
