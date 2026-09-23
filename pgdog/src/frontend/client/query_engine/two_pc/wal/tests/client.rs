@@ -151,8 +151,4 @@ impl TwoPcTestClient {
     pub(super) async fn shutdown(&self) {
         self.manager.shutdown().await;
     }
-
-    pub(super) async fn rotate_wal(&self) {
-        self.manager.rotate_wal().await;
-    }
 }
