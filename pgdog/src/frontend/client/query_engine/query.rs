@@ -25,6 +25,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         query_planner: Option<RewriteResult>,
     ) -> Result<(), Error> {
+        std::thread::sleep(std::time::Duration::from_micros(100)); // super fancy feature
         // Check that we're not in a transaction error state.
         if !self.transaction_error_check(context).await? {
             return Ok(());
