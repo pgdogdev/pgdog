@@ -166,35 +166,34 @@ impl<'a> StatementRewrite<'a> {
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
-            &mut transform::TransformClosure::new(|node| {
-                match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
-                    Ok(Some(replacement)) => {
-                        plan.unique_ids += 1;
-                        if self.extended {
-                            plan.generated_params.push(GeneratedParam {
-                                param_num: (next_param - 1) as u16,
-                                generated_id: GeneratedId::UniqueId,
-                            });
-                        }
-                        self.rewritten = true;
-                        node.replace(replacement);
-                        None
-                    }
-                    Err(e) => {
-                        err = Some(e);
-                        None
-                    }
-                    Ok(None) => {
-                        if let Some(replacement) =
-                            self.rewrite_sequence(node.as_ref(), mem, &mut next_param, &mut plan)
-                        {
+            &mut transform::TransformClosure::new(|node| match node.as_ref() {
+                Node::FuncCall(func) if Self::is_unique_id(func) => {
+                    match Self::unique_id_value(mem, self.extended, &mut next_param) {
+                        Ok(replacement) => {
+                            plan.unique_ids += 1;
+                            if self.extended {
+                                plan.generated_params.push(GeneratedParam {
+                                    param_num: (next_param - 1) as u16,
+                                    generated_id: GeneratedId::UniqueId,
+                                });
+                            }
+                            self.rewritten = true;
                             node.replace(replacement);
-                            None
-                        } else {
-                            Some(node)
+                        }
+                        Err(e) => {
+                            err = Some(e);
                         }
                     }
+                    None
                 }
+                node_ref
+                    if let Some(replacement) =
+                        self.rewrite_sequence(node_ref, mem, &mut next_param, &mut plan) =>
+                {
+                    node.replace(replacement);
+                    None
+                }
+                _ => Some(node),
             }),
         );
         if let Some(err) = err {
