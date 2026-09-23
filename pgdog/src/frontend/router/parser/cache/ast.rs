@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use pg_raw_parse::{Node, Owned, StmtList, make};
+use pg_raw_parse::{Error as ParseError, Node, Owned, StmtList, make};
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Instant;
@@ -127,7 +127,7 @@ impl Ast {
     }
 
     /// Record new AST entry, without rewriting or comment-routing.
-    pub(crate) fn new_record(query: &str) -> Result<Self, Error> {
+    pub(crate) fn new_record(query: &str) -> Result<Self, ParseError> {
         let ast = pg_raw_parse::parse(query)?;
 
         Ok(Self {
