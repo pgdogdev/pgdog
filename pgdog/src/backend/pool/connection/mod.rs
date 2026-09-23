@@ -154,7 +154,6 @@ impl Connection {
             self.binding = Binding::Direct(server, *shard);
         } else {
             let mut shards = vec![];
-            let mut shard_indices = vec![];
             for (i, shard) in self.cluster()?.shards().iter().enumerate() {
                 if let Shard::Multi(numbers) = route.shard()
                     && !numbers.contains(&i)
@@ -172,7 +171,6 @@ impl Connection {
                 }
 
                 shards.push(server);
-                shard_indices.push(i);
             }
 
             let num_shards = shards.len();

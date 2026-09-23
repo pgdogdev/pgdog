@@ -14,7 +14,8 @@ use crate::{
 
 use futures::future::join_all;
 
-use super::*;
+use super::super::*;
+// use super::*;
 use crate::util::safe_sleep;
 
 /// The server(s) the client is connected to.
@@ -85,7 +86,7 @@ impl Binding {
         }
     }
 
-    pub(super) async fn read(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         match self {
             Binding::Direct(guard, _) => guard.read().await,
 
@@ -283,7 +284,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn done(&self) -> bool {
+    pub(in super::super::super::connection) fn done(&self) -> bool {
         match self {
             Binding::Admin(admin) => admin.done(),
             Binding::Direct(server, ..) => server.done(),
@@ -312,7 +313,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn state_check(&self, state: State) -> bool {
+    pub(in super::super::super::connection) fn state_check(&self, state: State) -> bool {
         match self {
             Binding::Direct(server, ..) => {
                 debug!(
@@ -468,7 +469,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn dirty(&mut self) {
+    pub(in super::super::super::connection) fn dirty(&mut self) {
         match self {
             Binding::Direct(server, ..) => server.mark_dirty(true),
             Binding::MultiShard(servers, _state) => {
@@ -480,7 +481,7 @@ impl Binding {
 
     /// Propagate the client's lock state to every held Guard so each pool's
     /// `sv_locked` reflects the pin.
-    pub(super) fn set_locked(&mut self, locked: bool) {
+    pub(in super::super::super::connection) fn set_locked(&mut self, locked: bool) {
         match self {
             Binding::Direct(server, ..) => server.set_locked(locked),
             Binding::MultiShard(servers, _) => {
@@ -496,7 +497,7 @@ impl Binding {
     /// multi-shard binding are set/cleared together via [`Self::set_locked`],
     /// so they should always agree; if they don't, warn and err on the side
     /// of "locked" so we don't recycle a pinned connection.
-    pub(super) fn is_locked(&self) -> bool {
+    pub(in super::super::super::connection) fn is_locked(&self) -> bool {
         match self {
             Binding::Direct(server, ..) => server.is_locked(),
             Binding::MultiShard(servers, _) => {
