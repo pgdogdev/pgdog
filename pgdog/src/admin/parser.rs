@@ -20,6 +20,7 @@ pub(crate) enum ParseResult {
     ShowQueryCache(ShowQueryCache),
     ResetPrepared(ResetPrepared),
     ResetQueryCache(ResetQueryCache),
+    ResetStats(ResetStats),
     ShowStats(ShowStats),
     ShowTransactions(ShowTransactions),
     ShowMirrors(ShowMirrors),
@@ -70,6 +71,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
             ResetPrepared(cmd) => cmd.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
+            ResetStats(reset_stats) => reset_stats.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
             ShowTransactions(show_transactions) => show_transactions.execute().await,
             ShowMirrors(show_mirrors) => show_mirrors.execute().await,
@@ -120,6 +122,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
             ResetPrepared(cmd) => cmd.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
+            ResetStats(reset_stats) => reset_stats.name(),
             ShowStats(show_stats) => show_stats.name(),
             ShowTransactions(show_transactions) => show_transactions.name(),
             ShowMirrors(show_mirrors) => show_mirrors.name(),
@@ -241,6 +244,7 @@ impl Parser {
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
+                "stats" => ParseResult::ResetStats(ResetStats::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -380,6 +384,12 @@ mod tests {
     fn parses_reset_prepared_command() {
         let result = Parser::parse("RESET PREPARED");
         assert!(matches!(result, Ok(ParseResult::ResetPrepared(_))));
+    }
+
+    #[test]
+    fn parses_reset_stats_command() {
+        let result = Parser::parse("RESET STATS");
+        assert!(matches!(result, Ok(ParseResult::ResetStats(_))));
     }
 
     #[test]

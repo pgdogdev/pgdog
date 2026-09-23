@@ -118,6 +118,17 @@ pub(crate) fn shutdown() {
     databases().shutdown();
 }
 
+/// Reset cumulative statistics for all connection pools.
+pub(crate) fn reset_stats() {
+    for cluster in databases().all().values() {
+        for shard in cluster.shards() {
+            for pool in shard.pool_iter() {
+                pool.reset_stats();
+            }
+        }
+    }
+}
+
 /// Cancel all queries running on a database.
 pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     let clusters: Vec<_> = databases()
