@@ -14,21 +14,25 @@ use crate::Data;
 
 use super::*;
 
-/// Internal sign representation of NaN
+/// PostgreSQL's binary NUMERIC sign codes for non-finite values.
 const POSTGRES_NAN: u16 = 0xC000;
+const POSTGRES_POSITIVE_INFINITY: u16 = 0xD000;
+const POSTGRES_NEGATIVE_INFINITY: u16 = 0xF000;
 
-/// Enum to represent different numeric values including NaN.
+/// Finite and non-finite PostgreSQL numeric values.
 #[derive(Copy, Clone, Debug)]
 enum NumericValue {
     Number(Decimal),
     NaN,
+    PositiveInfinity,
+    NegativeInfinity,
 }
 
 /// PostgreSQL NUMERIC type representation using exact decimal arithmetic.
 ///
 /// Note: rust_decimal has a maximum of 28 decimal digits of precision.
 /// Values exceeding this will return an error.
-/// Supports special NaN (Not-a-Number) value following PostgreSQL semantics.
+/// Supports NaN and both infinities following PostgreSQL semantics.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct Numeric {
@@ -40,6 +44,8 @@ impl Display for Numeric {
         match self.value {
             NumericValue::Number(n) => write!(f, "{}", n),
             NumericValue::NaN => write!(f, "NaN"),
+            NumericValue::PositiveInfinity => f.write_str("Infinity"),
+            NumericValue::NegativeInfinity => f.write_str("-Infinity"),
         }
     }
 }
@@ -54,6 +60,8 @@ impl Hash for Numeric {
             NumericValue::NaN => {
                 1u8.hash(state); // Discriminant for NaN
             }
+            NumericValue::PositiveInfinity => 2u8.hash(state),
+            NumericValue::NegativeInfinity => 3u8.hash(state),
         }
     }
 }
@@ -63,7 +71,9 @@ impl PartialEq for Numeric {
         match (&self.value, &other.value) {
             (NumericValue::Number(a), NumericValue::Number(b)) => a == b,
             // PostgreSQL treats NaN as equal to NaN for indexing purposes
-            (NumericValue::NaN, NumericValue::NaN) => true,
+            (NumericValue::NaN, NumericValue::NaN)
+            | (NumericValue::PositiveInfinity, NumericValue::PositiveInfinity)
+            | (NumericValue::NegativeInfinity, NumericValue::NegativeInfinity) => true,
             _ => false,
         }
     }
@@ -85,6 +95,14 @@ impl Ord for Numeric {
             (NumericValue::NaN, NumericValue::NaN) => Ordering::Equal,
             (NumericValue::NaN, _) => Ordering::Greater,
             (_, NumericValue::NaN) => Ordering::Less,
+            (NumericValue::NegativeInfinity, NumericValue::NegativeInfinity)
+            | (NumericValue::PositiveInfinity, NumericValue::PositiveInfinity) => Ordering::Equal,
+            (NumericValue::NegativeInfinity, _) | (_, NumericValue::PositiveInfinity) => {
+                Ordering::Less
+            }
+            (NumericValue::PositiveInfinity, _) | (_, NumericValue::NegativeInfinity) => {
+                Ordering::Greater
+            }
         }
     }
 }
@@ -95,8 +113,16 @@ impl Add for Numeric {
     fn add(self, rhs: Self) -> Self::Output {
         match (self.value, rhs.value) {
             (NumericValue::Number(a), NumericValue::Number(b)) => Self::new(a + b),
-            // Any operation with NaN yields NaN
-            _ => Self::nan(),
+            (NumericValue::NaN, _)
+            | (_, NumericValue::NaN)
+            | (NumericValue::PositiveInfinity, NumericValue::NegativeInfinity)
+            | (NumericValue::NegativeInfinity, NumericValue::PositiveInfinity) => Self::nan(),
+            (NumericValue::PositiveInfinity, _) | (_, NumericValue::PositiveInfinity) => {
+                Self::infinity()
+            }
+            (NumericValue::NegativeInfinity, _) | (_, NumericValue::NegativeInfinity) => {
+                Self::negative_infinity()
+            }
         }
     }
 }
@@ -114,6 +140,10 @@ impl Mul<Decimal> for Numeric {
         match self.value {
             NumericValue::Number(n) => Self::from(n * rhs),
             NumericValue::NaN => self,
+            _ if rhs.is_zero() => Self::nan(),
+            NumericValue::PositiveInfinity if rhs.is_sign_negative() => Self::negative_infinity(),
+            NumericValue::NegativeInfinity if rhs.is_sign_negative() => Self::infinity(),
+            _ => self,
         }
     }
 }
@@ -129,12 +159,23 @@ impl FromDataType for Numeric {
                     }),
                     Err(e) => {
                         // Check for special PostgreSQL values
-                        match s.to_uppercase().as_str() {
-                            "NAN" => Ok(Self {
-                                value: NumericValue::NaN,
-                            }),
-                            "INFINITY" | "+INFINITY" | "-INFINITY" => Err(Error::UnexpectedPayload),
-                            _ => Err(Error::NotFloat(e.to_string().parse::<f64>().unwrap_err())),
+                        if s.eq_ignore_ascii_case("nan") {
+                            Ok(Self::nan())
+                        } else if ["infinity", "+infinity", "inf", "+inf"]
+                            .iter()
+                            .any(|value| s.eq_ignore_ascii_case(value))
+                        {
+                            Ok(Self::infinity())
+                        } else if s.eq_ignore_ascii_case("-infinity")
+                            || s.eq_ignore_ascii_case("-inf")
+                        {
+                            Ok(Self::negative_infinity())
+                        } else {
+                            Err(Error::NotFloat(
+                                e.to_string()
+                                    .parse::<f64>()
+                                    .expect_err("decimal error message is not a number"),
+                            ))
                         }
                     }
                 }
@@ -166,9 +207,15 @@ impl FromDataType for Numeric {
                     return Err(Error::UnexpectedPayload);
                 }
 
-                if sign == POSTGRES_NAN {
+                let special = match sign {
+                    POSTGRES_NAN => Some(Self::nan()),
+                    POSTGRES_POSITIVE_INFINITY => Some(Self::infinity()),
+                    POSTGRES_NEGATIVE_INFINITY => Some(Self::negative_infinity()),
+                    _ => None,
+                };
+                if let Some(special) = special {
                     if ndigits == 0 {
-                        Ok(Self::nan())
+                        Ok(special)
                     } else {
                         Err(Error::UnexpectedPayload)
                     }
@@ -185,26 +232,30 @@ impl FromDataType for Numeric {
         match encoding {
             Format::Text => match self.value {
                 NumericValue::Number(n) => Ok(Bytes::copy_from_slice(n.to_string().as_bytes())),
-                NumericValue::NaN => Ok(Bytes::copy_from_slice(b"NaN")),
+                NumericValue::NaN => Ok(Bytes::from_static(b"NaN")),
+                NumericValue::PositiveInfinity => Ok(Bytes::from_static(b"Infinity")),
+                NumericValue::NegativeInfinity => Ok(Bytes::from_static(b"-Infinity")),
             },
-            Format::Binary => match self.value {
-                NumericValue::NaN => {
-                    // NaN encoding: ndigits=0, weight=0, sign=0xC000, dscale=0
-                    let mut buf = BytesMut::new();
-                    buf.put_i16(0); // ndigits
-                    buf.put_i16(0); // weight
-                    buf.put_u16(POSTGRES_NAN); // NaN sign
-                    buf.put_i16(0); // dscale
-                    Ok(buf.freeze())
-                }
-                NumericValue::Number(decimal) => {
-                    let mut buf = BytesMut::new();
-                    decimal
-                        .to_sql(&Type::NUMERIC, &mut buf)
-                        .map(|_| buf.freeze())
-                        .map_err(|_| Error::UnexpectedPayload)
-                }
-            },
+            Format::Binary => {
+                let sign = match self.value {
+                    NumericValue::Number(decimal) => {
+                        let mut buf = BytesMut::new();
+                        return decimal
+                            .to_sql(&Type::NUMERIC, &mut buf)
+                            .map(|_| buf.freeze())
+                            .map_err(|_| Error::UnexpectedPayload);
+                    }
+                    NumericValue::NaN => POSTGRES_NAN,
+                    NumericValue::PositiveInfinity => POSTGRES_POSITIVE_INFINITY,
+                    NumericValue::NegativeInfinity => POSTGRES_NEGATIVE_INFINITY,
+                };
+                let mut buf = BytesMut::with_capacity(8);
+                buf.put_i16(0); // ndigits
+                buf.put_i16(0); // weight
+                buf.put_u16(sign);
+                buf.put_i16(0); // dscale
+                Ok(buf.freeze())
+            }
         }
     }
 }
@@ -237,6 +288,10 @@ impl From<f32> for Numeric {
             Self {
                 value: NumericValue::NaN,
             }
+        } else if value == f32::INFINITY {
+            Self::infinity()
+        } else if value == f32::NEG_INFINITY {
+            Self::negative_infinity()
         } else {
             Self {
                 // Note: This may lose precision
@@ -254,6 +309,10 @@ impl From<f64> for Numeric {
             Self {
                 value: NumericValue::NaN,
             }
+        } else if value == f64::INFINITY {
+            Self::infinity()
+        } else if value == f64::NEG_INFINITY {
+            Self::negative_infinity()
         } else {
             Self {
                 // Note: This may lose precision
@@ -287,24 +346,38 @@ impl Numeric {
         }
     }
 
+    /// Create a positive infinity Numeric value.
+    pub fn infinity() -> Self {
+        Self {
+            value: NumericValue::PositiveInfinity,
+        }
+    }
+
+    /// Create a negative infinity Numeric value.
+    pub fn negative_infinity() -> Self {
+        Self {
+            value: NumericValue::NegativeInfinity,
+        }
+    }
+
     /// Check if this is a NaN value
     pub fn is_nan(&self) -> bool {
         matches!(self.value, NumericValue::NaN)
     }
 
-    /// Get the underlying Decimal value if not NaN
+    /// Get the underlying Decimal value if finite.
     pub fn as_decimal(&self) -> Option<&Decimal> {
         match &self.value {
             NumericValue::Number(n) => Some(n),
-            NumericValue::NaN => None,
+            _ => None,
         }
     }
 
-    /// Get the underlying Decimal value if not NaN
+    /// Get the underlying Decimal value if finite.
     pub fn as_decimal_mut(&mut self) -> Option<&mut Decimal> {
         match &mut self.value {
             NumericValue::Number(n) => Some(n),
-            NumericValue::NaN => None,
+            _ => None,
         }
     }
 
@@ -317,9 +390,14 @@ impl Numeric {
                 n.to_f64()
             }
             NumericValue::NaN => Some(f64::NAN),
+            NumericValue::PositiveInfinity => Some(f64::INFINITY),
+            NumericValue::NegativeInfinity => Some(f64::NEG_INFINITY),
         }
     }
 }
+
+#[cfg(test)]
+mod infinity_tests;
 
 #[cfg(test)]
 mod tests {

@@ -24,6 +24,7 @@ pub mod max;
 pub mod multi_set;
 pub mod non_deterministic_funcs;
 pub mod notify;
+mod numeric_infinity;
 pub mod offset;
 pub mod partial_req;
 pub mod per_stmt_routing;
