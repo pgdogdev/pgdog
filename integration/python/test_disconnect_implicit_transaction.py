@@ -27,16 +27,16 @@ def result(conn):
         select.select([conn.socket], [], [], remaining)
 
 
-def wait_for_backend(observer, pid, state):
+def wait_for_recovery(observer, pid):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         row = observer.execute(
             "SELECT state FROM pg_stat_activity WHERE pid = %s", (pid,)
         ).fetchone()
-        if row == (state,) or (state == "idle" and row is None):
+        if row is None or row == ("idle",):
             return
         time.sleep(0.01)
-    raise AssertionError(f"backend {pid} did not reach {state}: {row}")
+    raise AssertionError(f"backend {pid} was not released after disconnect: {row}")
 
 
 @pytest.mark.parametrize("user", ["pgdog", "pgdog_session"])
@@ -61,7 +61,9 @@ def test_disconnect_preserves_implicit_transaction_boundary(user, send_sync):
             updated = result(conn)
             assert updated is not None and updated.status == pq.ExecStatus.TUPLES_OK
             pid = int(updated.get_value(0, 0))
-            wait_for_backend(observer, pid, "idle in transaction")
+            # CommandComplete confirms execution, but the write must remain
+            # invisible to other connections until the client sends Sync.
+            assert observer.execute(f"SELECT value FROM {table}").fetchone()[0] == 10
 
             if send_sync:
                 conn.pipeline_sync()
@@ -72,7 +74,7 @@ def test_disconnect_preserves_implicit_transaction_boundary(user, send_sync):
                 assert synced is not None and synced.status == pq.ExecStatus.PIPELINE_SYNC
 
             conn.finish()
-            wait_for_backend(observer, pid, "idle")
+            wait_for_recovery(observer, pid)
             value = observer.execute(f"SELECT value FROM {table}").fetchone()[0]
             assert value == (77 if send_sync else 10)
         finally:
