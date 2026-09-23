@@ -1,7 +1,6 @@
-# NOTE!!!: This does not work with forks right now, because this needs repository secrets.
-# It would be unsafe to allow them in this workflow.
-# Bencher has a documented 2-step workflow on how to accomplish this. I'll follow up with that in another PR.
-
+# Handles running Bencher perf tests to detect regressions.
+# Runs only when PRs are made from an internal branch (NOT A FORK) to main.
+# Forks are processed via 2 steps [bencher_fork_run.yml, bencher_fork_track.yml]
 # TODO: I have some big plans for this file. Please contact @jkaczman before planning to modify with new tests.
 
 name: bencher

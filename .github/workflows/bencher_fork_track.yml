@@ -1,0 +1,95 @@
+# Fork version of Bencher (Step 2 of 2)
+# 
+# We built the image in bencher_fork_run.yml on the fork PR.
+# Now, we can use it (ON THE MAIN BRANCH, where it's okay to use secrets),
+# and basically do what we do in the main Bencher workflow, with a pre-built image this time.
+  
+name: bencher-fork-track
+on:
+  workflow_run:
+    workflows: [bencher-fork-run]
+    types: [completed]
+
+env:
+  IMAGE: registry.bencher.dev/pgdog:${{ github.event.workflow_run.head_sha }}
+
+jobs:
+  image:
+    # Download image from previous workflow (2-step). Push image to bencher.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name != github.repository
+    permissions:
+      actions: read
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push image
+        run: |
+          docker load < image.tar.gz
+          docker tag pgdog-bench $IMAGE
+          echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
+          docker push $IMAGE
+ 
+  bench:
+    needs: image
+    permissions:
+      actions: read
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [pooler, lb, sharding]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: event.json
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Since we're running this on main branch, we have to download the artifact
+      # from the PR that requested this run to figure out which one it was,
+      # so that we can safely run this on main and have all the required info.
+      - name: Export PR event data
+        run: |
+          echo "PR_HEAD=$(jq -r .pull_request.head.ref event.json)" >> "$GITHUB_ENV"
+          echo "PR_HEAD_SHA=$(jq -r .pull_request.head.sha event.json)" >> "$GITHUB_ENV"
+          echo "PR_BASE=$(jq -r .pull_request.base.ref event.json)" >> "$GITHUB_ENV"
+          echo "PR_BASE_SHA=$(jq -r .pull_request.base.sha event.json)" >> "$GITHUB_ENV"
+          echo "PR_NUMBER=$(jq -r .number event.json)" >> "$GITHUB_ENV"
+      - uses: bencherdev/bencher@main
+      - name: Run ${{ matrix.suite }} on Bencher bare metal
+        # This will run one test per job (all in parallel).
+        # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
+        #
+        # After testing 5x back-to-back, variance was <1%. This should be enough
+        # of a difference, unless something goes on with their servers in the future.
+        #
+        # TODO: we can re-evaluate a proper variance later
+        #
+        # Why --github-actions? This allows it to comment on the PR with the result.
+        # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
+        run: |
+          bencher run \
+            --project pgdog \
+            --key '${{ secrets.BENCHER_API_KEY }}' \
+            --branch "$PR_HEAD" \
+            --hash "$PR_HEAD_SHA" \
+            --start-point "$PR_BASE" \
+            --start-point-hash "$PR_BASE_SHA" \
+            --start-point-clone-thresholds \
+            --spec intel-v1 \
+            --threshold-measure throughput \
+            --threshold-test percentage \
+            --threshold-lower-boundary 0.03 \
+            --thresholds-reset \
+            --error-on-alert \
+            --github-actions '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
+            --ci-number "$PR_NUMBER" \
+            --ci-id ${{ matrix.suite }} \
+            --ci-only-on-alert \
+            --adapter json \
+            --image $IMAGE \
+            "bash benches/perf/bencher.sh ${{ matrix.suite }}"
