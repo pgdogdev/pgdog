@@ -462,14 +462,9 @@ impl Cluster {
         shard.replica(request).await
     }
 
-    /// Whether the clusters share at least one Postgres node.
+    /// The two clusters have the same databases.
     pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
-        self.shards.iter().any(|from| {
-            other
-                .shards
-                .iter()
-                .any(|to| from.has_compatible_pool_with(to))
-        })
+        self.shards.len() == other.shards.len()
     }
 
     /// Move connections from cluster to another, saving them.
@@ -477,14 +472,8 @@ impl Cluster {
     pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<bool, Error> {
         let mut moved = false;
 
-        for from in &self.shards {
-            if let Some(to) = other
-                .shards
-                .iter()
-                .find(|to| from.has_compatible_pool_with(to))
-            {
-                moved |= from.move_conns_to(to)?;
-            }
+        for (from, to) in self.shards.iter().zip(other.shards.iter()) {
+            moved |= from.move_conns_to(to)?;
         }
 
         Ok(moved)
@@ -1022,48 +1011,6 @@ mod test {
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
         }
-    }
-
-    #[test]
-    fn test_move_conns_to_preserves_existing_shards_when_one_is_added() {
-        let config = ConfigAndUsers::default();
-        let source = Cluster::new_test_single_primary(&config);
-        let mut destination = Cluster::new_test_single_primary(&config);
-        let mut added_address = Address::new_test();
-        added_address.port += 1;
-        let added_pool = PoolConfig {
-            address: added_address,
-            config: Config::default(),
-        };
-        destination.shards.push(Shard::new(ShardConfig {
-            number: 1,
-            primary: Some(&added_pool),
-            identifier: destination.identifier.clone(),
-            ..Default::default()
-        }));
-
-        source.shards[0]
-            .pool_iter()
-            .next()
-            .expect("source pool")
-            .lock()
-            .stats
-            .counts
-            .query_count = 42;
-
-        assert!(source.can_move_conns_to(&destination));
-        assert!(source.move_conns_to(&destination).unwrap());
-        assert_eq!(
-            destination.shards[0]
-                .pool_iter()
-                .next()
-                .expect("destination pool")
-                .state()
-                .stats
-                .counts
-                .query_count,
-            42
-        );
     }
 
     #[test]

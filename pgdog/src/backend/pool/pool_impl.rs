@@ -327,6 +327,8 @@ impl Pool {
 
             // Propagate pause state so a paused database stays paused after reload.
             to_guard.paused = from_guard.paused;
+
+            // Preserve cumulative pool metrics reported by SHOW STATS and SHOW POOLS.
             to_guard.stats = from_guard.stats;
             to_guard.errors = from_guard.errors;
             to_guard.out_of_sync = from_guard.out_of_sync;

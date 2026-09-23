@@ -107,15 +107,6 @@ impl Shard {
         Ok(self.lb.move_conns_to(&destination.lb)? >= 1)
     }
 
-    /// Whether these shards contain at least one pool for the same Postgres node.
-    pub(crate) fn has_compatible_pool_with(&self, other: &Shard) -> bool {
-        self.pool_iter().any(|from| {
-            other
-                .pool_iter()
-                .any(|to| from.has_compatible_address_with(to))
-        })
-    }
-
     /// Listen for notifications on channel.
     pub(crate) async fn listen(&self, channel: &str) -> Result<Listener, Error> {
         match self.pub_sub.load_full().deref() {
