@@ -67,6 +67,11 @@ impl Guard {
         self.locked
     }
 
+    /// Shard number for this connection.
+    pub(super) fn shard(&self) -> usize {
+        self.pool.addr().shard
+    }
+
     /// Rollback any unfinished transactions and check the connection
     /// back into the pool.
     fn cleanup(&mut self) {

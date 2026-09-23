@@ -148,11 +148,11 @@ impl Binding {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
 
-                for (position, server) in servers.iter_mut().enumerate() {
+                for server in servers.iter_mut() {
                     // Map positional index to actual shard number.
                     // When only a subset of shards is connected (Shard::Multi binding),
                     // positional indices don't match actual shard numbers.
-                    let shard = state.shard_number(position);
+                    let shard = server.shard();
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
                             shards_sent = 1;
@@ -206,11 +206,11 @@ impl Binding {
             Binding::Direct(server, ..) => {
                 server.send_ignore(message).await?;
             }
-            Binding::MultiShard(servers, state) => {
+            Binding::MultiShard(servers, _) => {
                 if !servers.is_empty() {
                     let mut futures = Vec::new();
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
+                    for server in servers.iter_mut() {
+                        let shard = server.shard();
                         let send = match route.shard() {
                             Shard::Direct(s) => *s == shard,
                             Shard::Multi(shards) => shards.contains(&shard),
@@ -237,10 +237,10 @@ impl Binding {
     /// Send copy messages to shards they are destined to go.
     pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, state) => {
+            Binding::MultiShard(servers, _) => {
                 for row in rows {
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
+                    for server in servers.iter_mut() {
+                        let shard = server.shard();
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {

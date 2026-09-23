@@ -175,8 +175,9 @@ impl Connection {
                 shard_indices.push(i);
             }
 
+            let num_shards = shards.len();
             self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
+                Binding::MultiShard(shards, Box::new(MultiShard::new(num_shards, route)));
         }
 
         Ok(())
