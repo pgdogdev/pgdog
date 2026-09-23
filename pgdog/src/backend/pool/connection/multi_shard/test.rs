@@ -319,7 +319,7 @@ fn test_omni_data_rows_only_from_first_server() {
 fn test_pipelined_describe_forwards_every_group() {
     for shards in [1, 2] {
         let mut multi_shard = MultiShard::new(
-            2,
+            shards,
             &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
         );
 
