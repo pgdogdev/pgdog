@@ -19,7 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 5
+          run: bash integration/ci/install-deps.sh
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
