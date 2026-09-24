@@ -4,14 +4,8 @@ on:
     branches:
       - main
       - main-ent
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
   merge_group:
     types: [checks_requested]
 
