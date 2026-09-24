@@ -264,21 +264,10 @@ impl Binding {
             Binding::Direct(server, ..) => {
                 server.link_client(id, params, transaction_start_stmt).await
             }
-            Binding::MultiShard(servers) => {
-                let futures = servers
-                    .iter_mut()
-                    .map(|server| server.link_client(id, params, transaction_start_stmt));
-                let results = join_all(futures).await;
 
-                let mut max = 0;
-                for result in results {
-                    let synced = result?;
-                    if max < synced {
-                        max = synced;
-                    }
-                }
-                Ok(max)
-            }
+            Binding::MultiShard(servers) => Ok(servers
+                .link_client(id, params, transaction_start_stmt)
+                .await?),
 
             _ => Ok(0),
         }
