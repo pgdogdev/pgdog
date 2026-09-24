@@ -39,7 +39,7 @@ pub(crate) mod multi_shard;
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
-use multi_shard::MultiShard;
+use multi_shard::MultiBinding;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
@@ -73,7 +73,7 @@ impl Connection {
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         let connect = match &self.binding {
             Binding::NotConnected => true,
-            Binding::MultiShard(shards, _) => shards.is_empty(),
+            Binding::MultiShard(shards) => shards.is_empty(),
             _ => false,
         };
 
@@ -121,8 +121,7 @@ impl Connection {
         } else {
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 
-            self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
+            self.binding = Binding::MultiShard(MultiBinding::new(shards, shard_indices, route));
         }
 
         Ok(())
@@ -305,8 +304,8 @@ impl Connection {
 
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
         match self.binding {
-            Binding::MultiShard(_, ref mut state) => {
-                state.push_bind(bind);
+            Binding::MultiShard(ref mut servers) => {
+                servers.state_mut().push_bind(bind);
                 Ok(())
             }
 
@@ -346,7 +345,7 @@ impl Connection {
     pub(crate) fn addr(&self) -> Result<Vec<&Address>, Error> {
         Ok(match self.binding {
             Binding::Direct(ref server, ..) => vec![server.addr()],
-            Binding::MultiShard(ref servers, _) => servers.iter().map(|s| s.addr()).collect(),
+            Binding::MultiShard(ref servers) => servers.iter().map(|s| s.addr()).collect(),
             _ => {
                 return Err(Error::NotConnected);
             }
@@ -357,7 +356,7 @@ impl Connection {
     pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
         let servers: Vec<&Guard> = match self.binding {
             Binding::Direct(ref server, ..) => vec![server],
-            Binding::MultiShard(ref servers, _) => servers.iter().collect(),
+            Binding::MultiShard(ref servers) => servers.iter().collect(),
             _ => return Ok(()),
         };
 
