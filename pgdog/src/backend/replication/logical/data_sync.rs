@@ -5,6 +5,7 @@ use tokio::select;
 use tracing::{info, warn};
 
 use pgdog_config::CopyFormat;
+use pgdog_stats::TaskId;
 
 use crate::backend::pool::{Address, Request};
 use crate::backend::{Cluster, ConnectReason, Server, ServerOptions};
@@ -37,6 +38,7 @@ pub(crate) struct DataSync<'a> {
     pub(crate) source: &'a Cluster,
     pub(crate) dest: &'a Cluster,
     pub(crate) format: CopyFormat,
+    pub(crate) task_id: TaskId,
 }
 
 impl DataSync<'_> {
@@ -67,6 +69,7 @@ impl DataSync<'_> {
         let mut slot = ReplicationSlot::data_sync(&table.publication, address);
         slot.connect().await?;
         table.lsn = slot.create_slot().await?;
+        slot.set_task_id(self.task_id);
 
         // Reload table info just to be sure it's consistent.
         table.reload(slot.server()?).await?;

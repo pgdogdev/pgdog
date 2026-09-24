@@ -2,9 +2,8 @@ use indexmap::IndexSet;
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
 
-use crate::frontend::router::Ast;
+use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::{BufferedQuery, ClientRequest};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -18,9 +17,6 @@ pub(crate) struct InsertSplit {
 
     /// The split up INSERT statement with parameters and/or values.
     stmt: String,
-
-    /// The statement AST.
-    ast: Ast,
 
     /// The global prepared statement name for this split.
     /// Only set when the original statement was a named prepared statement.
@@ -63,7 +59,8 @@ impl InsertSplit {
                 other => other.clone(),
             };
             new_request.messages.push(new_message);
-            new_request.ast = Some(self.ast.clone());
+            let cache = Cache::get();
+            new_request.ast = Some(cache.record(&self.stmt)?);
         }
 
         // When the driver prepared the statement in a separate round-trip
@@ -74,6 +71,7 @@ impl InsertSplit {
         // otherwise it would still hold the original multi-tuple statement and
         // reject the Bind's parameter count.
         if !has_parse && let Some(parse) = &request.last_parse {
+            // FIXME: We should be able to use the previously cached `Parse` here
             let mut split_parse = parse.clone();
             split_parse.set_query(&self.stmt);
             if let Some(name) = self.statement_name() {
@@ -123,11 +121,9 @@ pub(super) fn build_resolved_split_requests(
     split_insert_statements(insert)?
         .into_iter()
         .map(|(params, stmt)| {
-            let ast = Ast::new_record(&stmt).map_err(|e| Error::Cache(e.to_string()))?;
             InsertSplit {
                 params,
                 stmt,
-                ast,
                 statement_name: None,
             }
             .build_request(request)
@@ -194,18 +190,7 @@ impl StatementRewrite<'_> {
         // base and make this behave consistently.
 
         // Now create Ast for each split (needs mutable borrow of prepared_statements)
-        let cache = Cache::get();
-        let ctx = self.ast_context();
         for (params, stmt) in splits {
-            let query = if self.extended {
-                BufferedQuery::Prepared(Parse::named("", &stmt))
-            } else {
-                BufferedQuery::Query(Query::new(&stmt))
-            };
-            let ast = cache
-                .query(&query, &ctx, self.prepared_statements)
-                .map_err(|e| Error::Cache(e.to_string()))?;
-
             // If this is a named prepared statement, register the split in the global cache
             // and store the assigned name for use in Bind messages.
             let statement_name = if self.prepared {
@@ -220,7 +205,6 @@ impl StatementRewrite<'_> {
             plan.insert_split.push(InsertSplit {
                 params,
                 stmt,
-                ast,
                 statement_name,
             });
         }

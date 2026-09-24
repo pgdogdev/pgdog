@@ -131,11 +131,23 @@ pub(crate) enum Error {
     #[error("replication timeout")]
     ReplicationTimeout,
 
+    #[error("replication streams did not drain in time")]
+    DrainTimeout,
+
+    #[error("replication slot \"{0}\" was not dropped in time")]
+    SlotDropTimeout(String),
+
+    #[error("replication stream stopped before shutdown was requested")]
+    ReplicationStreamStopped,
+
     #[error("publication \"{0}\" has no tables")]
     EmptyPublication(String),
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication table entry")]
+    NoReplicationTables(usize),
 
     #[error("parallel connection error")]
     ParallelConnection,
@@ -160,6 +172,9 @@ pub(crate) enum Error {
 
     #[error("data sync has been aborted")]
     DataSyncAborted,
+
+    #[error("replication has been aborted")]
+    ReplicationAborted,
 
     #[error("cutover abort timeout")]
     AbortTimeout,

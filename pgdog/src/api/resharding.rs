@@ -124,13 +124,13 @@ impl Task for ReshardTask {
                 orchestrator.refresh()?;
 
                 // `auto_cutover` (reshard) cuts over on its own; otherwise the
-                // task runs until an operator `CUTOVER`/`STOP_TASK`. Both of
-                // those resolve to `Ok`, so awaiting surfaces only a genuine
-                // replication failure.
-                let waiter = orchestrator.replicate().await?;
+                // task runs until an operator `CUTOVER`/`STOP_TASK`. A stop in
+                // a forward phase resolves to `Err(ReplicationAborted)` and runs
+                // the cleanup below; a stop in a reverse phase resolves to
+                // `Ok`, because the migration is already complete.
                 ctx.run(
                     ReplicationTask::builder()
-                        .waiter(waiter)
+                        .orchestrator(orchestrator.clone())
                         .auto_cutover(self.auto_cutover)
                         .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Cutover).build())
                         .build(),

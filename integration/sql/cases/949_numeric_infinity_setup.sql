@@ -1,0 +1,17 @@
+DROP TABLE IF EXISTS sql_regression_samples;
+CREATE TABLE sql_regression_samples (id BIGINT PRIMARY KEY, kind TEXT, value NUMERIC);
+INSERT INTO sql_regression_samples VALUES (1, 'mixed', '-Infinity');
+INSERT INTO sql_regression_samples VALUES (101, 'mixed', 'Infinity');
+INSERT INTO sql_regression_samples VALUES (2, 'positive', 2.5);
+INSERT INTO sql_regression_samples VALUES (102, 'positive', 'Infinity');
+INSERT INTO sql_regression_samples VALUES (3, 'negative', '-Infinity');
+INSERT INTO sql_regression_samples VALUES (103, 'negative', -2.5);
+INSERT INTO sql_regression_samples VALUES (4, 'finite', 1.25);
+INSERT INTO sql_regression_samples VALUES (104, 'finite', 2.75);
+INSERT INTO sql_regression_samples VALUES (5, 'null', NULL);
+INSERT INTO sql_regression_samples VALUES (105, 'null', NULL);
+INSERT INTO sql_regression_samples VALUES (6, 'nan', 'NaN');
+INSERT INTO sql_regression_samples VALUES (106, 'nan', 3.5);
+INSERT INTO sql_regression_samples VALUES (7, 'infinite', 'Infinity');
+INSERT INTO sql_regression_samples VALUES (107, 'infinite', 'Infinity');
+INSERT INTO sql_regression_samples VALUES (8, 'singleton', 'Infinity');
