@@ -11,6 +11,7 @@ use tokio::{
     time::Instant,
 };
 use tracing::{debug, error, info, trace, warn};
+use uuid::Uuid;
 
 use super::{
     ConnectReason, DisconnectReason, Error, Oids, PreparedStatements, ServerOptions, Stats,
@@ -125,6 +126,13 @@ impl From<&Vec<Query>> for ServerRequest {
     }
 }
 
+#[derive(Debug)]
+struct ResetResponse {
+    params: Parameters,
+    complete: Option<Message>,
+    pending: usize,
+}
+
 /// PostgreSQL server connection.
 #[derive(Debug)]
 pub(crate) struct Server {
@@ -135,6 +143,7 @@ pub(crate) struct Server {
     params: Parameters,
     changed_params: Parameters,
     client_params: Parameters,
+    reset_response: Option<Box<ResetResponse>>,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -428,6 +437,7 @@ impl Server {
             params,
             changed_params: Parameters::default(),
             client_params: Parameters::default(),
+            reset_response: None,
             prepared_statements: PreparedStatements::new(oids),
             dirty: false,
             streaming: false,
@@ -476,8 +486,12 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
-        for message in client_request.messages.iter() {
-            self.send_one(message).await?;
+        if let Some(params) = client_request.reset_params.as_deref() {
+            Box::pin(self.send_reset_all(client_request, &params.client, &params.startup)).await?;
+        } else {
+            for message in client_request.messages.iter() {
+                self.send_one(message).await?;
+            }
         }
         self.flush().await?;
 
@@ -487,6 +501,61 @@ impl Server {
 
         self.stats.state(State::ReceivingData);
 
+        Ok(())
+    }
+
+    /// Restore virtual startup defaults as part of the client's RESET request.
+    async fn send_reset_all(
+        &mut self,
+        request: &ClientRequest,
+        params: &Parameters,
+        startup: &Parameters,
+    ) -> Result<(), Error> {
+        let queries = startup.set_queries(false);
+        for message in &request.messages {
+            match message {
+                ProtocolMessage::Query(_) => {
+                    self.reset_response = Some(Box::new(ResetResponse {
+                        params: params.clone(),
+                        complete: None,
+                        pending: queries.len(),
+                    }));
+                    let mut query = String::from("RESET ALL");
+                    let state = self.prepared_statements.state_mut();
+                    state.add('C');
+                    for set in &queries {
+                        query.push_str("; ");
+                        query.push_str(set.query());
+                        state.add_ignore('C');
+                    }
+                    state.add('Z');
+                    self.send_stream(&Query::new(query).into()).await?;
+                }
+                ProtocolMessage::Execute(_) => {
+                    self.reset_response = Some(Box::new(ResetResponse {
+                        params: params.clone(),
+                        complete: None,
+                        pending: queries.len() * 5,
+                    }));
+                    self.send_one(message).await?;
+                    // Stay inside the client's extended-protocol transaction.
+                    // Its own Sync/Flush follows these internal SET commands.
+                    let name = format!("__pgdog_reset_{}", Uuid::new_v4().simple());
+                    for query in &queries {
+                        for internal in [
+                            Parse::named(&name, query.query()).into(),
+                            Bind::new_name_portal(&name, &name).into(),
+                            Execute::new_portal(&name).into(),
+                            Close::portal(&name).into(),
+                            Close::named(&name).into(),
+                        ] {
+                            self.send_ignore(&internal).await?;
+                        }
+                    }
+                }
+                _ => self.send_one(message).await?,
+            }
+        }
         Ok(())
     }
 
@@ -586,6 +655,28 @@ impl Server {
                     let mut message = message.stream(self.streaming).backend(self.id);
                     match self.prepared_statements.forward(&mut message) {
                         Ok(forward) => {
+                            if let Some(reset) = self.reset_response.as_mut() {
+                                if forward
+                                    && message.code() == 'C'
+                                    && reset.pending > 0
+                                    && CommandComplete::from_bytes(message.to_bytes())?.command()
+                                        == "RESET"
+                                {
+                                    // Return RESET's completion only after the internal
+                                    // SET replies, including requests ending in Flush.
+                                    reset.complete = Some(message);
+                                    continue;
+                                }
+                                if !forward && reset.complete.is_some() {
+                                    reset.pending -= 1;
+                                    if reset.pending == 0 {
+                                        break reset
+                                            .complete
+                                            .take()
+                                            .expect("RESET completion saved");
+                                    }
+                                }
+                            }
                             if forward {
                                 break message;
                             }
@@ -644,6 +735,7 @@ impl Server {
                 self.statement_executed = false;
             }
             'E' => {
+                self.reset_response = None;
                 let error = ErrorResponse::from_bytes(message.to_bytes())?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
@@ -678,7 +770,13 @@ impl Server {
                         self.prepared_statements.clear();
                         self.client_params.clear();
                     }
-                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
+                    "RESET" => {
+                        if let Some(reset) = self.reset_response.take() {
+                            self.client_params = reset.params;
+                        } else {
+                            self.client_params.clear();
+                        }
+                    }
                     _ => (),
                 }
                 self.stats.rows_affected(&cmd);
@@ -1386,6 +1484,7 @@ pub(crate) mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
+                reset_response: None,
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,

@@ -8,8 +8,8 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
-        ToBytes,
+        Close, CloseComplete, CommandComplete, FromBytes, Message, ParseComplete, Protocol,
+        ProtocolMessage, ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -101,7 +101,7 @@ pub(crate) struct PreparedStatements {
     local_cache: LruCache<String, LocalStatement>,
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    parses: VecDeque<Option<String>>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
@@ -169,6 +169,20 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Parse(_) => {
                 self.state.add_ignore('1');
+                self.parses.push_back(None);
+                Ok(())
+            }
+            ProtocolMessage::Bind(_) => {
+                self.state.add_ignore('2');
+                Ok(())
+            }
+            ProtocolMessage::Execute(_) => {
+                self.state.add_ignore(ExecutionCode::ExecutionCompleted);
+                Ok(())
+            }
+            ProtocolMessage::Close(_) => {
+                self.state.add_ignore('3');
+                self.parses.push_back(None);
                 Ok(())
             }
             _ => Err(Error::UnsupportedHandleIgnore(request.code())),
@@ -187,7 +201,7 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
+                            self.parses.push_back(Some(bind.statement().to_string()));
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
@@ -230,7 +244,8 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(describe.statement().to_string());
+                            self.parses
+                                .push_back(Some(describe.statement().to_string()));
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
@@ -297,7 +312,7 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.parses.push_back(parse.name().to_string());
+                        self.parses.push_back(Some(parse.name().to_string()));
                     }
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
@@ -306,6 +321,8 @@ impl PreparedStatements {
                         parse.anonymize();
                         rewritten = true;
                     }
+                } else {
+                    self.parses.push_back(None);
                 }
 
                 self.state.add('1');
@@ -347,7 +364,7 @@ impl PreparedStatements {
                     );
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(prepare.name().to_owned());
+                    self.parses.push_back(Some(prepare.name().to_owned()));
                     self.state.add(ExecutionCode::ReadyForQuery);
                 }
             }
@@ -365,7 +382,7 @@ impl PreparedStatements {
                         self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
                         self.state.add_ignore(ExecutionCode::ReadyForQuery);
 
-                        self.parses.push_back(name.to_owned());
+                        self.parses.push_back(Some(name.to_owned()));
 
                         // This will do Close => Prepare
                         return Ok(HandleResult::PrependProtocolMessage(
@@ -375,7 +392,7 @@ impl PreparedStatements {
                         return Ok(HandleResult::Drop);
                     }
                 } else {
-                    self.parses.push_back(prepare.name().to_string());
+                    self.parses.push_back(Some(prepare.name().to_string()));
                     self.state.add_ignore('C');
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
@@ -437,8 +454,11 @@ impl PreparedStatements {
                 self.describes.pop_front();
             }
 
-            '1' | 'C' => {
-                if let Some(name) = self.parses.pop_front() {
+            '1' | 'C'
+                if code == '1'
+                    || CommandComplete::from_bytes(message.to_bytes())?.command() == "PREPARE" =>
+            {
+                if let Some(Some(name)) = self.parses.pop_front() {
                     self.prepared(&name);
                 }
             }
@@ -449,9 +469,9 @@ impl PreparedStatements {
             '3' if matches!(action, Action::Ignore) => {
                 // ok, pop_front -> push_front just to avoid borrowing issues
                 // and not to copy the name just to remove by name
-                if let Some(name) = self.parses.pop_front() {
+                if let Some(Some(name)) = self.parses.pop_front() {
                     self.remove(&name);
-                    self.parses.push_front(name);
+                    self.parses.push_front(Some(name));
                 }
             }
 
@@ -509,7 +529,7 @@ impl PreparedStatements {
     /// to run something before actual client's requests
     fn check_prepared(&mut self, name: &str) -> Result<Option<Prepare>, Error> {
         // Ignore if we already have a Parse in progress.
-        if self.parses.iter().any(|s| s == name) {
+        if self.parses.iter().any(|s| s.as_deref() == Some(name)) {
             return Ok(None);
         }
 
@@ -714,7 +734,7 @@ pub(crate) mod test {
     use super::*;
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
-        Bind, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
+        Bind, BindComplete, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
         Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
         messages::ReadyForQuery,
     };
@@ -737,6 +757,44 @@ pub(crate) mod test {
             ..ps.config()
         });
         ps
+    }
+
+    #[test]
+    fn ignored_settings_do_not_complete_a_later_parse() {
+        let mut ps = new_extended();
+        ps.handle(&Execute::new().into()).expect("client RESET");
+        for message in [
+            Parse::named("internal_reset", "SET search_path TO s1").into(),
+            Bind::new_name_portal("internal_reset", "internal_reset").into(),
+            Execute::new_portal("internal_reset").into(),
+            Close::portal("internal_reset").into(),
+            Close::named("internal_reset").into(),
+        ] {
+            ps.handle_ignore(&message).expect("internal setting");
+        }
+        ps.handle(&Parse::named("after_reset", "SELECT 1").into())
+            .expect("later parse");
+
+        assert!(
+            ps.forward(&mut CommandComplete::new("RESET").message())
+                .expect("RESET completion")
+        );
+        for mut reply in [
+            ParseComplete.message(),
+            BindComplete.message(),
+            CommandComplete::new("SET").message(),
+            CloseComplete.message(),
+            CloseComplete.message(),
+        ] {
+            assert!(!ps.forward(&mut reply).expect("internal response"));
+            assert!(!ps.contains("after_reset"));
+        }
+        assert!(
+            ps.forward(&mut ParseComplete.message())
+                .expect("client response")
+        );
+        assert!(ps.contains("after_reset"));
+        assert!(ps.done());
     }
 
     const TTL: Duration = Duration::from_secs(300);

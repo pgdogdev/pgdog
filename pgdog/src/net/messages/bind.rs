@@ -230,7 +230,6 @@ impl Bind {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn new_name_portal(name: &str, portal: &str) -> Self {
         Self {
             statement: c_string_bytes(name),

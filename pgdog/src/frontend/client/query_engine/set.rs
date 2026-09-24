@@ -1,6 +1,6 @@
-use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
+use crate::frontend::{SetParam, client_request::ResetParams};
 use crate::net::messages::ErrorResponse;
 
 use super::*;
@@ -106,6 +106,12 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            if !context.in_error() {
+                context.client_request.reset_params = Some(Box::new(ResetParams {
+                    client: context.params.clone(),
+                    startup: context.startup_params.tracked(),
+                }));
+            }
             self.execute(context, None).await?;
         } else {
             self.fake_command_response(context, "RESET", None).await?;

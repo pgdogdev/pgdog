@@ -37,7 +37,6 @@ impl Execute {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn new_portal(name: &str) -> Self {
         let mut payload = Payload::named('E');
         payload.put_string(name);
