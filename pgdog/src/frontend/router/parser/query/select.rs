@@ -152,7 +152,7 @@ impl QueryParser {
                         context.router_context.cluster.user(),
                         context.router_context.parameter_hints.search_path,
                     ),
-                    statement_parser.extract_tables(),
+                    statement_parser.into_tables(),
                     pending_lookups,
                 )
             }

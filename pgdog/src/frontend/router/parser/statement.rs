@@ -701,9 +701,13 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Extract all tables referenced in the statement.
-    /// TODO: not clear to me why this isn't using walk() to use the cached ver
-    pub(crate) fn extract_tables(&self) -> Vec<Table<'a>> {
-        self.run_walk().tables
+    /// If `walk()` was previously run, consume it
+    /// If `walk()` was not previously run, it walks and DOES NOT cache the result.
+    pub(crate) fn into_tables(mut self) -> Vec<Table<'a>> {
+        self.cached_walk
+            .take()
+            .map(|w| w.tables)
+            .unwrap_or_else(|| self.run_walk().tables)
     }
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
