@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, DataRow, ErrorResponse, FromBytes, Message, NoData,
-        ParameterDescription, ParseComplete, ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, ErrorResponse, NoData, ParameterDescription, ParseComplete,
+        ReadyForQuery, parameter::ParameterValue,
     },
 };
 
@@ -765,123 +765,46 @@ async fn test_lock_timeout() {
 
 #[tokio::test]
 async fn test_reset_all_restores_startup_parameters() {
-    for end in [None, Some("COMMIT"), Some("ROLLBACK")] {
-        let mut startup = Parameters::default();
-        startup.insert("search_path", "s1");
-        startup.insert("timezone", "Asia/Tokyo");
-        let mut client = TestClient::new_sharded(startup.clone()).await;
-
-        for query in [
-            "SET search_path TO runtime",
-            "SET timezone TO 'Europe/Paris'",
-            "SET statement_timeout TO '5s'",
-        ] {
-            client.send_simple(Query::new(query)).await;
-            client.read_until('Z').await.expect("SET completed");
-        }
-        if end.is_some() {
-            client.send_simple(Query::new("BEGIN")).await;
-            client.read_until('Z').await.expect("BEGIN completed");
-        }
-        client.send_simple(Query::new("RESET ALL")).await;
-        client.read_until('Z').await.expect("RESET ALL completed");
-
-        assert_eq!(
-            client.client().params.get("search_path"),
-            startup.get("search_path")
-        );
-        assert_eq!(
-            client.client().params.get("timezone"),
-            startup.get("timezone")
-        );
-        assert_eq!(client.client().params.get("statement_timeout"), None);
-
-        if let Some(end) = end {
-            client.send_simple(Query::new(end)).await;
-            client.read_until('Z').await.expect("transaction completed");
-        }
-        let (search_path, timezone, timeout) = if end == Some("ROLLBACK") {
-            (
-                "runtime",
-                "Europe/Paris",
-                Some(ParameterValue::String("5s".into())),
-            )
-        } else {
-            ("s1", "Asia/Tokyo", None)
-        };
-        assert_eq!(
-            client
-                .client()
-                .params
-                .get("search_path")
-                .and_then(ParameterValue::as_str),
-            Some(search_path)
-        );
-        assert_eq!(
-            client
-                .client()
-                .params
-                .get("timezone")
-                .and_then(ParameterValue::as_str),
-            Some(timezone)
-        );
-        assert_eq!(
-            client.client().params.get("statement_timeout"),
-            timeout.as_ref()
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_reset_all_flush_preserves_implicit_transaction() {
-    async fn flush_query(client: &mut TestClient, query: &str) -> Vec<Message> {
-        let messages: [ProtocolMessage; 5] = [
-            Parse::new_anonymous(query).into(),
-            Bind::new_statement("").into(),
-            Describe::new_portal("").into(),
-            Execute::new().into(),
-            Flush.into(),
-        ];
-        for message in messages {
-            client.send(message).await;
-        }
-        tokio::time::timeout(std::time::Duration::from_secs(5), client.try_process())
-            .await
-            .expect("Flush request must complete before Sync")
-            .expect("request processed");
-        client.read_until('C').await.expect("command completed")
-    }
-    fn row(messages: &[Message]) -> DataRow {
-        let message = messages
-            .iter()
-            .find(|message| message.code() == 'D')
-            .expect("data row");
-        DataRow::from_bytes(message.payload()).expect("valid data row")
-    }
-
     let mut startup = Parameters::default();
     startup.insert("search_path", "s1");
     startup.insert("timezone", "Asia/Tokyo");
-    let mut client = TestClient::new_sharded(startup).await;
-    client
-        .send_simple(Query::new("SET search_path TO runtime"))
-        .await;
-    client.read_until('Z').await.expect("SET completed");
+    let mut client = TestClient::new_sharded(startup.clone()).await;
 
-    let before = flush_query(&mut client, "SELECT pg_current_xact_id()::text").await;
-    let transaction = row(&before).get_text(0).expect("transaction ID");
-    let reset = flush_query(&mut client, "RESET ALL").await;
-    assert!(!reset.iter().any(|message| message.code() == 'Z'));
-    let after = flush_query(
-        &mut client,
-        "SELECT pg_current_xact_id()::text, current_setting('search_path'), current_setting('TimeZone')",
-    ).await;
-    let after = row(&after);
-    assert_eq!(after.get_text(0).as_deref(), Some(transaction.as_str()));
-    assert_eq!(after.get_text(1).as_deref(), Some("s1"));
-    assert_eq!(after.get_text(2).as_deref(), Some("Asia/Tokyo"));
+    for query in [
+        "SET search_path TO runtime",
+        "SET timezone TO 'Europe/Paris'",
+        "SET statement_timeout TO '5s'",
+        "RESET ALL",
+        "ROLLBACK",
+    ] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.expect("command completed");
+    }
+    assert_eq!(
+        client.client().params.get("search_path"),
+        startup.get("search_path")
+    );
+    assert_eq!(
+        client.client().params.get("timezone"),
+        startup.get("timezone")
+    );
+    assert_eq!(client.client().params.get("statement_timeout"), None);
+}
 
-    client.send(Sync).await;
-    client.try_process().await.expect("Sync processed");
-    client.read_until('Z').await.expect("transaction completed");
+#[tokio::test]
+async fn test_reset_all_keeps_transaction_rollback() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    for query in [
+        "SET search_path TO runtime",
+        "BEGIN",
+        "RESET ALL",
+        "ROLLBACK",
+    ] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.expect("command completed");
+    }
+    assert_eq!(
+        client.client().params.get("search_path"),
+        Some(&ParameterValue::String("runtime".into()))
+    );
 }

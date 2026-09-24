@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     frontend::router::Ast,
     net::{
-        Error, Flush, Parameters, Parse, ProtocolMessage,
+        Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
@@ -19,12 +19,6 @@ use crate::{
 use super::{PreparedStatements, router::Route};
 
 pub(crate) use super::BufferedQuery;
-
-#[derive(Debug, Clone)]
-pub(crate) struct ResetParams {
-    pub(crate) client: Parameters,
-    pub(crate) startup: Parameters,
-}
 
 /// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
@@ -41,8 +35,6 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
-    /// Client parameters to restore after RESET ALL on an attached backend.
-    pub(crate) reset_params: Option<Box<ResetParams>>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -69,7 +61,6 @@ impl ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
-            reset_params: None,
         }
     }
 
@@ -102,7 +93,6 @@ impl ClientRequest {
         }
 
         self.messages.clear();
-        self.reset_params = None;
         self.route = None;
         self.ast = None;
     }
@@ -229,7 +219,6 @@ impl ClientRequest {
             ast: self.ast.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
-            reset_params: self.reset_params.clone(),
         }
     }
 
@@ -413,7 +402,6 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
-            reset_params: None,
         }
     }
 }

@@ -225,76 +225,48 @@ async fn test_reset_in_transaction_rollback() {
         .unwrap();
 }
 
-async fn reset_all_settings(
-    client: &tokio_postgres::Client,
-) -> Result<(String, String, String), tokio_postgres::Error> {
-    let row = client
-        .query_one(
-            "SELECT current_setting('search_path'), current_setting('TimeZone'), current_setting('statement_timeout')",
-            &[],
-        )
-        .await?;
-    Ok((row.get(0), row.get(1), row.get(2)))
-}
-
 #[tokio::test]
 async fn test_reset_all_startup_parameters() -> Result<(), tokio_postgres::Error> {
     for port in [5432, 6432] {
         for extended in [false, true] {
-            for end in [None, Some("COMMIT"), Some("ROLLBACK")] {
-                let mut config = tokio_postgres::Config::new();
-                config
-                    .host("127.0.0.1")
-                    .port(port)
-                    .user("pgdog")
-                    .password("pgdog")
-                    .dbname("pgdog")
-                    .options("-c search_path=s1 -c timezone=Asia/Tokyo");
-                let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-                let task = tokio::spawn(connection);
+            let mut config = tokio_postgres::Config::new();
+            config
+                .host("127.0.0.1")
+                .port(port)
+                .user("pgdog")
+                .password("pgdog")
+                .dbname("pgdog")
+                .options("-c search_path=s1 -c timezone=Asia/Tokyo");
+            let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
+            let task = tokio::spawn(connection);
 
-                let startup = ("s1".into(), "Asia/Tokyo".into(), "0".into());
-                assert_eq!(reset_all_settings(&client).await?, startup);
-                client
-                    .batch_execute(
+            for changed in [false, true] {
+                if changed {
+                    client.batch_execute(
                         "SET search_path TO runtime; SET timezone TO 'Europe/Paris'; SET statement_timeout TO '5s'",
-                    )
-                    .await?;
-                let changed = ("runtime".into(), "Europe/Paris".into(), "5s".into());
-                assert_eq!(reset_all_settings(&client).await?, changed);
-
-                if end.is_some() {
-                    client.batch_execute("BEGIN").await?;
-                    // Attach a backend before RESET ALL, even with lazy transactions.
-                    client.simple_query("SELECT 1").await?;
+                    ).await?;
                 }
                 if extended {
                     client.execute("RESET ALL", &[]).await?;
                 } else {
                     client.batch_execute("RESET ALL").await?;
                 }
+                let row = client.query_one(
+                    "SELECT current_setting('search_path'), current_setting('TimeZone'), current_setting('statement_timeout')",
+                    &[],
+                ).await?;
                 assert_eq!(
-                    reset_all_settings(&client).await?,
-                    startup,
-                    "port={port}, extended={extended}, end={end:?}"
+                    (
+                        row.get::<_, String>(0),
+                        row.get::<_, String>(1),
+                        row.get::<_, String>(2)
+                    ),
+                    ("s1".into(), "Asia/Tokyo".into(), "0".into()),
+                    "port={port}, extended={extended}, changed={changed}"
                 );
-
-                if let Some(end) = end {
-                    client.batch_execute(end).await?;
-                }
-                let expected = if end == Some("ROLLBACK") {
-                    changed
-                } else {
-                    startup
-                };
-                assert_eq!(
-                    reset_all_settings(&client).await?,
-                    expected,
-                    "after transaction: port={port}, extended={extended}, end={end:?}"
-                );
-                drop(client);
-                task.await.expect("connection task completed")?;
             }
+            drop(client);
+            task.await.expect("connection task completed")?;
         }
     }
     Ok(())

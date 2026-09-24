@@ -212,10 +212,7 @@ impl ProtocolState {
 
             // Used for preparing statements that the client expects to be there.
             ExecutionItem::Ignore(in_queue) => {
-                if code == in_queue
-                    || (in_queue == ExecutionCode::ExecutionCompleted
-                        && code == ExecutionCode::CommandComplete)
-                {
+                if code == in_queue {
                     Ok(Action::Ignore)
                 } else {
                     Err(Error::ProtocolOutOfSync)
