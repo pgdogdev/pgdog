@@ -78,7 +78,7 @@ impl Connection {
         };
 
         if connect {
-            self.try_conn(request, route).await?;
+            self.connect_internal(request, route).await?;
 
             if !self.binding.state_check(State::Idle) {
                 return Err(Error::NotInSync);
@@ -110,7 +110,7 @@ impl Connection {
     }
 
     /// Try to get a connection for the given route.
-    async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if let Shard::Direct(shard) = route.shard() {
             let server = self
                 .cluster
