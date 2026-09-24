@@ -856,7 +856,7 @@ async fn test_reset_all_flush_preserves_implicit_transaction() {
             .iter()
             .find(|message| message.code() == 'D')
             .expect("data row");
-        DataRow::from_bytes(message.to_bytes()).expect("valid data row")
+        DataRow::from_bytes(message.payload()).expect("valid data row")
     }
 
     let mut startup = Parameters::default();
