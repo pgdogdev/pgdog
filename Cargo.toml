@@ -22,7 +22,8 @@ edition = "2024"
 pgdog-plugin = { path = "./pgdog-plugin", version = "0.4.0", default-features = false }
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "6a6e16719b48eae2c5897e2e28de8d2bd65184f9" }
+# TODO: update after merge https://github.com/pgdogdev/pg_raw_parse/pull/56
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", branch = "meskill-2026-09-24-test--wos" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
 schemars = { version = "1.2.1", features = ["uuid1", "chrono04", "indexmap2"] }

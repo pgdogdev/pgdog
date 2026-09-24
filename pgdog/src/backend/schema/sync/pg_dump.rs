@@ -1088,6 +1088,24 @@ CREATE TABLE t (id bigint PRIMARY KEY);"#,
     }
 
     #[test]
+    fn test_view_time_zone_json_path_keeps_parentheses() {
+        let output = parse(
+            r#"
+CREATE VIEW public.v AS
+SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE ((summary -> 'stop'::text) ->> 'tz'::text))::date AS d
+FROM public.s;"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            statements[0].sql,
+            "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE ((summary -> 'stop'::text) ->> 'tz'::text))::date AS d FROM public.s"
+        );
+    }
+
+    #[test]
     fn test_generated_identity() {
         let output = parse(
             "ALTER TABLE public.users ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
