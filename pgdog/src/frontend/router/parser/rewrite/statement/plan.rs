@@ -226,7 +226,7 @@ impl RewritePlan {
                         } else {
                             // Keep Parse/Bind/Describe/Sync and their corresponding replies.
                             // Preparing the outer statement must not execute the SQL PREPARE.
-                            request.sql_prepare = Some(prepare.clone());
+                            request.sql_prepare = Some(Box::new(prepare.clone()));
                         }
                     }
                     PrepareExecute::Execute(prepare) => {
@@ -280,7 +280,7 @@ impl RewritePlan {
             request.last_parse = None;
             // Keep the original Bind name for cross-shard result decoding.
             // The backend binds this rewritten unnamed statement instead.
-            request.rewritten_parse = Some(parse);
+            request.rewritten_parse = Some(Box::new(parse));
         }
 
         self.apply_after_messages(request)

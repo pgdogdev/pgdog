@@ -476,7 +476,7 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
-        let mut rewritten_parse = client_request.rewritten_parse.as_ref();
+        let mut rewritten_parse = client_request.rewritten_parse.as_deref();
         for message in client_request.messages.iter() {
             match message {
                 ProtocolMessage::Bind(bind) if client_request.rewritten_parse.is_some() => {
@@ -493,7 +493,7 @@ impl Server {
                     self.send_one(&bind.into()).await?;
                 }
                 ProtocolMessage::Execute(_)
-                    if let Some(prepare) = client_request.sql_prepare.as_ref() =>
+                    if let Some(prepare) = client_request.sql_prepare.as_deref() =>
                 {
                     if self.prepared_statements.handle_execute_prepare(prepare)
                         == HandleResult::Forward

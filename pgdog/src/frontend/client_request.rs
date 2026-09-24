@@ -36,9 +36,9 @@ pub(crate) struct ClientRequest {
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
     /// SQL PREPARE completed by this request's Execute message.
-    pub(crate) sql_prepare: Option<Prepare>,
+    pub(crate) sql_prepare: Option<Box<Prepare>>,
     /// Per-execution SQL EXECUTE rewrite, parsed internally before Bind.
-    pub(crate) rewritten_parse: Option<Parse>,
+    pub(crate) rewritten_parse: Option<Box<Parse>>,
 }
 
 impl MemoryUsage for ClientRequest {
