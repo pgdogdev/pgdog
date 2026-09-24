@@ -4,14 +4,10 @@ on:
     branches:
       - main
       - main-ent
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
+  merge_group:
+    types: [checks_requested]
 
 jobs:
   tests:
@@ -36,6 +32,7 @@ jobs:
         run: cargo test --doc
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
+        if: ${{ github.event_name != 'merge_group' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
