@@ -1,5 +1,36 @@
 use integration_tests_rust::setup::connections_sqlx;
 
+// Same test as `advisory_locks_working_generally` but with an inner hashtext() & hashtextextended func.
+// We previously weren't parsing out and resolving hash funcs that can be used inside advisory locks.
+// In fact, these previously weren't tracked at all (id resolved to None in `AdvisoryLock`)
+// This just tests that it works generally speaking. I have a unit test also that tests what shards they resolve to
+#[tokio::test]
+pub async fn advisory_locks_with_functions() {
+    let sharded_conn = connections_sqlx().await;
+    let sharded_conn = sharded_conn.get(1).unwrap();
+
+    let sharded_conn_2 = connections_sqlx().await;
+    let sharded_conn_2 = sharded_conn_2.get(1).unwrap();
+    let funcs = [
+        "hashtext('super_cool_resource')",
+        "hashtextextended('lock++', 123)",
+    ];
+
+    for func_to_try in funcs {
+        sqlx::raw_sql(format!("SELECT pg_advisory_lock({func_to_try})").as_str())
+            .execute(sharded_conn)
+            .await
+            .unwrap();
+
+        let lock_acquired: bool =
+            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({func_to_try})").as_str())
+                .fetch_one(sharded_conn_2)
+                .await
+                .unwrap();
+        assert!(!lock_acquired);
+    }
+}
+
 // Test a general case where:
 // - We have 2 shards.
 // - We obtain a lock on one connection

@@ -3,10 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::StatementParameters;
+use crate::frontend::router::sharding::{varchar_extended, varchar_not_extended};
 use crate::util::ResultControlFlowExt;
 use itertools::*;
 use pg_raw_parse::walk::Recurse;
-use pg_raw_parse::{Node, list, nodes, walk};
+use pg_raw_parse::{ConstValue, Node, list, nodes, walk};
 use std::ops::ControlFlow;
 
 fn advisory_locks_from_func_call(
@@ -44,6 +45,12 @@ fn advisory_locks_from_func_call(
         _ => return Vec::new(),
     };
 
+    // TODO: what if we have SELECT pg_advisory_lock(key1 bigint, key2 bigint)?
+    // This looks like, at a glance, that it just ignores the second one
+    // (which leads to incorrect lock tracking)
+    //
+    // TODO: I came across this as another kind of pg_advisory_lock arg: 'users'::regclass::integer
+    // that we don't handle right now (resolving to None) here as the id
     let Some(arg) = func.args().into_iter().next() else {
         return vec![AdvisoryLock {
             id: None,
@@ -68,6 +75,50 @@ fn advisory_locks_from_func_call(
     // being taken yet. Return empty so we don't route as if a lock is held.
     if bind.is_none() && is_param_ref(arg) {
         return Vec::new();
+    }
+
+    // SELECT pg_advisory_lock(hashtext('some text!'))
+    // Parse & evaluate a hashtext / hashtextended function within a pg_advisory_lock query.
+    // The purpose is to understand what ID the func resolves to, so we can set on `AdvisoryLock`
+    if let Node::FuncCall(call) = arg
+        && let Some(Node::String(name)) = call.funcname().first()
+        && let Some(function_name) = name.sval()
+    {
+        let args = call.args();
+        let hash_func_evaluated_to_num = if function_name.eq("hashtext")
+            && args.len() == 1
+            && let Some(Node::A_Const(arg1)) = args.first()
+            && let Some(ConstValue::String(hash_text)) = arg1.val()
+        {
+            Some(varchar_not_extended(hash_text.as_bytes()) as i64)
+        } else if function_name.eq("hashtextextended")
+            && args.len() == 2
+            && let Some(Node::A_Const(arg1)) = args.first()
+            && let Some(Node::A_Const(arg2)) = args.get(1)
+            && let Some(ConstValue::String(hash_text)) = arg1.val()
+            && let Some(ConstValue::Integer(seed)) = arg2.val()
+        {
+            // This is a u64 -> i64 cast (bitwise reinterpretation wrap-around)
+            // Postgres does this same thing.
+            Some(varchar_extended(hash_text.as_bytes(), seed as u64) as i64)
+        } else {
+            // TODO: There's likely some other funcs that are used;
+            // however, hashtext and hashtextended are the most common
+
+            // I'm really not a fan of silently routing everything else to 0.
+            // I tried re-working all this to return an Error, and it was like
+            // 200 LOC of changes though
+            None
+        };
+
+        if hash_func_evaluated_to_num.is_some() {
+            return vec![AdvisoryLock {
+                id: hash_func_evaluated_to_num,
+                unlock,
+                unlock_all: false,
+                scope,
+            }];
+        }
     }
 
     // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
@@ -650,6 +701,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     }
 
     /// Extract all tables referenced in the statement.
+    /// TODO: not clear to me why this isn't using walk() to use the cached ver
     pub(crate) fn extract_tables(&self) -> Vec<Table<'a>> {
         self.run_walk().tables
     }
@@ -3033,6 +3085,20 @@ mod test {
             assert_eq!(
                 locks("SELECT pg_advisory_unlock(42)"),
                 vec![session(Some(42), true)],
+            );
+        }
+
+        #[test]
+        fn lock_with_hashtext_both() {
+            // Try out hashtext and hashtextended; compared against the numbers Postgres outputs!
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(hashtext('hello world'))"),
+                vec![session(Some(1021725223), false)]
+            );
+
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(hashtextextended('hello world', 123))"),
+                vec![session(Some(3896024775453578562), false)]
             );
         }
 
