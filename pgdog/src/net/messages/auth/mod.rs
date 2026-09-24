@@ -15,7 +15,7 @@ pub(crate) enum Authentication {
     /// AuthenticationOk (F)
     Ok,
     /// AuthenticationSASL (B)
-    Sasl(String),
+    Sasl(Vec<String>),
     /// AuthenticationSASLContinue (B)
     SaslContinue(String),
     /// AuthenticationSASLFinal (B)
@@ -27,9 +27,30 @@ pub(crate) enum Authentication {
 }
 
 impl Authentication {
-    /// Request SCRAM-SHA-256 auth.
+    pub(crate) const SCRAM_SHA_256: &'static str = "SCRAM-SHA-256";
+    pub(crate) const SCRAM_SHA_256_PLUS: &'static str = "SCRAM-SHA-256-PLUS";
+
+    /// Request SCRAM-SHA-256 auth (no channel binding).
     pub(crate) fn scram() -> Authentication {
-        Authentication::Sasl("SCRAM-SHA-256".to_string())
+        Authentication::Sasl(vec![Self::SCRAM_SHA_256.to_string()])
+    }
+
+    /// Request SCRAM-SHA-256-PLUS, falling back to SCRAM-SHA-256.
+    ///
+    /// PLUS is listed first so clients that pick the first advertised
+    /// mechanism get channel binding, matching PostgreSQL.
+    pub(crate) fn scram_plus() -> Authentication {
+        Authentication::Sasl(vec![
+            Self::SCRAM_SHA_256_PLUS.to_string(),
+            Self::SCRAM_SHA_256.to_string(),
+        ])
+    }
+}
+
+pub(crate) fn scram_challenge(tls_server_end_point: Option<&[u8]>) -> Authentication {
+    match tls_server_end_point {
+        Some(_) => Authentication::scram_plus(),
+        None => Authentication::scram(),
     }
 }
 
@@ -57,8 +78,18 @@ impl FromBytes for Authentication {
                 Ok(Authentication::Md5(Bytes::from(salt)))
             }
             10 => {
-                let mechanism = c_string_buf(&mut bytes);
-                Ok(Authentication::Sasl(mechanism))
+                let mut mechanisms = Vec::new();
+                loop {
+                    let mechanism = c_string_buf(&mut bytes);
+                    if mechanism.is_empty() {
+                        break;
+                    }
+                    mechanisms.push(mechanism);
+                }
+                if mechanisms.is_empty() {
+                    return Err(Error::UnexpectedPayload);
+                }
+                Ok(Authentication::Sasl(mechanisms))
             }
             11 => {
                 let data = c_string_buf(&mut bytes);
@@ -102,9 +133,11 @@ impl ToBytes for Authentication {
                 payload.freeze()
             }
 
-            Authentication::Sasl(mechanism) => {
+            Authentication::Sasl(mechanisms) => {
                 payload.put_i32(10);
-                payload.put_string(mechanism);
+                for mechanism in mechanisms {
+                    payload.put_string(mechanism);
+                }
                 payload.put_u8(0);
 
                 payload.freeze()
@@ -124,5 +157,79 @@ impl ToBytes for Authentication {
                 payload.freeze()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sasl_mechanisms(auth: Authentication) -> Option<Vec<String>> {
+        match auth {
+            Authentication::Sasl(mechanisms) => Some(mechanisms),
+            _ => None,
+        }
+    }
+
+    fn decoded(auth: Authentication) -> Authentication {
+        Authentication::from_bytes(auth.to_bytes()).unwrap()
+    }
+
+    #[test]
+    fn sasl_mechanisms_none_unless_sasl() {
+        assert_eq!(sasl_mechanisms(Authentication::Ok), None);
+        assert_eq!(
+            sasl_mechanisms(Authentication::Sasl(vec!["SCRAM-SHA-256".into()])),
+            Some(vec!["SCRAM-SHA-256".into()])
+        );
+    }
+
+    #[test]
+    fn scram_advertises_sha_256_only() {
+        assert_eq!(
+            sasl_mechanisms(decoded(Authentication::scram())).expect("Sasl"),
+            vec![Authentication::SCRAM_SHA_256]
+        );
+    }
+
+    #[test]
+    fn scram_plus_advertises_plus_then_sha_256() {
+        assert_eq!(
+            sasl_mechanisms(decoded(Authentication::scram_plus())).expect("Sasl"),
+            vec![
+                Authentication::SCRAM_SHA_256_PLUS,
+                Authentication::SCRAM_SHA_256
+            ]
+        );
+    }
+
+    #[test]
+    fn scram_challenge_encodes_plus_then_sha_256_when_cbind_present() {
+        assert_eq!(
+            sasl_mechanisms(decoded(scram_challenge(Some(&[1, 2, 3])))).expect("Sasl"),
+            vec![
+                Authentication::SCRAM_SHA_256_PLUS,
+                Authentication::SCRAM_SHA_256
+            ]
+        );
+    }
+
+    #[test]
+    fn scram_challenge_encodes_sha_256_only_when_cbind_absent() {
+        assert_eq!(
+            sasl_mechanisms(decoded(scram_challenge(None))).expect("Sasl"),
+            vec![Authentication::SCRAM_SHA_256]
+        );
+    }
+
+    #[test]
+    fn sasl_without_mechanisms_is_unexpected_payload() {
+        let mut payload = Payload::named('R');
+        payload.put_i32(10);
+        payload.put_u8(0);
+        assert!(matches!(
+            Authentication::from_bytes(payload.freeze()),
+            Err(Error::UnexpectedPayload)
+        ));
     }
 }

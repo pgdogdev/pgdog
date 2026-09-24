@@ -1,9 +1,5 @@
 //! Databases behind pgDog.
 
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-
 use arc_swap::ArcSwap;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
@@ -17,6 +13,9 @@ use pgdog_config::{
     EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::AuthResult;
@@ -77,6 +76,8 @@ pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Resul
     // 4. Shutdown all databases.
     old_databases.shutdown();
 
+    super::reload_signal::notify();
+
     Ok(())
 }
 
@@ -117,6 +118,17 @@ pub(crate) fn shutdown() {
     databases().shutdown();
 }
 
+/// Reset cumulative statistics for all connection pools.
+pub(crate) fn reset_stats() {
+    for cluster in databases().all().values() {
+        for shard in cluster.shards() {
+            for pool in shard.pool_iter() {
+                pool.reset_stats();
+            }
+        }
+    }
+}
+
 /// Cancel all queries running on a database.
 pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     let clusters: Vec<_> = databases()
@@ -131,14 +143,31 @@ pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Terminates all active connections on all `Pool`s.
+pub(crate) fn terminate_active_connections() {
+    databases()
+        .all()
+        .values()
+        .for_each(Cluster::terminate_active_connections);
+}
+
 /// Re-create pools from config.
-pub(crate) fn reload() -> Result<(), Error> {
-    info!("reloading configuration");
+pub(crate) fn reload(force: bool) -> Result<(), Error> {
+    if force {
+        info!("force reloading configuration");
+    } else {
+        info!("reloading configuration");
+    }
 
     // Load config from disk.
     let old_config = config();
     let new_config = load(&old_config.config_path, &old_config.users_path)?;
     let databases = from_config(&new_config);
+
+    // Terminate after checking config for validity.
+    if force {
+        terminate_active_connections();
+    }
 
     // Replace databases.
     replace_databases(databases, true)?;
@@ -183,7 +212,7 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     if let Some(mut existing) = existing {
         // Password hasn't been set yet.
         if existing.password.is_none() {
-            existing.password = user.password.clone();
+            existing.password = user.password;
             add_user(existing)?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
@@ -199,8 +228,8 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
             Ok(AuthResult::Ok)
         } else if config.config.general.passthrough_auth.allows_change() {
             // Passwords don't match but we can change it.
-            existing.password = user.password.clone();
-            add_user(user)?;
+            existing.password = user.password;
+            add_user(existing)?;
             reload_from_existing()?;
             Ok(AuthResult::Ok)
         } else {
@@ -228,6 +257,7 @@ pub(crate) async fn cutover(source: &str, destination: &str) -> Result<(), Error
         config.config.cutover(source, destination);
         config.users.cutover(source, destination);
 
+        let config = crate::config::set(config)?;
         let databases = from_config(&config);
 
         replace_databases(databases, true)?;
@@ -407,8 +437,8 @@ impl Databases {
 
             if let Some(dest) = dest
                 && cluster.can_move_conns_to(dest)
+                && cluster.move_conns_to(dest)?
             {
-                cluster.move_conns_to(dest)?;
                 moved += 1;
             }
         }
@@ -866,6 +896,26 @@ mod tests {
         let config = crate::config::config();
         let found = config.users.find(&make_user("dave", None));
         assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_password_change_preserves_user_config() {
+        let mut erin = make_user("erin", Some("old_pass"));
+        erin.statement_timeout = Some(100);
+        erin.pool_size = Some(7);
+        erin.server_password = Some("server_secret".to_string());
+
+        setup_config(PassthroughAuth::EnabledPlainAllowChange, vec![erin]);
+
+        let result = add(make_user("erin", Some("new_pass")));
+        assert!(result.unwrap().is_ok());
+
+        let config = crate::config::config();
+        let found = config.users.find(&make_user("erin", None)).unwrap();
+        assert_eq!(found.password, Some("new_pass".to_string()));
+        assert_eq!(found.statement_timeout, Some(100));
+        assert_eq!(found.pool_size, Some(7));
+        assert_eq!(found.server_password, Some("server_secret".to_string()));
     }
 
     #[test]
@@ -1971,5 +2021,43 @@ password = "testpass"
         assert_eq!(resolved.name.as_deref(), Some("Orders"));
         assert_eq!(resolved.schema.as_deref(), Some("Public"));
         assert_eq!(resolved.column, "Tenant_Id");
+    }
+
+    #[tokio::test]
+    async fn test_cutover_swaps_back_on_the_second_call() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases.push(Database {
+            name: "single".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            ..Default::default()
+        });
+        for shard in 0..2 {
+            config.config.databases.push(Database {
+                name: "sharded".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: Some(format!("shard_{shard}")),
+                shard,
+                ..Default::default()
+            });
+        }
+        for database in ["single", "sharded"] {
+            let mut user = ConfigUser::new("pgdog", "pgdog", database);
+            user.schema_admin = true;
+            config.users.users.push(user);
+        }
+        crate::config::set(config).unwrap();
+        init().unwrap();
+
+        let shards = |database: &str| databases().schema_owner(database).unwrap().shards().len();
+
+        assert_eq!((shards("single"), shards("sharded")), (1, 2));
+
+        cutover("single", "sharded").await.unwrap();
+        assert_eq!((shards("single"), shards("sharded")), (2, 1));
+
+        cutover("single", "sharded").await.unwrap();
+        assert_eq!((shards("single"), shards("sharded")), (1, 2));
     }
 }

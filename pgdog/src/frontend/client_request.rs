@@ -33,6 +33,8 @@ pub(crate) struct ClientRequest {
     pub(crate) ast: Option<Ast>,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
+    /// How many parameters the client wrote in the unnamed prepared statement
+    pub(crate) anonymous_client_params: Option<u16>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -58,6 +60,7 @@ impl ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            anonymous_client_params: None,
         }
     }
 
@@ -215,6 +218,7 @@ impl ClientRequest {
             route: self.route.clone(),
             ast: self.ast.clone(),
             last_parse: None,
+            anonymous_client_params: self.anonymous_client_params,
         }
     }
 
@@ -353,8 +357,16 @@ impl ClientRequest {
                 // Sync is always in its own request. This ensures
                 // we can handle ReadyForQuery separately from query results.
                 'S' => {
-                    // Push any accumulated messages first
+                    // Push any accumulated messages first. Since Sync is moved
+                    // to a separate request, force Postgres to deliver the
+                    // responses for this request before we wait for them.
                     if !current_request.is_empty() {
+                        if current_request
+                            .last()
+                            .is_none_or(|message| message.code() != 'H')
+                        {
+                            current_request.push(Flush.into());
+                        }
                         requests.push(std::mem::take(&mut current_request));
                     }
                     // Sync goes in its own request
@@ -389,6 +401,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             route: None,
             ast: None,
             last_parse: None,
+            anonymous_client_params: None,
         }
     }
 }
@@ -422,7 +435,7 @@ mod test {
             Parse::named("test", "SELECT $1").into(),
             Bind::new_statement("test").into(),
             Execute::new().into(),
-            Describe::new_statement("test").into(),
+            Describe::new_portal("").into(),
             Sync::new().into(),
         ];
         let req = ClientRequest::from(messages);
@@ -467,10 +480,11 @@ mod test {
             panic!("Expected Bind message");
         }
 
-        // Third slice should contain: Describe("test")
+        // Third slice should contain: Describe portal, Flush
         let third_slice = &splice[2];
-        assert_eq!(third_slice.len(), 1);
+        assert_eq!(third_slice.len(), 2);
         assert_eq!(third_slice[0].code(), 'D'); // Describe
+        assert_eq!(third_slice[1].code(), 'H'); // Flush
 
         // Fourth slice should contain: Sync (always separate)
         let fourth_slice = &splice[3];

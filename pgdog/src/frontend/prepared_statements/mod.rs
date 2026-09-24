@@ -8,7 +8,10 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::RewritePlan,
+    frontend::{
+        RewritePlan,
+        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
+    },
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -29,7 +32,7 @@ pub(crate) use global_cache::GlobalCache;
 // Maintenance tasks are spawned in main.rs.
 pub(crate) use maintenance::*;
 pub(crate) use rewrite::Rewrite;
-pub(crate) use statement::{Statement, StatementType};
+pub(crate) use statement::{PreparedPlan, Statement, StatementType};
 
 static CACHE: Lazy<PreparedStatements> = Lazy::new(PreparedStatements::default);
 
@@ -111,22 +114,28 @@ impl PreparedStatements {
     }
 
     /// Insert PREPARE statement into the cache.
-    ///
-    /// # Arguments
-    ///
-    /// - `parse`: [`Parse`] message, with the prepared statement named by the client.
-    ///
-    /// # Return
-    ///
-    /// Nothing, but the message is renamed to a unique, global name.
-    ///
     pub(crate) fn insert_prepare(
         &mut self,
         name: &str,
-        query: Bytes,
+        original_query: Bytes,
+        rewritten_query: Option<Bytes>,
+        // TODO: I think we should just pass `unique_ids` in here by itself.
+        //       Otherwise, it could be easily confused to want
+        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
         rewrite_plan: &RewritePlan,
+        // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
+        offset_plan: Option<OffsetPlan>,
+        generated_params: Vec<GeneratedParam>,
     ) -> Prepare {
-        let (_new, prepare) = { self.global.write().insert_prepare(query, rewrite_plan) };
+        let (_new, prepare) = {
+            self.global.write().insert_prepare(
+                original_query,
+                rewritten_query,
+                rewrite_plan,
+                offset_plan,
+                generated_params,
+            )
+        };
 
         self.insert_internal(name, prepare.name());
 
@@ -139,11 +148,11 @@ impl PreparedStatements {
         self.local.get(name)
     }
 
-    /// Get a globally unique [`Prepare`] message using the client name as key.
-    pub(crate) fn prepare_and_unique_ids(&self, name: &str) -> Option<(Prepare, u16)> {
+    /// Get a globally unique `PreparedPlan` using the client name as key.
+    pub(crate) fn prepared_plan(&self, name: &str) -> Option<PreparedPlan> {
         self.local
             .get(name)
-            .and_then(|name| self.global.read().prepare_and_unique_ids(name))
+            .and_then(|name| self.global.read().prepared_plan(name))
     }
 
     /// Number of prepared statements in the client's cache.
@@ -168,9 +177,9 @@ impl PreparedStatements {
 
     /// Close all prepared statements on this client.
     ///
-    /// This only happens when the client disconnects. This will update
-    /// the global usage counters of all of client's prepared statements.
-    pub(super) fn close_all(&mut self) {
+    /// Called when the client disconnects or runs `DISCARD`. Updates
+    /// the global usage counters of all of the client's prepared statements.
+    pub(crate) fn close_all(&mut self) {
         if !self.local.is_empty() {
             let mut global = self.global.write();
 

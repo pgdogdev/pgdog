@@ -12,20 +12,19 @@ use std::{
 use futures::future::try_join_all;
 use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
+use pgdog_stats::MissedRows;
 use tracing::{debug, trace, warn};
 
 use super::super::publisher::{NonIdentityColumnsPresence, tables_missing_unique_index};
 use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
-use super::PipelinedConnection;
 use super::StreamContext;
-use super::omni_ownership::OmniOwnership;
+use super::{PipelinedConnection, connect_primary};
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
-    backend::{Cluster, ConnectReason, Server},
-    config::Role,
+    backend::{Cluster, Server},
     frontend::router::parser::Shard,
     net::{
         Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
@@ -130,13 +129,13 @@ pub(crate) struct StreamSubscriber {
 
     // Bytes sharded
     bytes_sharded: usize,
+    rows_sharded: usize,
 
-    // Determines which destination shards this subscriber owns for omni tables.
-    partition: OmniOwnership,
+    missed_rows: MissedRows,
 }
 
 impl StreamSubscriber {
-    pub(crate) fn new(cluster: &Cluster, tables: &[Table], partition: OmniOwnership) -> Self {
+    pub(crate) fn new(cluster: &Cluster, tables: Vec<Table>) -> Self {
         let cluster = cluster.logical_stream();
         Self {
             cluster,
@@ -145,14 +144,14 @@ impl StreamSubscriber {
             table_lsns: HashMap::new(),
             changed_tables: HashSet::new(),
             tables: tables
-                .iter()
+                .into_iter()
                 .map(|table| {
                     (
                         Key {
                             schema: table.table.schema.clone(),
                             name: table.table.name.clone(),
                         },
-                        table.clone(),
+                        table,
                     )
                 })
                 .collect(),
@@ -160,10 +159,11 @@ impl StreamSubscriber {
             committed_lsn: 0,
             lsn: 0, // Unknown,
             bytes_sharded: 0,
+            rows_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
             keys: HashMap::default(),
-            partition,
+            missed_rows: MissedRows::default(),
         }
     }
 
@@ -177,15 +177,7 @@ impl StreamSubscriber {
         let mut conns: Vec<Server> = vec![];
 
         for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(r, _)| r == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Replication)
-                .await?;
-            conns.push(primary);
+            conns.push(connect_primary(shard).await?);
         }
 
         // Transaction control statements.
@@ -246,7 +238,6 @@ impl StreamSubscriber {
             }
         }
 
-        let partition = self.partition;
         let n_conns = self.connections.len();
         let is_direct = val.is_direct();
 
@@ -256,13 +247,9 @@ impl StreamSubscriber {
         let mut pending: Option<usize> = None;
         for shard in 0..n_conns {
             let target = match val {
-                // With a single destination shard the router collapses Shard::All
-                // to Direct(0), bypassing the partition ownership check.  Apply
-                // partition.owns() for all variants when there is only one connection
-                // so that omni-table writes are still partitioned across subscribers.
-                Shard::Direct(direct) if n_conns > 1 => shard == *direct,
-                Shard::Multi(multi) if n_conns > 1 => multi.contains(&shard),
-                _ => partition.owns(shard),
+                Shard::Direct(direct) => shard == *direct,
+                Shard::Multi(multi) => multi.contains(&shard),
+                _ => true,
             };
             if !target {
                 continue;
@@ -823,6 +810,12 @@ impl StreamSubscriber {
         self.connections.clear();
     }
 
+    fn capture_missed_rows(&mut self) {
+        for conn in &self.connections {
+            self.missed_rows.merge(conn.take_missed_rows());
+        }
+    }
+
     /// `docs/REPLICATION.md` → "Error rollback".
     pub(crate) async fn handle(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         match self.handle_inner(data).await {
@@ -854,11 +847,21 @@ impl StreamSubscriber {
             && let Some(payload) = xlog.payload()
         {
             match payload {
-                XLogPayload::Insert(insert) => self.insert(insert).await?,
-                XLogPayload::Update(update) => self.update(update).await?,
-                XLogPayload::Delete(delete) => self.delete(delete).await?,
+                XLogPayload::Insert(insert) => {
+                    self.insert(insert).await?;
+                    self.rows_sharded += 1;
+                }
+                XLogPayload::Update(update) => {
+                    self.update(update).await?;
+                    self.rows_sharded += 1;
+                }
+                XLogPayload::Delete(delete) => {
+                    self.delete(delete).await?;
+                    self.rows_sharded += 1;
+                }
                 XLogPayload::Commit(commit) => {
                     self.commit(commit).await?;
+                    self.capture_missed_rows();
                     status_update = Some(self.status_update());
                     self.in_transaction = false;
                 }
@@ -892,6 +895,11 @@ impl StreamSubscriber {
         self.bytes_sharded
     }
 
+    /// Number of rows applied.
+    pub(crate) fn rows_sharded(&self) -> usize {
+        self.rows_sharded
+    }
+
     /// Advance both LSN fields. Call after commit and on publisher init.
     pub(crate) fn set_current_lsn(&mut self, lsn: i64) -> bool {
         self.lsn_changed = lsn != self.lsn;
@@ -916,13 +924,11 @@ impl StreamSubscriber {
         self.in_transaction
     }
 
-    /// Aggregate and reset the missed-row counters across all shard connections.
+    /// Missed rows of all transactions committed so far. Resets on read.
+    /// Rows of a transaction that failed are never counted, because the
+    /// source sends that transaction again after a reconnect.
     pub(crate) fn missed_rows(&mut self) -> MissedRows {
-        let mut total = MissedRows::default();
-        for conn in &self.connections {
-            total.merge(conn.take_missed_rows());
-        }
-        total
+        std::mem::take(&mut self.missed_rows)
     }
 
     /// Verify every destination shard has a qualifying unique index for all `tables`.
@@ -955,71 +961,6 @@ impl StreamSubscriber {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct MissedRows {
-    insert: usize,
-    delete: usize,
-    update: usize,
-}
-
-impl MissedRows {
-    pub(crate) fn non_zero(&self) -> bool {
-        self.insert > 0 || self.delete > 0 || self.update > 0
-    }
-
-    /// Missed-row counts as `(insert, update, delete)`.
-    #[cfg(test)]
-    pub(crate) fn counts(&self) -> (usize, usize, usize) {
-        (self.insert, self.update, self.delete)
-    }
-
-    /// Count a direct-to-shard DML that touched 0 rows, keyed by command tag.
-    pub(crate) fn record(&mut self, tag: &str) {
-        match tag {
-            "UPDATE" => self.update += 1,
-            "DELETE" => self.delete += 1,
-            "INSERT" => self.insert += 1,
-            _ => (),
-        }
-    }
-
-    /// Fold another shard's counts into this one.
-    pub(crate) fn merge(&mut self, other: MissedRows) {
-        self.insert += other.insert;
-        self.update += other.update;
-        self.delete += other.delete;
-    }
-}
-
-impl Display for MissedRows {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut written = false;
-        if self.insert > 0 {
-            write!(f, "insert={}", self.insert)?;
-            written = true;
-        }
-        if self.update > 0 {
-            write!(
-                f,
-                "{}update={}",
-                if written { " " } else { "" },
-                self.update
-            )?;
-            written = true;
-        }
-        if self.delete > 0 {
-            write!(
-                f,
-                "{}delete={}",
-                if written { " " } else { "" },
-                self.delete
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::tests::begin_copy_data;
@@ -1028,7 +969,7 @@ mod tests {
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, &[], OmniOwnership::test())
+        StreamSubscriber::new(&cluster, vec![])
     }
 
     #[test]

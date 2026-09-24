@@ -142,6 +142,11 @@ impl Hash for Double {
         if self.0.is_nan() {
             // All NaN values hash to the same value
             0u8.hash(state);
+        } else if self.0 == 0.0 {
+            // 0.0 and -0.0 compare equal but have different bit patterns,
+            // so they must hash to the same value. Postgres normalizes the
+            // sign of zero the same way, in hashfloat8.
+            0.0_f64.to_bits().hash(state);
         } else {
             // Use bit representation for consistent hashing
             self.0.to_bits().hash(state);
@@ -278,7 +283,7 @@ mod tests {
 
         assert_eq!(hash1, hash2);
 
-        // Different values should (likely) have different hashes
+        // 0.0 and -0.0 compare equal, so they must hash the same
         let mut hasher3 = DefaultHasher::new();
         zero.hash(&mut hasher3);
         let hash3 = hasher3.finish();
@@ -287,8 +292,30 @@ mod tests {
         neg_zero.hash(&mut hasher4);
         let hash4 = hasher4.finish();
 
-        // Note: 0.0 and -0.0 have different bit patterns
-        assert_ne!(hash3, hash4);
+        assert_eq!(zero, neg_zero);
+        assert_eq!(hash3, hash4);
+
+        // Values that differ must still land on different hashes
+        let mut hasher5 = DefaultHasher::new();
+        Double(1.0).hash(&mut hasher5);
+        assert_ne!(hash3, hasher5.finish());
+    }
+
+    #[test]
+    fn test_double_negative_zero_groups_with_zero() {
+        use std::collections::HashSet;
+
+        // Cross-shard GROUP BY buckets rows in a HashMap keyed on the
+        // grouped values, so -0.0 coming back from one shard has to land
+        // in the same bucket as 0.0 from another, the way it would on a
+        // single Postgres node.
+        let mut set = HashSet::new();
+        set.insert(Double(0.0));
+        set.insert(Double(-0.0));
+
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&Double(-0.0)));
+        assert!(set.contains(&Double(0.0)));
     }
 
     #[test]

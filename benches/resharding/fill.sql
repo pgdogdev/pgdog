@@ -17,6 +17,8 @@
 -- Shard slice: pass -v num_shards=N -v shard_index=I to insert only the
 --   rows that belong on shard I.  Defaults to a single shard (all rows).
 \getenv scale BENCH_SCALE
+\set QUIET on
+SET client_min_messages TO warning;
 \if :{?scale}
 \else
 \set scale 100000
@@ -28,6 +30,10 @@
 \if :{?shard_index}
 \else
 \set shard_index 0
+\endif
+\if :{?copies}
+\else
+\set copies 40
 \endif
 -- ── sessions (inline, UUID + TIMESTAMPTZ heavy) ────────────────────────────────
 INSERT INTO bench_copy.sessions (
@@ -53,7 +59,7 @@ SELECT
     ROUND((gs.i % 1000)::numeric / 1000.0, 6)::float8,
     (gs.i % 10000),
     (gs.i % 1000000)::bigint * 1024
-FROM generate_series(:shard_index + 1, :scale, :num_shards) AS gs(i);
+FROM generate_series(:shard_index + 1, :scale / :copies, :num_shards) AS gs(i);
 
 -- ── documents (body ≈ 32 KB, STORAGE EXTERNAL) ────────────────────────────────
 INSERT INTO bench_copy.documents (id, tenant_id, title, body, tags, metadata, created_at, updated_at)
@@ -74,7 +80,7 @@ SELECT
     ),
     now() - ((gs.i % 730) || ' days')::interval,
     now() - ((gs.i % 365) || ' days')::interval
-FROM generate_series(:shard_index + 1, :scale / 100, :num_shards) AS gs(i);
+FROM generate_series(:shard_index + 1, :scale / 100 / :copies, :num_shards) AS gs(i);
 
 -- files (omni, no tenant_id) -- copied to every destination shard. content ~4 KB TOAST.
 INSERT INTO bench_copy.files (id, name, mime_type, content, size_bytes, checksum, uploaded_at)
@@ -86,7 +92,7 @@ SELECT
     4096,
     md5(gs.i::text),
     now() - ((gs.i % 365) || ' days')::interval
-FROM generate_series(1, :scale / 100) AS gs(i);
+FROM generate_series(1, :scale / 100 / :copies) AS gs(i);
 
 -- ── ledger (notes ≈ 16 KB, STORAGE EXTERNAL) ─────────────────────────────────
 INSERT INTO bench_copy.ledger (id, tenant_id, ref_code, amount, rate, currency, notes, checkpoints, posted_at)
@@ -104,4 +110,12 @@ SELECT
         FROM generate_series(0, (gs.i % 5)) AS j
     ),
     now() - ((gs.i % 365) || ' days')::interval
-FROM generate_series(:shard_index + 1, :scale / 100, :num_shards) AS gs(i);
+FROM generate_series(:shard_index + 1, :scale / 100 / :copies, :num_shards) AS gs(i);
+
+SELECT format(
+    'INSERT INTO bench_copy.%I SELECT * FROM bench_copy.%I',
+    t || '_' || lpad(g::text, 3, '0'),
+    t
+)
+FROM unnest(ARRAY['sessions', 'documents', 'files', 'ledger']) AS t,
+     generate_series(2, :copies) AS g \gexec

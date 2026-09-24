@@ -1,14 +1,15 @@
 use crate::{
     backend::pool::{Connection, Request},
     frontend::{
-        BufferedQuery, Client, ClientComms, Command, Error, Router, RouterContext, Stats,
+        BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
+        Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         router::{Route, parser::Shard},
     },
     net::{ErrorResponse, Message, Parameters},
     state::State,
 };
-
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 pub(crate) mod advisory_lock;
@@ -34,6 +35,7 @@ pub(crate) mod route_query;
 pub(crate) mod set;
 pub(crate) mod split;
 pub(crate) mod start_transaction;
+mod temp_table;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
@@ -47,6 +49,8 @@ pub(crate) use context::QueryEngineContext;
 use notify_buffer::NotifyBuffer;
 pub(crate) use result::QueryEngineResult;
 pub(crate) use split::Pipeline;
+pub(in crate::frontend) use temp_table::TempTableChange;
+use temp_table::TempTables;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
 
@@ -69,6 +73,7 @@ pub(crate) struct QueryEngine {
     // They will remain pinned to their connection until they unpin manually
     // or disconnect.
     manual_lock: bool,
+    temp_tables: TempTables,
 }
 
 impl QueryEngine {
@@ -96,11 +101,17 @@ impl QueryEngine {
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
+            temp_tables: Default::default(),
         })
     }
 
     pub(crate) fn from_client(client: &Client) -> Result<Self, Error> {
         Self::new(&client.params, &client.comms, client.admin)
+    }
+
+    /// Token cancelled when an admin terminates this client's cluster (FORCE_RELOAD).
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.backend.cancellation_token()
     }
 
     /// Wait for an async message from the backend.
@@ -145,7 +156,7 @@ impl QueryEngine {
         }
 
         // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context) {
+        let rewrite_result = match self.parse_and_rewrite(context).await {
             Ok(rewrite_result) => rewrite_result,
             Err(e) => {
                 self.error_response(context, ErrorResponse::syntax(e.to_string()))
@@ -269,7 +280,9 @@ impl QueryEngine {
             }
             Command::Copy(_) => self.execute(context, rewrite_result).await?,
             Command::Deallocate => self.deallocate(context).await?,
-            Command::Discard { extended } => self.discard(context, *extended).await?,
+            Command::Discard { target, extended } => {
+                self.discard(context, *target, *extended).await?
+            }
             Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }
 

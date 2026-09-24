@@ -5,6 +5,7 @@ use pg_raw_parse::make::{owned, try_owned};
 use pg_raw_parse::{DeparseResult, Node, NodeMut, Owned, deparse, nodes, walk};
 use pgdog_config::RewriteMode;
 
+use crate::backend::ShardedTables;
 use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
@@ -95,28 +96,18 @@ impl Deref for ShardingKeyUpdate {
 impl ShardingKeyUpdate {
     pub(crate) fn sharded_table<'a>(
         &self,
-        sharded_tables: &'a [ShardedTable],
+        sharded_tables: &'a ShardedTables,
     ) -> Option<&'a ShardedTable> {
         let table = self.target_table();
 
-        sharded_tables.iter().find(|sharded| {
+        sharded_tables.tables().iter().find(|sharded| {
             if let Some(name) = sharded.name.as_ref()
                 && !table.name_match(name)
             {
                 return false;
             }
 
-            if let Some(schema) = sharded.schema.as_ref()
-                && let Some(table_schema) = table.schema
-                && table_schema != schema
-            {
-                return false;
-            }
-
-            self.from_update
-                .target_list()
-                .iter()
-                .any(|rt| rt.name() == Some(&*sharded.column))
+            sharded.schema.as_deref() == table.schema
         })
     }
 }
@@ -467,6 +458,8 @@ mod test {
             prepared_statements: &mut stmts,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         };
         let mut plan = RewritePlan::default();
         StatementRewrite::new(ctx).sharding_key_update(
@@ -493,9 +486,8 @@ mod test {
         assert_eq!(result.delete.params, indexset![2]);
 
         let schema = default_schema();
-        let tables = schema.tables.tables();
         assert_eq!(result.target_table().name, "sharded");
-        assert_eq!(result.sharded_table(tables).unwrap().column, "id");
+        assert_eq!(result.sharded_table(&schema.tables).unwrap().column, "id");
     }
 
     #[test]
@@ -552,23 +544,17 @@ mod test {
             "DELETE FROM sharded WHERE email = $1 RETURNING *"
         );
 
-        assert!(result.sharded_table(&[]).is_none());
+        assert!(result.sharded_table(&ShardedTables::default()).is_none());
         assert!(
             result
-                .sharded_table(&[ShardedTable {
-                    name: Some("other".into()),
-                    column: "id".into(),
-                    ..Default::default()
-                }])
-                .is_none()
-        );
-        assert!(
-            result
-                .sharded_table(&[ShardedTable {
-                    name: Some("sharded".into()),
-                    column: "user_id".into(),
-                    ..Default::default()
-                }])
+                .sharded_table(&ShardedTables::from(
+                    [ShardedTable {
+                        name: Some("other".into()),
+                        column: "id".into(),
+                        ..Default::default()
+                    }]
+                    .as_slice()
+                ))
                 .is_none()
         );
     }

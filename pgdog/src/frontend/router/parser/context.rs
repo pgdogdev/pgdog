@@ -65,7 +65,7 @@ impl<'a> QueryParserContext<'a> {
         let mut shards_calculator = ShardsWithPriority::default();
         let mut bare_key_lookups = Vec::new();
 
-        let sharded_tables = !router_context.cluster.sharded_tables().is_empty();
+        let sharded_tables = !router_context.cluster.sharded_tables().tables().is_empty();
         let sharding_schema = router_context.cluster.sharding_schema();
 
         router_context.parameter_hints.compute_shard(
@@ -98,10 +98,14 @@ impl<'a> QueryParserContext<'a> {
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
         let role = self.router_context.parameter_hints.compute_role();
+        // Readonly clusters cannot pin ordinary transactions to a writer.
         let txn_write = matches!(
-            self.router_context.transaction(),
+            self.router_context
+                .transaction()
+                .map(|t| t.transaction_type()),
             Some(TransactionType::ReadWrite | TransactionType::Implicit)
-        ) && self.rw_conservative();
+        ) && self.rw_conservative()
+            && !self.read_only;
         // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
         txn_write
             || role == Some(Role::Primary)

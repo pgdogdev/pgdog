@@ -12,6 +12,14 @@ pub(crate) struct SetParam {
     pub(crate) local: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiscardTarget {
+    All,
+    Plans,
+    Sequences,
+    Temp,
+}
+
 /// Query parser result.
 #[derive(Debug, Clone)]
 pub(crate) enum Command {
@@ -42,6 +50,7 @@ pub(crate) enum Command {
     },
     Deallocate,
     Discard {
+        target: DiscardTarget,
         extended: bool,
     },
     Listen {

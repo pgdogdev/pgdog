@@ -16,7 +16,8 @@ impl Command for Reload {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        reload()?;
+        // false = NOT a force reload
+        reload(false)?;
         Ok(vec![])
     }
 }

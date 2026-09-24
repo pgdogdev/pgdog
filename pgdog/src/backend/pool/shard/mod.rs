@@ -22,10 +22,12 @@ use crate::net::messages::FrontendPid;
 
 use super::{Error, Guard, LoadBalancer, Pool, PoolConfig, Request};
 
+pub(crate) mod failover_signal;
 pub(crate) mod monitor;
 mod oids;
 pub(crate) mod role_detector;
 
+use failover_signal::{FailoverSignal, FailoverSignalWatcher};
 use monitor::*;
 pub(crate) use oids::{CanonicalOids, Oids};
 use role_detector::*;
@@ -99,16 +101,10 @@ impl Shard {
     ///
     /// This is done during configuration reloading, if no significant changes are made to
     /// the configuration.
-    pub(crate) fn move_conns_to(&self, destination: &Shard) -> Result<(), Error> {
-        self.lb.move_conns_to(&destination.lb)?;
-
-        Ok(())
-    }
-
-    /// Checks if the connection pools from this shard are compatible
-    /// with the other shard. If yes, they can be moved without closing them.
-    pub(crate) fn can_move_conns_to(&self, other: &Shard) -> bool {
-        self.lb.can_move_conns_to(&other.lb)
+    ///
+    /// Returns true if at least one `Pool` moved.
+    pub(crate) fn move_conns_to(&self, destination: &Shard) -> Result<bool, Error> {
+        Ok(self.lb.move_conns_to(&destination.lb)? >= 1)
     }
 
     /// Listen for notifications on channel.
@@ -196,7 +192,9 @@ impl Shard {
 
     /// Returns true if the shard has a primary database.
     pub(crate) fn has_primary(&self) -> bool {
-        self.lb.primary().is_some() || self.lb.role_detection_enabled()
+        // Until detection completes, a configured auto target may be a primary.
+        let pending = self.lb.role_detection_enabled() && !self.lb.roles_detected();
+        pending || self.lb.primary().is_some()
     }
 
     /// Returns true if the shard has any replica databases.
@@ -310,6 +308,18 @@ impl Shard {
         }
     }
 
+    /// Signal that a failover has taken place.
+    pub(super) fn signal_failover(&self) {
+        if self.lb.primary().is_some() {
+            self.failover_signal.notify();
+        }
+    }
+
+    /// Listen for a failover event in real-time.
+    pub(crate) fn failover_listener(&self) -> FailoverSignalWatcher {
+        self.failover_signal.watch()
+    }
+
     /// Shutdown pub/sub listener.
     fn shutdown_pub_sub(&self) {
         if let Some(pub_sub) = self.inner.pub_sub.swap(Arc::new(None)).deref() {
@@ -340,6 +350,7 @@ pub(crate) struct ShardInner {
     pub_sub_enabled: bool,
     schema_cache: SchemaCache,
     oids: Arc<Oids>,
+    failover_signal: FailoverSignal,
 }
 
 impl ShardInner {
@@ -373,6 +384,7 @@ impl ShardInner {
             pub_sub_enabled,
             schema_cache,
             oids,
+            failover_signal: FailoverSignal::new(),
         }
     }
 }

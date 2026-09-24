@@ -207,6 +207,19 @@ impl ErrorResponse {
         }
     }
 
+    /// Terminating due to admin command (e.g. FORCE_RELOAD)
+    pub(crate) fn admin_termination() -> ErrorResponse {
+        ErrorResponse {
+            severity: "FATAL".into(),
+            code: "57P01".into(),
+            message: "terminating connection due to administrator command".into(),
+            detail: None,
+            context: None,
+            file: None,
+            routine: None,
+        }
+    }
+
     pub(crate) fn syntax<T: Into<String>>(err: T) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),
@@ -260,6 +273,9 @@ impl ErrorResponse {
         use crate::backend::Error as BackendError;
         if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
             *(err.clone())
+        } else if let FrontendError::AdminTermination = err {
+            // Allows us to set a custom code (to identically represent the same Postgres error)
+            ErrorResponse::admin_termination()
         } else {
             Self {
                 severity: "FATAL".into(),
@@ -296,6 +312,15 @@ impl ErrorResponse {
             message: "there is no transaction in progress".into(),
             routine: Some("EndTransactionBlock".into()),
             file: Some("xact.c".into()),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn discard_all_in_transaction() -> Self {
+        Self {
+            severity: "ERROR".into(),
+            code: "25001".into(),
+            message: "DISCARD ALL cannot run inside a transaction block".into(),
             ..Default::default()
         }
     }

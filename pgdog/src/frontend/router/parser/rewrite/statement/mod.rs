@@ -1,17 +1,19 @@
 //! Statement rewriter.
 
-use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
-
-use crate::backend::ShardingSchema;
 use crate::backend::schema::Schema;
+use crate::config::config;
 use crate::frontend::PreparedStatements;
-use crate::frontend::router::parser::AstContext;
+use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
 use crate::net::parameter::ParameterValue;
+use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
+use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 
 pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
+pub(crate) mod nextval;
+pub(crate) mod non_deterministic_funcs;
 pub(crate) mod offset;
 pub(crate) mod plan;
 pub(crate) mod simple_prepared;
@@ -20,6 +22,9 @@ pub(crate) mod update;
 
 pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
+use pgdog_config::RewriteMode;
+//use pgdog_config::RewriteMode;
+use plan::GeneratedId;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
@@ -42,6 +47,10 @@ pub(crate) struct StatementRewriteContext<'a> {
     pub(crate) user: &'a str,
     /// Search path for table lookups.
     pub(crate) search_path: Option<&'a ParameterValue>,
+    /// Timezone for now() time generation for TIMEZONE columns.
+    pub(crate) timezone: Option<&'a ParameterValue>,
+    /// Statement, and transaction DateTime<Utc> relevant to the current Query (if not being cached)
+    pub(crate) query_timestamps: QueryTimestamps,
 }
 
 #[derive(Debug)]
@@ -65,6 +74,10 @@ pub(crate) struct StatementRewrite<'a> {
     user: &'a str,
     /// Search path for table lookups.
     search_path: Option<&'a ParameterValue>,
+    /// Timezone for now() time generation for TIMEZONE columns.
+    timezone: Option<&'a ParameterValue>,
+    /// Statement, and transaction DateTime<Utc> relevant to the current Query (if not being cached)
+    query_timestamps: QueryTimestamps,
 }
 
 impl<'a> StatementRewrite<'a> {
@@ -82,16 +95,8 @@ impl<'a> StatementRewrite<'a> {
             db_schema: ctx.db_schema,
             user: ctx.user,
             search_path: ctx.search_path,
-        }
-    }
-
-    /// Create an AstContext from this rewriter's fields.
-    fn ast_context(&self) -> AstContext<'a> {
-        AstContext {
-            sharding_schema: self.schema.clone(),
-            db_schema: self.db_schema.clone(),
-            user: self.user,
-            search_path: self.search_path,
+            timezone: ctx.timezone,
+            query_timestamps: ctx.query_timestamps,
         }
     }
 
@@ -132,7 +137,9 @@ impl<'a> StatementRewrite<'a> {
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
         match stmt.stmt_mut() {
-            NodeMut::InsertStmt(insert) => self.inject_auto_id(insert, mem, &mut plan)?,
+            NodeMut::InsertStmt(insert) => {
+                self.inject_auto_id(insert, mem, &mut plan)?;
+            }
             NodeMut::PrepareStmt(mut prepare) => {
                 if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
                     self.inject_auto_id(insert, mem, &mut plan)?;
@@ -146,20 +153,34 @@ impl<'a> StatementRewrite<'a> {
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
-            &mut transform::TransformClosure::new(|node| {
-                match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
-                    Ok(Some(replacement)) => {
-                        plan.unique_ids += 1;
-                        self.rewritten = true;
-                        node.replace(replacement);
-                        None
+            &mut transform::TransformClosure::new(|node| match node.as_ref() {
+                Node::FuncCall(func) if Self::is_unique_id(func) => {
+                    match Self::unique_id_value(mem, self.extended, &mut next_param) {
+                        Ok(replacement) => {
+                            plan.unique_ids += 1;
+                            if self.extended {
+                                plan.generated_params.push(GeneratedParam {
+                                    param_num: (next_param - 1) as u16,
+                                    generated_id: GeneratedId::UniqueId,
+                                });
+                            }
+                            self.rewritten = true;
+                            node.replace(replacement);
+                        }
+                        Err(e) => {
+                            err = Some(e);
+                        }
                     }
-                    Err(e) => {
-                        err = Some(e);
-                        None
-                    }
-                    Ok(None) => Some(node),
+                    None
                 }
+                node_ref
+                    if let Some(replacement) =
+                        self.rewrite_sequence(node_ref, mem, &mut next_param, &mut plan) =>
+                {
+                    node.replace(replacement);
+                    None
+                }
+                _ => Some(node),
             }),
         );
         if let Some(err) = err {
@@ -171,8 +192,33 @@ impl<'a> StatementRewrite<'a> {
             self.limit_offset(&select, &mut plan);
         }
 
+        let nd_function_rewrite = !matches!(
+            config().config.rewrite.non_deterministic_functions,
+            RewriteMode::Ignore
+        );
+
+        if nd_function_rewrite {
+            match stmt.stmt_mut() {
+                NodeMut::InsertStmt(_) => {
+                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut next_param, &mut plan)?;
+                }
+                NodeMut::PrepareStmt(mut prepare) => {
+                    if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
+                        self.rewrite_nd_functions(
+                            prepare.query_mut(),
+                            mem,
+                            &mut next_param,
+                            &mut plan,
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Handle top-level PREPARE/EXECUTE statements.
-        let prepared_result = self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan)?;
+        let prepared_result =
+            self.rewrite_simple_prepared(stmt.stmt_mut(), mem, &mut plan, nd_function_rewrite)?;
         if prepared_result.rewritten {
             self.rewritten = true;
             plan.prepare_rewrites = prepared_result.rewrites;

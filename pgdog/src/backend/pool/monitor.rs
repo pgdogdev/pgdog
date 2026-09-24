@@ -455,6 +455,7 @@ impl Monitor {
             .await
             {
                 Ok(Ok(mut conn)) => {
+                    conn.stats_mut().set_pool_id(pool.id());
                     let elapsed = now.elapsed();
                     {
                         let mut guard = pool.lock();
@@ -464,6 +465,7 @@ impl Monitor {
                         conn.set_credentials_generation(guard.credentials_generation());
                     }
                     conn.apply_lifetime_jitter(max_age, max_age_jitter);
+                    pool.cache_params(conn.params());
                     return Ok(conn);
                 }
 

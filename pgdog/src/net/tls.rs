@@ -1,6 +1,8 @@
 //! TLS configuration.
 
 use std::{
+    collections::{HashMap, hash_map::Entry},
+    ops::Deref,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -8,8 +10,10 @@ use std::{
     },
 };
 
-use crate::config::TlsVerifyMode;
+use crate::config::{General, ServerTls, TlsVerifyMode};
 use arc_swap::ArcSwapOption;
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{
     self, ClientConfig,
@@ -25,12 +29,40 @@ use crate::config::config;
 
 use super::Error;
 
-static ACCEPTOR: ArcSwapOption<TlsAcceptor> = ArcSwapOption::const_empty();
+/// TLS acceptor plus the `tls-server-end-point` binding for the leaf
+/// certificate it will present. Kept together so a reload cannot pair a
+/// new acceptor with an old hash (or the reverse) on an in-flight login.
+pub(crate) struct TlsListener {
+    acceptor: TlsAcceptor,
+    server_end_point: Option<Vec<u8>>,
+}
+
+impl TlsListener {
+    /// Channel-binding data for SCRAM-SHA-256-PLUS, if the leaf certificate
+    /// uses a hash RFC 5929 can name.
+    pub(crate) fn server_end_point(&self) -> Option<&[u8]> {
+        self.server_end_point.as_deref()
+    }
+}
+
+impl Deref for TlsListener {
+    type Target = TlsAcceptor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.acceptor
+    }
+}
+
+static ACCEPTOR: ArcSwapOption<TlsListener> = ArcSwapOption::const_empty();
 static ACCEPTOR_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-static CONNECTOR: ArcSwapOption<ConnectorCacheEntry> = ArcSwapOption::const_empty();
+/// Upstream TLS client configs, keyed by the settings that produced them.
+/// Databases can override the global TLS settings, so several configs can be
+/// live at once (e.g., a different client certificate per server).
+static CONNECTORS: Lazy<RwLock<HashMap<ConnectorConfigKey, Arc<ClientConfig>>>> =
+    Lazy::new(Default::default);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ConnectorConfigKey {
     mode: TlsVerifyMode,
     ca_path: Option<PathBuf>,
@@ -54,18 +86,68 @@ impl ConnectorConfigKey {
     }
 }
 
-struct ConnectorCacheEntry {
-    key: ConnectorConfigKey,
-    config: Arc<ClientConfig>,
+fn cached_client_config(key: &ConnectorConfigKey) -> Option<Arc<ClientConfig>> {
+    CONNECTORS.read().get(key).cloned()
 }
 
-impl ConnectorCacheEntry {
-    fn new(key: ConnectorConfigKey, config: Arc<ClientConfig>) -> Arc<Self> {
-        Arc::new(Self { key, config })
+/// Upstream TLS settings for one server: per-database overrides applied over
+/// the global `[general]` values.
+pub(crate) struct UpstreamTlsSettings<'a> {
+    pub(crate) verify: TlsVerifyMode,
+    ca_certificate: Option<&'a PathBuf>,
+    certificate: Option<&'a PathBuf>,
+    private_key: Option<&'a PathBuf>,
+}
+
+impl<'a> UpstreamTlsSettings<'a> {
+    /// Each override falls back to its `[general]` counterpart, except the
+    /// client certificate and key: they are a keypair, so setting either one
+    /// per-database replaces the global pair (config validation guarantees
+    /// both are set together).
+    pub(crate) fn resolve(general: &'a General, overrides: &'a ServerTls) -> Self {
+        let (certificate, private_key) = if overrides.tls_server_certificate.is_some()
+            || overrides.tls_server_private_key.is_some()
+        {
+            (
+                overrides.tls_server_certificate.as_ref(),
+                overrides.tls_server_private_key.as_ref(),
+            )
+        } else {
+            (
+                general.tls_server_certificate.as_ref(),
+                general.tls_server_private_key.as_ref(),
+            )
+        };
+
+        Self {
+            verify: overrides.tls_verify.unwrap_or(general.tls_verify),
+            ca_certificate: overrides
+                .tls_server_ca_certificate
+                .as_ref()
+                .or(general.tls_server_ca_certificate.as_ref()),
+            certificate,
+            private_key,
+        }
     }
 
-    fn connector(&self) -> TlsConnector {
-        TlsConnector::from(self.config.clone())
+    /// Create a TLS connector for these settings, reusing a cached one
+    /// when available.
+    pub(crate) fn connector(&self) -> Result<TlsConnector, Error> {
+        connector_with_verify_mode(
+            self.verify,
+            self.ca_certificate,
+            self.certificate,
+            self.private_key,
+        )
+    }
+
+    fn cache_key(&self) -> ConnectorConfigKey {
+        ConnectorConfigKey::new(
+            self.verify,
+            self.ca_certificate,
+            self.certificate,
+            self.private_key,
+        )
     }
 }
 
@@ -81,8 +163,59 @@ fn increment_connector_build_count() {
 fn increment_connector_build_count() {}
 
 /// Get the current TLS acceptor snapshot, if TLS is enabled.
-pub(crate) fn acceptor() -> Option<Arc<TlsAcceptor>> {
+pub(crate) fn acceptor() -> Option<Arc<TlsListener>> {
     ACCEPTOR.load_full()
+}
+
+/// RFC 5929 hash named by a signature OID. MD5 and SHA-1 upgrade to SHA-256.
+/// `None` for algorithms that do not name a single hash (Ed25519, RSASSA-PSS, …).
+fn digest_for_signature_oid(oid: &str) -> Option<&'static aws_lc_rs::digest::Algorithm> {
+    use aws_lc_rs::digest;
+    Some(match oid {
+        // MD5 / SHA-1 → SHA-256 (RFC 5929 §4.1)
+        "1.2.840.113549.1.1.4" // md5WithRSAEncryption
+        | "1.2.840.113549.1.1.5" // sha1WithRSAEncryption
+        | "1.2.840.10045.4.1" // ecdsa-with-SHA1
+        | "1.2.840.10040.4.3" // dsaWithSHA1
+        | "1.2.840.113549.2.5" // md5
+        | "1.3.14.3.2.26" // sha1
+        // SHA-256
+        | "1.2.840.113549.1.1.11" // sha256WithRSAEncryption
+        | "1.2.840.10045.4.3.2" // ecdsa-with-SHA256
+        | "2.16.840.1.101.3.4.3.2" // dsa-with-sha256
+        | "2.16.840.1.101.3.4.2.1" => &digest::SHA256, // id-sha256
+        // SHA-384
+        "1.2.840.113549.1.1.12" // sha384WithRSAEncryption
+        | "1.2.840.10045.4.3.3" // ecdsa-with-SHA384
+        | "2.16.840.1.101.3.4.2.2" => &digest::SHA384, // id-sha384
+        // SHA-512
+        "1.2.840.113549.1.1.13" // sha512WithRSAEncryption
+        | "1.2.840.10045.4.3.4" // ecdsa-with-SHA512
+        | "2.16.840.1.101.3.4.2.3" => &digest::SHA512, // id-sha512
+        // SHA-224
+        "1.2.840.113549.1.1.14" // sha224WithRSAEncryption
+        | "1.2.840.10045.4.3.1" // ecdsa-with-SHA224
+        | "2.16.840.1.101.3.4.3.1" // dsa-with-sha224
+        | "2.16.840.1.101.3.4.2.4" => &digest::SHA224, // id-sha224
+        _ => return None,
+    })
+}
+
+/// RFC 5929 `tls-server-end-point` channel-binding data: the hash of the
+/// DER-encoded end-entity certificate, using the certificate's own
+/// signature hash (MD5 and SHA-1 are upgraded to SHA-256).
+///
+/// Returns `None` when we cannot name a single hash from the signature
+/// OID (Ed25519, Ed448, RSASSA-PSS, …). RSA-PSS parameters are not
+/// parsed, so we do not advertise PLUS in those cases.
+pub(crate) fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>> {
+    use aws_lc_rs::digest::digest;
+    use x509_parser::certificate::X509Certificate;
+
+    let (_, parsed) = X509Certificate::from_der(cert.as_ref()).ok()?;
+    let oid = parsed.signature_algorithm.algorithm.to_id_string();
+    let algorithm = digest_for_signature_oid(&oid)?;
+    Some(digest(algorithm, cert.as_ref()).as_ref().to_vec())
 }
 
 /// Extract the hostname identity from the peer's TLS certificate, if present.
@@ -141,20 +274,34 @@ pub(crate) fn reload() -> Result<(), Error> {
     let config = config();
     let general = &config.config.general;
 
-    // Always validate upstream TLS settings so we surface CA and client
-    // certificate issues early.
-    let _ = connector_with_verify_mode(
-        general.tls_verify,
-        general.tls_server_ca_certificate.as_ref(),
-        general.tls_server_certificate.as_ref(),
-        general.tls_server_private_key.as_ref(),
-    )?;
+    // Rebuild the connector for every TLS configuration the current config
+    // references, reading certificates fresh from disk so in-place rotations
+    // (e.g. re-mounted Kubernetes secrets) are picked up. Building into a new
+    // map also drops entries from previous configs. Nothing is swapped in
+    // until the whole config validates.
+    let mut connectors = HashMap::new();
+    let no_overrides = ServerTls::default();
+    let general_settings = UpstreamTlsSettings::resolve(general, &no_overrides);
+    let database_settings = config
+        .config
+        .databases
+        .iter()
+        .map(|database| UpstreamTlsSettings::resolve(general, &database.tls));
+
+    for settings in std::iter::once(general_settings).chain(database_settings) {
+        if let Entry::Vacant(entry) = connectors.entry(settings.cache_key()) {
+            let client_config = build_connector(entry.key())?;
+            entry.insert(client_config);
+        }
+    }
 
     let tls_paths = general.tls();
     let client_ca = general.tls_client_ca_certificate.as_deref();
     let new_acceptor = tls_paths
         .map(|(cert, key)| build_acceptor(cert, key, client_ca))
         .transpose()?;
+
+    *CONNECTORS.write() = connectors;
 
     match (new_acceptor, tls_paths) {
         (Some(acceptor), Some((cert, _))) => {
@@ -183,8 +330,33 @@ pub(crate) fn reload() -> Result<(), Error> {
     Ok(())
 }
 
-fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsAcceptor, Error> {
-    let pem = CertificateDer::from_pem_file(cert)?;
+fn load_certificate_chain(path: &Path, label: &str) -> Result<Vec<CertificateDer<'static>>, Error> {
+    let certificates = CertificateDer::pem_file_iter(path)
+        .map_err(|e| {
+            invalid_data(format!(
+                "failed to read {label} file {}: {e}",
+                path.display()
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            invalid_data(format!(
+                "failed to parse {label} from {}: {e}",
+                path.display()
+            ))
+        })?;
+    if certificates.is_empty() {
+        return Err(invalid_data(format!(
+            "no PEM certificates found in {label} file {}",
+            path.display()
+        )));
+    }
+    Ok(certificates)
+}
+
+fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsListener, Error> {
+    let certificates = load_certificate_chain(cert, "certificate")?;
+    let server_end_point = certificates.first().and_then(tls_server_end_point);
     let key = PrivateKeyDer::from_pem_file(key)?;
 
     let builder = rustls::ServerConfig::builder();
@@ -195,11 +367,14 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
         }
         None => builder.with_no_client_auth(),
     }
-    .with_single_cert(vec![pem], key)?;
+    .with_single_cert(certificates, key)?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    Ok(TlsAcceptor::from(Arc::new(config)))
+    Ok(TlsListener {
+        acceptor: TlsAcceptor::from(Arc::new(config)),
+        server_end_point,
+    })
 }
 
 /// Build a client certificate verifier. Presented certificates are verified
@@ -221,27 +396,7 @@ fn build_client_cert_verifier(ca_path: &Path) -> Result<Arc<dyn ClientCertVerifi
 fn load_ca_bundle(path: &Path, label: &str) -> Result<rustls::RootCertStore, Error> {
     debug!("loading {label} bundle from {}", path.display());
 
-    let certs = CertificateDer::pem_file_iter(path)
-        .map_err(|e| {
-            invalid_data(format!(
-                "failed to read {label} file {}: {e}",
-                path.display()
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            invalid_data(format!(
-                "failed to parse {label} from {}: {e}",
-                path.display()
-            ))
-        })?;
-
-    if certs.is_empty() {
-        return Err(invalid_data(format!(
-            "no PEM certificates found in {label} file {}",
-            path.display()
-        )));
-    }
+    let certs = load_certificate_chain(path, label)?;
 
     let total = certs.len();
     let mut roots = rustls::RootCertStore::empty();
@@ -361,12 +516,12 @@ fn build_client_config(
     client_auth: Option<(&Path, &Path)>,
 ) -> Result<ClientConfig, Error> {
     match client_auth {
-        // Load the leaf certificate and key the same way `build_acceptor`
+        // Load the certificate chain and key the same way `build_acceptor`
         // loads PgDog's own server certificate.
         Some((cert_path, key_path)) => {
-            let cert = CertificateDer::from_pem_file(cert_path)?;
+            let certificates = load_certificate_chain(cert_path, "client certificate")?;
             let key = PrivateKeyDer::from_pem_file(key_path)?;
-            Ok(builder.with_client_auth_cert(vec![cert], key)?)
+            Ok(builder.with_client_auth_cert(certificates, key)?)
         }
         None => Ok(builder.with_no_client_auth()),
     }
@@ -390,7 +545,7 @@ pub(crate) fn test_connector_build_count() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_reset_connector() {
-    CONNECTOR.store(None);
+    CONNECTORS.write().clear();
     CONNECTOR_BUILD_COUNT.store(0, Ordering::SeqCst);
 }
 
@@ -448,7 +603,7 @@ impl ServerCertVerifier for AllowAllVerifier {
 }
 
 /// Create a TLS connector with the specified verification mode.
-pub(crate) fn connector_with_verify_mode(
+fn connector_with_verify_mode(
     mode: TlsVerifyMode,
     ca_cert_path: Option<&PathBuf>,
     client_cert_path: Option<&PathBuf>,
@@ -456,15 +611,13 @@ pub(crate) fn connector_with_verify_mode(
 ) -> Result<TlsConnector, Error> {
     let config_key = ConnectorConfigKey::new(mode, ca_cert_path, client_cert_path, client_key_path);
 
-    if let Some(entry) = CONNECTOR.load_full()
-        && entry.key == config_key
-    {
-        return Ok(entry.connector());
+    if let Some(config) = cached_client_config(&config_key) {
+        return Ok(TlsConnector::from(config));
     }
 
     let client_config = build_connector(&config_key)?;
     let connector = TlsConnector::from(client_config.clone());
-    CONNECTOR.store(Some(ConnectorCacheEntry::new(config_key, client_config)));
+    CONNECTORS.write().insert(config_key, client_config);
 
     Ok(connector)
 }
@@ -557,7 +710,137 @@ impl ServerCertVerifier for NoHostnameVerifier {
 mod tests {
     use super::*;
     use crate::config::TlsVerifyMode;
-    use std::sync::Arc;
+    use rustls::pki_types::ServerName;
+    use std::{sync::Arc, time::Duration};
+
+    #[tokio::test]
+    async fn certificate_chains_are_sent_to_tls_peers() {
+        crate::logger();
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain");
+        let chain = fixtures.join("chain.pem");
+        let key = fixtures.join("leaf-key.pem");
+        let root = fixtures.join("root.pem");
+        let leaf = CertificateDer::from_pem_file(&chain).expect("leaf certificate");
+
+        for mutual_tls in [false, true] {
+            let listener = build_acceptor(&chain, &key, mutual_tls.then_some(root.as_path()))
+                .expect("server TLS configuration");
+            assert_eq!(
+                listener.server_end_point(),
+                tls_server_end_point(&leaf).as_deref(),
+                "channel binding must continue to use the leaf certificate"
+            );
+            let roots = load_ca_bundle(&root, "test root").expect("root CA");
+            let client = build_client_config(
+                ClientConfig::builder().with_root_certificates(roots),
+                mutual_tls.then_some((chain.as_path(), key.as_path())),
+            )
+            .expect("client TLS configuration");
+            let connector = TlsConnector::from(Arc::new(client));
+            let name = ServerName::try_from("localhost").expect("server name");
+            let (server_io, client_io) = tokio::io::duplex(16 * 1024);
+            let (server, client) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(
+                    listener.acceptor.accept(server_io),
+                    connector.connect(name, client_io)
+                )
+            })
+            .await
+            .expect("TLS handshake completed")
+            .expect("certificate chain verifies against its root CA");
+            assert_eq!(
+                client
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .expect("server chain")
+                    .len(),
+                2
+            );
+            if mutual_tls {
+                assert_eq!(
+                    server
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .expect("client chain")
+                        .len(),
+                    2
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_certificate_chains_are_rejected() {
+        crate::logger();
+        let directory = tempfile::tempdir().expect("temporary certificate directory");
+        let empty = directory.path().join("empty.pem");
+        std::fs::write(&empty, "").expect("empty certificate bundle");
+        let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain/leaf-key.pem");
+        assert_invalid_certificate_error(
+            build_acceptor(&empty, &key, None)
+                .err()
+                .expect("empty server chain rejected"),
+            &format!(
+                "no PEM certificates found in certificate file {}",
+                empty.display()
+            ),
+        );
+        assert_invalid_certificate_error(
+            build_client_config(
+                ClientConfig::builder().with_root_certificates(rustls::RootCertStore::empty()),
+                Some((&empty, &key)),
+            )
+            .expect_err("empty client chain rejected"),
+            &format!(
+                "no PEM certificates found in client certificate file {}",
+                empty.display()
+            ),
+        );
+    }
+
+    fn assert_invalid_certificate_error(error: Error, expected: &str) {
+        let Error::Io(error) = error else {
+            panic!("expected InvalidData, got {error}");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), expected);
+    }
+
+    #[test]
+    fn certificate_file_errors_include_the_path() {
+        let directory = tempfile::tempdir().expect("temporary certificate directory");
+        let path = directory.path().join("certificate.pem");
+        for (contents, operation) in [
+            (None, "read"),
+            (
+                Some("-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n"),
+                "parse",
+            ),
+        ] {
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).expect("invalid certificate bundle");
+            }
+            let error = load_certificate_chain(&path, "certificate")
+                .expect_err("invalid certificate file rejected");
+            let Error::Io(error) = error else {
+                panic!("expected InvalidData, got {error}");
+            };
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            let prefix = if operation == "read" {
+                "failed to read certificate file"
+            } else {
+                "failed to parse certificate from"
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("{prefix} {}:", path.display())),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn acceptor_reuse_snapshot() {
@@ -582,6 +865,10 @@ mod tests {
         let second = super::acceptor().expect("acceptor initialized");
 
         assert!(Arc::ptr_eq(&first, &second), "cached acceptor reused");
+        assert!(
+            first.server_end_point().is_some(),
+            "test cert must produce tls-server-end-point data so PLUS can be advertised"
+        );
         assert_eq!(
             super::test_acceptor_build_count(),
             1,
@@ -676,6 +963,9 @@ mod tests {
 
         crate::config::set(cfg).unwrap();
 
+        let key =
+            super::ConnectorConfigKey::new(TlsVerifyMode::VerifyFull, Some(&ca_path), None, None);
+
         let _first = super::connector_with_verify_mode(
             TlsVerifyMode::VerifyFull,
             Some(&ca_path),
@@ -683,9 +973,8 @@ mod tests {
             None,
         )
         .expect("first connector builds");
-        let first_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after first build");
+        let first_cache =
+            super::cached_client_config(&key).expect("connector cached after first build");
 
         let _second = super::connector_with_verify_mode(
             TlsVerifyMode::VerifyFull,
@@ -694,9 +983,8 @@ mod tests {
             None,
         )
         .expect("second connector reuses cache");
-        let second_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after second build");
+        let second_cache =
+            super::cached_client_config(&key).expect("connector cached after second build");
 
         assert_eq!(
             super::test_connector_build_count(),
@@ -705,31 +993,24 @@ mod tests {
         );
         assert!(
             Arc::ptr_eq(&first_cache, &second_cache),
-            "cache entry reused"
-        );
-        assert!(
-            Arc::ptr_eq(&first_cache.config, &second_cache.config),
             "client config reused"
         );
 
+        // Reload rebuilds every in-use connector from disk so certificate
+        // rotations at unchanged paths are picked up.
         super::reload().expect("reload succeeds");
 
-        let post_reload_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after reload");
+        let post_reload_cache =
+            super::cached_client_config(&key).expect("connector cached after reload");
 
         assert_eq!(
             super::test_connector_build_count(),
-            1,
-            "reload does not rebuild connector"
+            2,
+            "reload rebuilds the connector from disk"
         );
         assert!(
-            Arc::ptr_eq(&second_cache, &post_reload_cache),
-            "reload retains cache entry"
-        );
-        assert!(
-            Arc::ptr_eq(&second_cache.config, &post_reload_cache.config),
-            "reload retains client config"
+            !Arc::ptr_eq(&second_cache, &post_reload_cache),
+            "reload replaces the cached client config"
         );
 
         let _third = super::connector_with_verify_mode(
@@ -738,24 +1019,59 @@ mod tests {
             None,
             None,
         )
-        .expect("third connector still reuses cache");
-        let third_cache = super::CONNECTOR
-            .load_full()
-            .expect("connector cached after third build");
+        .expect("third connector reuses the reloaded cache");
+        let third_cache =
+            super::cached_client_config(&key).expect("connector cached after third build");
 
         assert_eq!(
             super::test_connector_build_count(),
-            1,
-            "additional calls reuse existing connector"
+            2,
+            "connect-time calls reuse the reloaded connector"
         );
         assert!(
             Arc::ptr_eq(&post_reload_cache, &third_cache),
-            "cache entry unchanged"
+            "client config unchanged"
         );
 
         super::test_reset_connector();
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reload_evicts_connectors_absent_from_config() {
+        crate::logger();
+        super::test_reset_connector();
+        super::test_reset_acceptor();
+
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        // A connector for settings no config references, e.g. from a
+        // database that was removed before this reload.
+        let stale_ca = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/cert.pem");
+        let stale_key =
+            super::ConnectorConfigKey::new(TlsVerifyMode::VerifyCa, Some(&stale_ca), None, None);
+        connector_with_verify_mode(TlsVerifyMode::VerifyCa, Some(&stale_ca), None, None)
+            .expect("stale connector builds");
+        assert!(super::cached_client_config(&stale_key).is_some());
+
+        super::reload().expect("reload succeeds");
+
+        assert!(
+            super::cached_client_config(&stale_key).is_none(),
+            "reload drops connectors the config no longer references"
+        );
+
+        let config = crate::config::config();
+        let no_overrides = ServerTls::default();
+        let general_key =
+            super::UpstreamTlsSettings::resolve(&config.config.general, &no_overrides).cache_key();
+        assert!(
+            super::cached_client_config(&general_key).is_some(),
+            "reload keeps the connector for the current config"
+        );
+
+        super::test_reset_connector();
     }
 
     #[tokio::test]
@@ -842,7 +1158,193 @@ mod tests {
             "identical client cert reuses the cached connector"
         );
 
+        // Both configs stay cached: alternating between them (e.g. servers
+        // with different client certificates) does not rebuild either one.
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, None, None).unwrap();
+        connector_with_verify_mode(TlsVerifyMode::Prefer, None, Some(&cert), Some(&key)).unwrap();
+        assert_eq!(
+            super::test_connector_build_count(),
+            2,
+            "distinct TLS configs are cached side by side"
+        );
+
         super::test_reset_connector();
+    }
+
+    #[test]
+    fn upstream_tls_settings_fall_back_to_general() {
+        let cert = PathBuf::from("/general/client.pem");
+        let key = PathBuf::from("/general/client.key");
+        let ca = PathBuf::from("/general/ca.pem");
+
+        let general = crate::config::General {
+            tls_verify: TlsVerifyMode::VerifyFull,
+            tls_server_ca_certificate: Some(ca.clone()),
+            tls_server_certificate: Some(cert.clone()),
+            tls_server_private_key: Some(key.clone()),
+            ..Default::default()
+        };
+
+        // No overrides: everything comes from [general].
+        let no_overrides = ServerTls::default();
+        let settings = UpstreamTlsSettings::resolve(&general, &no_overrides);
+        assert_eq!(settings.verify, TlsVerifyMode::VerifyFull);
+        assert_eq!(settings.ca_certificate, Some(&ca));
+        assert_eq!(settings.certificate, Some(&cert));
+        assert_eq!(settings.private_key, Some(&key));
+
+        // Verify mode and CA override independently.
+        let db_ca = PathBuf::from("/db/ca.pem");
+        let overrides = ServerTls {
+            tls_verify: Some(TlsVerifyMode::VerifyCa),
+            tls_server_ca_certificate: Some(db_ca.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.verify, TlsVerifyMode::VerifyCa);
+        assert_eq!(settings.ca_certificate, Some(&db_ca));
+        assert_eq!(settings.certificate, Some(&cert));
+        assert_eq!(settings.private_key, Some(&key));
+
+        // The client certificate and key override as a pair: the general
+        // key must not leak in next to a per-database certificate.
+        let db_cert = PathBuf::from("/db/client.pem");
+        let db_key = PathBuf::from("/db/client.key");
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            tls_server_private_key: Some(db_key.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.certificate, Some(&db_cert));
+        assert_eq!(settings.private_key, Some(&db_key));
+        assert_eq!(settings.ca_certificate, Some(&ca));
+
+        // Half a pair (rejected by config validation, but resolution must
+        // still not mix the pairs).
+        let overrides = ServerTls {
+            tls_server_certificate: Some(db_cert.clone()),
+            ..Default::default()
+        };
+        let settings = UpstreamTlsSettings::resolve(&general, &overrides);
+        assert_eq!(settings.certificate, Some(&db_cert));
+        assert_eq!(settings.private_key, None);
+    }
+
+    #[test]
+    fn reload_validates_per_database_tls_overrides() {
+        crate::logger();
+        super::test_reset_connector();
+        super::test_reset_acceptor();
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.databases.push(crate::config::Database {
+            name: "bad_tls".into(),
+            host: "127.0.0.1".into(),
+            tls: ServerTls {
+                tls_verify: Some(TlsVerifyMode::VerifyFull),
+                tls_server_ca_certificate: Some(PathBuf::from("/nonexistent/ca.pem")),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        crate::config::set(cfg).unwrap();
+
+        assert!(
+            super::reload().is_err(),
+            "reload must fail when a database override points at a missing CA"
+        );
+
+        super::test_reset_connector();
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[test]
+    fn tls_server_end_point_matches_sha256_of_test_cert() {
+        let pem = include_str!("../../tests/tls/cert.pem");
+        let cert: CertificateDer<'static> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .next()
+                .expect("test cert PEM has one block")
+                .expect("test cert parses");
+
+        let binding =
+            super::tls_server_end_point(&cert).expect("test cert uses a hash RFC 5929 can name");
+
+        // tests/tls/cert.pem is sha256WithRSAEncryption, so the binding is
+        // SHA-256 of the DER — the same value openssl x509 -fingerprint -sha256
+        // prints.
+        let expected = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, cert.as_ref());
+        assert_eq!(binding, expected.as_ref());
+    }
+
+    #[test]
+    fn digest_for_signature_oid_maps_every_named_rfc5929_hash() {
+        // Outcome is the digest length RFC 5929 / the OID name imply.
+        // SHA-1 and MD5 must upgrade to SHA-256 (32 bytes).
+        const SHA256: &[&str] = &[
+            "1.2.840.113549.1.1.4",
+            "1.2.840.113549.1.1.5",
+            "1.2.840.10045.4.1",
+            "1.2.840.10040.4.3",
+            "1.2.840.113549.2.5",
+            "1.3.14.3.2.26",
+            "1.2.840.113549.1.1.11",
+            "1.2.840.10045.4.3.2",
+            "2.16.840.1.101.3.4.3.2",
+            "2.16.840.1.101.3.4.2.1",
+        ];
+        const SHA384: &[&str] = &[
+            "1.2.840.113549.1.1.12",
+            "1.2.840.10045.4.3.3",
+            "2.16.840.1.101.3.4.2.2",
+        ];
+        const SHA512: &[&str] = &[
+            "1.2.840.113549.1.1.13",
+            "1.2.840.10045.4.3.4",
+            "2.16.840.1.101.3.4.2.3",
+        ];
+        const SHA224: &[&str] = &[
+            "1.2.840.113549.1.1.14",
+            "1.2.840.10045.4.3.1",
+            "2.16.840.1.101.3.4.3.1",
+            "2.16.840.1.101.3.4.2.4",
+        ];
+
+        let len = |oid: &str| {
+            super::digest_for_signature_oid(oid)
+                .map(|algo| aws_lc_rs::digest::digest(algo, b"").as_ref().len())
+        };
+
+        for oid in SHA256 {
+            assert_eq!(len(oid), Some(32), "{oid} must name SHA-256");
+        }
+        for oid in SHA384 {
+            assert_eq!(len(oid), Some(48), "{oid} must name SHA-384");
+        }
+        for oid in SHA512 {
+            assert_eq!(len(oid), Some(64), "{oid} must name SHA-512");
+        }
+        for oid in SHA224 {
+            assert_eq!(len(oid), Some(28), "{oid} must name SHA-224");
+        }
+
+        assert_eq!(
+            len("1.3.101.112"),
+            None,
+            "Ed25519 does not name a single hash"
+        );
+        assert_eq!(
+            len("1.2.840.113549.1.1.10"),
+            None,
+            "RSASSA-PSS parameters are not parsed"
+        );
+    }
+
+    #[test]
+    fn tls_server_end_point_none_for_unparseable_der() {
+        let cert = CertificateDer::from(b"not-a-certificate".to_vec());
+        assert_eq!(super::tls_server_end_point(&cert), None);
     }
 
     #[test]

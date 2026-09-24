@@ -36,6 +36,7 @@ impl Ord for Timestamp {
         use std::cmp::Ordering;
 
         match (self.special, other.special) {
+            (Some(left), Some(right)) => left.cmp(&right),
             (None, None) => self
                 .year
                 .cmp(&other.year)
@@ -61,6 +62,10 @@ impl ToDataRowColumn for Timestamp {
 
 impl Display for Timestamp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(positive) = self.special {
+            return f.write_str(if positive { "infinity" } else { "-infinity" });
+        }
+
         write!(
             f,
             "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
@@ -183,6 +188,11 @@ impl FromDataType for Timestamp {
         match encoding {
             Format::Text => {
                 let s = String::decode(bytes, Format::Text)?;
+                match s.as_str() {
+                    "infinity" => return Ok(Self::infinity()),
+                    "-infinity" => return Ok(Self::neg_infinity()),
+                    _ => (),
+                }
                 let mut result = Timestamp {
                     special: None,
                     ..Default::default()
@@ -210,7 +220,12 @@ impl FromDataType for Timestamp {
                         if let Some(micros) = micros {
                             let neg = micros.find('-').is_some();
                             let mut parts = micros.split(&['-', '+']);
-                            assign!(result, micros, parts);
+                            let fraction = parts.next().ok_or(Error::InvalidTimestamp)?;
+                            if fraction.is_empty() || fraction.len() > 6 {
+                                return Err(Error::InvalidTimestamp);
+                            }
+                            result.micros =
+                                fraction.parse::<i32>()? * 10_i32.pow(6 - fraction.len() as u32);
                             if let Some(offset) = parts.next() {
                                 let offset: i8 = bigint(offset)?
                                     .try_into()
@@ -277,6 +292,42 @@ impl FromDataType for Timestamp {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_timestamp_fractional_seconds() {
+        for (fraction, micros) in [
+            ("0", 0),
+            ("000000", 0),
+            ("1", 100_000),
+            ("01", 10_000),
+            ("001", 1_000),
+            ("0001", 100),
+            ("00001", 10),
+            ("000001", 1),
+            ("12345", 123_450),
+            ("123456", 123_456),
+        ] {
+            for offset in ["", "+00", "-08"] {
+                let input = format!("2025-03-05 14:51:42.{fraction}{offset}");
+                let timestamp = Timestamp::decode(input.as_bytes(), Format::Text)
+                    .expect("valid PostgreSQL timestamp");
+                assert_eq!(timestamp.micros, micros, "{input}");
+                assert_eq!(
+                    timestamp.to_pg_epoch_micros().expect("valid timestamp") % 1_000_000,
+                    i64::from(micros),
+                    "{input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_timestamp_rejects_invalid_fraction() {
+        for fraction in ["", "0000000", "1234567", "abc"] {
+            let input = format!("2025-03-05 14:51:42.{fraction}");
+            assert!(Timestamp::decode(input.as_bytes(), Format::Text).is_err());
+        }
+    }
 
     #[test]
     fn test_timestamp() {
@@ -774,5 +825,41 @@ mod test {
         assert_eq!(decoded.minute, ts.minute);
         assert_eq!(decoded.second, ts.second);
         assert_eq!(decoded.micros, ts.micros);
+    }
+
+    #[test]
+    fn test_timestamp_infinity_text_roundtrip() {
+        for (text, timestamp) in [
+            (b"infinity".as_slice(), Timestamp::infinity()),
+            (b"-infinity".as_slice(), Timestamp::neg_infinity()),
+        ] {
+            assert_eq!(
+                Timestamp::decode(text, Format::Text).expect("valid PostgreSQL timestamp"),
+                timestamp
+            );
+            assert_eq!(timestamp.encode(Format::Text).expect("text encoding"), text);
+            let binary = timestamp.encode(Format::Binary).expect("binary encoding");
+            assert_eq!(
+                Timestamp::decode(&binary, Format::Binary).expect("binary decoding"),
+                timestamp
+            );
+        }
+    }
+
+    #[test]
+    fn test_timestamp_infinity_total_order() {
+        use std::cmp::Ordering;
+
+        let values = [
+            Timestamp::neg_infinity(),
+            Timestamp::from_pg_epoch_micros(0).expect("PostgreSQL epoch"),
+            Timestamp::infinity(),
+        ];
+        for (left_index, left) in values.iter().enumerate() {
+            for (right_index, right) in values.iter().enumerate() {
+                assert_eq!(left.cmp(right), left_index.cmp(&right_index));
+                assert_eq!(left.cmp(right) == Ordering::Equal, left == right);
+            }
+        }
     }
 }

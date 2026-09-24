@@ -87,6 +87,7 @@ pub(super) enum HandleResult {
         prepend: Prepare,
         rewrite: ProtocolMessage,
     },
+    PrependProtocolMessage(ProtocolMessage),
 }
 
 /// Server-specific prepared statements.
@@ -103,10 +104,14 @@ pub(crate) struct PreparedStatements {
     parses: VecDeque<String>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
+    // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
+    parameter_describes: VecDeque<String>,
     config: PreparedStatementsConfig,
     memory_used: usize,
     oids: Arc<Oids>,
     server_state: State,
+    // Client parameter count of the unnamed statement being rewritten
+    anonymous_client_params: Option<u16>,
 }
 
 #[cfg(test)]
@@ -125,10 +130,12 @@ impl PreparedStatements {
             state: ProtocolState::default(),
             parses: VecDeque::new(),
             describes: VecDeque::new(),
+            parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
             oids,
             server_state: State::Idle,
+            anonymous_client_params: None,
         }
     }
 
@@ -136,6 +143,11 @@ impl PreparedStatements {
     #[inline]
     pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
+    }
+
+    /// Number of parameters the client wrote in the unnamed statement this request rewrites.
+    pub(crate) fn set_anonymous_client_params(&mut self, params: Option<u16>) {
+        self.anonymous_client_params = params;
     }
 
     pub(super) fn set_server_state(&mut self, state: State) {
@@ -204,6 +216,11 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::Describe(describe) => {
+                if describe.is_statement() {
+                    self.parameter_describes
+                        .push_back(describe.statement().to_string());
+                }
+
                 if !describe.anonymous() {
                     let message = self.check_prepared(describe.statement())?;
 
@@ -335,8 +352,28 @@ impl PreparedStatements {
                 }
             }
             ProtocolMessage::EnsurePrepared(prepare) => {
-                if self.contains(prepare.name()) {
-                    return Ok(HandleResult::Drop);
+                let name = prepare.name();
+                if self.contains(name) {
+                    let entry = self.local_cache.get(name);
+                    let expired = self.config.ttl.is_some()
+                        && entry.is_some_and(|entry| entry.expired(Instant::now()));
+
+                    if expired {
+                        // Reached TTL limit for the given statement. Close it and re-Prepare on Postgres.
+
+                        self.state.add_ignore(ExecutionCode::CloseComplete); // (the Close)
+                        self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
+                        self.state.add_ignore(ExecutionCode::ReadyForQuery);
+
+                        self.parses.push_back(name.to_owned());
+
+                        // This will do Close => Prepare
+                        return Ok(HandleResult::PrependProtocolMessage(
+                            ProtocolMessage::Close(Close::named(name)),
+                        ));
+                    } else {
+                        return Ok(HandleResult::Drop);
+                    }
                 } else {
                     self.parses.push_back(prepare.name().to_string());
                     self.state.add_ignore('C');
@@ -381,6 +418,7 @@ impl PreparedStatements {
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
                 self.describes.clear();
+                self.parameter_describes.clear();
                 self.parses.clear();
             }
 
@@ -427,7 +465,8 @@ impl PreparedStatements {
             }
 
             't' => {
-                self.rewrite_parameter_description_data_types(message)?;
+                let statement = self.parameter_describes.pop_front();
+                self.rewrite_parameter_description(message, statement.as_deref())?;
             }
 
             _ => (),
@@ -634,17 +673,37 @@ impl PreparedStatements {
         }
     }
 
-    fn rewrite_parameter_description_data_types(&self, message: &mut Message) -> Result<(), Error> {
-        let Some(mappings) = self.oids.get() else {
-            return Ok(());
+    /// Rewrite the ParameterDescription for `statement` to hide any parameters the rewrite engine added.
+    /// Asyncpg (& possibly others) check their argument count against this before sending Bind
+    fn rewrite_parameter_description(
+        &self,
+        message: &mut Message,
+        statement: Option<&str>,
+    ) -> Result<(), Error> {
+        let mappings = self
+            .oids
+            .get()
+            .map(|mappings| &mappings.shard_to_canonical)
+            .filter(|mappings| !mappings.is_empty());
+        let client_params = match statement.filter(|name| !name.is_empty()) {
+            Some(name) => self.global_cache.read().client_params(name),
+            None => self.anonymous_client_params,
         };
-        let mappings = &mappings.shard_to_canonical;
-        if mappings.is_empty() {
+
+        if mappings.is_none() && client_params.is_none() {
             return Ok(());
         }
 
         let mut parameter_description = ParameterDescription::from_bytes(message.payload())?;
-        parameter_description.rewrite_data_types(mappings);
+        if let Some(mappings) = mappings {
+            parameter_description.rewrite_data_types(mappings);
+        }
+
+        // Note: This relies on the invariant that the first X parameters are all client-provided
+        // params, while the ones we re-write are appended to the end.
+        if let Some(client_params) = client_params {
+            parameter_description.truncate(client_params as usize);
+        }
         message.replace_payload(parameter_description.to_bytes());
         Ok(())
     }
@@ -893,6 +952,48 @@ pub(crate) mod test {
         rewritten_name
     }
 
+    /// Describe `name` -> forward a ParameterDescription
+    fn describe_parameters(ps: &mut PreparedStatements, name: &str, oids: Vec<i32>) -> Vec<i32> {
+        let result = ps
+            .handle(&ProtocolMessage::Describe(Describe::new_statement(name)))
+            .unwrap();
+        assert!(matches!(result, HandleResult::Prepend(_)));
+
+        let mut parse_complete = Message::new(ParseComplete.to_bytes());
+        ps.forward(&mut parse_complete).unwrap();
+
+        let mut message = Message::new(ParameterDescription::new(oids).to_bytes());
+        ps.forward(&mut message).unwrap();
+
+        ParameterDescription::from_bytes(message.payload())
+            .unwrap()
+            .params()
+            .to_vec()
+    }
+
+    #[test]
+    fn parameter_description_hides_rewrite_engine_params() {
+        let mut ps = new_extended();
+        let name = insert_global("param_desc_rewritten", "SELECT $1 AS param_desc_rewritten");
+        FrontendPreparedStatements::global().write().rewrite(
+            &Parse::named(&name, "SELECT $1 AS param_desc_rewritten, $2::text"),
+            1,
+        );
+
+        assert_eq!(describe_parameters(&mut ps, &name, vec![23, 25]), vec![23]);
+    }
+
+    #[test]
+    fn parameter_description_untouched_without_rewrite() {
+        let mut ps = new_extended();
+        let name = insert_global("param_desc_plain", "SELECT $1, $2 AS param_desc_plain");
+
+        assert_eq!(
+            describe_parameters(&mut ps, &name, vec![23, 25]),
+            vec![23, 25]
+        );
+    }
+
     #[test]
     fn ensure_prepared_completes_after_backend_responses() {
         let mut ps = new_extended();
@@ -910,6 +1011,57 @@ pub(crate) mod test {
 
         let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
         assert!(!ps.forward(&mut ready_for_query).unwrap());
+        assert!(ps.done());
+    }
+
+    #[test]
+    fn ensure_prepared_re_prepares_after_ttl_expire() {
+        let mut ps = new_extended();
+        let config = ps.config;
+
+        // Configure with a TTL of Zero;
+        // Ensures that any subsequent requests will immediately be expired.
+        ps.configure(PreparedStatementsConfig {
+            ttl: Some(Duration::ZERO),
+            ttl_jitter: Duration::ZERO,
+            ..config
+        });
+
+        let name = "__stmt_ensure";
+        let prepare = ProtocolMessage::EnsurePrepared(SimplePrepare::new(
+            name,
+            "PREPARE __pgdog_template_name AS SELECT $1",
+        ));
+
+        assert_eq!(ps.handle(&prepare).unwrap(), HandleResult::Forward);
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(!ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
+        assert!(!ps.forward(&mut ready_for_query).unwrap());
+        assert!(ps.done());
+
+        // Will be expired (TTL zero)
+
+        let HandleResult::PrependProtocolMessage(protocol_message) = ps.handle(&prepare).unwrap()
+        else {
+            unreachable!("Should have it do Close -> Prepare");
+        };
+
+        assert!(matches!(protocol_message, ProtocolMessage::Close(_)));
+
+        let mut close_complete = Message::new(CloseComplete.to_bytes());
+        assert!(!ps.forward(&mut close_complete).unwrap());
+        assert!(!ps.contains(name));
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(!ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        let mut rfq = Message::new(ReadyForQuery::idle().to_bytes());
+        assert!(!ps.forward(&mut rfq).unwrap());
         assert!(ps.done());
     }
 

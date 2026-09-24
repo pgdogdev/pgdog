@@ -3,8 +3,15 @@ on:
   push:
     branches:
       - main
+      - main-ent
+    paths:
+      - "**/*.rs"
+      - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - "**/*.rs"
+      - "integration/**"
 
 jobs:
   macos:

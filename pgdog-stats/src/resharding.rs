@@ -1,37 +1,10 @@
-use std::{sync::Arc, time::SystemTime};
+use std::time::SystemTime;
 
 use derive_more::Display;
 use pgdog_config::ServerAuth;
 use serde::{Deserialize, Serialize};
 
-use crate::{Lsn, User};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TableCopy {
-    pub schema: String,
-    pub table: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TableCopyState {
-    pub sql: Arc<String>,
-    pub rows: usize,
-    pub bytes: usize,
-    pub bytes_per_sec: usize,
-    pub last_update: SystemTime,
-}
-
-impl Default for TableCopyState {
-    fn default() -> Self {
-        Self {
-            sql: Arc::new(String::default()),
-            rows: 0,
-            bytes: 0,
-            bytes_per_sec: 0,
-            last_update: SystemTime::now(),
-        }
-    }
-}
+use crate::{Lsn, TaskId, User};
 
 /// Replication slot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +15,7 @@ pub struct ReplicationSlot {
     pub copy_data: bool,
     pub address: Address,
     pub last_transaction: Option<SystemTime>,
+    pub task_id: Option<TaskId>,
 }
 
 /// Server address.
@@ -105,5 +79,61 @@ pub enum SyncState {
     PreData,
     PostData,
     Cutover,
-    PostCutover,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MissedRows {
+    pub inserts: usize,
+    pub updates: usize,
+    pub deletes: usize,
+}
+
+impl MissedRows {
+    pub fn non_zero(&self) -> bool {
+        self.inserts > 0 || self.updates > 0 || self.deletes > 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.inserts += other.inserts;
+        self.updates += other.updates;
+        self.deletes += other.deletes;
+    }
+
+    pub fn record(&mut self, tag: &str) {
+        if tag.starts_with("INSERT") {
+            self.inserts += 1;
+        } else if tag.starts_with("UPDATE") {
+            self.updates += 1;
+        } else if tag.starts_with("DELETE") {
+            self.deletes += 1;
+        }
+    }
+}
+
+impl std::fmt::Display for MissedRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut written = false;
+        if self.inserts > 0 {
+            write!(f, "insert={}", self.inserts)?;
+            written = true;
+        }
+        if self.updates > 0 {
+            write!(
+                f,
+                "{}update={}",
+                if written { " " } else { "" },
+                self.updates
+            )?;
+            written = true;
+        }
+        if self.deletes > 0 {
+            write!(
+                f,
+                "{}delete={}",
+                if written { " " } else { "" },
+                self.deletes
+            )?;
+        }
+        Ok(())
+    }
 }

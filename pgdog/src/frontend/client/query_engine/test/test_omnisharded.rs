@@ -7,13 +7,17 @@
 //! omni write can only reach that one shard, which would leave the shards
 //! inconsistent. We block such writes with an error instead.
 //!
+//! Reads are different: any single shard can answer a read of an omnisharded
+//! table, so a read inside a pinned transaction is allowed even though the
+//! conservative read/write strategy routes it to the primary.
+//!
 //! See [`crate::frontend::client::query_engine::route_query`].
 
 use crate::{
     backend::databases::reload_from_existing,
     config::{config, load_test_sharded, set},
     expect_message,
-    net::{CommandComplete, ErrorResponse, Parameters, Query, ReadyForQuery},
+    net::{CommandComplete, DataRow, ErrorResponse, Parameters, Query, ReadyForQuery},
 };
 
 use super::prelude::*;
@@ -178,10 +182,11 @@ async fn test_omni_write_allowed_as_first_statement_in_transaction() {
 }
 
 /// A SELECT against an omnisharded table inside a direct-to-shard transaction is
-/// also blocked: inside an explicit transaction, reads are routed to the primary
-/// (treated as writes), so they hit the same omni-in-direct-to-shard guard.
+/// allowed: the pinned shard holds the same rows as every other shard. The
+/// transaction routes the read to the primary, but that does not make it a
+/// mutation, so the omni-in-direct-to-shard guard does not apply.
 #[tokio::test]
-async fn test_omni_read_blocked_in_direct_to_shard_transaction() {
+async fn test_omni_read_allowed_in_direct_to_shard_transaction() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
     reset_tables(&mut client).await;
 
@@ -194,10 +199,16 @@ async fn test_omni_read_blocked_in_direct_to_shard_transaction() {
     client
         .send_simple(Query::new("SELECT * FROM sharded_omni"))
         .await;
-    let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_write_with_directive(&err);
-    let rfq = expect_message!(client.read().await, ReadyForQuery);
-    assert_eq!(rfq.status, 'E');
+    let messages = client
+        .read_until('Z')
+        .await
+        .expect("omnisharded read inside a pinned transaction must succeed");
+    let cc = messages
+        .iter()
+        .find(|m| m.code() == 'C')
+        .map(|m| CommandComplete::try_from(m.clone()).unwrap())
+        .expect("SELECT should complete");
+    assert_eq!(cc.command(), "SELECT 0");
 
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
@@ -234,11 +245,11 @@ async fn test_omni_write_blocked_after_set_sharding_key() {
     reset_tables(&mut client).await;
 }
 
-/// A SELECT against an omnisharded table after `SET pgdog.sharding_key` is also
-/// blocked, for the same reason as the `SET pgdog.shard` case: in-transaction
-/// reads are routed to the primary and hit the omni-in-direct-to-shard guard.
+/// A SELECT against an omnisharded table after `SET pgdog.sharding_key` is
+/// allowed for the same reason as the `SET pgdog.shard` case: a read pinned to
+/// one shard is still a read.
 #[tokio::test]
-async fn test_omni_read_blocked_after_set_sharding_key() {
+async fn test_omni_read_allowed_after_set_sharding_key() {
     let mut client = new_sharded_client_without_schemas().await;
     reset_tables(&mut client).await;
 
@@ -250,13 +261,91 @@ async fn test_omni_read_blocked_after_set_sharding_key() {
     client
         .send_simple(Query::new("SELECT * FROM sharded_omni"))
         .await;
-    let err = expect_message!(client.read().await, ErrorResponse);
-    assert_omni_write_with_directive(&err);
-    let rfq = expect_message!(client.read().await, ReadyForQuery);
-    assert_eq!(rfq.status, 'E');
+    let messages = client
+        .read_until('Z')
+        .await
+        .expect("omnisharded read after SET pgdog.sharding_key must succeed");
+    let cc = messages
+        .iter()
+        .find(|m| m.code() == 'C')
+        .map(|m| CommandComplete::try_from(m.clone()).unwrap())
+        .expect("SELECT should complete");
+    assert_eq!(cc.command(), "SELECT 0");
 
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
+
+    reset_tables(&mut client).await;
+}
+
+/// Count rows with `id` on one specific shard.
+async fn count_on_shard(client: &mut TestClient, shard: usize, id: i64) -> i64 {
+    client
+        .send_simple(Query::new(format!(
+            "/* pgdog_shard: {shard} */ SELECT count(*) FROM sharded_omni WHERE id = {id}"
+        )))
+        .await;
+    let messages = client.read_until('Z').await.unwrap();
+    let row = messages
+        .iter()
+        .find(|m| m.code() == 'D')
+        .map(|m| DataRow::try_from(m.clone()).unwrap())
+        .expect("count(*) returns a row");
+    row.get_int(0, true).unwrap()
+}
+
+/// A write to an omnisharded table hidden inside a CTE of a SELECT is
+/// broadcast like a plain omnisharded INSERT: the row lands on every shard,
+/// and the client sees the `RETURNING` rows from one shard only. With a shard
+/// directive the same statement is rejected, since it could only reach the
+/// directed shard.
+#[tokio::test]
+async fn test_omni_write_in_cte_reaches_every_shard() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    reset_tables(&mut client).await;
+    let id = client.random_id_for_shard(1);
+
+    let cte = format!(
+        "WITH ins AS (INSERT INTO sharded_omni (id, value) VALUES ({id}, 'cte') RETURNING id) \
+         SELECT id FROM ins"
+    );
+
+    client.send_simple(Query::new(cte.clone())).await;
+    let messages = client
+        .read_until('Z')
+        .await
+        .expect("omnisharded write inside a CTE must succeed");
+    let rows: Vec<_> = messages
+        .iter()
+        .filter(|m| m.code() == 'D')
+        .map(|m| DataRow::try_from(m.clone()).unwrap())
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "RETURNING rows must be deduplicated to one shard"
+    );
+    assert_eq!(rows[0].get_int(0, true), Some(id));
+
+    assert_eq!(
+        count_on_shard(&mut client, 0, id).await,
+        1,
+        "row missing on shard 0"
+    );
+    assert_eq!(
+        count_on_shard(&mut client, 1, id).await,
+        1,
+        "row missing on shard 1"
+    );
+
+    // The same write pinned to one shard is rejected.
+    client
+        .send_simple(Query::new(format!("/* pgdog_shard: 1 */ {cte}")))
+        .await;
+    let err = expect_message!(client.read().await, ErrorResponse);
+    assert_omni_write_with_directive(&err);
+    let rfq = expect_message!(client.read().await, ReadyForQuery);
+    assert_eq!(rfq.status, 'I');
 
     reset_tables(&mut client).await;
 }

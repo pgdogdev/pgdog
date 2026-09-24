@@ -140,7 +140,7 @@ async fn test_cross_shard_omni_check_valid_cases() {
     }
 }
 
-// All of these should throw errors.
+// Reads inside a pinned transaction succeed; writes to omnisharded tables throw.
 #[tokio::test]
 async fn test_cross_shard_omni_check_invalid_cases() {
     let admin = admin_sqlx().await;
@@ -155,8 +155,12 @@ async fn test_cross_shard_omni_check_invalid_cases() {
             .unwrap();
 
     // Test on a table that's NOT schema sharded.
-    // Try a direct-to-shard SET in a transaction using a SELECT to an omnisharded table.
-    // Should fail with "cannot write to an omnisharded table with a shard directive"
+    // A direct-to-shard SET in a transaction, then a SELECT from an omnisharded
+    // table (pg_type). The read is allowed: every shard holds the same rows, and
+    // the transaction routing it to the primary does not make it a write.
+    // A write to an omnisharded table in the same pinned transaction could only
+    // reach shard 0, so it must fail with
+    // "cannot write to an omnisharded table with a shard directive".
     {
         let mut transaction = conn.begin().await.unwrap();
         transaction
@@ -164,7 +168,7 @@ async fn test_cross_shard_omni_check_invalid_cases() {
             .await
             .unwrap();
 
-        let error = transaction
+        let result = transaction
             .fetch_one(
                 "
                     SELECT
@@ -175,6 +179,13 @@ async fn test_cross_shard_omni_check_invalid_cases() {
                     ORDER BY t.oid;",
             )
             .await
+            .unwrap();
+
+        assert_eq!(result.get::<&str, &str>("name"), "int4");
+
+        let error = transaction
+            .execute("INSERT INTO sharded_omni (id, value) VALUES (1, 'omni')")
+            .await
             .err()
             .unwrap();
 
@@ -183,6 +194,6 @@ async fn test_cross_shard_omni_check_invalid_cases() {
                 .to_string()
                 .contains("cannot write to an omnisharded table with a shard directive")
         );
-        transaction.commit().await.unwrap();
+        transaction.rollback().await.unwrap();
     }
 }

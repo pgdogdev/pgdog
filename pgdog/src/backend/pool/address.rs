@@ -12,7 +12,7 @@ use crate::backend::Error;
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::dns_cache::DnsCache;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::config::{Database, ServerAuth, User, config};
+use crate::config::{Database, ServerAuth, ServerTls, User, config};
 
 /// Server address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
@@ -32,6 +32,9 @@ pub(crate) struct Address {
     pub(crate) server_auth: ServerAuth,
     /// Optional IAM region override.
     pub(crate) server_iam_region: Option<String>,
+    /// Optional IAM role ARN to assume before minting the RDS IAM token, for
+    /// cross-account RDS IAM.
+    pub(crate) server_iam_assume_role: Option<String>,
     /// Vault path to fetch dynamic credentials from.
     #[serde(default)]
     pub(crate) vault_path: Option<String>,
@@ -43,6 +46,10 @@ pub(crate) struct Address {
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
     pub(crate) configured_role: Role,
+    /// TLS overrides for connections to this server. Unset fields fall
+    /// back to the `[general]` settings.
+    #[serde(default)]
+    pub(crate) tls: ServerTls,
 }
 
 impl From<Address> for pgdog_stats::Address {
@@ -95,10 +102,12 @@ impl Address {
             },
             server_auth,
             server_iam_region: user.server_iam_region.clone(),
+            server_iam_assume_role: user.server_iam_assume_role.clone(),
             vault_path: user.server_vault_path.clone(),
             vault_refresh_percent: user.vault_refresh_percent,
             database_number,
             configured_role: database.role,
+            tls: database.tls.clone(),
         }
     }
 
@@ -190,6 +199,9 @@ impl Address {
             // Requires an allocation, which isn't very efficient
             // but this is an "edge case": how often are you changing passwords anyway?
             let mut other = other.clone();
+
+            // The database number will change if we remove a replica.
+            other.database_number = self.database_number;
             other.passwords = self.passwords.clone();
             self == &other
         } else {
@@ -209,10 +221,12 @@ impl Address {
             database_name: "pgdog".into(),
             server_auth: ServerAuth::Password,
             server_iam_region: None,
+            server_iam_assume_role: None,
             vault_path: None,
             vault_refresh_percent: None,
             database_number: 0,
             configured_role: Role::Primary,
+            tls: ServerTls::default(),
         }
     }
 }
@@ -257,6 +271,7 @@ mod test {
     use std::time::{Duration, Instant, SystemTime};
 
     use crate::config;
+    use crate::config::TlsVerifyMode;
 
     use super::*;
 
@@ -295,6 +310,36 @@ mod test {
         assert_eq!(address.database_name, "not_pgdog");
         assert_eq!(address.user, "alice");
         assert_eq!(address.passwords.first().unwrap(), "hunter3");
+    }
+
+    #[test]
+    fn test_tls_overrides_from_config() {
+        let database = Database {
+            name: "pgdog".into(),
+            host: "replica.internal".into(),
+            tls: ServerTls {
+                tls_verify: Some(TlsVerifyMode::VerifyCa),
+                tls_server_ca_certificate: Some("/certs/replica-ca.pem".into()),
+                tls_server_certificate: Some("/certs/replica-client.pem".into()),
+                tls_server_private_key: Some("/certs/replica-client.key".into()),
+            },
+            ..Default::default()
+        };
+
+        let user = User {
+            name: "pgdog".into(),
+            database: "pgdog".into(),
+            ..Default::default()
+        };
+
+        let address = Address::new(&database, &user, 0);
+        assert_eq!(address.tls, database.tls);
+
+        // TLS overrides are part of pool identity: changing them must
+        // recreate server connections on config reload.
+        let mut rotated = address.clone();
+        rotated.tls.tls_server_certificate = Some("/certs/other-client.pem".into());
+        assert!(!address.compatible(&rotated));
     }
 
     #[test]
@@ -707,5 +752,32 @@ mod test {
             cache.cached_ip_for_testing(hostname),
             Some(socket_addr.ip())
         );
+    }
+
+    #[test]
+    fn test_address_carries_assume_role_from_user() {
+        let database = Database {
+            name: "db".into(),
+            host: "db.example.com".into(),
+            port: 5432,
+            ..Default::default()
+        };
+        let user = User {
+            name: "app".into(),
+            database: "db".into(),
+            server_auth: ServerAuth::RdsIam,
+            server_iam_assume_role: Some("arn:aws:iam::111122223333:role/pgdog-rds-connect".into()),
+            ..Default::default()
+        };
+
+        let addr = Address::new(&database, &user, 0);
+
+        assert_eq!(addr.server_auth, ServerAuth::RdsIam);
+        assert_eq!(
+            addr.server_iam_assume_role.as_deref(),
+            Some("arn:aws:iam::111122223333:role/pgdog-rds-connect")
+        );
+        // External-identity server auth carries no static password.
+        assert!(addr.passwords.is_empty());
     }
 }

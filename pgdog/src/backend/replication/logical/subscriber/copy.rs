@@ -12,8 +12,7 @@ use crate::frontend::client::query_engine::two_pc::{
 
 use crate::frontend::router::parser::Error as ParseError;
 use crate::{
-    backend::{Cluster, ConnectReason, replication::subscriber::ParallelConnection},
-    config::Role,
+    backend::{Cluster, replication::subscriber::ParallelConnection},
     frontend::router::parser::{CopyParser, Shard},
     net::{
         CopyData, CopyDone, ErrorResponse, FromBytes, Message, Protocol, ProtocolMessage, Query,
@@ -22,6 +21,7 @@ use crate::{
 };
 
 use super::super::{CopyStatement, Error};
+use super::connect_primary;
 
 // Not really needed, but we're currently
 // sharding 3 CopyData messages at a time.
@@ -36,7 +36,6 @@ pub(crate) struct CopySubscriber {
     buffer: Vec<CopyData>,
     connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
-    bytes_sharded: usize,
 }
 
 impl CopySubscriber {
@@ -67,7 +66,6 @@ impl CopySubscriber {
             buffer: vec![],
             connections: vec![],
             stmt: copy_stmt.clone(),
-            bytes_sharded: 0,
         })
     }
 
@@ -75,15 +73,8 @@ impl CopySubscriber {
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
         for shard in self.cluster.shards() {
-            let primary = shard
-                .pools_with_roles()
-                .iter()
-                .find(|(role, _)| role == &Role::Primary)
-                .ok_or(Error::NoPrimary)?
-                .1
-                .standalone(ConnectReason::Replication)
-                .await?;
-            servers.push(ParallelConnection::new(primary)?);
+            let server = connect_primary(shard).await?;
+            servers.push(ParallelConnection::new(server)?);
         }
 
         self.connections = servers;
@@ -225,8 +216,8 @@ impl CopySubscriber {
         // earlier shards have already committed, those shards stay committed — the only residual
         // partial-commit window (full cross-shard atomicity via 2PC is intentionally out of
         // scope). Shards not yet committed roll back on connection close. The
-        // destination_has_rows() guard in parallel_sync.rs prevents a doomed retry if this
-        // window is ever hit.
+        // validate_destination_has_rows() guard in the table copy retry loop prevents a
+        // doomed retry if this window is ever hit.
         if self.cluster.two_pc_enabled() {
             self.commit_two_pc().await?;
         } else {
@@ -334,14 +325,7 @@ impl CopySubscriber {
             }
         }
 
-        self.bytes_sharded += result.iter().map(|c| c.len()).sum::<usize>();
-
         Ok((rows, bytes))
-    }
-
-    /// Total amount of bytes shaded.
-    pub(crate) fn bytes_sharded(&self) -> usize {
-        self.bytes_sharded
     }
 }
 

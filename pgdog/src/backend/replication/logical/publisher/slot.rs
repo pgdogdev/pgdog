@@ -17,6 +17,7 @@ use std::{fmt::Display, str::FromStr, time::Duration};
 use tracing::{debug, info, trace, warn};
 
 pub(crate) use pgdog_stats::Lsn;
+use pgdog_stats::TaskId;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Snapshot {
@@ -101,13 +102,19 @@ impl ReplicationSlot {
         }
     }
 
+    pub(crate) fn set_task_id(&mut self, task_id: TaskId) {
+        if let Some(tracker) = &mut self.tracker {
+            tracker.set_task_id(task_id);
+        }
+    }
+
     /// Connect to database using replication mode.
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         self.server = Some(
             Box::pin(Server::connect(
                 &self.address,
                 ServerOptions::new_replication(),
-                ConnectReason::Replication,
+                ConnectReason::Resharding,
                 Default::default(),
             ))
             .await?,
@@ -125,7 +132,7 @@ impl ReplicationSlot {
                 Server::connect(
                     &self.address,
                     ServerOptions::default(),
-                    ConnectReason::Replication,
+                    ConnectReason::Resharding,
                     Default::default(),
                 )
                 .await?,
@@ -136,6 +143,16 @@ impl ReplicationSlot {
 
     /// Replication lag in bytes for this slot.
     pub(crate) async fn replication_lag(&mut self) -> Result<i64, Error> {
+        let lag = self.query_replication_lag().await;
+
+        if lag.is_err() {
+            self.server_meta = None;
+        }
+
+        lag
+    }
+
+    async fn query_replication_lag(&mut self) -> Result<i64, Error> {
         let query = format!(
             "SELECT pg_current_wal_lsn() - confirmed_flush_lsn \
              FROM pg_replication_slots \
@@ -148,7 +165,7 @@ impl ReplicationSlot {
             .pop()
             .ok_or(Error::MissingReplicationSlot(self.name.clone()))?;
 
-        if let Some(ref tracker) = self.tracker {
+        if let Some(tracker) = &self.tracker {
             tracker.update_lag(lag);
         }
 
@@ -164,8 +181,9 @@ impl ReplicationSlot {
         if self.server.is_none() {
             self.connect().await?;
         }
+        drop(self.tracker.take());
 
-        info!(
+        debug!(
             "creating replication slot \"{}\" [{}]",
             self.name, self.address
         );
@@ -276,6 +294,10 @@ impl ReplicationSlot {
 
     /// Drop the slot.
     pub(crate) async fn drop_slot(&mut self) -> Result<(), Error> {
+        if !self.server.as_ref().is_some_and(Server::in_sync) {
+            self.server = None;
+            self.connect().await?;
+        }
         let drop_slot = self.drop_slot_query(true);
         self.server()?.execute(&drop_slot).await?;
 
@@ -396,14 +418,26 @@ impl ReplicationSlot {
 
     /// Drop the source connection and reconnect, restarting replication from the
     /// last confirmed position (`self.lsn`, kept in sync by `status_update`).
+    /// A stream that was already asked to stop is asked again.
     pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
+        let stopped = self.stopped;
         self.server = None;
         self.connect().await?;
-        self.start_replication().await
+        self.start_replication().await?;
+
+        if stopped {
+            self.stop_replication().await?;
+        }
+
+        Ok(())
     }
 
     /// Ask remote to close stream.
     pub(crate) async fn stop_replication(&mut self) -> Result<(), Error> {
+        if self.stopped {
+            return Ok(());
+        }
+
         self.server()?.send_one(&CopyDone.into()).await?;
         self.server()?.flush().await?;
         self.stopped = true;
@@ -411,9 +445,21 @@ impl ReplicationSlot {
         Ok(())
     }
 
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Current slot LSN.
     pub(crate) fn lsn(&self) -> Lsn {
         self.lsn
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn addr(&self) -> &Address {
+        &self.address
     }
 }
 

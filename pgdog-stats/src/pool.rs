@@ -44,6 +44,8 @@ pub struct Counts {
     pub bind_count: usize,
     /// Number of times the pool had to rollback unfinished transactions.
     pub rollbacks: usize,
+    /// Server connections terminated by Postgres with SQLSTATE `25P03`.
+    pub idle_xact_timeouts: usize,
     /// Number of times the pool sent the health check query.
     pub healthchecks: usize,
     /// Total count of Close messages sent to server connections.
@@ -71,6 +73,8 @@ pub struct Counts {
     pub rows_updated: usize,
     /// Rows reported affected by DELETE command tags.
     pub rows_deleted: usize,
+    /// Checkout timeouts.
+    pub checkout_timeouts: usize,
 }
 
 impl Sub for Counts {
@@ -93,6 +97,9 @@ impl Sub for Counts {
             parse_count: self.parse_count.saturating_sub(rhs.parse_count),
             bind_count: self.bind_count.saturating_sub(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_sub(rhs.rollbacks),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_sub(rhs.idle_xact_timeouts),
             healthchecks: self.healthchecks.saturating_sub(rhs.healthchecks),
             close: self.close.saturating_sub(rhs.close),
             errors: self.errors.saturating_sub(rhs.errors),
@@ -106,6 +113,7 @@ impl Sub for Counts {
             rows_inserted: self.rows_inserted.saturating_sub(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_sub(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_sub(rhs.rows_deleted),
+            checkout_timeouts: self.checkout_timeouts.saturating_sub(rhs.checkout_timeouts),
         }
     }
 }
@@ -130,6 +138,9 @@ impl Add for Counts {
             parse_count: self.parse_count.saturating_add(rhs.parse_count),
             bind_count: self.bind_count.saturating_add(rhs.bind_count),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_add(rhs.idle_xact_timeouts),
             healthchecks: self.healthchecks.saturating_add(rhs.healthchecks),
             close: self.close.saturating_add(rhs.close),
             errors: self.errors.saturating_add(rhs.errors),
@@ -143,6 +154,7 @@ impl Add for Counts {
             rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
+            checkout_timeouts: self.checkout_timeouts.saturating_add(rhs.checkout_timeouts),
         }
     }
 }
@@ -168,6 +180,7 @@ impl Div<usize> for Counts {
             parse_count: self.parse_count.checked_div(rhs).unwrap_or(0),
             bind_count: self.bind_count.checked_div(rhs).unwrap_or(0),
             rollbacks: self.rollbacks.checked_div(rhs).unwrap_or(0),
+            idle_xact_timeouts: self.idle_xact_timeouts.checked_div(rhs).unwrap_or(0),
             healthchecks: self.healthchecks.checked_div(rhs).unwrap_or(0),
             close: self.close.checked_div(rhs).unwrap_or(0),
             errors: self.errors.checked_div(rhs).unwrap_or(0),
@@ -184,6 +197,7 @@ impl Div<usize> for Counts {
             rows_inserted: self.rows_inserted.checked_div(rhs).unwrap_or(0),
             rows_updated: self.rows_updated.checked_div(rhs).unwrap_or(0),
             rows_deleted: self.rows_deleted.checked_div(rhs).unwrap_or(0),
+            checkout_timeouts: self.checkout_timeouts.checked_div(rhs).unwrap_or(0),
         }
     }
 }

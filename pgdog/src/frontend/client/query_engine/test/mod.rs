@@ -11,6 +11,7 @@ mod advisory_lock;
 mod close_parse;
 mod close_parse_global_cache;
 mod cross_shard_disabled;
+mod discard;
 mod extended;
 mod extended_anonymous;
 mod extended_transaction;
@@ -26,6 +27,7 @@ mod omni;
 mod pipeline_execution;
 pub(crate) mod prelude;
 mod prepared_syntax_error;
+mod pub_sub;
 mod replicas;
 mod rewrite_extended;
 mod rewrite_insert_split;
@@ -37,8 +39,10 @@ mod set_schema_sharding;
 mod sharded;
 mod sharded_prepared;
 mod spliced;
+mod temp_table;
 mod test_omnisharded;
 mod transaction_state;
+mod two_pc_single_shard;
 
 pub(super) fn test_client() -> Client {
     load_test();

@@ -1,11 +1,12 @@
 # Resharding benchmarks
 
-Two suites measure different phases of the resharding pipeline:
+Three suites measure different phases of the resharding pipeline:
 
 | Suite | Script | What is timed |
 |---|---|---|
 | `copy_data` | `copy_data/run.sh` | Bulk COPY throughput, 3 source shards → 4 destination shards |
 | `replication` | `replication/run.sh` | WAL streaming throughput draining a pre-seeded backlog |
+| `schema_sync` | `schema_sync/run.sh` | Dump, parse and rewrite of the source schema per stage |
 
 ## Prerequisites
 
@@ -28,6 +29,31 @@ BENCH_SCALE=10000000 bash benches/resharding/copy_data/run.sh
 # save a baseline then compare
 bash benches/resharding/copy_data/run.sh --save-baseline main
 bash benches/resharding/copy_data/run.sh --baseline main
+```
+
+## Schema sync stages
+
+Every stage runs `schema-sync --dry-run`. pgdog dumps the source schema,
+parses it, rewrites it, and prints the statements of the stage. It writes
+nothing to the destinations, so the numbers show pgdog cost, not Postgres DDL
+cost.
+
+| Stage | Flag | Statements produced |
+|---|---|---|
+| `pre_data` | none | Types, tables, defaults, table partitions, publication |
+| `post_data` | `--data-sync-complete` | Indexes, constraints, foreign keys, index partitions |
+| `cutover` | `--cutover` | One `setval` per sequence |
+
+`BENCH_TABLES` scales the schema. The default is 500 tables per source shard.
+Half of them use `integer` keys, which exercises the `integer` to `bigint`
+rewrite.
+
+```sh
+# all three stages
+bash benches/resharding/schema_sync/run.sh
+
+# one stage, larger schema
+BENCH_TABLES=1000 BENCH_STAGES=post_data bash benches/resharding/schema_sync/run.sh
 ```
 
 ## Network simulation with toxiproxy

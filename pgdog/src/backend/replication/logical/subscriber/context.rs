@@ -5,7 +5,7 @@ use crate::{
     backend::Cluster,
     frontend::{
         BufferedQuery, ClientRequest, Command, PreparedStatements, Router, RouterContext,
-        client::Sticky,
+        client::{QueryTimestamps, Sticky},
         router::{
             parser::{AstContext, Cache, Shard},
             sharding::lookup,
@@ -50,7 +50,7 @@ impl StreamContext {
         let parse = stmt.clone();
         let mut request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
 
-        let ast_context = AstContext::from_cluster(cluster, &PARAMS);
+        let ast_context = AstContext::from_cluster(cluster, &PARAMS, QueryTimestamps::now());
         let ast = Cache::get().query(
             &BufferedQuery::Prepared(parse),
             &ast_context,

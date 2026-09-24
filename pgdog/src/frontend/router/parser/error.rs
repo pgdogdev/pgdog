@@ -90,4 +90,7 @@ pub(crate) enum Error {
 
     #[error("execute requires prepared statements to be set to full")]
     ExecuteRequiresFull,
+
+    #[error("unknown DISCARD target: {0}")]
+    UnknownDiscardTarget(u32),
 }

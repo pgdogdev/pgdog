@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -40,6 +40,8 @@ pub(crate) struct Target {
     pub(crate) pool: Pool,
     pub(crate) ban: Ban,
     role: PoolRole,
+    /// Auto targets start as replicas before their roles are actually known.
+    role_detected: Arc<AtomicBool>,
     /// Smooth weighted round-robin current weight tracker.
     current_weight: Arc<AtomicI64>,
 }
@@ -47,6 +49,7 @@ pub(crate) struct Target {
 impl Target {
     pub(super) fn new(pool: Pool, role: Role) -> Self {
         let ban = Ban::new(&pool);
+        let role_detected = !pool.config().role_detection;
 
         // Set pool to last known role.
         pool.set_role(role);
@@ -54,6 +57,7 @@ impl Target {
         Self {
             ban,
             role: PoolRole::new(role),
+            role_detected: Arc::new(AtomicBool::new(role_detected)),
             pool,
             current_weight: Arc::new(AtomicI64::new(0)),
         }
@@ -64,10 +68,11 @@ impl Target {
         self.role.role()
     }
 
-    /// Set role.
+    /// Set a known role, including when detection confirms the initial replica role.
     pub(super) fn set_role(&self, role: Role) -> bool {
         let lb = self.role.set_role(role);
         let pool = self.pool.set_role(role);
+        self.role_detected.store(true, Ordering::Release);
 
         debug_assert_eq!(
             lb, pool,
@@ -254,7 +259,11 @@ impl LoadBalancer {
     /// removals: each old target is paired with the new target that shares its
     /// address. New targets with no matching old target start empty; old targets
     /// with no match in the new config have their connections dropped.
-    pub(crate) fn move_conns_to(&self, destination: &LoadBalancer) -> Result<(), Error> {
+    ///
+    /// Returns the amount of `Pools` that moved from one replica to the other.
+    pub(crate) fn move_conns_to(&self, destination: &LoadBalancer) -> Result<usize, Error> {
+        let mut moved: usize = 0;
+
         for from in &self.targets {
             if let Some(to) = destination
                 .targets
@@ -262,30 +271,22 @@ impl LoadBalancer {
                 .find(|to| from.pool.has_compatible_address_with(&to.pool))
             {
                 from.pool.move_conns_to(&to.pool)?;
+                moved += 1;
 
                 // Carry over detected roles and LSN stats so the new load balancer
                 // doesn't briefly appear read-only before the role detector runs.
                 to.set_role(from.role());
+                to.role_detected.store(
+                    from.role_detected.load(Ordering::Acquire),
+                    Ordering::Release,
+                );
                 *to.pool.inner().lsn_stats.write() = from.pool.lsn_stats();
+                to.ban.carry_manual_ban(&from.ban);
             }
         }
         destination.require_healthcheck_for_new_targets(&self.targets);
 
-        Ok(())
-    }
-
-    /// The two replica sets are referring to the same databases.
-    ///
-    /// Returns `true` when every target in `self` has a matching address in
-    /// `destination`. This allows replica additions (new targets start empty)
-    /// while still preserving connections to unchanged replicas.
-    pub(crate) fn can_move_conns_to(&self, destination: &LoadBalancer) -> bool {
-        self.targets.iter().all(|from| {
-            destination
-                .targets
-                .iter()
-                .any(|to| from.pool.has_compatible_address_with(&to.pool))
-        })
+        Ok(moved)
     }
 
     /// True if the LB has any target that can serve replica reads.
@@ -302,6 +303,13 @@ impl LoadBalancer {
                 .targets
                 .iter()
                 .all(|target| target.pool.config().role_detection)
+    }
+
+    /// True once every target has a configured or detected role.
+    pub(crate) fn roles_detected(&self) -> bool {
+        self.targets
+            .iter()
+            .all(|target| target.role_detected.load(Ordering::Acquire))
     }
 
     /// Cancel a query if one is running.

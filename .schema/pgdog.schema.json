@@ -27,6 +27,7 @@
       "default": {
         "application_name_add_host": false,
         "auth_type": "scram",
+        "background_workers": 0,
         "ban_replica_lag": 9223372036854775807,
         "ban_replica_lag_bytes": 9223372036854775807,
         "ban_timeout": 300000,
@@ -224,6 +225,7 @@
       "$ref": "#/$defs/Rewrite",
       "default": {
         "enabled": false,
+        "non_deterministic_functions": "ignore",
         "primary_key": "ignore",
         "shard_key": "error",
         "split_inserts": "error"
@@ -595,6 +597,38 @@
           "format": "uint64",
           "minimum": 0
         },
+        "tls_server_ca_certificate": {
+          "description": "Overrides the `tls_server_ca_certificate` setting: the CA bundle used to\nverify this server's certificate.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_certificate": {
+          "description": "Overrides the `tls_server_certificate` setting: the client certificate PgDog\npresents to this server (mTLS). Must be set together with `tls_server_private_key`;\nwhen set, the pair replaces the `[general]` pair for this database.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_server_private_key": {
+          "description": "Overrides the `tls_server_private_key` setting: the private key for\n`tls_server_certificate`. Must be set together with `tls_server_certificate`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_verify": {
+          "description": "Overrides the `tls_verify` setting for connections to this database.\nUseful when servers in the same cluster require different TLS settings,\ne.g., managed databases where each instance has its own CA.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TlsVerifyMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user": {
           "description": "Name of the PostgreSQL user to connect with when creating backend connections from PgDog to Postgres. If not set, this defaults to `name` in users.toml.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#user>",
           "type": [
@@ -664,6 +698,13 @@
           "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",
           "default": "scram"
+        },
+        "background_workers": {
+          "description": "Maximum number of background workers, used for executing blocking tasks. We typically offload CPU-intensive workloads here.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
         },
         "ban_replica_lag": {
           "description": "Ban a replica from serving read queries if its replication lag (in milliseconds) exceeds this threshold.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#ban_replica_lag>",
@@ -1905,6 +1946,11 @@
           "type": "boolean",
           "default": false
         },
+        "non_deterministic_functions": {
+          "description": "Behavior when an `INSERT` is headed to an omnisharded table using a function (such as date-time functions)\nthat will not be consistent when performing the functions separately on each shard.\nThus, it re-writes all such functions before performing the `INSERT` with constant values to maintain consistency.\n\nIt also handles re-writing `NOW()` (and other funtions that rely on transaction start time) to be consistent\nwithin a transaction. This is especially important when we write such a function to multiple Shards in a singular transaction.\n\nExample: `NOW()` is re-written to `2026-09-15 18:14:09.123456-05` (or whatever the current time is)\nbefore performing the individual `INSERT` operations.\n\nThis applies to both `DEFAULT` table schema and functions called within a VALUES list of an `INSERT`.\n\n`ignore` allows the `INSERT` without modification.\n\n_Default:_ `ignore`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#non_deterministic_functions>",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "ignore"
+        },
         "primary_key": {
           "description": "Behavior for `INSERT` missing a `BIGINT` primary key: `error` rejects, `rewrite` auto-injects `pgdog.unique_id()`, `ignore` allows without modification.\n\n_Default:_ `ignore`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#primary_key>",
           "$ref": "#/$defs/RewriteMode",
@@ -1945,6 +1991,11 @@
           "description": "Rewrite only for omnisharded tables.",
           "type": "string",
           "const": "rewrite_omni"
+        },
+        {
+          "description": "Rewrite only for omnisharded tables and use global sequence instead of unique ID.",
+          "type": "string",
+          "const": "rewrite_omni_global"
         }
       ]
     },

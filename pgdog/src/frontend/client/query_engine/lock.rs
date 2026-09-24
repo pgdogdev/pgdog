@@ -6,7 +6,8 @@ impl QueryEngine {
     pub(super) fn check_lock(&mut self) {
         // The presence of advisory locks or manual pin
         // indicates we cannot release the backend.
-        let locked = self.advisory_locks.locked() || self.manual_lock;
+        let locked =
+            self.advisory_locks.locked() || !self.temp_tables.is_empty() || self.manual_lock;
 
         self.backend.lock(locked);
         self.stats.locked(locked);

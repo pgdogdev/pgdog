@@ -2,9 +2,8 @@ use indexmap::IndexSet;
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
 
-use crate::frontend::router::Ast;
+use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Cache;
-use crate::frontend::{BufferedQuery, ClientRequest};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
 use super::{Error, RewritePlan, StatementRewrite};
@@ -18,9 +17,6 @@ pub(crate) struct InsertSplit {
 
     /// The split up INSERT statement with parameters and/or values.
     stmt: String,
-
-    /// The statement AST.
-    ast: Ast,
 
     /// The global prepared statement name for this split.
     /// Only set when the original statement was a named prepared statement.
@@ -63,7 +59,8 @@ impl InsertSplit {
                 other => other.clone(),
             };
             new_request.messages.push(new_message);
-            new_request.ast = Some(self.ast.clone());
+            let cache = Cache::get();
+            new_request.ast = Some(cache.record(&self.stmt)?);
         }
 
         // When the driver prepared the statement in a separate round-trip
@@ -74,6 +71,7 @@ impl InsertSplit {
         // otherwise it would still hold the original multi-tuple statement and
         // reject the Bind's parameter count.
         if !has_parse && let Some(parse) = &request.last_parse {
+            // FIXME: We should be able to use the previously cached `Parse` here
             let mut split_parse = parse.clone();
             split_parse.set_query(&self.stmt);
             if let Some(name) = self.statement_name() {
@@ -110,6 +108,49 @@ pub(crate) fn build_split_requests(
         .collect()
 }
 
+/// Split a simple query after sequence calls have been resolved. Both the SQL
+/// and routing AST must use the values allocated for this execution.
+pub(super) fn build_resolved_split_requests(
+    query: &Query,
+    request: &ClientRequest,
+) -> Result<Vec<ClientRequest>, Error> {
+    let ast = pg_raw_parse::parse(query.query())?;
+    let Some(Node::InsertStmt(insert)) = ast.stmts().next() else {
+        return Err(Error::EmptyQuery);
+    };
+    split_insert_statements(insert)?
+        .into_iter()
+        .map(|(params, stmt)| {
+            InsertSplit {
+                params,
+                stmt,
+                statement_name: None,
+            }
+            .build_request(request)
+        })
+        .collect()
+}
+
+fn split_insert_statements(
+    insert: &nodes::InsertStmt,
+) -> Result<Vec<(IndexSet<u16>, String)>, Error> {
+    let mut splits = Vec::new();
+    make::try_owned(|mem| {
+        let mut copy = mem.make_unique(insert);
+
+        if let Node::SelectStmt(select) = insert.select_stmt() {
+            for list in select.values_lists() {
+                let (params, select) = StatementRewrite::build_single_tuple_select(mem, list);
+                copy.as_mut().set_select_stmt(select.uncast());
+                splits.push((params, deparse(&*copy)?.as_str().to_string()));
+            }
+        }
+
+        Ok::<_, Error>(copy)
+    })?;
+    Ok(splits)
+}
+
 impl StatementRewrite<'_> {
     /// Split up multi-tuple INSERT statements into separate single-tuple statements
     /// for individual execution.
@@ -137,20 +178,7 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
-        let mut splits = Vec::new();
-        make::try_owned(|mem| {
-            let mut copy = mem.make_unique(insert);
-
-            if let Node::SelectStmt(select) = insert.select_stmt() {
-                for list in select.values_lists() {
-                    let (params, select) = self.build_single_tuple_select(mem, list);
-                    copy.as_mut().set_select_stmt(select.uncast());
-                    splits.push((params, deparse(&*copy)?.as_str().to_string()));
-                }
-            }
-
-            Ok::<_, Error>(copy)
-        })?;
+        let splits = split_insert_statements(insert)?;
 
         if splits.len() <= 1 {
             return Ok(());
@@ -162,18 +190,7 @@ impl StatementRewrite<'_> {
         // base and make this behave consistently.
 
         // Now create Ast for each split (needs mutable borrow of prepared_statements)
-        let cache = Cache::get();
-        let ctx = self.ast_context();
         for (params, stmt) in splits {
-            let query = if self.extended {
-                BufferedQuery::Prepared(Parse::named("", &stmt))
-            } else {
-                BufferedQuery::Query(Query::new(&stmt))
-            };
-            let ast = cache
-                .query(&query, &ctx, self.prepared_statements)
-                .map_err(|e| Error::Cache(e.to_string()))?;
-
             // If this is a named prepared statement, register the split in the global cache
             // and store the assigned name for use in Bind messages.
             let statement_name = if self.prepared {
@@ -188,7 +205,6 @@ impl StatementRewrite<'_> {
             plan.insert_split.push(InsertSplit {
                 params,
                 stmt,
-                ast,
                 statement_name,
             });
         }
@@ -197,9 +213,8 @@ impl StatementRewrite<'_> {
     }
 
     /// Build a single-tuple INSERT from the original statement with just one values_list.
-    /// Returns the parameter positions (0-indexed) and the SQL string.
+    /// Returns the original parameter positions (1-indexed) and SELECT AST.
     fn build_single_tuple_select<'mem>(
-        &self,
         mem: make::MemoryToken<'mem>,
         values_list: Node<'_>,
     ) -> (IndexSet<u16>, make::Unique<'mem, &'mem nodes::SelectStmt>) {
@@ -227,6 +242,7 @@ mod tests {
     use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
+    use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::net::messages::bind::{Format, Parameter};
 
@@ -263,6 +279,8 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(insert, &mut plan).unwrap();

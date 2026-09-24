@@ -17,6 +17,7 @@ use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
 /// Run the full migration from a source database to a target: schema sync
@@ -62,63 +63,55 @@ impl Task for ReshardTask {
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         // Take the cancellation token so a `STOP_TASK` winds the children down
         // cooperatively (they'd otherwise outlive this task).
-        let _token = ctx.cancellation_token();
+        let cancel = ctx.cancellation_token();
         let mut orchestrator = self.orchestrator;
+        let schema_sync = SchemaSyncTask::builder()
+            .databases(orchestrator.databases())
+            .publication(orchestrator.publication.clone())
+            .ignore_errors(true);
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.
         if !self.skip_schema_sync {
             ctx.set_status(ReshardStatus::SchemaSync);
-            orchestrator = ctx
-                .run(
-                    SchemaSyncTask::builder()
-                        .orchestrator(orchestrator)
-                        .phase(SchemaSyncPhase::Pre)
-                        .ignore_errors(true)
-                        .build(),
-                )
+            ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Pre).build())
                 .await?;
+
+            // The pre-data sync changed the destination's schema, so its pools
+            // reloaded. `SchemaSync::reload_destination` refreshes only its own
+            // cluster refs, so the orchestrator still holds stale ones.
+            orchestrator.refresh()?;
+            orchestrator.refresh_publisher();
         }
 
         // From the data copy onward the orchestrator may hold replication slots
         // (created during data_sync, kept until replication takes them over).
-        // Awaiting this guard on every exit drops whatever the publisher still
-        // owns — a no-op once replication has claimed the slots — so a failed or
-        // aborted migration doesn't leave them lingering on the source.
+        // The guard cleans up on failure or cancellation, including when the
+        // task is force-aborted before it can reach the cleanup below. Once
+        // replication claims the slots, publisher cleanup becomes a no-op.
         let guard = orchestrator.publication_guard();
         let result: Result<(), MigrationError> = async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
-                orchestrator = ctx
-                    .run(
-                        CopyDataTask::builder()
-                            .orchestrator(orchestrator)
-                            // Only streaming needs replica identity, not a sync-only copy.
-                            .require_replica_identity(!self.sync_only)
-                            .build(),
-                    )
-                    .await?;
+                ctx.run(
+                    CopyDataTask::builder()
+                        .orchestrator(orchestrator.clone())
+                        .format(config().config.general.resharding_copy_format)
+                        // Only streaming needs replica identity, not a sync-only copy.
+                        .require_replica_identity(!self.sync_only)
+                        .build(),
+                )
+                .await?;
             }
 
             // Post-data schema sync (secondary indexes, constraints): the
             // second half of schema sync, after the bulk load.
+            // It reuses dump schema from the earlier schema_sync
+            // calls if they were executed.
             if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::FinalizingSchema);
-
-                // The bulk copy above can run for hours; pools may have reloaded
-                // meanwhile, leaving our cluster refs stale. Re-fetch them before
-                // touching the destination.
-                orchestrator.refresh()?;
-
-                orchestrator = ctx
-                    .run(
-                        SchemaSyncTask::builder()
-                            .orchestrator(orchestrator)
-                            .phase(SchemaSyncPhase::Post)
-                            .ignore_errors(true)
-                            .build(),
-                    )
+                ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Post).build())
                     .await?;
             }
 
@@ -131,14 +124,15 @@ impl Task for ReshardTask {
                 orchestrator.refresh()?;
 
                 // `auto_cutover` (reshard) cuts over on its own; otherwise the
-                // task runs until an operator `CUTOVER`/`STOP_TASK`. Both of
-                // those resolve to `Ok`, so awaiting surfaces only a genuine
-                // replication failure.
-                let waiter = orchestrator.replicate().await?;
+                // task runs until an operator `CUTOVER`/`STOP_TASK`. A stop in
+                // a forward phase resolves to `Err(ReplicationAborted)` and runs
+                // the cleanup below; a stop in a reverse phase resolves to
+                // `Ok`, because the migration is already complete.
                 ctx.run(
                     ReplicationTask::builder()
-                        .waiter(waiter)
+                        .orchestrator(orchestrator.clone())
                         .auto_cutover(self.auto_cutover)
+                        .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Cutover).build())
                         .build(),
                 )
                 .await?;
@@ -150,10 +144,12 @@ impl Task for ReshardTask {
 
         // Drop any replication slots the publisher still owns only when the
         // migration failed or was aborted mid-copy.
-        if result.is_err()
-            && let Err(err) = guard.cleanup().await
-        {
-            warn!("failed to clean up replication slots after migration: {err}");
+        if result.is_err() || cancel.is_cancelled() {
+            if let Err(err) = guard.cleanup().await {
+                warn!("failed to clean up replication slots after migration: {err}");
+            }
+        } else {
+            guard.disarm();
         }
 
         result

@@ -118,7 +118,7 @@ impl Listener {
                 }
 
                 _ = sighup.listen() => {
-                    if let Err(err) = reload() {
+                    if let Err(err) = reload(false) {
                         error!("configuration reload error: {}", err);
                     }
                 }
@@ -241,6 +241,7 @@ impl Listener {
                             config.config.memory.net_buffer,
                             tls_identity,
                             tls_client_certificate,
+                            tls.server_end_point().map(|data| data.to_vec()),
                         );
                     } else {
                         stream.send_flush(&SslReply::No).await?;
@@ -280,6 +281,8 @@ impl Listener {
                 Startup::Cancel { ref id } => {
                     if comms().verify_cancel(id) {
                         let _ = databases().cancel(FrontendPid::from(id)).await;
+                    } else {
+                        super::ee::broadcast_cancel(id).await?;
                     }
                     break;
                 }

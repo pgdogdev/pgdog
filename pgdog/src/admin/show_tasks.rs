@@ -26,8 +26,8 @@ impl Command for ShowTasks {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
-            Field::bigint("parent_id"),
             Field::bigint("id"),
+            Field::bigint("parent_id"),
             Field::text("type"),
             Field::text("status"),
             Field::text("inner_status"),
@@ -59,8 +59,8 @@ impl Command for ShowTasks {
 
             let stoppable_id = task.parent_id.is_none().then_some(task.id);
 
-            row.add(task.parent_id)
-                .add(stoppable_id)
+            row.add(stoppable_id)
+                .add(task.parent_id)
                 .add(definition_str.as_str())
                 .add(status_str.as_str())
                 .add(inner_str.as_str())

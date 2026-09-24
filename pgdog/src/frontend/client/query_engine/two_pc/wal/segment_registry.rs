@@ -4,7 +4,11 @@
 use std::{sync::Arc, time::SystemTime};
 
 use dashmap::DashMap;
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+
+use super::super::TwoPcTransaction;
 
 /// Segment state.
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -32,6 +36,9 @@ static REGISTRY: Lazy<SegmentRegistry> = Lazy::new(SegmentRegistry::default);
 #[derive(Default, Debug)]
 pub(crate) struct SegmentRegistry {
     segments: Arc<DashMap<SegmentId, SegmentState>>,
+    // Registered before a phase record is queued, including records that have
+    // not reached disk yet. Checkpoint selection holds this same mutex.
+    segment_to_transaction_mapping: Mutex<HashMap<SegmentId, HashSet<TwoPcTransaction>>>,
 }
 
 impl SegmentRegistry {
@@ -66,6 +73,24 @@ impl SegmentRegistry {
     /// the file from disk, too.
     pub(crate) fn remove(&self, segment: SegmentId) {
         self.segments.remove(&segment);
+        self.segment_to_transaction_mapping.lock().remove(&segment);
+    }
+
+    /// Record that a particual segment was used to write information about a transaction.
+    pub(super) fn add_phase_reference(&self, segment: SegmentId, transaction: TwoPcTransaction) {
+        self.segment_to_transaction_mapping
+            .lock()
+            .entry(segment)
+            .or_default()
+            .insert(transaction);
+    }
+
+    /// Serialize checkpoint selection with publication of new dependencies.
+    pub(super) fn with_segment_to_transaction_mapping<T>(
+        &self,
+        select: impl FnOnce(&HashMap<SegmentId, HashSet<TwoPcTransaction>>) -> T,
+    ) -> T {
+        select(&self.segment_to_transaction_mapping.lock())
     }
 
     /// Global accessor.

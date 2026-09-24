@@ -18,6 +18,7 @@ export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGUSER=pgdog
 export PGPASSWORD=pgdog
+export PGOPTIONS='-c client_min_messages=warning'
 
 SOURCE_DBS=(pgdog1 pgdog2 pgdog3)
 DEST_DBS=(shard_0 shard_1 shard_2 shard_3)

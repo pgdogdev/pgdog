@@ -17,6 +17,7 @@ pub struct Counts {
     pub queries: usize,
     pub rollbacks: usize,
     pub errors: usize,
+    pub idle_xact_timeouts: usize,
     pub prepared_statements: usize,
     pub query_time: Duration,
     pub transaction_time: Duration,
@@ -50,20 +51,23 @@ impl Add<Counts> for PoolCounts {
             parse_count: self.parse_count + rhs.parse,
             bind_count: self.bind_count + rhs.bind,
             rollbacks: self.rollbacks + rhs.rollbacks,
+            idle_xact_timeouts: self.idle_xact_timeouts + rhs.idle_xact_timeouts,
             healthchecks: self.healthchecks + rhs.healthchecks,
             close: self.close + rhs.close,
             errors: self.errors + rhs.errors,
             cleaned: self.cleaned + rhs.cleaned,
             prepared_sync: self.prepared_sync + rhs.prepared_sync,
+            rows_inserted: self.rows_inserted + rhs.rows_inserted,
+            rows_updated: self.rows_updated + rhs.rows_updated,
+            rows_deleted: self.rows_deleted + rhs.rows_deleted,
+
             // These are not counted by each server stats.
             connect_count: self.connect_count,
             connect_time: self.connect_time,
             writes: self.writes,
             reads: self.reads,
             auth_attempts: self.auth_attempts,
-            rows_inserted: self.rows_inserted + rhs.rows_inserted,
-            rows_updated: self.rows_updated + rhs.rows_updated,
-            rows_deleted: self.rows_deleted + rhs.rows_deleted,
+            checkout_timeouts: self.checkout_timeouts,
         }
     }
 }
@@ -80,6 +84,9 @@ impl Add for Counts {
             queries: self.queries.saturating_add(rhs.queries),
             rollbacks: self.rollbacks.saturating_add(rhs.rollbacks),
             errors: self.errors.saturating_add(rhs.errors),
+            idle_xact_timeouts: self
+                .idle_xact_timeouts
+                .saturating_add(rhs.idle_xact_timeouts),
             prepared_statements: self.prepared_statements + rhs.prepared_statements,
             query_time: self.query_time.saturating_add(rhs.query_time),
             transaction_time: self.transaction_time.saturating_add(rhs.transaction_time),
@@ -124,5 +131,24 @@ impl Default for Stats {
             last_sent: 0,
             last_received: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_idle_xact_timeouts_propagate_to_pool() {
+        let pool = PoolCounts {
+            idle_xact_timeouts: 2,
+            ..Default::default()
+        };
+        let server = Counts {
+            idle_xact_timeouts: 3,
+            ..Default::default()
+        };
+
+        assert_eq!((pool + server).idle_xact_timeouts, 5);
     }
 }

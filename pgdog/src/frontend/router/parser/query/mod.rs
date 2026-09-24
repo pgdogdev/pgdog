@@ -126,6 +126,10 @@ impl QueryParser {
                     !context.sharding_schema.schemas.is_empty() && !context.sharded_tables;
 
                 // Note: this is dependent on route.sharded_schema_only being set first.
+                // Only statements that mutate an omnisharded table need full
+                // coverage; a read pinned to one shard by a directive is fine
+                // (every shard holds the same rows), even inside a read/write
+                // transaction that routes it to the primary.
                 let full_shard_coverage = route.requires_full_shard_coverage();
 
                 let manual_routing = matches!(
@@ -440,8 +444,17 @@ impl QueryParser {
 
             Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
 
-            Node::DiscardStmt { .. } => {
+            Node::DiscardStmt(stmt) => {
+                let target = match stmt.target {
+                    nodes::DiscardMode::DISCARD_ALL => DiscardTarget::All,
+                    nodes::DiscardMode::DISCARD_PLANS => DiscardTarget::Plans,
+                    nodes::DiscardMode::DISCARD_SEQUENCES => DiscardTarget::Sequences,
+                    nodes::DiscardMode::DISCARD_TEMP => DiscardTarget::Temp,
+                    target => return Err(Error::UnknownDiscardTarget(target)),
+                };
+
                 return Ok(Command::Discard {
+                    target,
                     extended: !context.query()?.simple(),
                 });
             }

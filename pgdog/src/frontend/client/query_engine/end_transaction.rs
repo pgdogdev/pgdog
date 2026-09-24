@@ -56,6 +56,7 @@ impl QueryEngine {
         // tries to commit transaction anyway,
         // we rollback to prevent cross-shard inconsistencies.
         if context.in_error() && !rollback {
+            self.temp_tables.finish_transaction(true);
             self.backend.execute("ROLLBACK").await?;
 
             // Update stats.
@@ -63,7 +64,7 @@ impl QueryEngine {
             self.stats.transaction(true);
 
             // Disconnect from servers.
-            self.cleanup_backend(context)?;
+            self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
             self.end_not_connected(context, true, extended).await?;
@@ -71,11 +72,14 @@ impl QueryEngine {
             return Ok(());
         }
 
-        // 2pc is used only for writes and is not needed for rollbacks.
+        // 2pc is used for cross-shard writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
             && context.client_request.route().is_write()
             && !rollback
-            && context.transaction().map(|t| t.write()).unwrap_or(false);
+            && context.transaction().map(|t| t.write()).unwrap_or(false)
+            && self.backend.connected_servers() > 1;
+
+        self.temp_tables.finish_transaction(rollback);
 
         if two_pc {
             self.end_two_pc(false).await?;
@@ -85,7 +89,7 @@ impl QueryEngine {
             self.stats.transaction(true);
 
             // Disconnect from servers.
-            self.cleanup_backend(context)?;
+            self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
             self.end_not_connected(context, false, extended).await?;
@@ -138,7 +142,7 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::config::load_test;
-    use crate::frontend::client::TransactionType;
+    use crate::frontend::client::{Transaction, TransactionType};
     use crate::net::Stream;
 
     #[tokio::test]
@@ -148,7 +152,7 @@ mod tests {
         // Create a test client with DevNull stream (doesn't require real I/O)
         let mut client =
             crate::frontend::Client::new_test(Stream::dev_null(), Parameters::default());
-        client.transaction = Some(TransactionType::ReadWrite);
+        client.transaction = Some(Transaction::new(TransactionType::ReadWrite));
 
         // Create a default query engine (avoids backend connection)
         let mut engine = QueryEngine::from_client(&client).unwrap();
@@ -158,9 +162,14 @@ mod tests {
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(
-            context.transaction, None,
+            context
+                .transaction
+                .map(|transaction| transaction.transaction_type()),
+            None,
             "Transaction state should be None, but is {:?}",
-            context.transaction
+            context
+                .transaction
+                .map(|transaction| transaction.transaction_type())
         );
     }
 }

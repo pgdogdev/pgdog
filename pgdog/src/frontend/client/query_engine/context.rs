@@ -2,10 +2,14 @@ use crate::{
     backend::pool::{connection::mirror::Mirror, stats::MemoryStats},
     frontend::{
         Client, ClientRequest, PreparedStatements,
-        client::{ClientRequestSettings, Sticky, TransactionType},
+        client::{
+            ClientRequestSettings, Sticky,
+            transaction_type::{QueryTimestamps, Transaction},
+        },
     },
     net::{FrontendPid, Parameters, Stream},
 };
+use chrono::{DateTime, Utc};
 use std::net::SocketAddr;
 
 use super::split::Pipeline;
@@ -18,6 +22,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
     pub(super) params: &'a mut Parameters,
+    /// Parameters from the client's startup message.
+    pub(super) startup_params: &'a Parameters,
     /// Request.
     pub(super) client_request: &'a mut ClientRequest,
     /// How many requests are left to execute in an extended pipeline.
@@ -25,7 +31,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Client's socket to send responses to.
     pub(super) stream: &'a mut Stream,
     /// Client in transaction?
-    pub(super) transaction: Option<TransactionType>,
+    pub(super) transaction: Option<Transaction>,
     /// Per-request settings snapshot.
     pub(super) request_settings: ClientRequestSettings,
     /// Cross shard  queries are disabled.
@@ -40,6 +46,8 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) sticky: Sticky,
     /// Client TCP address, used for `application_name_add_host`.
     pub(super) client_addr: SocketAddr,
+    /// When we received the first message of the request.
+    pub(super) statement_start: DateTime<Utc>,
 }
 
 impl<'a> QueryEngineContext<'a> {
@@ -50,6 +58,7 @@ impl<'a> QueryEngineContext<'a> {
             id: FrontendPid::from(&client.key),
             prepared_statements: &mut client.prepared_statements,
             params: &mut client.params,
+            startup_params: &client.startup_params,
             client_request: &mut client.client_request,
             stream: &mut client.stream,
             transaction: client.transaction,
@@ -61,6 +70,7 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: client.sticky,
             client_addr: client.addr,
+            statement_start: client.statement_start,
         }
     }
 
@@ -78,6 +88,7 @@ impl<'a> QueryEngineContext<'a> {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
+            startup_params: &mirror.startup_params,
             client_request: buffer,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
@@ -92,11 +103,17 @@ impl<'a> QueryEngineContext<'a> {
             rollback: false,
             sticky: Sticky::new(),
             client_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+            statement_start: Utc::now(),
         }
     }
 
-    pub(crate) fn transaction(&self) -> Option<TransactionType> {
+    pub(crate) fn transaction(&self) -> Option<Transaction> {
         self.transaction
+    }
+
+    /// Request itself can start a transaction, so this is computed "on demand"
+    pub(crate) fn timestamps(&self) -> QueryTimestamps {
+        QueryTimestamps::new(self.transaction.as_ref(), self.statement_start)
     }
 
     pub(crate) fn in_transaction(&self) -> bool {

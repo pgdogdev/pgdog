@@ -44,6 +44,11 @@ impl ParameterDescription {
         Self { params: Vec::new() }
     }
 
+    /// Keep only the first `len` parameters.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.params.truncate(len);
+    }
+
     pub(crate) fn rewrite_data_types(&mut self, mapping: &HashMap<u32, u32>) {
         for param in &mut self.params {
             if let Some(&canonical) = mapping.get(&(*param as u32)) {
@@ -58,6 +63,10 @@ mod test {
     use super::*;
 
     impl ParameterDescription {
+        pub(crate) fn new(params: Vec<i32>) -> Self {
+            Self { params }
+        }
+
         /// Type OIDs of the parameters, in order.
         pub(crate) fn params(&self) -> &[i32] {
             &self.params

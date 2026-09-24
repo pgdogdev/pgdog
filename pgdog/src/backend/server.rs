@@ -39,7 +39,7 @@ use crate::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
         parameter::Parameters,
-        tls::connector_with_verify_mode,
+        tls::UpstreamTlsSettings,
     },
 };
 use crate::{net::tweak, state::State};
@@ -201,6 +201,9 @@ impl Server {
                 Ok(mut server) => {
                     auth_secret.valid(true);
                     server.password_attempts = idx + 1;
+                    if options.session_replication_role {
+                        server.set_session_replication_role().await?;
+                    }
                     return Ok(server);
                 }
                 Err(Error::ConnectionError(error)) => {
@@ -251,13 +254,13 @@ impl Server {
 
         let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
 
-        let tls_mode = config.config.general.tls_verify;
+        let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 
         // Only attempt TLS if not in Disabled mode
-        if tls_mode != TlsVerifyMode::Disabled {
+        if tls.verify != TlsVerifyMode::Disabled {
             debug!(
                 "requesting TLS connection with verify mode: {:?} [{}]",
-                tls_mode, addr,
+                tls.verify, addr,
             );
 
             // Request TLS.
@@ -271,12 +274,7 @@ impl Server {
             if ssl == SslReply::Yes {
                 debug!("server supports TLS, initiating TLS handshake [{}]", addr);
 
-                let connector = connector_with_verify_mode(
-                    tls_mode,
-                    config.config.general.tls_server_ca_certificate.as_ref(),
-                    config.config.general.tls_server_certificate.as_ref(),
-                    config.config.general.tls_server_private_key.as_ref(),
-                )?;
+                let connector = tls.connector()?;
                 let plain = stream.take()?;
 
                 let server_name = ServerName::try_from(addr.host.clone())?;
@@ -286,7 +284,8 @@ impl Server {
                     Ok(tls_stream) => {
                         debug!("TLS handshake successful with {}", addr.host);
                         let cipher = tokio_rustls::TlsStream::Client(tls_stream);
-                        stream = Stream::tls(cipher, config.config.memory.net_buffer, None, false);
+                        stream =
+                            Stream::tls(cipher, config.config.memory.net_buffer, None, false, None);
                     }
                     Err(e) => {
                         error!("TLS handshake failed with {:?} [{}]", e, addr);
@@ -296,7 +295,9 @@ impl Server {
                         )));
                     }
                 }
-            } else if tls_mode == TlsVerifyMode::VerifyFull || tls_mode == TlsVerifyMode::VerifyCa {
+            } else if tls.verify == TlsVerifyMode::VerifyFull
+                || tls.verify == TlsVerifyMode::VerifyCa
+            {
                 // If we require TLS but server doesn't support it, fail
                 error!("server does not support TLS but it is required [{}]", addr,);
                 return Err(Error::TlsRequired);
@@ -422,7 +423,7 @@ impl Server {
             stream: Some(stream),
             key,
             id,
-            stats: Stats::connect(id, addr, &params, &options, &config.config.memory),
+            stats: Stats::connect(id, addr, &params, &config.config.memory),
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
@@ -472,6 +473,9 @@ impl Server {
             self.in_transaction = true;
         }
 
+        self.prepared_statements
+            .set_anonymous_client_params(client_request.anonymous_client_params);
+
         for message in client_request.messages.iter() {
             self.send_one(message).await?;
         }
@@ -499,6 +503,10 @@ impl Server {
             HandleResult::Rewrite(rewrite) => self.send_stream(rewrite).await?,
             HandleResult::Prepend(prepare) => {
                 self.send_prepare(prepare).await?;
+                self.send_stream(message).await?;
+            }
+            HandleResult::PrependProtocolMessage(protocol_message) => {
+                self.send_stream(protocol_message).await?;
                 self.send_stream(message).await?;
             }
             HandleResult::PrependRewrite { prepend, rewrite } => {
@@ -639,6 +647,9 @@ impl Server {
                 let error = ErrorResponse::from_bytes(message.to_bytes())?;
                 self.schema_changed = error.code == "0A000";
                 self.stats.error();
+                if error.code == "25P03" {
+                    self.stats.idle_xact_timeout();
+                }
 
                 // Non-recoverable, Postgres is about to close the connection,
                 // by no fault of ours or theirs.
@@ -859,19 +870,35 @@ impl Server {
     }
 
     /// A request is being sent by a client.
-    pub(crate) fn sending_request(&self) -> bool {
+    pub(crate) fn is_sending_request(&self) -> bool {
         self.sending_request
     }
 
     /// Close the connection, don't do any recovery.
-    pub(crate) fn force_close(&self) -> bool {
+    pub(crate) fn is_force_close(&self) -> bool {
         self.stats().get_state() == State::ForceClose || self.io_in_progress()
+    }
+
+    /// Indicate that this connection should be closed
+    /// when it's returned to the connection pool.
+    pub(crate) fn force_close(&mut self) {
+        self.stats_mut().state(State::ForceClose);
     }
 
     /// Server parameters.
     #[inline]
     pub(crate) fn params(&self) -> &Parameters {
         &self.params
+    }
+
+    /// Manually set the session_replication_role setting via SET
+    /// since apparently we can't do this via startup parameters.
+    async fn set_session_replication_role(&mut self) -> Result<(), Error> {
+        self.execute_checked("SET session_replication_role TO replica")
+            .await?;
+        self.params.insert("session_replication_role", "replica");
+
+        Ok(())
     }
 
     /// Execute a batch of queries and return all results.
@@ -995,6 +1022,24 @@ impl Server {
         }
     }
 
+    /// Return connection to synchronized extended protocol state.
+    ///
+    /// Sends [`Sync`] to the server and receives all messages it returns, up to
+    /// [`ReadyForQuery`].
+    pub(super) async fn synchronize(&mut self) -> Result<(), Error> {
+        if !self.in_sync() {
+            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
+
+            while !self.in_sync() {
+                self.read().await?;
+            }
+
+            self.re_synced = true;
+        }
+
+        Ok(())
+    }
+
     /// Drain any remaining messages on the server connection,
     /// attempting to return the connection into a synchronized state.
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
@@ -1002,16 +1047,7 @@ impl Server {
             self.read().await?;
         }
 
-        if !self.in_sync() {
-            self.send(&vec![ProtocolMessage::Sync(Sync)].into()).await?;
-
-            while !self.in_sync() {
-                self.read().await?;
-            }
-        }
-
-        self.re_synced = true;
-        Ok(())
+        self.synchronize().await
     }
 
     /// Synchronize prepared statements from Postgres.
@@ -1034,6 +1070,9 @@ impl Server {
     }
 
     /// Close any prepared statements that exceed cache capacity.
+    ///
+    /// N.B.: Caller is responsible for actually sending these to the server
+    /// to synchronize state, see [`Self::close_many`].
     pub(super) fn ensure_prepared_capacity(&mut self) -> Vec<Close> {
         let close = self.prepared_statements.ensure_capacity();
         self.stats
@@ -1303,7 +1342,7 @@ impl Drop for Server {
 // Used for testing.
 #[cfg(test)]
 pub(crate) mod test {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use bytes::{BufMut, Bytes, BytesMut};
     use pgdog_config::prepared_statements::PreparedStatementsConfig;
@@ -1347,13 +1386,7 @@ pub(crate) mod test {
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
                 client_params: Parameters::default(),
-                stats: Stats::connect(
-                    id,
-                    &addr,
-                    &Parameters::default(),
-                    &ServerOptions::default(),
-                    &Memory::default(),
-                ),
+                stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,
                 dirty: false,
@@ -1395,28 +1428,11 @@ pub(crate) mod test {
         .unwrap()
     }
 
-    /// Connect to the `pgdog1` database on the test server.
-    /// Used by tests that need a second, distinct database so that
-    /// row locks on the two databases do not share a lock namespace.
-    pub(crate) async fn test_server_pgdog1_db() -> Server {
-        Server::connect(
-            &Address {
-                database_name: "pgdog1".into(),
-                ..Address::new_test()
-            },
-            ServerOptions::default(),
-            ConnectReason::Other,
-            Default::default(),
-        )
-        .await
-        .unwrap()
-    }
-
     pub(crate) async fn test_replication_server() -> Server {
         Server::connect(
             &Address::new_test(),
             ServerOptions::new_replication(),
-            ConnectReason::Replication,
+            ConnectReason::Resharding,
             Default::default(),
         )
         .await
@@ -1435,6 +1451,16 @@ pub(crate) mod test {
         (server, peer.await.unwrap())
     }
 
+    async fn wait_for_liveness(server: &mut Server, expected: Liveness) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while server.liveness() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("server socket did not reach expected liveness state");
+    }
+
     #[test]
     fn test_liveness_without_stream_is_closed() {
         let mut server = Server::default();
@@ -1449,9 +1475,8 @@ pub(crate) mod test {
         assert_eq!(server.liveness(), Liveness::Clean);
 
         drop(peer);
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::Closed);
+        wait_for_liveness(&mut server, Liveness::Closed).await;
     }
 
     #[tokio::test]
@@ -1460,9 +1485,8 @@ pub(crate) mod test {
 
         peer.write_all(b"E").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(server.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut server, Liveness::DataPending).await;
     }
 
     #[tokio::test]
@@ -2255,7 +2279,14 @@ pub(crate) mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(name, query.clone(), &RewritePlan::default());
+        let prepare = prep.insert_prepare(
+            name,
+            query.clone(),
+            None,
+            &RewritePlan::default(),
+            None,
+            vec![],
+        );
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server
@@ -3060,6 +3091,23 @@ pub(crate) mod test {
             server.stats().total().idle_in_transaction_time,
             final_idle_time,
         );
+    }
+
+    #[tokio::test]
+    async fn test_idle_in_transaction_timeout_count() {
+        let mut server = test_server().await;
+
+        server
+            .execute("SET idle_in_transaction_session_timeout TO 50")
+            .await
+            .unwrap();
+        server.execute("BEGIN").await.unwrap();
+        server.execute("SELECT 1").await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(server.read().await.is_err());
+        assert_eq!(server.stats().total().idle_xact_timeouts, 1);
+        assert_eq!(server.stats().last_checkout().idle_xact_timeouts, 1);
     }
 
     #[tokio::test]
@@ -3963,7 +4011,7 @@ pub(crate) mod test {
             }
         };
         assert!(matches!(err, Error::ExecutionError(_)));
-        assert!(server.force_close());
+        assert!(server.is_force_close());
         assert_eq!(server.stats().get_state(), State::ForceClose);
     }
 

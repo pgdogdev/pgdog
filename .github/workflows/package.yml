@@ -1,7 +1,10 @@
 name: package
 on:
   push:
-    branches: ['main']
+    branches: ["main", "main-ent"]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
   release:
     types: [published]
   workflow_dispatch:

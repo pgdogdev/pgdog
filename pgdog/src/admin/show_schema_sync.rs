@@ -1,9 +1,11 @@
+use std::ops::ControlFlow;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
+use pgdog_stats::TaskDefinitionKind;
 
 use crate::{
-    backend::replication::logical::status::SchemaStatements,
+    api::tasks_storage,
     util::{format_time, human_duration_display},
 };
 
@@ -23,57 +25,58 @@ impl Command for ShowSchemaSync {
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
         let rd = RowDescription::new(&[
-            Field::text("database"),
-            Field::text("user"),
-            Field::bigint("shard"),
-            Field::text("kind"),
+            Field::bigint("parent_id"),
+            Field::bigint("id"),
+            Field::text("source"),
+            Field::text("destination"),
             Field::text("sync_state"),
+            Field::bigint("shard"),
+            Field::text("status"),
+            Field::text("inner_status"),
             Field::text("started_at"),
             Field::text("elapsed"),
             Field::bigint("elapsed_ms"),
-            Field::text("table_schema"),
-            Field::text("table_name"),
-            Field::text("sql"),
         ]);
-        let mut messages = vec![rd.message()];
         let now = SystemTime::now();
+        let mut messages = vec![rd.message()];
 
-        let mut entries: Vec<_> = SchemaStatements::get()
-            .iter()
-            .map(|task| task.clone())
-            .collect();
-        entries.sort_by_key(|k| if k.running { 0 } else { 1 });
+        tasks_storage().try_for_each(|task| {
+            let state = task.state();
 
-        for entry in entries {
-            let stmt = entry.statement;
+            let (databases, sync_state, shard) = match &state.definition.kind {
+                TaskDefinitionKind::SchemaSync(def) => {
+                    (&def.databases, def.sync_state, None::<i64>)
+                }
+                TaskDefinitionKind::SchemaShard(def) => {
+                    (&def.databases, def.sync_state, Some(def.shard as i64))
+                }
+                _ => return ControlFlow::Continue(()),
+            };
 
-            let elapsed = stmt
-                .started_at
-                .map(|t| now.duration_since(t).unwrap_or_default());
-            let elapsed_ms: Option<i64> = elapsed.map(|e| e.as_millis() as i64);
-            let elapsed_human: Option<String> = elapsed.map(human_duration_display);
-
-            let kind = stmt.kind.to_string();
-            let sync_state = stmt.sync_state.to_string();
-            let started_at: Option<String> = stmt
-                .started_at
-                .map(|started_at| format_time(DateTime::<Local>::from(started_at)));
+            let end = if state.is_terminal() {
+                state.updated_at
+            } else {
+                now
+            };
+            let elapsed = end.duration_since(state.started_at).unwrap_or_default();
 
             let mut row = DataRow::new();
-            row.add(stmt.user.database.as_str())
-                .add(stmt.user.user.as_str())
-                .add(stmt.shard as i64)
-                .add(kind.as_str())
-                .add(sync_state.as_str())
-                .add(started_at)
-                .add(elapsed_human)
-                .add(elapsed_ms)
-                .add(stmt.table_schema.as_deref().unwrap_or(""))
-                .add(stmt.table_name.as_deref().unwrap_or(""))
-                .add(stmt.sql.as_str());
+            row.add(task.parent_id)
+                .add(task.id)
+                .add(databases.source.as_str())
+                .add(databases.destination.as_str())
+                .add(sync_state.to_string().as_str())
+                .add(shard)
+                .add(state.progress.to_string().as_str())
+                .add(state.status.to_string().as_str())
+                .add(format_time(DateTime::<Local>::from(state.started_at)).as_str())
+                .add(human_duration_display(elapsed).as_str())
+                .add(elapsed.as_millis() as i64);
 
             messages.push(row.message());
-        }
+
+            ControlFlow::Continue(())
+        });
 
         Ok(messages)
     }

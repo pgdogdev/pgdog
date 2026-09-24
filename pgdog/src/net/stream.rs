@@ -42,6 +42,7 @@ pub(crate) struct Stream {
     capacity: usize,
     tls_identity: Option<String>,
     tls_client_certificate: bool,
+    tls_server_end_point: Option<Vec<u8>>,
 }
 
 impl AsyncRead for Stream {
@@ -112,6 +113,7 @@ impl Stream {
             capacity,
             tls_identity: None,
             tls_client_certificate: false,
+            tls_server_end_point: None,
         }
     }
 
@@ -121,6 +123,7 @@ impl Stream {
         capacity: usize,
         tls_identity: Option<String>,
         tls_client_certificate: bool,
+        tls_server_end_point: Option<Vec<u8>>,
     ) -> Self {
         Self {
             inner: StreamInner::Tls(BufStream::with_capacity(capacity, capacity, stream)),
@@ -128,6 +131,7 @@ impl Stream {
             capacity,
             tls_identity,
             tls_client_certificate,
+            tls_server_end_point,
         }
     }
 
@@ -139,6 +143,7 @@ impl Stream {
             capacity: 0,
             tls_identity: None,
             tls_client_certificate: false,
+            tls_server_end_point: None,
         }
     }
 
@@ -156,6 +161,18 @@ impl Stream {
     /// This is a TLS stream.
     pub(crate) fn is_tls(&self) -> bool {
         matches!(self.inner, StreamInner::Tls(_))
+    }
+
+    /// `tls-server-end-point` binding for the certificate this connection
+    /// presented, snapshotted at accept so a later TLS reload cannot
+    /// change the hash mid-handshake.
+    pub(crate) fn tls_server_end_point(&self) -> Option<&[u8]> {
+        self.tls_server_end_point.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_tls_server_end_point(&mut self, data: Vec<u8>) {
+        self.tls_server_end_point = Some(data);
     }
 
     /// Get peer address if any. We're not using UNIX sockets (yet)
@@ -426,6 +443,7 @@ mod tests {
         assert!(!stream.is_tls());
         assert!(!stream.tls_client_certificate());
         assert_eq!(stream.tls_identity(), None);
+        assert_eq!(stream.tls_server_end_point(), None);
 
         client.await.unwrap();
     }
@@ -445,6 +463,16 @@ mod tests {
         let (ours, _) = listener.accept().await.unwrap();
 
         (Stream::plain(ours, 4096), peer.await.unwrap())
+    }
+
+    async fn wait_for_liveness(stream: &mut Stream, expected: Liveness) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while stream.liveness() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("socket did not reach expected liveness state");
     }
 
     #[tokio::test]
@@ -473,9 +501,8 @@ mod tests {
 
         peer.write_all(b"E").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut stream, Liveness::DataPending).await;
     }
 
     #[tokio::test]
@@ -483,9 +510,8 @@ mod tests {
         let (mut stream, peer) = connected_pair().await;
 
         drop(peer);
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::Closed);
+        wait_for_liveness(&mut stream, Liveness::Closed).await;
     }
 
     #[tokio::test]
@@ -494,9 +520,8 @@ mod tests {
 
         peer.write_all(b"hello").await.unwrap();
         peer.flush().await.unwrap();
-        tokio::task::yield_now().await;
 
-        assert_eq!(stream.liveness(), Liveness::DataPending);
+        wait_for_liveness(&mut stream, Liveness::DataPending).await;
         assert_eq!(stream.liveness(), Liveness::DataPending);
 
         let mut buf = [0u8; 5];

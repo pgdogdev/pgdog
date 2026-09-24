@@ -1,8 +1,7 @@
 //! Admin command parser.
 
-use crate::admin::show_guc::get_show_variable;
-
 use super::*;
+use crate::admin::show_guc::get_show_variable;
 
 use tracing::debug;
 
@@ -12,6 +11,7 @@ pub(crate) enum ParseResult {
     Reconnect(Reconnect),
     ShowClients(ShowClients),
     Reload(Reload),
+    ForceReload(ForceReload),
     ShowPools(ShowPools),
     ShowBans(ShowBans),
     ShowConfig(ShowConfig),
@@ -20,6 +20,7 @@ pub(crate) enum ParseResult {
     ShowQueryCache(ShowQueryCache),
     ResetPrepared(ResetPrepared),
     ResetQueryCache(ResetQueryCache),
+    ResetStats(ResetStats),
     ShowStats(ShowStats),
     ShowTransactions(ShowTransactions),
     ShowMirrors(ShowMirrors),
@@ -61,6 +62,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.execute().await,
             ShowClients(show_clients) => show_clients.execute().await,
             Reload(reload) => reload.execute().await,
+            ForceReload(force_reload) => force_reload.execute().await,
             ShowPools(show_pools) => show_pools.execute().await,
             ShowBans(show_bans) => show_bans.execute().await,
             ShowConfig(show_config) => show_config.execute().await,
@@ -69,6 +71,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.execute().await,
             ResetPrepared(cmd) => cmd.execute().await,
             ResetQueryCache(reset_query_cache) => reset_query_cache.execute().await,
+            ResetStats(reset_stats) => reset_stats.execute().await,
             ShowStats(show_stats) => show_stats.execute().await,
             ShowTransactions(show_transactions) => show_transactions.execute().await,
             ShowMirrors(show_mirrors) => show_mirrors.execute().await,
@@ -110,6 +113,7 @@ impl ParseResult {
             Reconnect(reconnect) => reconnect.name(),
             ShowClients(show_clients) => show_clients.name(),
             Reload(reload) => reload.name(),
+            ForceReload(force_reload) => force_reload.name(),
             ShowPools(show_pools) => show_pools.name(),
             ShowBans(show_bans) => show_bans.name(),
             ShowConfig(show_config) => show_config.name(),
@@ -118,6 +122,7 @@ impl ParseResult {
             ShowQueryCache(show_query_cache) => show_query_cache.name(),
             ResetPrepared(cmd) => cmd.name(),
             ResetQueryCache(reset_query_cache) => reset_query_cache.name(),
+            ResetStats(reset_stats) => reset_stats.name(),
             ShowStats(show_stats) => show_stats.name(),
             ShowTransactions(show_transactions) => show_transactions.name(),
             ShowMirrors(show_mirrors) => show_mirrors.name(),
@@ -206,6 +211,7 @@ impl Parser {
             "shutdown" => ParseResult::Shutdown(Shutdown::parse(&sql)?),
             "reconnect" => ParseResult::Reconnect(Reconnect::parse(&sql)?),
             "reload" => ParseResult::Reload(Reload::parse(&sql)?),
+            "force_reload" => ParseResult::ForceReload(ForceReload::parse(&sql)?),
             "ban" | "unban" => ParseResult::Ban(Ban::parse(&sql)?),
             "healthcheck" => ParseResult::Healthcheck(Healthcheck::parse(&sql)?),
             // These are not covered by the show handler above
@@ -238,6 +244,7 @@ impl Parser {
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
+                "stats" => ParseResult::ResetStats(ResetStats::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -286,6 +293,7 @@ mod tests {
         assert_parses!("RESUME", ParseResult::Pause(_));
         assert_parses!("RECONNECT", ParseResult::Reconnect(_));
         assert_parses!("RELOAD", ParseResult::Reload(_));
+        assert_parses!("FORCE_RELOAD", ParseResult::ForceReload(_));
         assert_parses!("SHUTDOWN", ParseResult::Shutdown(_));
         assert_parses!("BAN", ParseResult::Ban(_));
         assert_parses!("UNBAN", ParseResult::Ban(_));
@@ -376,6 +384,12 @@ mod tests {
     fn parses_reset_prepared_command() {
         let result = Parser::parse("RESET PREPARED");
         assert!(matches!(result, Ok(ParseResult::ResetPrepared(_))));
+    }
+
+    #[test]
+    fn parses_reset_stats_command() {
+        let result = Parser::parse("RESET STATS");
+        assert!(matches!(result, Ok(ParseResult::ResetStats(_))));
     }
 
     #[test]

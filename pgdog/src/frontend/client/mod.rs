@@ -5,10 +5,12 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use tokio::{select, spawn};
+use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
@@ -25,7 +27,7 @@ use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
 use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
-    Protocol, ProtocolVersion, ReadyForQuery, ToBytes,
+    Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
 use crate::net::{
     MessageBuffer, ProtocolMessage, Stream,
@@ -44,7 +46,7 @@ pub(crate) mod transaction_type;
 use query_engine::QueryEngine;
 pub(crate) use request_settings::ClientRequestSettings;
 pub(crate) use sticky::Sticky;
-pub(crate) use transaction_type::TransactionType;
+pub(crate) use transaction_type::{QueryTimestamps, Transaction, TransactionType};
 
 /// PostgreSQL client.
 ///
@@ -62,6 +64,8 @@ pub(crate) struct Client {
     // Client startup parameters. Keeps track of any parameters
     // the client changes at runtime with `SET` as well.
     params: Parameters,
+    // Parameters exactly as they came in the startup message.
+    startup_params: Parameters,
     // Process-global communication primitives used for clients
     // to talk to each other, e.g. to track their own state.
     comms: ClientComms,
@@ -76,7 +80,7 @@ pub(crate) struct Client {
     // Client prepared statements cache.
     prepared_statements: PreparedStatements,
     // Client transaction state.
-    transaction: Option<TransactionType>,
+    transaction: Option<Transaction>,
     // Per-request settings snapshot, refreshed in [`Self::buffer`].
     request_settings: ClientRequestSettings,
     // Stateful buffer containing the current whole client request.
@@ -91,6 +95,8 @@ pub(crate) struct Client {
     sticky: Sticky,
     /// Client database.
     database: String,
+    /// When we received the first message of the current request.
+    statement_start: DateTime<Utc>,
 }
 
 /// Inputs to the per-user client certificate check.
@@ -201,7 +207,8 @@ impl Client {
             }
 
             AuthType::Scram => {
-                stream.send_flush(&Authentication::scram()).await?;
+                let challenge = scram_challenge(stream.tls_server_end_point());
+                stream.send_flush(&challenge).await?;
 
                 let scram = Server::new(passwords);
                 let res = scram.handle(stream).await;
@@ -420,6 +427,7 @@ impl Client {
             comms,
             admin,
             streaming: false,
+            startup_params: params.clone(),
             params: params.clone(),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
@@ -431,6 +439,7 @@ impl Client {
             ),
             sticky: Sticky::from_params(&params),
             database: database.to_string(),
+            statement_start: Utc::now(),
         }))
     }
 
@@ -485,8 +494,10 @@ impl Client {
                 config().config.general.frontend_query_size_limit_block(),
             ),
             sticky: Sticky::from_params(&params),
+            startup_params: params.clone(),
             params,
             database: "pgdog".to_string(),
+            statement_start: Utc::now(),
         }
     }
 
@@ -540,6 +551,8 @@ impl Client {
 
             let client_state = query_engine.client_state();
 
+            let cancellation_token = query_engine.cancellation_token();
+
             select! {
                 _ = shutdown.cancelled(), if !offline => {
                     continue; // Wake up task.
@@ -551,7 +564,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state) => {
+                buffer = self.buffer(client_state, &cancellation_token) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -620,7 +633,8 @@ impl Client {
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
                 if extended {
-                    self.transaction.get_or_insert(TransactionType::Implicit);
+                    self.transaction
+                        .get_or_insert(Transaction::new(TransactionType::Implicit));
                 }
 
                 while let Some(mut request) = requests.next() {
@@ -650,11 +664,12 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
+    async fn buffer(
+        &mut self,
+        state: State,
+        cancellation_token: &CancellationToken,
+    ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
-
-        // Only start timer once we receive the first message.
-        let mut timer = None;
 
         // Check config once per request.
         let config = config::config();
@@ -664,32 +679,46 @@ impl Client {
         self.stream_buffer
             .set_size_limit_block(self.request_settings.frontend_query_size_limit_block);
 
+        let mut has_set_time: bool = false;
         while !self.client_request.is_complete() {
             let idle_timeout = self
                 .request_settings
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
-            let message =
-                match safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await {
-                    Err(_) => {
-                        self.stream
-                            .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
-                            .await?;
-                        return Ok(BufferEvent::DisconnectAbrupt);
-                    }
+            let message = select! {
+                message = safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)) => {
+                    message
+                }
+                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
+                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
+                // which will disconnect the `Client` (and `QueryEngine` transactions)
+                _ = cancellation_token.cancelled() => {
+                    return Err(Error::AdminTermination)
+                }
+            };
 
-                    Ok(Ok(message)) => message.stream(self.streaming).frontend(),
-                    Ok(Err(err)) => {
-                        if let Some(response) = err.as_fatal_error_response() {
-                            self.stream.fatal(response).await?;
-                        }
-                        return Ok(BufferEvent::DisconnectAbrupt);
-                    }
-                };
+            let message = match message {
+                Err(_) => {
+                    self.stream
+                        .fatal(ErrorResponse::client_idle_timeout(idle_timeout, &state))
+                        .await?;
+                    return Ok(BufferEvent::DisconnectAbrupt);
+                }
 
-            if timer.is_none() {
-                timer = Some(Instant::now());
+                Ok(Ok(message)) => message.stream(self.streaming).frontend(),
+
+                Ok(Err(err)) => {
+                    if let Some(response) = err.as_fatal_error_response() {
+                        self.stream.fatal(response).await?;
+                    }
+                    return Ok(BufferEvent::DisconnectAbrupt);
+                }
+            };
+
+            if !has_set_time {
+                has_set_time = true;
+                self.statement_start = Utc::now();
             }
 
             // Terminate (B & F).
@@ -701,10 +730,11 @@ impl Client {
             }
         }
 
+        let elapsed_time = Utc::now() - self.statement_start;
         if !enabled!(LogLevel::TRACE) {
             debug!(
                 "request buffered [{:.4}ms] {:?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request
                     .messages
                     .iter()
@@ -714,7 +744,7 @@ impl Client {
         } else {
             trace!(
                 "request buffered [{:.4}ms]\n{:#?}",
-                timer.unwrap().elapsed().as_secs_f64() * 1000.0,
+                elapsed_time.as_seconds_f64() * 1000.0,
                 self.client_request,
             );
         }
@@ -759,6 +789,7 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Stream>()
             + std::mem::size_of::<BackendKeyData>()
             + self.params.memory_usage()
+            + self.startup_params.memory_usage()
             + std::mem::size_of::<ClientComms>()
             + std::mem::size_of::<bool>() * 5
             + self.prepared_statements.memory_used()

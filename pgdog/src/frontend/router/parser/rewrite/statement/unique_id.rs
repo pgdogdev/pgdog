@@ -1,21 +1,16 @@
 use super::StatementRewrite;
-use pg_raw_parse::{Node, make};
+use pg_raw_parse::{Node, make, nodes};
 
 impl StatementRewrite<'_> {
     /// Attempt to rewrite a pgdog.unique_id() call.
     ///
     /// Returns `Ok(Some(replacement_node))` if the node is a unique_id call,
     /// `Ok(None)` otherwise. Increments `next_param` when in extended mode.
-    pub(super) fn rewrite_unique_id<'mem>(
-        node: Node<'_>,
+    pub(super) fn unique_id_value<'mem>(
         mem: make::MemoryToken<'mem>,
         extended: bool,
         next_param: &mut i32,
-    ) -> Result<Option<make::Unique<'mem, Node<'mem>>>, super::Error> {
-        if !Self::is_unique_id(node) {
-            return Ok(None);
-        }
-
+    ) -> Result<make::Unique<'mem, Node<'mem>>, super::Error> {
         let replacement = if extended {
             let param_ref = mem.make_param_ref(*next_param);
             *next_param += 1;
@@ -28,24 +23,19 @@ impl StatementRewrite<'_> {
                 .uncast()
         };
 
-        Ok(Some(
-            mem.make_type_cast(
+        Ok(mem
+            .make_type_cast(
                 replacement,
                 mem.make_list(&[
                     mem.make_string(Some("pg_catalog")),
                     mem.make_string(Some("int8")),
                 ]),
             )
-            .uncast(),
-        ))
+            .uncast())
     }
 
     /// Check if a node is a function call to pgdog.unique_id().
-    fn is_unique_id(node: Node<'_>) -> bool {
-        let Node::FuncCall(func) = node else {
-            return false;
-        };
-
+    pub(super) fn is_unique_id(func: &nodes::FuncCall) -> bool {
         func.funcname()
             .iter()
             .filter_map(Node::as_str)
@@ -58,12 +48,12 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
     use crate::frontend::router::parser::rewrite::statement::RewritePlan;
     use crate::test_utils::set_env_var;
+    use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
     use pg_raw_parse::{Owned, nodes};
 
     fn default_schema() -> ShardingSchema {
@@ -81,11 +71,15 @@ mod tests {
         Schema::default()
     }
 
-    fn parse_first_target(sql: &str) -> Owned<nodes::ResTarget> {
+    fn parse_first_target(sql: &str) -> Owned<nodes::FuncCall> {
         let ast = pg_raw_parse::parse(sql).unwrap();
         match ast.stmts().next().unwrap() {
             Node::SelectStmt(select) => {
-                make::owned(|mem| mem.make_unique(select.target_list().first().unwrap()))
+                let func = match select.target_list().first() {
+                    Some(rt) if let Node::FuncCall(func) = rt.val() => func,
+                    node => panic!("Expected a function call, got {:?}", node),
+                };
+                make::owned(|mem| mem.make_unique(func))
             }
             _ => panic!("expected SelectStmt"),
         }
@@ -94,31 +88,25 @@ mod tests {
     #[test]
     fn test_is_unique_id_qualified() {
         let node = parse_first_target("SELECT pgdog.unique_id()");
-        assert!(StatementRewrite::is_unique_id(node.val()));
+        assert!(StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_unqualified() {
         let node = parse_first_target("SELECT unique_id()");
-        assert!(!StatementRewrite::is_unique_id(node.val()));
+        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_wrong_schema() {
         let node = parse_first_target("SELECT other.unique_id()");
-        assert!(!StatementRewrite::is_unique_id(node.val()));
+        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
     fn test_is_unique_id_wrong_function() {
         let node = parse_first_target("SELECT pgdog.other_func()");
-        assert!(!StatementRewrite::is_unique_id(node.val()));
-    }
-
-    #[test]
-    fn test_is_unique_id_not_function() {
-        let node = parse_first_target("SELECT 1");
-        assert!(!StatementRewrite::is_unique_id(node.val()));
+        assert!(!StatementRewrite::is_unique_id(&node));
     }
 
     #[test]
@@ -288,6 +276,8 @@ mod tests {
             db_schema: &db_schema,
             user: "",
             search_path: None,
+            timezone: None,
+            query_timestamps: QueryTimestamps::default(),
         });
         let mut plan = Default::default();
         let ast = make::owned(|mem| {

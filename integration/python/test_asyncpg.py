@@ -689,3 +689,45 @@ async def test_pgdog_role_selection():
             pass
 
     assert got_err
+
+
+# Test to make sure everything works with unnamed prepared statements when we need to re-write
+# Bind for `TimeFunction`
+@pytest.mark.asyncio
+async def test_omni_time_function_unnamed_statement():
+    """`statement_cache_size=0` makes asyncpg use unnamed prepared statements.
+    """
+    conn = await asyncpg.connect(
+        user="pgdog",
+        password="pgdog",
+        database="pgdog_sharded",
+        host="127.0.0.1",
+        port=6432,
+        statement_cache_size=0,
+    )
+    row_id = random.randrange(1 << 32, 1 << 63)
+
+    try:
+        result = await conn.execute(
+            "INSERT INTO sharded_omni (id, value, created_at) VALUES ($1, $2, now())",
+            row_id,
+            "unnamed",
+        )
+        assert result == "INSERT 0 1"
+
+        # Every shard must have gotten the same timestamp.
+        created_at = [
+            await conn.fetchval(
+                f"/* pgdog_shard: {shard} */ SELECT created_at"
+                " FROM sharded_omni WHERE id = $1",
+                row_id,
+            )
+            for shard in (0, 1)
+        ]
+        assert created_at[0] is not None
+        assert created_at[0] == created_at[1]
+    finally:
+        await conn.execute("DELETE FROM sharded_omni WHERE id = $1", row_id)
+        await conn.close()
+
+    no_out_of_sync()

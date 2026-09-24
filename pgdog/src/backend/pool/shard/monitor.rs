@@ -94,6 +94,8 @@ impl ShardMonitor {
                     self.shard.number(),
                     self.shard.identifier()
                 );
+
+                self.shard.signal_failover();
             }
 
             update_replica_lag(&self.shard.pools());

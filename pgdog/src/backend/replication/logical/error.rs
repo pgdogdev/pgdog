@@ -3,6 +3,7 @@ use std::num::ParseIntError;
 
 use derive_more::{Display, Error};
 
+use crate::util::sync::worker_pool;
 use crate::{
     backend::replication::publisher::PublicationTable,
     frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
@@ -71,6 +72,18 @@ pub(crate) enum Error {
     #[error("backend: {0}")]
     Backend(#[from] crate::backend::Error),
 
+    #[error(
+        "Resharding connection denied for user \"{user}\" on database \"{database}\": {source}.
+    Check and update user permissions:
+    Resharding requires SET ON PARAMETER session_replication_role, or a superuser."
+    )]
+    ReshardingPermissionDenied {
+        user: String,
+        database: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
     #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 
@@ -118,20 +131,29 @@ pub(crate) enum Error {
     #[error("replication timeout")]
     ReplicationTimeout,
 
-    #[error("shard {0} has no replication tables")]
-    NoReplicationTables(usize),
+    #[error("replication streams did not drain in time")]
+    DrainTimeout,
+
+    #[error("replication slot \"{0}\" was not dropped in time")]
+    SlotDropTimeout(String),
+
+    #[error("replication stream stopped before shutdown was requested")]
+    ReplicationStreamStopped,
+
+    #[error("publication \"{0}\" has no tables")]
+    EmptyPublication(String),
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication table entry")]
+    NoReplicationTables(usize),
 
     #[error("parallel connection error")]
     ParallelConnection,
 
     #[error("pipelined connection task closed")]
     PipelineClosed,
-
-    #[error("no replicas available for table sync")]
-    NoReplicas,
 
     #[error("{0}")]
     TableValidation(TableValidationErrors),
@@ -140,10 +162,7 @@ pub(crate) enum Error {
     IncorrectCommand,
 
     #[error("schema: {0}")]
-    SchemaSync(Box<crate::backend::schema::sync::error::Error>),
-
-    #[error("schema isn't loaded")]
-    NoSchema,
+    SchemaSync(Box<crate::backend::schema::sync::error::SchemaSyncError>),
 
     #[error("tokio: {0}")]
     JoinError(#[from] tokio::task::JoinError),
@@ -153,6 +172,9 @@ pub(crate) enum Error {
 
     #[error("data sync has been aborted")]
     DataSyncAborted,
+
+    #[error("replication has been aborted")]
+    ReplicationAborted,
 
     #[error("cutover abort timeout")]
     AbortTimeout,
@@ -168,6 +190,9 @@ pub(crate) enum Error {
 
     #[error("missing key in replication stream, out of sync")]
     MissingKey,
+
+    #[error("Error while managing worker pool: {0}")]
+    WorkerPoolError(#[from] worker_pool::Error),
 
     #[error("toasted identity column in UPDATE: {table} (oid {oid})")]
     ToastedIdentityColumn {
@@ -206,8 +231,8 @@ impl From<ErrorResponse> for Error {
     }
 }
 
-impl From<crate::backend::schema::sync::error::Error> for Error {
-    fn from(value: crate::backend::schema::sync::error::Error) -> Self {
+impl From<crate::backend::schema::sync::SchemaSyncError> for Error {
+    fn from(value: crate::backend::schema::sync::SchemaSyncError) -> Self {
         Self::SchemaSync(Box::new(value))
     }
 }

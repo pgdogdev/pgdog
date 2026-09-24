@@ -11,9 +11,9 @@ use tracing::{debug, error, warn};
 
 use crate::backend::Cluster;
 use crate::config::{ConfigAndUsers, config};
-use crate::frontend::client::TransactionType;
 use crate::frontend::client::query_engine::{QueryEngine, QueryEngineContext};
 use crate::frontend::client::timeouts::Timeouts;
+use crate::frontend::client::transaction_type::Transaction;
 use crate::frontend::{ClientComms, PreparedStatements};
 use crate::net::{FrontendPid, Parameter, Parameters, Stream};
 use crate::tasks;
@@ -40,12 +40,14 @@ pub(crate) struct Mirror {
     pub(crate) prepared_statements: PreparedStatements,
     /// Mirror connection parameters.
     pub(crate) params: Parameters,
+    /// Parameters the mirrored client started with.
+    pub(crate) startup_params: Parameters,
     /// Timeouts.
     pub(crate) timeouts: Timeouts,
     /// Stream that absorbs all data.
     pub(crate) stream: Stream,
     /// Transaction state.
-    pub(crate) transaction: Option<TransactionType>,
+    pub(crate) transaction: Option<Transaction>,
 }
 
 impl Mirror {
@@ -57,6 +59,7 @@ impl Mirror {
             id: FrontendPid::new(),
             prepared_statements,
             params: params.clone(),
+            startup_params: params.clone(),
             timeouts: Timeouts::from_config(&config.config.general),
             stream: Stream::dev_null(),
             transaction: None,
@@ -169,9 +172,10 @@ mod test {
     use pgdog_config::MirrorConfig;
 
     use crate::{
-        backend::pool::Request,
+        backend::{Error as BackendError, pool::Request},
         config::{self, PoolerMode, PreparedStatementsLevel},
         net::{Parameter, Parameters, Query},
+        util::safe_timeout,
     };
 
     use super::*;
@@ -231,9 +235,6 @@ mod test {
         );
     }
 
-    // This test relies on data written to multiple databases.
-    // It's flaky. Not sure why yet.
-    #[pgdog_macros::flaky]
     #[tokio::test]
     async fn test_mirror() {
         config::load_test();
@@ -241,6 +242,9 @@ mod test {
         cluster.launch();
         let mut mirror = Mirror::spawn("pgdog", &cluster, None).unwrap();
         let mut conn = cluster.primary(0, &Request::default()).await.unwrap();
+        conn.execute("DROP TABLE IF EXISTS pgdog.test_mirror")
+            .await
+            .expect("clear the mirror fixture");
 
         for _ in 0..3 {
             assert!(
@@ -273,11 +277,19 @@ mod test {
                 "table pgdog.test_mirror shouldn't exist yet"
             );
             assert!(mirror.flush(), "mirror didn't flush");
-            safe_sleep(Duration::from_millis(50)).await;
-            assert!(
-                conn.execute("DROP TABLE pgdog.test_mirror").await.is_ok(),
-                "pgdog.test_mirror should exist"
-            );
+            safe_timeout(Duration::from_secs(5), async {
+                loop {
+                    match conn.execute("DROP TABLE pgdog.test_mirror").await {
+                        Ok(_) => break,
+                        Err(BackendError::ExecutionError(error)) if error.code == "42P01" => {
+                            safe_sleep(Duration::from_millis(10)).await;
+                        }
+                        Err(error) => panic!("checking the mirrored table failed: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("the flushed mirror request should create pgdog.test_mirror");
             assert!(mirror.buffer().is_empty(), "mirror buffer should be empty");
         }
 

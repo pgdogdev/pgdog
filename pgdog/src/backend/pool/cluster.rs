@@ -7,10 +7,10 @@ use pgdog_config::{
     users::PasswordKind,
 };
 use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 use crate::backend::schema::SchemaCache;
 use crate::backend::server::ServerRequest;
-use crate::frontend::router::sharding::ShardedTable;
 use crate::{
     backend::{
         Schema, ShardedTables, databases::User as DatabaseUser, replication::ShardedSchemas,
@@ -19,11 +19,15 @@ use crate::{
         ConnectionRecovery, MultiTenant, PoolerMode, ReadWriteSplit, ReadWriteStrategy, User,
     },
     frontend::{ClientRequest, RegexParser, router::round_robin},
-    net::{bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid},
+    net::{
+        bind::Parameter as BindParameter, messages::DataRow, messages::FrontendPid,
+        parameter::ParameterValue,
+    },
 };
 
 use super::{
-    Address, CanonicalOids, ClusterMetrics, Config, Error, Guard, Request, Shard, ShardConfig,
+    Address, CanonicalOids, ClusterFailoverSignalWatcher, ClusterMetrics, Config, Error, Guard,
+    Request, Shard, ShardConfig,
 };
 use crate::config::LoadBalancingStrategy;
 use launch::Readiness;
@@ -85,6 +89,8 @@ pub(crate) struct Cluster {
     schema_loader: Box<dyn SchemaLoader>,
     canonical_oids: Option<Arc<CanonicalOids>>,
     read_only: bool,
+    failover_signal: ClusterFailoverSignalWatcher,
+    cancellation_token: CancellationToken,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -133,6 +139,8 @@ impl Default for Cluster {
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
             read_only: Default::default(),
+            failover_signal: ClusterFailoverSignalWatcher::default(),
+            cancellation_token: Default::default(),
         }
     }
 }
@@ -351,25 +359,29 @@ impl Cluster {
             ..Default::default()
         }));
 
+        let shard_pools = shards
+            .iter()
+            .enumerate()
+            .map(|(number, config)| {
+                Shard::new(ShardConfig {
+                    number,
+                    primary: config.primary.as_ref(),
+                    replicas: &config.replicas,
+                    lb_strategy,
+                    rw_split,
+                    identifier: identifier.clone(),
+                    lsn_check_interval,
+                    pub_sub_enabled,
+                    schema_cache: schema_cache.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let failover_signal = ClusterFailoverSignalWatcher::new(&shard_pools);
+
         Self {
             identifier: identifier.clone(),
-            shards: shards
-                .iter()
-                .enumerate()
-                .map(|(number, config)| {
-                    Shard::new(ShardConfig {
-                        number,
-                        primary: config.primary.as_ref(),
-                        replicas: &config.replicas,
-                        lb_strategy,
-                        rw_split,
-                        identifier: identifier.clone(),
-                        lsn_check_interval,
-                        pub_sub_enabled,
-                        schema_cache: schema_cache.clone(),
-                    })
-                })
-                .collect(),
+            shards: shard_pools,
             passwords,
             pooler_mode,
             sharded_tables,
@@ -407,7 +419,24 @@ impl Cluster {
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
             read_only,
+            failover_signal,
+            cancellation_token: Default::default(),
         }
+    }
+
+    pub(crate) fn get_cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    /// Terminates all active connections for the `Cluster`
+    /// and marks all `Pool`s as offline to refuse future connections.
+    pub(crate) fn terminate_active_connections(&self) {
+        for shard in self.shards() {
+            for pool in shard.pools() {
+                pool.set_offline();
+            }
+        }
+        self.cancellation_token.cancel();
     }
 
     /// Change config to work with logical replication streaming.
@@ -417,6 +446,7 @@ impl Cluster {
         cluster.rewrite.enabled = false;
         cluster.rewrite.shard_key = RewriteMode::Ignore;
         cluster.rewrite.split_inserts = RewriteMode::Ignore;
+        cluster.rewrite.non_deterministic_functions = RewriteMode::Ignore;
         cluster
     }
 
@@ -435,20 +465,18 @@ impl Cluster {
     /// The two clusters have the same databases.
     pub(crate) fn can_move_conns_to(&self, other: &Cluster) -> bool {
         self.shards.len() == other.shards.len()
-            && self
-                .shards
-                .iter()
-                .zip(other.shards.iter())
-                .all(|(a, b)| a.can_move_conns_to(b))
     }
 
     /// Move connections from cluster to another, saving them.
-    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<(), Error> {
+    /// Returns true if any `Pool`s were moved.
+    pub(crate) fn move_conns_to(&self, other: &Cluster) -> Result<bool, Error> {
+        let mut moved = false;
+
         for (from, to) in self.shards.iter().zip(other.shards.iter()) {
-            from.move_conns_to(to)?;
+            moved |= from.move_conns_to(to)?;
         }
 
-        Ok(())
+        Ok(moved)
     }
 
     /// Cancel a query executed by one of the shards.
@@ -463,6 +491,14 @@ impl Cluster {
     /// Get all shards.
     pub(crate) fn shards(&self) -> &[Shard] {
         &self.shards
+    }
+
+    /// The database's default `TimeZone`
+    pub(crate) fn default_timezone(&self) -> Option<&ParameterValue> {
+        self.shards
+            .iter()
+            .flat_map(|shard| shard.pool_iter())
+            .find_map(|pool| pool.cached_params()?.get("TimeZone"))
     }
 
     pub(crate) fn passwords(&self) -> &[PasswordKind] {
@@ -501,8 +537,8 @@ impl Cluster {
     }
 
     // Get sharded tables if any.
-    pub(crate) fn sharded_tables(&self) -> &[ShardedTable] {
-        self.sharded_tables.tables()
+    pub(crate) fn sharded_tables(&self) -> &ShardedTables {
+        &self.sharded_tables
     }
 
     /// Get query rewrite config.
@@ -733,6 +769,12 @@ impl Cluster {
     pub(crate) fn is_canonicalizing_oids(&self) -> bool {
         self.canonical_oids.is_some()
     }
+
+    /// Listen for failover signal from one or more shards.
+    #[allow(unused)]
+    pub(crate) fn failover_signal(&mut self) -> &mut ClusterFailoverSignalWatcher {
+        &mut self.failover_signal
+    }
 }
 
 #[cfg(test)]
@@ -899,35 +941,6 @@ mod test {
         pub(crate) fn new_test_session_mode(config: &ConfigAndUsers) -> Cluster {
             let mut cluster = Self::new_test(config);
             cluster.pooler_mode = PoolerMode::Session;
-            cluster
-        }
-
-        /// Two shards targeting different databases on the same server.
-        /// Gives separate lock namespaces without needing two Postgres instances.
-        pub(crate) fn new_test_two_databases(config: &ConfigAndUsers) -> Cluster {
-            let mut cluster = Self::new_test(config);
-            let shard1 = cluster.shards.last_mut().unwrap();
-            *shard1 = Shard::new(ShardConfig {
-                number: 1,
-                primary: Some(&PoolConfig {
-                    address: Address {
-                        database_name: "pgdog1".into(),
-                        ..Address::new_test()
-                    },
-                    config: Config::default(),
-                }),
-                replicas: &[PoolConfig {
-                    address: Address {
-                        database_name: "pgdog1".into(),
-                        configured_role: Role::Replica,
-                        ..Address::new_test()
-                    },
-                    config: Config::default(),
-                }],
-                identifier: cluster.identifier.clone(),
-                lsn_check_interval: Duration::MAX,
-                ..Default::default()
-            });
             cluster
         }
 

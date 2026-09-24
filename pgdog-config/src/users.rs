@@ -126,6 +126,13 @@ impl Users {
                 }
             }
 
+            if user.server_iam_assume_role.is_some() && user.server_auth != ServerAuth::RdsIam {
+                warn!(
+                    r#"user "{}" (database "{}") sets "server_iam_assume_role" but "server_auth" is not "rds_iam"; the assume-role will be ignored"#,
+                    user.name, user.database
+                );
+            }
+
             if !user.database.is_empty() && !user.databases.is_empty() {
                 warn!(
                     r#"user "{}" is configured for both "{}" and "{:?}", defaulting to "{:?}""#,
@@ -324,6 +331,11 @@ pub struct User {
     pub server_auth: ServerAuth,
     /// Optional region override for RDS IAM token generation.
     pub server_iam_region: Option<String>,
+    /// IAM role ARN to assume (in the backend database's AWS account) before
+    /// generating the RDS IAM auth token. Enables cross-account RDS IAM: the token
+    /// is signed with the assumed role's credentials instead of PgDog's own
+    /// ambient identity. Only used when `server_auth = "rds_iam"`.
+    pub server_iam_assume_role: Option<String>,
     /// Vault path used to fetch backend (server-side) database credentials,
     /// e.g. `database/creds/my-role` for `server_auth = "vault_dynamic"` or
     /// `database/static-creds/my-role` for `server_auth = "vault_static"`.

@@ -147,6 +147,49 @@ async fn test_unlock_all_clears_session_locks() {
 }
 
 #[tokio::test]
+async fn test_discard_all_clears_session_locks() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("SELECT pg_advisory_lock(1)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    assert!(client.engine.advisory_locks().contains(1));
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("DISCARD ALL")).await;
+    client.read_until('Z').await.unwrap();
+
+    assert_eq!(client.engine.advisory_locks().len(), 0);
+    assert!(
+        !client.backend_locked(),
+        "backend must be released after DISCARD ALL"
+    );
+}
+
+#[tokio::test]
+async fn test_non_all_discard_keeps_session_locks() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("SELECT pg_advisory_lock(1)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    for query in ["DISCARD PLANS", "DISCARD SEQUENCES", "DISCARD TEMP"] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.unwrap();
+
+        assert!(
+            client.engine.advisory_locks().contains(1),
+            "{query} must not release advisory locks",
+        );
+        assert!(client.backend_locked());
+    }
+}
+
+#[tokio::test]
 async fn test_xact_lock_does_not_pin_backend_and_releases_on_commit() {
     // pg_advisory_xact_lock isn't tracked.
     let mut client = TestClient::new_sharded(Parameters::default()).await;

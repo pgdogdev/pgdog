@@ -3,8 +3,13 @@ on:
   push:
     branches:
       - main
+      - main-ent
+    paths:
+      - "**/*.rs"
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - "**/*.rs"
 
 jobs:
   plugin-unit-tests:

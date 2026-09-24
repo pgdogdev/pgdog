@@ -22,7 +22,7 @@ use crate::net::{Liveness, Parameter, Parameters};
 use super::inner::CheckInResult;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    State, Stats, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -119,6 +119,7 @@ impl Pool {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
                 self.inner.health.toggle(false);
+                self.lock().stats.counts.checkout_timeouts += 1;
                 Err(Error::CheckoutTimeout)
             }
             Ok(Err(err)) => {
@@ -193,6 +194,18 @@ impl Pool {
                 Err(Error::ServerClosed) => continue,
                 Err(err) => return Err(err),
             }
+        }
+    }
+
+    /// Server parameters
+    pub(crate) fn cached_params(&self) -> Option<&Parameters> {
+        self.inner.params.get()
+    }
+
+    /// Record the server parameters of a newly created connection
+    pub(super) fn cache_params(&self, params: &Parameters) {
+        if self.inner.params.get().is_none() {
+            let _ = self.inner.params.set(params.clone());
         }
     }
 
@@ -313,11 +326,16 @@ impl Pool {
             let mut to_guard = destination.lock();
 
             // Propagate pause state so a paused database stays paused after reload.
-            if from_guard.paused {
-                to_guard.paused = true;
-            }
+            to_guard.paused = from_guard.paused;
 
+            // Preserve cumulative pool metrics reported by SHOW STATS and SHOW POOLS.
+            to_guard.stats = from_guard.stats;
+            to_guard.errors = from_guard.errors;
+            to_guard.out_of_sync = from_guard.out_of_sync;
+            to_guard.re_synced = from_guard.re_synced;
+            to_guard.force_close = from_guard.force_close;
             from_guard.online = false;
+
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
                 to_guard.put(server, now)?;
@@ -330,6 +348,16 @@ impl Pool {
         Ok(())
     }
 
+    /// Reset cumulative statistics for this pool.
+    pub(crate) fn reset_stats(&self) {
+        let mut guard = self.lock();
+        guard.stats = Stats::default();
+        guard.errors = 0;
+        guard.out_of_sync = 0;
+        guard.re_synced = 0;
+        guard.force_close = 0;
+    }
+
     /// The two pools refer to the same database.
     pub(crate) fn has_compatible_address_with(&self, other: &Pool) -> bool {
         self.addr().compatible(other.addr())
@@ -338,9 +366,8 @@ impl Pool {
     /// Pause pool, closing all open connections.
     pub(crate) fn pause(&self) {
         let mut guard = self.lock();
-
-        guard.paused = true;
         guard.dump_idle();
+        guard.paused = true;
     }
 
     /// Send a cancellation request for all running queries.
@@ -352,6 +379,7 @@ impl Pool {
             .cancel_keys()
             .map(|key| Server::cancel(&addr, key.clone()))
             .collect();
+
         try_join_all(futures)
             .await
             .map_err(|_| Error::FastShutdown)?;
@@ -395,6 +423,13 @@ impl Pool {
         self.comms().ready.notify_waiters();
     }
 
+    /// Sets the `Pool` offline (to refuse more connections)
+    /// Does not dump idle connections or shutdown.
+    pub(crate) fn set_offline(self) {
+        let mut guard = self.lock();
+        guard.online = false;
+    }
+
     /// Pool exclusive lock.
     #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
@@ -430,53 +465,45 @@ impl Pool {
         &self.inner.config
     }
 
+    pub(crate) fn oids(&self) -> &Arc<Oids> {
+        &self.inner.oids
+    }
+
     /// Get startup parameters for new server connections.
     pub(super) fn server_options(&self) -> ServerOptions {
-        let mut params = vec![
-            Parameter {
-                name: "application_name".into(),
-                value: "PgDog".into(),
-            },
-            Parameter {
-                name: "client_encoding".into(),
-                value: "utf-8".into(),
-            },
-        ];
+        let mut options = ServerOptions::default();
 
         let config = self.inner.config;
 
         if let Some(statement_timeout) = config.statement_timeout {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "statement_timeout".into(),
                 value: statement_timeout.as_millis().to_string().into(),
             });
         }
 
         if let Some(lock_timeout) = config.lock_timeout {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "lock_timeout".into(),
                 value: lock_timeout.as_millis().to_string().into(),
             });
         }
 
         if config.replication_mode {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "replication".into(),
                 value: "database".into(),
             });
         }
 
         if config.read_only {
-            params.push(Parameter {
+            options.add(Parameter {
                 name: "default_transaction_read_only".into(),
                 value: "on".into(),
             });
         }
 
-        ServerOptions {
-            params,
-            pool_id: self.id(),
-        }
+        options
     }
 
     /// Pool state.
@@ -492,6 +519,11 @@ impl Pool {
     /// LSN stats
     pub(crate) fn lsn_stats(&self) -> LsnStats {
         *self.inner().lsn_stats.read()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_lsn_stats(&self, stats: LsnStats) {
+        *self.inner().lsn_stats.write() = stats;
     }
 
     /// Set pool role returning true if the role changed.

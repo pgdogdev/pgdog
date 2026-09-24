@@ -1,6 +1,7 @@
 //! Configuration.
 
 // Submodules
+pub(crate) mod changed;
 pub(crate) mod convert;
 pub(crate) mod core;
 pub(crate) mod database;
@@ -24,7 +25,9 @@ pub(crate) use networking::{MultiTenant, TlsVerifyMode};
 pub(crate) use overrides::Overrides;
 use pgdog_config::LookupResult;
 pub(crate) use pgdog_config::auth::AuthType;
-pub(crate) use pgdog_config::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
+pub(crate) use pgdog_config::{
+    LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy, ServerTls,
+};
 pub(crate) use pooling::{ConnectionRecovery, PoolerMode, PreparedStatementsLevel};
 pub(crate) use rewrite::RewriteMode;
 use std::path::Path;
@@ -52,7 +55,12 @@ static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Load configuration.
 pub(crate) fn config() -> Arc<ConfigAndUsers> {
-    CONFIG.load().clone()
+    CONFIG.load_full()
+}
+
+/// Get the configuration quickly, but let go of this guard as quickly as possible.
+pub(crate) fn config_quick() -> arc_swap::Guard<Arc<ConfigAndUsers>> {
+    CONFIG.load()
 }
 
 /// Load the configuration file from disk.
@@ -70,6 +78,7 @@ pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
         table.load_centroids()?;
     }
     CONFIG.store(Arc::new(config.clone()));
+    changed::notify(CONFIG.load_full());
     Ok(config)
 }
 

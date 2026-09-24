@@ -5,12 +5,13 @@ edition = "2024"
 
 [dependencies]
 serde = {version = "*", features = ["derive", "rc"]}
+serde_with.workspace = true
 pgdog-config = { path = "../pgdog-config" }
 pgdog-postgres-types = { path = "../pgdog-postgres-types" }
 bytes.workspace = true
 indexmap.workspace = true
 schemars.workspace = true
-derive_more = { workspace = true, features = ["from_str"] }
+derive_more = { workspace = true, features = ["error", "from_str"] }
 
 [dev-dependencies]
 serde_json.workspace = true

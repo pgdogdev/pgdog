@@ -56,6 +56,24 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO sharded_to_omni (id, org_id, name, value)
+VALUES (
+    :id_seed,
+    :id_seed,
+    'sharded-to-omni-' || :id_seed || '-copy',
+    'value-' || :id_seed || '-copy'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO omni_to_sharded (id, org_id, name, value)
+VALUES (
+    :id_seed,
+    :id_seed,
+    'omni-to-sharded-' || :id_seed || '-copy',
+    'value-' || :id_seed || '-copy'
+)
+ON CONFLICT (id) DO NOTHING;
+
 UPDATE tenants
 SET name = 'tenant-' || :id_seed || '-replicate'
 WHERE id = :id_seed;
@@ -78,4 +96,12 @@ WHERE id = :id_seed;
 
 UPDATE settings
 SET name = 'setting-' || :id_seed || '-replicate'
+WHERE id = :id_seed;
+
+UPDATE sharded_to_omni
+SET name = 'sharded-to-omni-' || :id_seed || '-replicate'
+WHERE id = :id_seed;
+
+UPDATE omni_to_sharded
+SET name = 'omni-to-sharded-' || :id_seed || '-replicate'
 WHERE id = :id_seed;

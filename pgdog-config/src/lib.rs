@@ -15,6 +15,7 @@ pub mod prepared_statements;
 pub mod replication;
 pub mod rewrite;
 pub mod role_config;
+pub mod server_tls;
 pub mod sharding;
 pub mod system_catalogs;
 #[cfg(test)]
@@ -41,6 +42,7 @@ pub use pooling::{PoolerMode, PreparedStatementsLevel};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use role_config::RoleConfig;
+pub use server_tls::ServerTls;
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, ServerAuth, User, Users};

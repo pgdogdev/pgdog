@@ -1,0 +1,20 @@
+[[users]]
+name = "pgdog"
+database = "no_client_cert"
+password = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "with_client_cert"
+password = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"
+
+[[users]]
+name = "pgdog"
+database = "rotated_client_cert"
+password = "pgdog"
+server_user = "pgdog"
+server_password = "pgdog"

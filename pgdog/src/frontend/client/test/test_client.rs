@@ -1,4 +1,5 @@
 use std::{fmt::Debug, ops::Deref};
+use tokio_util::sync::CancellationToken;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
@@ -171,6 +172,18 @@ impl TestClient {
         Self::new(params).await
     }
 
+    /// New sharded client with two-phase commit enabled.
+    pub(crate) async fn new_sharded_two_pc(params: Parameters) -> Self {
+        load_test_sharded();
+
+        let mut config = config().deref().clone();
+        config.config.general.two_phase_commit = true;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+
+        Self::new(params).await
+    }
+
     /// New client with cross-shard-queries disabled.
     pub(crate) async fn new_cross_shard_disabled(params: Parameters) -> Self {
         load_test_sharded();
@@ -237,7 +250,9 @@ impl TestClient {
 
     /// Process a request.
     pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.client.buffer(self.engine.stats().state).await?;
+        self.client
+            .buffer(self.engine.stats().state, &CancellationToken::new())
+            .await?;
         self.client.client_messages(&mut self.engine).await?;
 
         Ok(())
@@ -275,7 +290,7 @@ impl TestClient {
     pub(crate) fn shard_for_id(&mut self, id: i64) -> Shard {
         let cluster = self.engine.backend().cluster().unwrap();
 
-        ContextBuilder::new(cluster.sharded_tables().first().unwrap())
+        ContextBuilder::new(cluster.sharded_tables().tables().first().unwrap())
             .data(id)
             .shards(cluster.shards().len())
             .build()

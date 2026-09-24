@@ -2,7 +2,7 @@ use tracing::{info, trace};
 
 use crate::{
     frontend::{
-        client::TransactionType,
+        client::{TransactionType, transaction_type::Transaction},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
@@ -64,15 +64,33 @@ impl QueryEngine {
             }
         }
 
+        let cancellation_token = self.backend.cancellation_token();
+
         let query_timeout = context
             .request_settings
             .timeouts
             .query_timeout(&self.stats.state);
-        let result = safe_timeout(
-            query_timeout,
-            self.client_server_exchange(context, query_planner),
-        )
-        .await;
+
+        let result = tokio::select! {
+            result = safe_timeout(
+                query_timeout,
+                self.client_server_exchange(context, query_planner),
+            ) => {
+                result
+            }
+            // If the cluster's cancellation token triggers, exit early. Currently used for admin FORCE_RELOAD.
+            // If this returns an Error, it'll be propagated up to Client's Box::pin(self.run())
+            // which will disconnect the client (and QueryEngine transactions)
+            _ = cancellation_token.cancelled() => {
+                // Postgres is still running the query. Send a cancellation request before we stop on our end.
+                if let Err(err) = self.backend.cancel_query().await {
+                    // Tell the administrator that we failed to cancel the query.
+                    error!("failed to cancel query on admin termination: {err}");
+                }
+                self.backend.force_close();
+                return Err(Error::AdminTermination);
+            }
+        };
 
         match result {
             Ok(response) => response?,
@@ -180,10 +198,12 @@ impl QueryEngine {
 
             match state {
                 TransactionState::Error => {
-                    let error_state = match context.transaction {
-                        Some(TransactionType::ReadOnly) => Some(TransactionType::ErrorReadOnly),
+                    let error_state = match context.transaction.map(|t| t.transaction_type()) {
+                        Some(TransactionType::ReadOnly) => {
+                            Some(Transaction::new(TransactionType::ErrorReadOnly))
+                        }
                         Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(TransactionType::ErrorReadWrite)
+                            Some(Transaction::new(TransactionType::ErrorReadWrite))
                         }
                         _ => None,
                     };
@@ -205,20 +225,22 @@ impl QueryEngine {
                         self.end_two_pc(false).await?;
                         two_pc_auto = true;
                     }
-                    match context.transaction {
+                    match context.transaction.map(|t| t.transaction_type()) {
                         // Query parser is disabled, so the server is responsible for telling us
                         // we started a transaction.
                         None => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction =
+                                Some(Transaction::new(TransactionType::ReadWrite));
                         }
 
                         // Restore transaction state after rollback to savepoint.
                         Some(TransactionType::ErrorReadOnly) => {
-                            context.transaction = Some(TransactionType::ReadOnly);
+                            context.transaction = Some(Transaction::new(TransactionType::ReadOnly));
                         }
 
                         Some(TransactionType::ErrorReadWrite) => {
-                            context.transaction = Some(TransactionType::ReadWrite);
+                            context.transaction =
+                                Some(Transaction::new(TransactionType::ReadWrite));
                         }
 
                         _ => (),
@@ -240,6 +262,10 @@ impl QueryEngine {
             self.advisory_locks
                 .merge(self.router.command().route().advisory_locks());
 
+            if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
+                self.temp_tables.update(change, context.in_transaction());
+            }
+
             self.check_lock();
 
             if !context.in_transaction() {
@@ -250,7 +276,7 @@ impl QueryEngine {
         self.stats.sent(message.len());
 
         // Do this before flushing, because flushing can take time.
-        self.cleanup_backend(context)?;
+        self.cleanup_backend(context).await?;
 
         // Pipelined requests only return
         // one ReadyForQuery message.
@@ -304,7 +330,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(super) fn cleanup_backend(
+    pub(super) async fn cleanup_backend(
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
@@ -329,7 +355,7 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                schema_changed()?;
+                schema_changed().await?;
             }
 
             self.router.reset();

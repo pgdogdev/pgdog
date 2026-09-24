@@ -8,13 +8,40 @@ split_inserts = "error"
 [[databases]]
 name = "source"
 host = "127.0.0.1"
-database_name = "pgdog1"
+shard = 0
+database_name = "pgdog1_shard_0"
+
+[[databases]]
+name = "source"
+host = "127.0.0.1"
+shard = 1
+database_name = "pgdog1_shard_1"
 
 [[databases]]
 name = "destination"
 host = "127.0.0.1"
-database_name = "pgdog2"
+shard = 0
+database_name = "pgdog2_shard_0"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+shard = 1
+database_name = "pgdog2_shard_1"
+
+[[databases]]
+name = "destination"
+host = "127.0.0.1"
+shard = 2
+database_name = "pgdog2_shard_2"
+
+[[sharded_tables]]
+database = "source"
+column = "user_id"
 
 [[sharded_tables]]
 database = "destination"
 column = "user_id"
+
+[admin]
+password = "pgdog"
