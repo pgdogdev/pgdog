@@ -111,10 +111,8 @@ fn advisory_locks_from_func_call(
             None
         };
 
-        if let Some(hash_func_evaluated_to_num) = hash_func_evaluated_to_num {
+        if hash_func_evaluated_to_num.is_some() {
             return vec![AdvisoryLock {
-                // TODO: I'm not sure what implications there are downstream
-                // since previously these evaluated to None
                 id: Some(hash_func_evaluated_to_num),
                 unlock,
                 unlock_all: false,
