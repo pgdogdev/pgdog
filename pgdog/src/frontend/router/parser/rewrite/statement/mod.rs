@@ -3,7 +3,6 @@
 use crate::backend::schema::Schema;
 use crate::config::config;
 use crate::frontend::PreparedStatements;
-use crate::frontend::router::parser::AstContext;
 use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
@@ -98,18 +97,6 @@ impl<'a> StatementRewrite<'a> {
             search_path: ctx.search_path,
             timezone: ctx.timezone,
             query_timestamps: ctx.query_timestamps,
-        }
-    }
-
-    /// Create an AstContext from this rewriter's fields.
-    fn ast_context(&self) -> AstContext<'a> {
-        AstContext {
-            sharding_schema: self.schema.clone(),
-            db_schema: self.db_schema.clone(),
-            user: self.user,
-            search_path: self.search_path,
-            timezone: self.timezone,
-            query_timestamps: self.query_timestamps,
         }
     }
 

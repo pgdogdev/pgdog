@@ -6,6 +6,7 @@ fn main() {
 
     cc::Build::new()
         .file("src/frontend/router/sharding/hashfn.c")
+        .flags(["-Wno-implicit-fallthrough"])
         .compile("postgres_hash");
 
     let output = Command::new("git").args(["rev-parse", "HEAD"]).output();

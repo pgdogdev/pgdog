@@ -1,11 +1,13 @@
 use fnv::FnvHashSet;
 
-use crate::frontend::router::parser::statement::{AdvisoryLocks as ParserAdvisoryLocks, LockScope};
+use crate::frontend::router::parser::statement::{
+    AdvisoryLockId, AdvisoryLocks as ParserAdvisoryLocks, LockScope,
+};
 
 /// Tracks advisory locks held by the current client across requests.
 #[derive(Default, Debug)]
 pub(crate) struct AdvisoryLocks {
-    locks: FnvHashSet<i64>,
+    locks: FnvHashSet<AdvisoryLockId>,
 }
 
 impl AdvisoryLocks {
@@ -35,7 +37,7 @@ impl AdvisoryLocks {
     }
 
     #[cfg(test)]
-    pub(crate) fn contains(&self, id: i64) -> bool {
+    pub(crate) fn contains(&self, id: AdvisoryLockId) -> bool {
         self.locks.contains(&id)
     }
 
