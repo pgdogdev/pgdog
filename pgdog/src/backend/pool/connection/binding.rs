@@ -59,6 +59,50 @@ impl Binding {
         self.disconnect();
     }
 
+    pub(crate) fn has_connections_for_route(&self, route: &Route, num_shards: usize) -> bool {
+        match self {
+            Binding::Direct(_, prev_shard) => {
+                if let Shard::Direct(shard) = route.shard() {
+                    debug_assert_eq!(*prev_shard, *shard);
+                    true
+                } else {
+                    panic!("has_connections_for_route shard mismatch");
+                }
+            }
+            Binding::Admin(_) => true,
+            Binding::NotConnected => false,
+            Binding::MultiShard(shards, _) => match route.shard() {
+                Shard::Direct(shard) => shards
+                    .iter()
+                    .find(|server| server.shard() == *shard)
+                    .is_some(),
+                Shard::Multi(route_shards) => shards
+                    .iter()
+                    .all(|server| route_shards.contains(&server.shard())),
+                Shard::All => shards.len() == num_shards,
+            },
+        }
+    }
+
+    pub(super) fn shard_diff(&self, shard: &Shard, shards: usize) -> Vec<usize> {
+        match shard {
+            Shard::Direct(direct) => vec![*direct],
+            Shard::All => {
+                if let Binding::MultiShard(servers, _) = self {
+                    let mut shards = (0..shards).collect::<Vec<_>>();
+
+                    for server in servers {
+                        shards.remove(server.shard());
+                    }
+                    shards
+                } else {
+                    panic!("shard_diff can only run on multi")
+                }
+            }
+            _ => vec![],
+        }
+    }
+
     /// Are we connected to a backend?
     pub(crate) fn connected(&self) -> bool {
         match self {

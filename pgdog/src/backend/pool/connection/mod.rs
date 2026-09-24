@@ -7,7 +7,10 @@ use tracing::debug;
 
 use crate::{
     admin::server::AdminServer,
-    backend::{PubSubClient, pool},
+    backend::{
+        PubSubClient,
+        pool::{self, connection::multi_shard::MultiBinding},
+    },
     config::PoolerMode,
     frontend::{
         ClientRequest, Router,
@@ -86,6 +89,39 @@ impl Connection {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn connect_transaction(&mut self) {
+        if self.connected() {
+            return;
+        }
+
+        self.binding = Binding::MultiShard(vec![], Box::new(MultiShard::default()));
+    }
+
+    pub(crate) async fn ensure_connected(
+        &mut self,
+        request: &Request,
+        route: &Route,
+    ) -> Result<(), Error> {
+        let shards = self.cluster()?.shards().len();
+
+        if self.has_connections_for_route(route, shards) {
+            return Ok(());
+        }
+
+        let diff = self.shard_diff(route.shard(), shards);
+        for shard in diff {
+            let conn = self.cluster.get_conn(request, shard, false).await?;
+            match self.binding {
+                Binding::MultiShard(ref mut servers, _) => {
+                    servers.insert(shard, MultiBinding::new(conn, shard))
+                }
+                _ => (),
+            }
+        }
+
+        todo!()
     }
 
     /// Send client request to mirrors.
