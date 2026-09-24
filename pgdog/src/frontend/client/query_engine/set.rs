@@ -99,7 +99,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        if context.in_transaction() {
+        if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
             context.params.restore_startup(context.startup_params);
