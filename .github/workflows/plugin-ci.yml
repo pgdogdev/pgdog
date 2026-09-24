@@ -5,10 +5,14 @@ on:
       - main
       - main-ent
     paths:
+      - ".github/workflows/plugin-ci.yml"
+      - "integration/ci/**"
       - "**/*.rs"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/plugin-ci.yml"
+      - "integration/ci/**"
       - "**/*.rs"
 
 jobs:
