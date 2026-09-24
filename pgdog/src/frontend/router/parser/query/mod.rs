@@ -466,7 +466,6 @@ impl QueryParser {
         if !context.router_context.executable
             && let Command::Query(ref query) = command
             && query.is_cross_shard()
-            && statement.rewrite_plan.insert_split.is_empty()
         {
             context
                 .shards_calculator
