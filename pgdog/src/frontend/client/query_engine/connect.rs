@@ -42,7 +42,10 @@ impl QueryEngine {
                 self.stats.connected();
                 self.debug_connected(context, false);
 
-                let query_timeout = context.timeouts.query_timeout(&self.stats.state);
+                let query_timeout = context
+                    .request_settings
+                    .timeouts
+                    .query_timeout(&self.stats.state);
                 let begin_stmt = self.begin_stmt.take();
 
                 // We may need to sync params with the server and that reads from the socket.

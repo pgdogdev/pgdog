@@ -1,6 +1,5 @@
 use crate::{
     backend::pool::{Connection, Request},
-    config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
         Stats,
@@ -201,7 +200,7 @@ impl QueryEngine {
             .route // Admin commands don't have a route.
             .as_mut()
             .and_then(|route| route.take_explain())
-            && config().config.general.expanded_explain
+            && context.request_settings.expanded_explain
         {
             self.pending_explain = Some(ExplainResponseState::new(trace));
         }
