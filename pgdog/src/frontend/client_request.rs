@@ -227,6 +227,8 @@ impl ClientRequest {
             ast: self.ast.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
+            sql_prepare: self.sql_prepare.clone(),
+            rewritten_parse: self.rewritten_parse.clone(),
         }
     }
 
