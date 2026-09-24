@@ -3210,7 +3210,7 @@ mod test {
             }
             assert_eq!(
                 locks("SELECT pg_catalog.pg_advisory_unlock_all()"),
-                vec![session(None, true)],
+                vec![unlock_all()],
             );
         }
 
