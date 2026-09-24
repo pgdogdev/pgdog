@@ -22,7 +22,7 @@ use crate::net::{Liveness, Parameter, Parameters};
 use super::inner::CheckInResult;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    State, Stats, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -327,6 +327,13 @@ impl Pool {
 
             // Propagate pause state so a paused database stays paused after reload.
             to_guard.paused = from_guard.paused;
+
+            // Preserve cumulative pool metrics reported by SHOW STATS and SHOW POOLS.
+            to_guard.stats = from_guard.stats;
+            to_guard.errors = from_guard.errors;
+            to_guard.out_of_sync = from_guard.out_of_sync;
+            to_guard.re_synced = from_guard.re_synced;
+            to_guard.force_close = from_guard.force_close;
             from_guard.online = false;
 
             let (idle, taken) = from_guard.move_conns_to(destination);
@@ -339,6 +346,16 @@ impl Pool {
         self.shutdown();
 
         Ok(())
+    }
+
+    /// Reset cumulative statistics for this pool.
+    pub(crate) fn reset_stats(&self) {
+        let mut guard = self.lock();
+        guard.stats = Stats::default();
+        guard.errors = 0;
+        guard.out_of_sync = 0;
+        guard.re_synced = 0;
+        guard.force_close = 0;
     }
 
     /// The two pools refer to the same database.

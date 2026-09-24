@@ -143,6 +143,36 @@ fn test_distinct_on_columns() {
 }
 
 #[test]
+fn test_distinct_on_qualified_columns() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SELECT DISTINCT ON (t.id, t.email) t.id, t.email FROM users t").into(),
+    ]);
+
+    let route = command.route();
+    let distinct = route.distinct().as_ref().unwrap();
+    assert_eq!(
+        distinct,
+        &DistinctBy::Columns(vec![
+            DistinctColumn::Name(String::from("id")),
+            DistinctColumn::Name(String::from("email"))
+        ])
+    );
+
+    let command = test.execute(vec![
+        Query::new("SELECT DISTINCT ON (users.id) users.id FROM users").into(),
+    ]);
+
+    let route = command.route();
+    let distinct = route.distinct().as_ref().unwrap();
+    assert_eq!(
+        distinct,
+        &DistinctBy::Columns(vec![DistinctColumn::Name(String::from("id"))])
+    );
+}
+
+#[test]
 fn test_any_literal() {
     let mut test = QueryParserTest::new();
 

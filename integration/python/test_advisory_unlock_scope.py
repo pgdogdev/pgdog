@@ -19,12 +19,12 @@ def test_individual_unlock_keeps_other_session_locks(case, binary):
     ) as admin:
         def locked():
             # Complete another request so SHOW CLIENTS observes the prior one.
-            owner.execute("/* pgdog_shard: 0 */ SELECT 1")
+            owner.execute("SELECT 1")
             rows = admin.execute("SHOW CLIENTS").fetchall()
             return next(row["locked"] for row in rows if row["application_name"] == application)
 
         try:
-            owner.execute(f"/* pgdog_shard: 0 */ SELECT pg_advisory_lock({key})")
+            owner.execute(f"SELECT pg_advisory_lock({key})")
             assert locked() is True
             query, params, expected = {
                 "null_literal": ("SELECT pg_advisory_unlock(NULL::bigint)", None, None),
@@ -33,10 +33,10 @@ def test_individual_unlock_keeps_other_session_locks(case, binary):
                 "null_values": ("SELECT pg_advisory_unlock(value) FROM (VALUES (NULL::bigint)) AS t(value)", None, None),
             }[case]
             with owner.cursor(binary=binary) as cursor:
-                cursor.execute("/* pgdog_shard: 0 */ " + query, params)
+                cursor.execute(query, params)
                 assert cursor.fetchone()[0] is expected
             assert locked() is True
-            owner.execute("/* pgdog_shard: 0 */ SELECT pg_advisory_unlock_all()")
+            owner.execute("SELECT pg_advisory_unlock_all()")
             assert locked() is False
         finally:
-            owner.execute("/* pgdog_shard: 0 */ SELECT pg_advisory_unlock_all()")
+            owner.execute("SELECT pg_advisory_unlock_all()")
