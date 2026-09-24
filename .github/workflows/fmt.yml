@@ -5,11 +5,13 @@ on:
       - main
       - main-ent
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
 
