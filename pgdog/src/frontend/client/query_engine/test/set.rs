@@ -762,3 +762,49 @@ async fn test_lock_timeout() {
         "lock_timeout should be cleared after RESET"
     );
 }
+
+#[tokio::test]
+async fn test_reset_all_restores_startup_parameters() {
+    let mut startup = Parameters::default();
+    startup.insert("search_path", "s1");
+    startup.insert("timezone", "Asia/Tokyo");
+    let mut client = TestClient::new_sharded(startup.clone()).await;
+
+    for query in [
+        "SET search_path TO runtime",
+        "SET timezone TO 'Europe/Paris'",
+        "SET statement_timeout TO '5s'",
+        "RESET ALL",
+        "ROLLBACK",
+    ] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.expect("command completed");
+    }
+    assert_eq!(
+        client.client().params.get("search_path"),
+        startup.get("search_path")
+    );
+    assert_eq!(
+        client.client().params.get("timezone"),
+        startup.get("timezone")
+    );
+    assert_eq!(client.client().params.get("statement_timeout"), None);
+}
+
+#[tokio::test]
+async fn test_reset_all_keeps_transaction_rollback() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+    for query in [
+        "SET search_path TO runtime",
+        "BEGIN",
+        "RESET ALL",
+        "ROLLBACK",
+    ] {
+        client.send_simple(Query::new(query)).await;
+        client.read_until('Z').await.expect("command completed");
+    }
+    assert_eq!(
+        client.client().params.get("search_path"),
+        Some(&ParameterValue::String("runtime".into()))
+    );
+}
