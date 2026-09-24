@@ -101,6 +101,14 @@ CREATE INDEX idx_users_roles ON core.users USING GIN(roles);
 CREATE INDEX idx_users_preferences ON core.users USING GIN(preferences);
 CREATE INDEX idx_users_created_at ON core.users(created_at);
 
+CREATE FUNCTION core.user_count()
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COUNT(*) FROM core.users
+$$;
+
 CREATE TABLE core.countries (
   country_code CHAR(2) PRIMARY KEY,
   country_name VARCHAR(100) NOT NULL,

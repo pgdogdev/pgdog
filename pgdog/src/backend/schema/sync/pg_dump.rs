@@ -921,7 +921,11 @@ impl PgDumpOutput {
                     }
                 }
 
-                Node::VariableSetStmt(_) => continue,
+                Node::VariableSetStmt(stmt) => {
+                    if state == SyncState::PreData && stmt.name() == Some("check_function_bodies") {
+                        result.push(Statement::new(original));
+                    }
+                }
                 Node::SelectStmt(_) => continue,
                 _ => {
                     if state == SyncState::PreData {
@@ -1055,6 +1059,32 @@ ALTER TABLE ONLY public.users
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
         let _parse = pg_raw_parse::parse(&PgDump::clean(dump)).unwrap();
+    }
+
+    #[test]
+    fn test_check_function_bodies_is_restored_before_functions() {
+        let output = parse(
+            r#"
+SET statement_timeout = 0;
+SET check_function_bodies = false;
+CREATE FUNCTION t_count() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM t $$;
+CREATE TABLE t (id bigint PRIMARY KEY);"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 3);
+        assert_eq!(statements[0].sql, "SET check_function_bodies = false");
+        assert!(
+            statements[1]
+                .sql
+                .starts_with("CREATE OR REPLACE FUNCTION t_count()")
+        );
+        assert!(
+            statements[2]
+                .sql
+                .starts_with("CREATE TABLE IF NOT EXISTS t")
+        );
     }
 
     #[test]
