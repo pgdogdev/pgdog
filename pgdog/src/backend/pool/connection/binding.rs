@@ -16,6 +16,7 @@ use futures::future::join_all;
 
 use super::*;
 use crate::util::safe_sleep;
+use multi_shard::MultiBinding;
 
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
@@ -25,7 +26,7 @@ pub(crate) enum Binding {
     /// Admin database connection.
     Admin(AdminServer),
     /// Multi-shard transaction.
-    MultiShard(Vec<Guard>, Box<MultiShard>),
+    MultiShard(Vec<MultiBinding>, Box<MultiShard>),
     /// Not connected.
     #[default]
     NotConnected,
@@ -148,11 +149,11 @@ impl Binding {
                 let mut shards_sent = servers.len();
                 let mut futures = Vec::new();
 
-                for (position, server) in servers.iter_mut().enumerate() {
+                for server in servers.iter_mut() {
                     // Map positional index to actual shard number.
                     // When only a subset of shards is connected (Shard::Multi binding),
                     // positional indices don't match actual shard numbers.
-                    let shard = state.shard_number(position);
+                    let shard = server.shard();
                     let send = match client_request.route().shard() {
                         Shard::Direct(s) => {
                             shards_sent = 1;
@@ -206,11 +207,11 @@ impl Binding {
             Binding::Direct(server, ..) => {
                 server.send_ignore(message).await?;
             }
-            Binding::MultiShard(servers, state) => {
+            Binding::MultiShard(servers, _) => {
                 if !servers.is_empty() {
                     let mut futures = Vec::new();
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
+                    for server in servers.iter_mut() {
+                        let shard = server.shard();
                         let send = match route.shard() {
                             Shard::Direct(s) => *s == shard,
                             Shard::Multi(shards) => shards.contains(&shard),
@@ -237,10 +238,10 @@ impl Binding {
     /// Send copy messages to shards they are destined to go.
     pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, state) => {
+            Binding::MultiShard(servers, _) => {
                 for row in rows {
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
+                    for server in servers.iter_mut() {
+                        let shard = server.shard();
                         match row.shard() {
                             Shard::Direct(row_shard) => {
                                 if shard == *row_shard {
@@ -363,8 +364,8 @@ impl Binding {
         Ok(result)
     }
 
-    pub(crate) async fn two_pc_on_guards(
-        servers: &mut [Guard],
+    async fn execute_two_pc(
+        servers: &mut [MultiBinding],
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
         ignore_missing: bool,
@@ -405,7 +406,7 @@ impl Binding {
     ) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers, _) => {
-                Self::two_pc_on_guards(servers, transaction, phase, ignore_missing).await
+                Self::execute_two_pc(servers, transaction, phase, ignore_missing).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
@@ -502,7 +503,7 @@ impl Binding {
             Binding::MultiShard(servers, _) => {
                 debug_assert!(
                     servers.iter().all(|s| s.is_locked()) == servers.iter().any(|s| s.is_locked()),
-                    "Shards disagree on lock status {servers:?}"
+                    "shards disagree on lock status {servers:?}"
                 );
 
                 servers.iter().any(|s| s.is_locked())

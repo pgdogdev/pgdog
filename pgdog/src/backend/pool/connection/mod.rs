@@ -111,6 +111,8 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+        use multi_shard::MultiBinding;
+
         if let Shard::Direct(shard) = route.shard() {
             let server = self
                 .cluster
@@ -120,9 +122,14 @@ impl Connection {
             self.binding = Binding::Direct(server, *shard);
         } else {
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
+            let bindings = shards
+                .into_iter()
+                .zip(shard_indices.into_iter())
+                .map(|(shard, index)| MultiBinding::new(shard, index))
+                .collect::<Vec<_>>();
+            let shards = bindings.len();
 
-            self.binding =
-                Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
+            self.binding = Binding::MultiShard(bindings, Box::new(MultiShard::new(shards, route)));
         }
 
         Ok(())
@@ -357,7 +364,9 @@ impl Connection {
     pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
         let servers: Vec<&Guard> = match self.binding {
             Binding::Direct(ref server, ..) => vec![server],
-            Binding::MultiShard(ref servers, _) => servers.iter().collect(),
+            Binding::MultiShard(ref servers, _) => {
+                servers.iter().map(|server| server.deref()).collect()
+            }
             _ => return Ok(()),
         };
 
