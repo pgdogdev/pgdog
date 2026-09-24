@@ -28,6 +28,8 @@ pub(crate) use schema::SchemaSharder;
 pub(crate) use tables::*;
 pub(crate) use value::*;
 
+const HASH_PARTITION_SEED: u64 = 0x7A5B22367996DCFD;
+
 /// Hash `BIGINT`.
 pub(crate) fn bigint(id: i64) -> u64 {
     unsafe { ffi::hash_combine64(0, ffi::hashint8extended(id)) }
@@ -38,14 +40,33 @@ pub(crate) fn uuid(uuid: Uuid) -> u64 {
     unsafe {
         ffi::hash_combine64(
             0,
-            ffi::hash_bytes_extended(uuid.as_bytes().as_ptr(), uuid.as_bytes().len() as i64),
+            ffi::hash_bytes_extended(
+                uuid.as_bytes().as_ptr(),
+                uuid.as_bytes().len() as i64,
+                HASH_PARTITION_SEED,
+            ),
         )
     }
 }
 
 /// Hash VARCHAR.
 pub(crate) fn varchar(s: &[u8]) -> u64 {
-    unsafe { ffi::hash_combine64(0, ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64)) }
+    unsafe {
+        ffi::hash_combine64(
+            0,
+            ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64, HASH_PARTITION_SEED),
+        )
+    }
+}
+
+/// hashtext(`s`) equivalient behavior
+pub(crate) fn varchar_not_extended(s: &[u8]) -> u32 {
+    unsafe { ffi::hash_bytes(s.as_ptr(), s.len() as i64) }
+}
+
+/// hashtextextended(`s`, `seed`) equivalient behavior
+pub(crate) fn varchar_extended(s: &[u8], seed: u64) -> u64 {
+    unsafe { ffi::hash_bytes_extended(s.as_ptr(), s.len() as i64, seed) }
 }
 
 #[cfg(test)]
