@@ -11,19 +11,10 @@ use super::{
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProtocolMessage {
     Bind(Bind),
-    /// Bind the unnamed rewrite while retaining the original statement's result metadata.
-    BindAnonymous(Bind),
     Parse(Parse),
-    /// Internal anonymous Parse whose ParseComplete is consumed by PgDog.
-    EnsureParsed(Parse),
     Describe(Describe),
     EnsurePrepared(Prepare),
     PrepareFromClient(Prepare),
-    /// Execute a SQL PREPARE sent through the extended protocol.
-    ExecutePrepare {
-        execute: Execute,
-        prepare: Prepare,
-    },
     Execute(Execute),
     Close(Close),
     Query(Query),
@@ -40,15 +31,7 @@ impl ProtocolMessage {
         use ProtocolMessage::*;
         matches!(
             self,
-            Bind(_)
-                | BindAnonymous(_)
-                | Parse(_)
-                | EnsureParsed(_)
-                | Describe(_)
-                | Execute(_)
-                | ExecutePrepare { .. }
-                | Sync(_)
-                | Close(_)
+            Bind(_) | Parse(_) | Describe(_) | Execute(_) | Sync(_) | Close(_)
         )
     }
 
@@ -57,7 +40,6 @@ impl ProtocolMessage {
 
         match self {
             Bind(bind) => bind.anonymous(),
-            BindAnonymous(_) | EnsureParsed(_) => true,
             Parse(parse) => parse.anonymous(),
             Describe(describe) => describe.anonymous(),
             _ => false,
@@ -78,12 +60,11 @@ impl ProtocolMessage {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Bind(bind) => bind.len(),
-            Self::BindAnonymous(bind) => bind.len() - bind.statement().len(),
-            Self::Parse(parse) | Self::EnsureParsed(parse) => parse.len(),
+            Self::Parse(parse) => parse.len(),
             Self::Describe(describe) => describe.len(),
             Self::EnsurePrepared(prepare) => prepare.len(),
             Self::PrepareFromClient(prepare) => prepare.len(),
-            Self::Execute(execute) | Self::ExecutePrepare { execute, .. } => execute.len(),
+            Self::Execute(execute) => execute.len(),
             Self::Close(close) => close.len(),
             Self::Query(query) => query.len(),
             Self::Other(message) => message.len(),
@@ -99,11 +80,11 @@ impl ProtocolMessage {
 impl Protocol for ProtocolMessage {
     fn code(&self) -> char {
         match self {
-            Self::Bind(bind) | Self::BindAnonymous(bind) => bind.code(),
-            Self::Parse(parse) | Self::EnsureParsed(parse) => parse.code(),
+            Self::Bind(bind) => bind.code(),
+            Self::Parse(parse) => parse.code(),
             Self::Describe(describe) => describe.code(),
             Self::EnsurePrepared { .. } | Self::PrepareFromClient { .. } => 'Q',
-            Self::Execute(execute) | Self::ExecutePrepare { execute, .. } => execute.code(),
+            Self::Execute(execute) => execute.code(),
             Self::Close(close) => close.code(),
             Self::Query(query) => query.code(),
             Self::Other(message) => message.code(),
@@ -140,16 +121,11 @@ impl ToBytes for ProtocolMessage {
     fn to_bytes(&self) -> bytes::Bytes {
         match self {
             Self::Bind(bind) => bind.to_bytes(),
-            Self::BindAnonymous(bind) => {
-                let mut bind = bind.clone();
-                bind.anonymize();
-                bind.to_bytes()
-            }
-            Self::Parse(parse) | Self::EnsureParsed(parse) => parse.to_bytes(),
+            Self::Parse(parse) => parse.to_bytes(),
             Self::Describe(describe) => describe.to_bytes(),
             Self::EnsurePrepared(prepare) => prepare.to_bytes(),
             Self::PrepareFromClient(prepare) => prepare.to_bytes(),
-            Self::Execute(execute) | Self::ExecutePrepare { execute, .. } => execute.to_bytes(),
+            Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),
             Self::Other(message) => message.to_bytes(),

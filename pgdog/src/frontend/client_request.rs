@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     frontend::router::Ast,
     net::{
-        Error, Flush, Parse, ProtocolMessage,
+        Error, Flush, Parse, Prepare, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
@@ -35,6 +35,10 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
+    /// SQL PREPARE completed by this request's Execute message.
+    pub(crate) sql_prepare: Option<Prepare>,
+    /// Per-execution SQL EXECUTE rewrite, parsed internally before Bind.
+    pub(crate) rewritten_parse: Option<Parse>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -61,6 +65,8 @@ impl ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
+            sql_prepare: None,
+            rewritten_parse: None,
         }
     }
 
@@ -93,6 +99,8 @@ impl ClientRequest {
         }
 
         self.messages.clear();
+        self.sql_prepare = None;
+        self.rewritten_parse = None;
         self.route = None;
         self.ast = None;
     }
@@ -133,10 +141,10 @@ impl ClientRequest {
                 ProtocolMessage::Query(query) => {
                     return Ok(Some(BufferedQuery::Query(query.clone())));
                 }
-                ProtocolMessage::Parse(parse) | ProtocolMessage::EnsureParsed(parse) => {
+                ProtocolMessage::Parse(parse) => {
                     return Ok(Some(BufferedQuery::Prepared(parse.clone())));
                 }
-                ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) => {
+                ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
                         return Ok(PreparedStatements::global()
                             .read()
@@ -188,7 +196,7 @@ impl ClientRequest {
     /// If this buffer contains bound parameters, retrieve them.
     pub(crate) fn parameters(&self) -> Result<Option<&Bind>, Error> {
         for message in &self.messages {
-            if let ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) = message {
+            if let ProtocolMessage::Bind(bind) = message {
                 return Ok(Some(bind));
             }
         }
@@ -278,7 +286,7 @@ impl ClientRequest {
         let mut references_anonymous = false;
         for message in &self.messages {
             match message {
-                ProtocolMessage::Parse(_) | ProtocolMessage::EnsureParsed(_) => return false,
+                ProtocolMessage::Parse(_) => return false,
                 ProtocolMessage::Bind(bind) => {
                     if !bind.anonymous() {
                         return false;
@@ -402,6 +410,8 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
+            sql_prepare: None,
+            rewritten_parse: None,
         }
     }
 }

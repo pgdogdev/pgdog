@@ -92,10 +92,8 @@ async fn test_rewrite_extended_prepare_preserves_protocol() {
     assert!(
         matches!(&messages[0], ProtocolMessage::Parse(parse) if parse.query().starts_with("PREPARE __pgdog_"))
     );
-    assert!(matches!(
-        &messages[3],
-        ProtocolMessage::ExecutePrepare { .. }
-    ));
+    assert!(matches!(&messages[3], ProtocolMessage::Execute(_)));
+    assert!(client.client_request.sql_prepare.is_some());
 }
 
 #[tokio::test]

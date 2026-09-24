@@ -8,8 +8,8 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
-        ToBytes,
+        Close, CloseComplete, CommandComplete, FromBytes, Message, ParseComplete,
+        Prepare as SqlPrepare, Protocol, ProtocolMessage, ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -178,21 +178,26 @@ impl PreparedStatements {
         }
     }
 
+    /// Track SQL PREPARE when its extended-protocol Execute is sent.
+    pub(super) fn handle_execute_prepare(&mut self, prepare: &SqlPrepare) -> HandleResult {
+        if self.contains(prepare.name()) {
+            // Another client may have prepared the same global statement on this backend.
+            let reply = if self.server_state == State::TransactionError {
+                ErrorResponse::in_failed_transaction().message()
+            } else {
+                CommandComplete::from_str("PREPARE").message()
+            };
+            self.state.add_simulated(reply);
+            return HandleResult::Drop;
+        }
+        self.parses.push_back(Some(prepare.name().to_owned()));
+        self.state.add(ExecutionCode::ExecutionCompleted);
+        HandleResult::Forward
+    }
+
     /// Handle extended protocol message.
     pub(super) fn handle(&mut self, request: &ProtocolMessage) -> Result<HandleResult, Error> {
         match request {
-            ProtocolMessage::EnsureParsed(parse) => {
-                debug_assert!(parse.anonymous());
-                self.state.add_ignore('1');
-                self.parses.push_back(None);
-                let mut parse = parse.clone();
-                if self.rewrite_parse_data_types(&mut parse) {
-                    return Ok(HandleResult::Rewrite(ProtocolMessage::EnsureParsed(parse)));
-                }
-            }
-            ProtocolMessage::BindAnonymous(_) => {
-                self.state.add('2');
-            }
             ProtocolMessage::Bind(bind) => {
                 if !bind.anonymous() {
                     let message = self.check_prepared(bind.statement())?;
@@ -291,22 +296,6 @@ impl PreparedStatements {
             }
 
             ProtocolMessage::Execute(_) => {
-                self.state.add(ExecutionCode::ExecutionCompleted);
-            }
-
-            ProtocolMessage::ExecutePrepare { prepare, .. } => {
-                if self.contains(prepare.name()) {
-                    // SQL statements use global names too, so another client may
-                    // already have prepared this query on the pooled connection.
-                    let reply = if self.server_state == State::TransactionError {
-                        ErrorResponse::in_failed_transaction().message()
-                    } else {
-                        crate::net::CommandComplete::from_str("PREPARE").message()
-                    };
-                    self.state.add_simulated(reply);
-                    return Ok(HandleResult::Drop);
-                }
-                self.parses.push_back(Some(prepare.name().to_owned()));
                 self.state.add(ExecutionCode::ExecutionCompleted);
             }
 
@@ -678,7 +667,7 @@ impl PreparedStatements {
         self.oids = Arc::clone(oids)
     }
 
-    fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
+    pub(super) fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
         let Some(mappings) = self.oids.get() else {
             return false;
         };
@@ -1031,12 +1020,9 @@ pub(crate) mod test {
     #[test]
     fn internal_parse_does_not_complete_a_later_named_parse() {
         let mut ps = new_extended();
-        let internal = ProtocolMessage::EnsureParsed(Parse::named("", "SELECT 1"));
+        let internal = ProtocolMessage::Parse(Parse::named("", "SELECT 1"));
         let named = ProtocolMessage::Parse(Parse::named("later_named", "SELECT 2"));
-        assert_eq!(
-            ps.handle(&internal).expect("internal parse"),
-            HandleResult::Forward
-        );
+        ps.handle_ignore(&internal).expect("internal parse");
         assert_eq!(
             ps.handle(&named).expect("named parse"),
             HandleResult::Forward
@@ -1058,21 +1044,15 @@ pub(crate) mod test {
     fn extended_sql_prepare_tracks_completion_without_ready_for_query() {
         let mut ps = new_extended();
         let name = "__stmt_extended_prepare";
-        let execute = ProtocolMessage::ExecutePrepare {
-            execute: crate::net::Execute::new(),
-            prepare: SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1"),
-        };
+        let prepare = SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1");
 
-        assert_eq!(ps.handle(&execute).expect("execute"), HandleResult::Forward);
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Forward);
         assert!(!ps.contains(name));
         let mut complete = CommandComplete::from_str("PREPARE").message();
         assert!(ps.forward(&mut complete).expect("command complete"));
         assert!(ps.contains(name));
         assert!(ps.done());
-        assert_eq!(
-            ps.handle(&execute).expect("cached prepare"),
-            HandleResult::Drop
-        );
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Drop);
     }
 
     #[test]

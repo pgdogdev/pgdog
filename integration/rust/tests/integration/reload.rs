@@ -1,9 +1,27 @@
 use std::time::Duration;
 
-use crate::setup::{admin_tokio, backends, connection_failover, connection_sqlx_direct};
+use crate::setup::{
+    admin_sqlx, admin_tokio, backends, connection_failover, connection_sqlx_direct,
+    connections_sqlx,
+};
+use rust_decimal::Decimal;
 use serial_test::serial;
-use sqlx::{Executor, Row, postgres::PgPoolOptions};
+use sqlx::{Executor, Pool, Postgres, Row, postgres::PgPoolOptions};
 use tokio::time::sleep;
+
+async fn total_query_count(admin: &Pool<Postgres>) -> i64 {
+    admin
+        .fetch_all("SHOW STATS")
+        .await
+        .unwrap()
+        .iter()
+        .filter(|row| row.get::<String, _>("database") == "pgdog")
+        .map(|row| {
+            i64::try_from(row.get::<Decimal, _>("total_query_count"))
+                .expect("total_query_count should fit in i64")
+        })
+        .sum()
+}
 
 #[tokio::test]
 #[serial]
@@ -154,4 +172,43 @@ async fn test_reconnect() {
     assert!(!none_survived);
 
     conn.close().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_reload_preserves_stats_until_reset() {
+    let admin = admin_sqlx().await;
+    let pools = connections_sqlx().await;
+    let conn = &pools[0];
+
+    admin.execute("RESET STATS").await.unwrap();
+
+    const QUERIES: i64 = 50;
+    for _ in 0..QUERIES {
+        conn.execute("SELECT 1").await.unwrap();
+    }
+
+    let before_reload = total_query_count(&admin).await;
+    assert!(
+        before_reload >= QUERIES,
+        "expected at least {QUERIES} queries before reload, got {before_reload}"
+    );
+
+    admin.execute("RELOAD").await.unwrap();
+
+    let after_reload = total_query_count(&admin).await;
+    assert!(
+        after_reload >= before_reload,
+        "RELOAD zeroed pool stats: before={before_reload}, after={after_reload}"
+    );
+
+    admin.execute("RESET STATS").await.unwrap();
+
+    let after_reset = total_query_count(&admin).await;
+    assert!(
+        after_reset < before_reload,
+        "RESET STATS left accumulated counters: before={before_reload}, after={after_reset}"
+    );
+
+    admin.close().await;
 }

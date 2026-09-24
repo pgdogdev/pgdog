@@ -169,16 +169,20 @@ impl OffsetPlan {
         let new_execute_sql = deparse(new_execute)?;
 
         // Replace SQL EXECUTE's LIMIT/OFFSET arguments with the values each shard
-        // needs (limit + offset, 0). Update Query for simple protocol and Parse
-        // or EnsureParsed for extended protocol, including cached statements.
+        // needs (limit + offset, 0). Update Query for simple protocol and both
+        // client and internal Parse messages for extended protocol.
         for message in request.messages.iter_mut() {
             match message {
                 ProtocolMessage::Query(query) => query.set_query(new_execute_sql.as_str()),
-                ProtocolMessage::Parse(parse) | ProtocolMessage::EnsureParsed(parse) => {
+                ProtocolMessage::Parse(parse) => {
                     parse.set_query(new_execute_sql.as_str());
                 }
                 _ => {}
             }
+        }
+
+        if let Some(parse) = request.rewritten_parse.as_mut() {
+            parse.set_query(new_execute_sql.as_str());
         }
 
         route.set_limit(Limit {

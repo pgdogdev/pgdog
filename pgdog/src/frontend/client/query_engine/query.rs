@@ -41,9 +41,14 @@ impl QueryEngine {
         self.two_pc_check(context);
 
         // We need to run a query now.
-        if context.in_transaction() {
+        if context.in_transaction() || context.client_request.route().is_lock_session() {
             // Connect to one shard if not sharded or to all shards
-            // for a cross-shard tranasction.
+            // for a cross-shard transaction.
+            //
+            // We also do this for advisory locks. Otherwise, we'd be pinned to one shard,
+            // and if we get a hash for a different one next query around, we'd be stuck
+            // at a point where we would have to refuse it (thus, maintaining all
+            // connections gives us freedom to fix that)
             if !self.connect_transaction(context).await? {
                 return Ok(());
             }
@@ -60,7 +65,7 @@ impl QueryEngine {
 
         // Set response format.
         for msg in context.client_request.messages.iter() {
-            if let ProtocolMessage::Bind(bind) | ProtocolMessage::BindAnonymous(bind) = msg {
+            if let ProtocolMessage::Bind(bind) = msg {
                 self.backend.bind(bind)?
             }
         }

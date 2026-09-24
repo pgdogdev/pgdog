@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -13,11 +14,13 @@ import sqlparse
 
 
 def _values_equal(a, b) -> bool:
-    """Equality that treats NaN == NaN so float arrays with NaN compare stably."""
+    """Compare result values, treating floating-point and numeric NaNs as equal."""
     if isinstance(a, float) and isinstance(b, float):
         if math.isnan(a) and math.isnan(b):
             return True
         return a == b
+    if isinstance(a, Decimal) and isinstance(b, Decimal) and a.is_nan() and b.is_nan():
+        return True
     if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
         if len(a) != len(b):
             return False
