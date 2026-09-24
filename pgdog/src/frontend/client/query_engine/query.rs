@@ -59,9 +59,14 @@ impl QueryEngine {
         self.hooks.after_connected(context, &self.backend)?;
 
         // Set response format.
-        for msg in context.client_request.messages.iter() {
-            if let ProtocolMessage::Bind(bind) = msg {
-                self.backend.bind(bind)?
+        for message in context.client_request.messages.iter() {
+            match message {
+                ProtocolMessage::Bind(bind) => {
+                    self.backend.bind(bind)?;
+                    self.advisory_locks.bind(bind);
+                }
+                ProtocolMessage::Query(_) => self.advisory_locks.simple_query(),
+                _ => {}
             }
         }
 
@@ -174,10 +179,17 @@ impl QueryEngine {
         }
 
         if code == 'E' {
+            self.advisory_locks
+                .query_error(self.router.command().route().advisory_locks());
             if let Some(state) = self.pending_explain.as_mut() {
                 state.annotated = true;
             }
             self.pending_explain = None;
+        }
+
+        if code == 'D' {
+            self.advisory_locks
+                .process_data_row(self.router.command().route().advisory_locks(), &message)?;
         }
 
         // Messages that we need to send to the client immediately.
@@ -257,8 +269,8 @@ impl QueryEngine {
             self.stats.idle(context.in_transaction());
             // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
             // the router and the command state.
-            self.advisory_locks
-                .merge(self.router.command().route().advisory_locks());
+            let advisory_locks = self.router.command().route().advisory_locks();
+            self.advisory_locks.merge(advisory_locks);
 
             if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
                 self.temp_tables.update(change, context.in_transaction());
