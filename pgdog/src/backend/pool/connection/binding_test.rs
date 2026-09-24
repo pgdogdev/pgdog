@@ -16,7 +16,7 @@ mod tests {
         },
     };
 
-    use super::super::multi_shard::MultiShard;
+    use super::super::multi_shard::{MultiBinding, MultiShard};
     use tokio::time::Instant;
 
     async fn create_multishard_binding() -> Binding {
@@ -47,11 +47,16 @@ mod tests {
             crate::backend::pool::Guard::new(pool2, server2, now),
             crate::backend::pool::Guard::new(pool3, server3, now),
         ];
+        let bindings: Vec<_> = guards
+            .into_iter()
+            .enumerate()
+            .map(|(shard, guard)| MultiBinding::new(guard, shard))
+            .collect();
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        let multishard = MultiShard::new(vec![0, 1, 2], &route);
+        let multishard = MultiShard::new(bindings.len(), &route);
 
-        let mut binding = Binding::MultiShard(guards, Box::new(multishard));
+        let mut binding = Binding::MultiShard(bindings, Box::new(multishard));
 
         // Start transaction on all shards for two-phase commit tests
         let _result = binding
