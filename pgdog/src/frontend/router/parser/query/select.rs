@@ -1,4 +1,5 @@
 use crate::frontend::router::parser::cache::Ast;
+use crate::frontend::router::parser::statement::AdvisoryLockId;
 
 use super::*;
 use pg_raw_parse::walk;
@@ -77,13 +78,15 @@ impl QueryParser {
                 //
                 // Since advisory locks are stored in memory, we don't have to worry
                 // about accounting for resharding / changing shard_count later in time
-                //
-                // Advisory lock can be None when an inner function is used, e.g., hashtext
-                // Since we don't parse that explicitly, they're deterministically always hashed
-                // to the first shard. TODO: if an app exclusively uses this, could cause issues
                 let hashed_shard: usize = match advisory_locks
                     .iter()
-                    .map(|lock| lock.id.unwrap_or(0).unsigned_abs() as usize % context.shards)
+                    .map(|lock| {
+                        lock.id
+                            .map(AdvisoryLockId::get_first_parameter)
+                            .unwrap_or(0)
+                            .unsigned_abs() as usize
+                            % context.shards
+                    })
                     .all_equal_value()
                 {
                     Ok(singular_shard) => {
