@@ -38,13 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          run: bash integration/ci/install-deps.sh
-        
+        run: bash integration/ci/install-deps.sh
       # Compute the binary key before restoring rust-cache: rust-cache restores
       # target/ build outputs that would otherwise change the key. Use the
       # split cache actions so pgdog binaries are saved immediately after the
@@ -132,12 +126,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          run: bash integration/ci/install-deps.sh
+        run: bash integration/ci/install-deps.sh
       - name: Compute cache key
         id: cache-key
         run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
