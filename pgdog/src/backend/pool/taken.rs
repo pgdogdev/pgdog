@@ -35,7 +35,6 @@ pub(super) struct Taken {
 }
 
 impl Taken {
-    #[inline]
     pub(super) fn take(&mut self, frontend: FrontendPid, backend: BackendPid, key: BackendKeyData) {
         self.backend_to_frontend.insert(backend, frontend);
         self.frontend_to_cancel.insert(
@@ -53,7 +52,6 @@ impl Taken {
     /// Returns [`Error::UntrackedConnCheckin`] if the backend was never
     /// tracked — a double-checkin or a checkin for a backend that never went
     /// through [`Self::take`].
-    #[inline]
     pub(super) fn check_in(&mut self, backend: BackendPid) -> Result<(), Error> {
         let frontend = self
             .backend_to_frontend
@@ -71,19 +69,16 @@ impl Taken {
         Ok(())
     }
 
-    #[inline]
     pub(super) fn len(&self) -> usize {
         self.backend_to_frontend.len()
     }
 
     #[cfg(test)]
-    #[inline]
     pub(super) fn is_empty(&self) -> bool {
         self.backend_to_frontend.is_empty()
     }
 
     /// Backend cancel key for this frontend's current checkout.
-    #[inline]
     pub(super) fn cancel_key(&self, frontend: FrontendPid) -> Option<&BackendKeyData> {
         self.frontend_to_cancel.get(&frontend).map(|c| &c.key)
     }
@@ -97,7 +92,6 @@ impl Taken {
 
     /// Mark or unmark a checked-out backend as pinned to its client. Called by
     /// the frontend when it takes/releases an advisory lock or manual pin.
-    #[inline]
     pub(super) fn set_locked(&mut self, backend: BackendPid, locked: bool) {
         if let Some(&frontend) = self.backend_to_frontend.get(&backend)
             && let Some(entry) = self.frontend_to_cancel.get_mut(&frontend)
@@ -108,7 +102,6 @@ impl Taken {
     }
 
     /// Count checked-out backends currently pinned to their client.
-    #[inline]
     pub(super) fn locked_count(&self) -> usize {
         self.frontend_to_cancel
             .values()
