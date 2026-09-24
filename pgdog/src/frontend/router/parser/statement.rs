@@ -45,13 +45,11 @@ fn advisory_locks_from_func_call(
         _ => return Vec::new(),
     };
 
-    // TODO: what if we have SELECT pg_advisory_lock(key1 bigint, key2 bigint)?
-    // This looks like, at a glance, that it just ignores the second one
-    // (which leads to incorrect lock tracking)
-    //
     // TODO: I came across this as another kind of pg_advisory_lock arg: 'users'::regclass::integer
     // that we don't handle right now (resolving to None) here as the id
-    let Some(arg) = func.args().into_iter().next() else {
+    let mut arg_iterator = func.args().iter();
+
+    let Some(arg) = arg_iterator.next() else {
         return vec![AdvisoryLock {
             id: None,
             unlock,
@@ -60,10 +58,27 @@ fn advisory_locks_from_func_call(
         }];
     };
 
+    let second_arg = arg_iterator.next();
+
     // Fast path: the key is a literal / param / cast we can resolve directly.
-    if let Some(id) = integer_arg(arg, bind) {
+    if let Some(id) = integer_arg(arg, bind)
+        && second_arg.is_none()
+    {
         return vec![AdvisoryLock {
-            id: Some(id),
+            id: Some(AdvisoryLockId::OneParameter(id)),
+            unlock,
+            unlock_all: false,
+            scope,
+        }];
+    } else if let Some(first_id) = integer_arg(arg, bind)
+        && let Some(second_arg) = second_arg
+        && let Some(second_id) = integer_arg(second_arg, bind)
+    {
+        return vec![AdvisoryLock {
+            id: Some(AdvisoryLockId::TwoParameters(
+                first_id as i32,
+                second_id as i32,
+            )),
             unlock,
             unlock_all: false,
             scope,
@@ -73,8 +88,21 @@ fn advisory_locks_from_func_call(
     // If the argument is a parameter placeholder ($1) and we have no Bind message,
     // this is just a prepared statement being parsed — the lock isn't actually
     // being taken yet. Return empty so we don't route as if a lock is held.
-    if bind.is_none() && is_param_ref(arg) {
+    if bind.is_none()
+        && (is_param_ref(arg) || (second_arg.map(|s_arg| is_param_ref(s_arg)).unwrap_or(false)))
+    {
         return Vec::new();
+    }
+
+    // TODO: If we have a second arg that isn't numeric,
+    //  e.g., two functions, this isn't handled yet.
+    if second_arg.is_some() {
+        return vec![AdvisoryLock {
+            id: None,
+            unlock,
+            unlock_all: false,
+            scope,
+        }];
     }
 
     // SELECT pg_advisory_lock(hashtext('some text!'))
@@ -113,7 +141,7 @@ fn advisory_locks_from_func_call(
 
         if hash_func_evaluated_to_num.is_some() {
             return vec![AdvisoryLock {
-                id: hash_func_evaluated_to_num,
+                id: hash_func_evaluated_to_num.map(AdvisoryLockId::OneParameter),
                 unlock,
                 unlock_all: false,
                 scope,
@@ -133,7 +161,7 @@ fn advisory_locks_from_func_call(
             // Skip unresolvable param refs when there is no Bind.
             .filter(|v| bind.is_some() || !is_param_ref(**v))
             .map(|v| AdvisoryLock {
-                id: integer_arg(*v, bind),
+                id: integer_arg(*v, bind).map(AdvisoryLockId::OneParameter),
                 unlock,
                 unlock_all: false,
                 scope,
@@ -238,10 +266,30 @@ pub(crate) enum LockScope {
 /// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub(crate) struct AdvisoryLock {
-    pub(crate) id: Option<i64>,
+    pub(crate) id: Option<AdvisoryLockId>,
     pub(crate) unlock: bool,
     pub(crate) unlock_all: bool,
     pub(crate) scope: LockScope,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub(crate) enum AdvisoryLockId {
+    /// pg_advisory_lock(ID)
+    OneParameter(i64),
+    /// pg_advisory_lock(ID_1, ID_2)
+    TwoParameters(i32, i32),
+}
+
+impl AdvisoryLockId {
+    /// Return the first parameter of the ID
+    /// OneParameter(x) => x
+    /// TwoParameters(x, y) => x
+    pub(crate) fn get_first_parameter(self) -> i64 {
+        match self {
+            Self::OneParameter(x) => x,
+            Self::TwoParameters(x, _) => x as i64,
+        }
+    }
 }
 
 /// Set of advisory locks discovered while walking a statement.
@@ -3052,11 +3100,18 @@ mod test {
             let stmt = raw.stmts().next().unwrap();
             let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
             let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
-            v.sort_by_key(|l| (l.id, l.unlock));
+            v.sort_by_key(|l| {
+                let id = match l.id {
+                    Some(AdvisoryLockId::OneParameter(id)) => Some((id, None)),
+                    Some(AdvisoryLockId::TwoParameters(a, b)) => Some((a as i64, Some(b))),
+                    None => None,
+                };
+                (id, l.unlock)
+            });
             v
         }
 
-        fn session(id: Option<i64>, unlock: bool) -> AdvisoryLock {
+        fn session(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
             AdvisoryLock {
                 id,
                 unlock,
@@ -3065,7 +3120,7 @@ mod test {
             }
         }
 
-        fn xact(id: Option<i64>, unlock: bool) -> AdvisoryLock {
+        fn xact(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
             AdvisoryLock {
                 id,
                 unlock,
@@ -3087,11 +3142,19 @@ mod test {
         fn lock_and_unlock() {
             assert_eq!(
                 locks("SELECT pg_advisory_lock(42)"),
-                vec![session(Some(42), false)],
+                vec![session(Some(AdvisoryLockId::OneParameter(42)), false)],
             );
             assert_eq!(
                 locks("SELECT pg_advisory_unlock(42)"),
-                vec![session(Some(42), true)],
+                vec![session(Some(AdvisoryLockId::OneParameter(42)), true)],
+            );
+        }
+
+        #[test]
+        fn lock_with_two_param() {
+            assert_eq!(
+                locks("SELECT pg_advisory_lock(1, 2)"),
+                vec![session(Some(AdvisoryLockId::TwoParameters(1, 2)), false)]
             );
         }
 
@@ -3100,12 +3163,18 @@ mod test {
             // Try out hashtext and hashtextended; compared against the numbers Postgres outputs!
             assert_eq!(
                 locks("SELECT pg_advisory_lock(hashtext('hello world'))"),
-                vec![session(Some(1021725223), false)]
+                vec![session(
+                    Some(AdvisoryLockId::OneParameter(1021725223)),
+                    false
+                )]
             );
 
             assert_eq!(
                 locks("SELECT pg_advisory_lock(hashtextextended('hello world', 123))"),
-                vec![session(Some(3896024775453578562), false)]
+                vec![session(
+                    Some(AdvisoryLockId::OneParameter(3896024775453578562)),
+                    false
+                )]
             );
         }
 
@@ -3114,7 +3183,10 @@ mod test {
             // Values larger than i32 are encoded as Float in PG internally.
             assert_eq!(
                 locks("SELECT pg_advisory_lock(9000000000)"),
-                vec![session(Some(9_000_000_000), false)],
+                vec![session(
+                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
+                    false
+                )],
             );
         }
 
@@ -3125,7 +3197,11 @@ mod test {
                 "SELECT pg_advisory_lock_shared(7)",
                 "SELECT pg_try_advisory_lock_shared(7)",
             ] {
-                assert_eq!(locks(q), vec![session(Some(7), false)], "{q}");
+                assert_eq!(
+                    locks(q),
+                    vec![session(Some(AdvisoryLockId::OneParameter(7)), false)],
+                    "{q}"
+                );
             }
         }
 
@@ -3139,7 +3215,11 @@ mod test {
                 "SELECT pg_try_advisory_xact_lock(7)",
                 "SELECT pg_try_advisory_xact_lock_shared(7)",
             ] {
-                assert_eq!(locks(q), vec![xact(Some(7), false)], "{q}");
+                assert_eq!(
+                    locks(q),
+                    vec![xact(Some(AdvisoryLockId::OneParameter(7)), false)],
+                    "{q}"
+                );
             }
         }
 
@@ -3147,7 +3227,10 @@ mod test {
         fn multiple_and_dedup() {
             assert_eq!(
                 locks("SELECT pg_advisory_lock(5), pg_advisory_lock(5), pg_advisory_lock(6)"),
-                vec![session(Some(5), false), session(Some(6), false)],
+                vec![
+                    session(Some(AdvisoryLockId::OneParameter(5)), false),
+                    session(Some(AdvisoryLockId::OneParameter(6)), false)
+                ],
             );
         }
 
@@ -3155,11 +3238,11 @@ mod test {
         fn cast_and_cte() {
             assert_eq!(
                 locks("SELECT pg_try_advisory_lock(9)::bool"),
-                vec![session(Some(9), false)],
+                vec![session(Some(AdvisoryLockId::OneParameter(9)), false)],
             );
             assert_eq!(
                 locks("WITH x AS (SELECT pg_advisory_lock(11)) SELECT * FROM x"),
-                vec![session(Some(11), false)],
+                vec![session(Some(AdvisoryLockId::OneParameter(11)), false)],
             );
         }
 
@@ -3168,6 +3251,13 @@ mod test {
             // Without a Bind message, a parameter placeholder means the prepared
             // statement is only being parsed — no lock is actually taken.
             assert!(locks("SELECT pg_advisory_lock($1)").is_empty());
+        }
+
+        #[test]
+        fn two_params_without_bind_is_ignored() {
+            assert!(locks("SELECT pg_advisory_lock($1, $2)").is_empty());
+            assert!(locks("SELECT pg_advisory_lock($1, 1)").is_empty());
+            assert!(locks("SELECT pg_adivsory_lock(1, $2)").is_empty());
         }
 
         #[test]
@@ -3211,15 +3301,15 @@ mod test {
             let bind = Bind::new_params("", &[Parameter::new(b"4242")]);
             assert_eq!(
                 locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(Some(4242), false)],
+                vec![session(Some(AdvisoryLockId::OneParameter(4242)), false)],
             );
             assert_eq!(
                 locks_with_bind("SELECT pg_advisory_xact_lock($1)", Some(&bind)),
-                vec![xact(Some(4242), false)],
+                vec![xact(Some(AdvisoryLockId::OneParameter(4242)), false)],
             );
             assert_eq!(
                 locks_with_bind("SELECT pg_advisory_unlock($1)", Some(&bind)),
-                vec![session(Some(4242), true)],
+                vec![session(Some(AdvisoryLockId::OneParameter(4242)), true)],
             );
         }
 
@@ -3230,7 +3320,10 @@ mod test {
             let bind = Bind::new_params("", &[Parameter::new(b"9000000000")]);
             assert_eq!(
                 locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(Some(9_000_000_000), false)],
+                vec![session(
+                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
+                    false
+                )],
             );
         }
 
@@ -3251,9 +3344,9 @@ mod test {
                     Some(&bind),
                 ),
                 vec![
-                    session(Some(11), false),
-                    xact(Some(22), false),
-                    session(Some(33), true),
+                    session(Some(AdvisoryLockId::OneParameter(11)), false),
+                    xact(Some(AdvisoryLockId::OneParameter(22)), false),
+                    session(Some(AdvisoryLockId::OneParameter(33)), true),
                 ],
             );
         }
@@ -3267,9 +3360,9 @@ mod test {
                 ),
                 vec![
                     unlock_all(),
-                    session(Some(10), false),
-                    xact(Some(20), false),
-                    session(Some(30), true),
+                    session(Some(AdvisoryLockId::OneParameter(10)), false),
+                    xact(Some(AdvisoryLockId::OneParameter(20)), false),
+                    session(Some(AdvisoryLockId::OneParameter(30)), true),
                 ],
             );
         }
@@ -3281,9 +3374,9 @@ mod test {
             assert_eq!(
                 locks("SELECT pg_advisory_lock(value) FROM (VALUES (10), (20), (30)) AS t(value)",),
                 vec![
-                    session(Some(10), false),
-                    session(Some(20), false),
-                    session(Some(30), false),
+                    session(Some(AdvisoryLockId::OneParameter(10)), false),
+                    session(Some(AdvisoryLockId::OneParameter(20)), false),
+                    session(Some(AdvisoryLockId::OneParameter(30)), false),
                 ],
             );
         }
@@ -3293,9 +3386,9 @@ mod test {
             assert_eq!(
                 locks("SELECT pg_advisory_lock(column1) FROM (VALUES (10), (20), (30))",),
                 vec![
-                    session(Some(10), false),
-                    session(Some(20), false),
-                    session(Some(30), false),
+                    session(Some(AdvisoryLockId::OneParameter(10)), false),
+                    session(Some(AdvisoryLockId::OneParameter(20)), false),
+                    session(Some(AdvisoryLockId::OneParameter(30)), false),
                 ],
             );
         }
@@ -3307,9 +3400,9 @@ mod test {
                     "SELECT pg_advisory_lock(column1), (SELECT pg_advisory_lock(c) FROM (VALUES (20), (30)) AS t(c)) FROM (VALUES (10))",
                 ),
                 vec![
-                    session(Some(10), false),
-                    session(Some(20), false),
-                    session(Some(30), false),
+                    session(Some(AdvisoryLockId::OneParameter(10)), false),
+                    session(Some(AdvisoryLockId::OneParameter(20)), false),
+                    session(Some(AdvisoryLockId::OneParameter(30)), false),
                 ],
             );
         }
@@ -3330,9 +3423,9 @@ mod test {
                     Some(&bind),
                 ),
                 vec![
-                    session(Some(41), false),
-                    session(Some(42), false),
-                    session(Some(43), false),
+                    session(Some(AdvisoryLockId::OneParameter(41)), false),
+                    session(Some(AdvisoryLockId::OneParameter(42)), false),
+                    session(Some(AdvisoryLockId::OneParameter(43)), false),
                 ],
             );
         }
@@ -3342,11 +3435,17 @@ mod test {
             // Same multi-row expansion for unlock and xact variants.
             assert_eq!(
                 locks("SELECT pg_advisory_unlock(value) FROM (VALUES (1), (2)) AS t(value)",),
-                vec![session(Some(1), true), session(Some(2), true)],
+                vec![
+                    session(Some(AdvisoryLockId::OneParameter(1)), true),
+                    session(Some(AdvisoryLockId::OneParameter(2)), true)
+                ],
             );
             assert_eq!(
                 locks("SELECT pg_advisory_xact_lock(value) FROM (VALUES (5), (6)) AS t(value)",),
-                vec![xact(Some(5), false), xact(Some(6), false)],
+                vec![
+                    xact(Some(AdvisoryLockId::OneParameter(5)), false),
+                    xact(Some(AdvisoryLockId::OneParameter(6)), false)
+                ],
             );
         }
 
@@ -3359,7 +3458,10 @@ mod test {
                     "SELECT pg_advisory_lock($1), pg_advisory_lock($2)",
                     Some(&bind),
                 ),
-                vec![session(None, false), session(Some(99), false)],
+                vec![
+                    session(None, false),
+                    session(Some(AdvisoryLockId::OneParameter(99)), false)
+                ],
             );
         }
     }

@@ -31,6 +31,30 @@ pub async fn advisory_locks_with_functions() {
     }
 }
 
+// Same test as `advisory_locks_working_generally`, but now testing 2 inner params
+#[tokio::test]
+pub async fn advisory_locks_with_2_params() {
+    let sharded_conn = connections_sqlx().await;
+    let sharded_conn = sharded_conn.get(1).unwrap();
+
+    let sharded_conn_2 = connections_sqlx().await;
+    let sharded_conn_2 = sharded_conn_2.get(1).unwrap();
+    let funcs = ["1, 2", "2, 1"];
+
+    for func_to_try in funcs {
+        sqlx::raw_sql(format!("SELECT pg_advisory_lock({func_to_try})").as_str())
+            .execute(sharded_conn)
+            .await
+            .unwrap();
+
+        let lock_acquired: bool =
+            sqlx::query_scalar(format!("SELECT pg_try_advisory_lock({func_to_try})").as_str())
+                .fetch_one(sharded_conn_2)
+                .await
+                .unwrap();
+        assert!(!lock_acquired);
+    }
+}
 // Test a general case where:
 // - We have 2 shards.
 // - We obtain a lock on one connection

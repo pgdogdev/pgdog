@@ -1,5 +1,5 @@
 use super::prelude::*;
-use crate::net::DataRow;
+use crate::{frontend::router::parser::statement::AdvisoryLockId, net::DataRow};
 
 #[tokio::test]
 async fn test_session_lock_tracked_outside_transaction() {
@@ -12,7 +12,7 @@ async fn test_session_lock_tracked_outside_transaction() {
 
     {
         let locks = client.engine.advisory_locks();
-        assert!(locks.contains(101));
+        assert!(locks.contains(AdvisoryLockId::OneParameter(101)));
         assert_eq!(locks.len(), 1);
     }
 
@@ -26,7 +26,12 @@ async fn test_session_lock_tracked_outside_transaction() {
 
     assert!(client.backend_connected());
     assert!(client.backend_locked());
-    assert!(client.engine.advisory_locks().contains(101));
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(101))
+    );
 }
 
 #[tokio::test]
@@ -180,7 +185,12 @@ async fn test_session_lock_inside_transaction_survives_commit() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().contains(202));
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(202))
+    );
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -188,7 +198,10 @@ async fn test_session_lock_inside_transaction_survives_commit() {
     client.read_until('Z').await.unwrap();
 
     assert!(
-        client.engine.advisory_locks().contains(202),
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(202)),
         "session-scoped lock must survive COMMIT"
     );
     assert!(client.backend_connected());
@@ -211,7 +224,12 @@ async fn test_session_lock_inside_transaction_survives_rollback() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().contains(303));
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(303))
+    );
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -219,7 +237,10 @@ async fn test_session_lock_inside_transaction_survives_rollback() {
     client.read_until('Z').await.unwrap();
 
     assert!(
-        client.engine.advisory_locks().contains(303),
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(303)),
         "session-scoped lock must survive ROLLBACK"
     );
     assert!(client.backend_connected());
@@ -235,7 +256,12 @@ async fn test_unlock_removes_session_lock() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().contains(404));
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(404))
+    );
     assert!(client.backend_connected());
     assert!(client.backend_locked());
 
@@ -245,7 +271,7 @@ async fn test_unlock_removes_session_lock() {
     client.read_until('Z').await.unwrap();
 
     let locks = client.engine.advisory_locks();
-    assert!(!locks.contains(404));
+    assert!(!locks.contains(AdvisoryLockId::OneParameter(404)));
     assert_eq!(locks.len(), 0);
     assert!(
         !client.backend_locked(),
@@ -293,7 +319,12 @@ async fn test_discard_all_clears_session_locks() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    assert!(client.engine.advisory_locks().contains(1));
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(1))
+    );
     assert!(client.backend_locked());
 
     client.send_simple(Query::new("DISCARD ALL")).await;
@@ -320,7 +351,10 @@ async fn test_non_all_discard_keeps_session_locks() {
         client.read_until('Z').await.unwrap();
 
         assert!(
-            client.engine.advisory_locks().contains(1),
+            client
+                .engine
+                .advisory_locks()
+                .contains(AdvisoryLockId::OneParameter(1)),
             "{query} must not release advisory locks",
         );
         assert!(client.backend_locked());
