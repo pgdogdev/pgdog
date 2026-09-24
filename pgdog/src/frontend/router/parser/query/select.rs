@@ -49,16 +49,14 @@ impl QueryParser {
                 .push(ShardWithPriority::new_override_cross_shard_function());
         }
 
-        let (advisory_locks, mut omnisharded) = {
-            let mut parser = StatementParser::new(
-                stmt.into(),
-                context.router_context.bind,
-                &context.sharding_schema,
-                None,
-            );
-
-            (parser.extract_advisory_locks(), parser.is_all_omnisharded())
-        };
+        let mut parser = StatementParser::new(
+            stmt.into(),
+            context.router_context.bind,
+            &context.sharding_schema,
+        )
+        .with_explain(self.recorder_mut().is_some());
+        let (advisory_locks, mut omnisharded) =
+            (parser.extract_advisory_locks(), parser.is_all_omnisharded());
 
         // If there's an advisory lock function in this query, we must always route it
         // to a deterministic `Shard`.
@@ -130,33 +128,26 @@ impl QueryParser {
 
         let mut shards = HashSet::new();
 
-        let (shard, is_sharded, tables, pending_lookups) = {
-            let mut statement_parser = StatementParser::new(
-                stmt.into(),
-                context.router_context.bind,
-                &context.sharding_schema,
-                self.recorder_mut(),
-            );
-            statement_parser.set_resolved_lookups(&context.router_context.resolved_lookups);
+        parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
-            let shard = statement_parser.shard()?;
-            let pending_lookups = statement_parser.take_pending_lookups();
+        let shard = parser.shard()?;
+        let pending_lookups = parser.take_pending_lookups();
 
-            if shard.is_some() {
-                (shard, true, vec![], pending_lookups)
-            } else {
-                (
-                    None,
-                    statement_parser.is_sharded(
-                        &context.router_context.schema,
-                        context.router_context.cluster.user(),
-                        context.router_context.parameter_hints.search_path,
-                    ),
-                    statement_parser.extract_tables(),
-                    pending_lookups,
-                )
-            }
+        // Collect explain entries from the parser.
+        if let Some(recorder) = self.recorder_mut() {
+            recorder.extend(parser.take_explain());
+        }
+
+        let is_sharded = if shard.is_some() {
+            true
+        } else {
+            parser.is_sharded(
+                &context.router_context.schema,
+                context.router_context.cluster.user(),
+                context.router_context.parameter_hints.search_path,
+            )
         };
+        let tables = shard.is_none().then(|| parser.tables());
 
         context.pending_lookups.extend(pending_lookups);
 
@@ -245,15 +236,12 @@ impl QueryParser {
                 .push(ShardWithPriority::new_table(Shard::All));
         } else {
             let system_catalog_sharded =
-                if context.sharding_schema.tables().is_system_catalog_sharded() {
-                    {
+                context.sharding_schema.tables().is_system_catalog_sharded()
+                    && tables.is_some_and(|tables| {
                         tables
                             .iter()
                             .any(|table| system_catalogs().contains(&table.name))
-                    }
-                } else {
-                    Default::default()
-                };
+                    });
 
             if system_catalog_sharded {
                 debug!("system catalog sharded");
@@ -284,12 +272,14 @@ impl QueryParser {
                         .push(ShardWithPriority::new_table_omni(Shard::All));
                 } else {
                     // Any single shard can answer a read.
-                    let sticky = tables.iter().any(|table| {
-                        context
-                            .sharding_schema
-                            .tables()
-                            .is_omnisharded_sticky(table.name)
-                            == Some(true)
+                    let sticky = tables.is_some_and(|tables| {
+                        tables.iter().any(|table| {
+                            context
+                                .sharding_schema
+                                .tables()
+                                .is_omnisharded_sticky(table.name)
+                                == Some(true)
+                        })
                     });
 
                     let (rr_index, explain) = if sticky

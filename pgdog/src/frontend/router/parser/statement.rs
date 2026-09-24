@@ -217,7 +217,7 @@ fn is_param_ref(node: Node<'_>) -> bool {
 
 use super::{
     super::sharding::Value as ShardingValue, Column, Error, Table, Value,
-    explain_trace::ExplainRecorder,
+    explain_trace::ExplainEntry,
 };
 
 /// Lifetime of an advisory lock.
@@ -500,14 +500,15 @@ pub(crate) struct SchemaLookupContext<'a> {
     pub(crate) search_path: Option<&'a ParameterValue>,
 }
 
-pub(crate) struct StatementParser<'a, 'b, 'c> {
+pub(crate) struct StatementParser<'a, 'b> {
     stmt: pg_raw_parse::Node<'a>,
     bind: Option<StatementParameters<'b>>,
     schema: &'b ShardingSchema,
-    recorder: Option<&'c mut ExplainRecorder>,
     /// Optional schema lookup context for INSERT without column list.
     schema_lookup: Option<SchemaLookupContext<'b>>,
     hooks: ParserHooks,
+    /// Explain entries collected while routing (only when explain is enabled).
+    explain: Option<Vec<ExplainEntry>>,
     /// Cached walk result (tables + advisory locks).
     cached_walk: Option<Walk<'a>>,
     /// Cached result of all_omnisharded check (None = not yet computed)
@@ -517,20 +518,19 @@ pub(crate) struct StatementParser<'a, 'b, 'c> {
     resolved_lookups: Option<&'b ResolvedLookups>,
 }
 
-impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
+impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     pub(crate) fn new(
         stmt: Node<'a>,
         bind: Option<StatementParameters<'b>>,
         schema: &'b ShardingSchema,
-        recorder: Option<&'c mut ExplainRecorder>,
     ) -> Self {
         Self {
             stmt,
             bind,
             schema,
-            recorder,
             schema_lookup: None,
             hooks: ParserHooks::default(),
+            explain: None,
             cached_walk: None,
             all_omnisharded: None,
             pending_lookups: Vec::new(),
@@ -543,6 +543,19 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
     /// after its pending lookups resolved can't miss.
     pub(crate) fn set_resolved_lookups(&mut self, resolved: &'b ResolvedLookups) {
         self.resolved_lookups = Some(resolved);
+    }
+
+    /// If `enabled`, explain entries will be collected while routing.
+    pub(crate) fn with_explain(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.explain = Some(Vec::new());
+        }
+        self
+    }
+
+    /// Collect an owned Vec of `ExplainEntry`s for all collected thus far.
+    pub(crate) fn take_explain(&mut self) -> Vec<ExplainEntry> {
+        self.explain.take().unwrap_or_default()
     }
 
     fn walk(&mut self) -> &Walk<'a> {
@@ -588,7 +601,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         self.hooks
             .record_sharding_key(shard, &column, value, self.bind);
 
-        if let Some(recorder) = self.recorder.as_mut() {
+        if let Some(explain) = self.explain.as_mut() {
             let col_str = if let Some(table) = column.table {
                 format!("{}.{}", table, column.name)
             } else {
@@ -600,7 +613,7 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
                 }
                 _ => format!("matched sharding key {} using constant", col_str),
             };
-            recorder.record_entry(Some(shard.clone()), description);
+            explain.push(ExplainEntry::new(Some(shard.clone()), description));
         }
     }
 
@@ -629,11 +642,11 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         if let Some((shard, schema_name)) = schema_sharder.get() {
-            if let Some(recorder) = self.recorder.as_mut() {
-                recorder.record_entry(
+            if let Some(explain) = self.explain.as_mut() {
+                explain.push(ExplainEntry::new(
                     Some(shard.clone()),
                     format!("matched schema {}", schema_name),
-                );
+                ));
                 self.hooks.record_sharded_schema(&shard, schema_name);
             }
             return Ok(Some(shard));
@@ -698,12 +711,6 @@ impl<'a, 'b: 'a, 'c> StatementParser<'a, 'b, 'c> {
         }
 
         false
-    }
-
-    /// Extract all tables referenced in the statement.
-    /// TODO: not clear to me why this isn't using walk() to use the cached ver
-    pub(crate) fn extract_tables(&self) -> Vec<Table<'a>> {
-        self.run_walk().tables
     }
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
@@ -1426,7 +1433,7 @@ mod test {
         let schema = test_schema();
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
         parser.shard()
     }
 
@@ -1439,7 +1446,7 @@ mod test {
     ) -> (Option<Shard>, Vec<PendingLookup>) {
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind.map(Into::into), schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), schema);
         let shard = parser.shard().unwrap();
         (shard, parser.take_pending_lookups())
     }
@@ -2411,7 +2418,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
         parser.shard()
     }
 
@@ -2523,7 +2530,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
         parser.shard()
     }
 
@@ -2698,7 +2705,7 @@ mod test {
         };
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &sharding_schema, None)
+        let mut parser = StatementParser::new(stmt, bind.map(Into::into), &sharding_schema)
             .with_schema_lookup(schema_lookup);
         parser.shard()
     }
@@ -2836,7 +2843,7 @@ mod test {
         let db_schema = make_omnisharded_db_schema();
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, None, &schema, None);
+        let mut parser = StatementParser::new(stmt, None, &schema);
         parser.is_sharded(&db_schema, "test", None)
     }
 
@@ -2889,7 +2896,7 @@ mod test {
         let schema = make_omnisharded_sharding_schema();
         let raw = pg_raw_parse::parse(stmt).unwrap();
         let stmt = raw.stmts().next().unwrap();
-        let mut parser = StatementParser::new(stmt, None, &schema, None);
+        let mut parser = StatementParser::new(stmt, None, &schema);
         parser.shard().unwrap()
     }
 
@@ -3043,7 +3050,7 @@ mod test {
             let schema = ShardingSchema::default();
             let raw = pg_raw_parse::parse(query).unwrap();
             let stmt = raw.stmts().next().unwrap();
-            let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema, None);
+            let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
             let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
             v.sort_by_key(|l| (l.id, l.unlock));
             v
