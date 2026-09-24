@@ -87,7 +87,7 @@ pub(crate) struct Client {
     client_request: ClientRequest,
     // Keep the client's original unnamed statement across executions. The
     // request's copy can be rewritten for whichever backend receives it.
-    unnamed_parse: Option<Parse>,
+    unnamed_parse: Option<Box<Parse>>,
     // Raw buffer of messages the client sent. We keep them here to avoid memory allocations
     // down the line (using [`bytes::Bytes`]).
     stream_buffer: MessageBuffer,
@@ -657,7 +657,7 @@ impl Client {
         cancellation_token: &CancellationToken,
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
-        self.client_request.last_parse = self.unnamed_parse.clone();
+        self.client_request.last_parse = self.unnamed_parse.as_deref().cloned();
 
         // Check config once per request.
         let config = config::config();
@@ -717,7 +717,7 @@ impl Client {
                 let message = ProtocolMessage::from_bytes(message.to_bytes())?;
                 match &message {
                     ProtocolMessage::Parse(parse) if parse.anonymous() => {
-                        self.unnamed_parse = Some(parse.clone());
+                        self.unnamed_parse = Some(Box::new(parse.clone()));
                     }
                     ProtocolMessage::Query(_) => self.unnamed_parse = None,
                     ProtocolMessage::Close(close) if close.is_statement() && close.anonymous() => {
@@ -795,8 +795,11 @@ impl MemoryUsage for Client {
             + std::mem::size_of::<Timeouts>()
             + self.stream_buffer.capacity()
             + self.client_request.memory_usage()
-            + std::mem::size_of::<Option<Parse>>()
-            + self.unnamed_parse.as_ref().map_or(0, Parse::len)
+            + std::mem::size_of::<Option<Box<Parse>>>()
+            + self
+                .unnamed_parse
+                .as_deref()
+                .map_or(0, |parse| std::mem::size_of::<Parse>() + parse.len())
     }
 }
 
