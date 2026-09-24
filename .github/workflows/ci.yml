@@ -15,9 +15,7 @@ on:
       - "**/Cargo.toml"
       - "integration/**"
   merge_group:
-    branches:
-      - main
-      - main-ent
+    types: [checks_requested]
 
 jobs:
   # Build both pgdog artifacts in parallel:
