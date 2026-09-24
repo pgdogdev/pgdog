@@ -1,0 +1,23 @@
+[package]
+name = "pgdog-cache"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+bench = false
+
+[dependencies]
+hashbrown.workspace = true
+
+[dev-dependencies]
+cachekit = { version = "0.8.0", features = ["policy-lfu"] }
+criterion = "0.8.2"
+evictor = { version = "0.7.2", default-features = false, features = ["ahash"] }
+lru = "0.18.4"
+rand = "0.9"
+rand_distr = "0.5"
+schnellru = "0.2.4"
+
+[[bench]]
+name = "cache"
+harness = false
