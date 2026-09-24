@@ -16,7 +16,7 @@ use futures::future::join_all;
 
 use super::*;
 use crate::util::safe_sleep;
-use multi_shard::MultiBinding;
+use multi_shard::{LinkedServer, MultiBinding};
 
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
@@ -241,12 +241,12 @@ impl Binding {
     }
 
     pub(crate) async fn two_pc_on_guards(
-        servers: &mut [Guard],
+        servers: &mut [LinkedServer],
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
         ignore_missing: bool,
     ) -> Result<(), Error> {
-        let mut futures = Vec::new();
+        let mut futures = vec![];
         for (shard, server) in servers.iter_mut().enumerate() {
             let query = phase_control(transaction, shard, phase);
             futures.push(server.execute(query));
@@ -282,7 +282,8 @@ impl Binding {
     ) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers) => {
-                Self::two_pc_on_guards(servers, transaction, phase, ignore_missing).await
+                Self::two_pc_on_guards(servers.deref_mut(), transaction, phase, ignore_missing)
+                    .await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
@@ -300,21 +301,10 @@ impl Binding {
             Binding::Direct(server, ..) => {
                 server.link_client(id, params, transaction_start_stmt).await
             }
-            Binding::MultiShard(servers) => {
-                let futures = servers
-                    .iter_mut()
-                    .map(|server| server.link_client(id, params, transaction_start_stmt));
-                let results = join_all(futures).await;
 
-                let mut max = 0;
-                for result in results {
-                    let synced = result?;
-                    if max < synced {
-                        max = synced;
-                    }
-                }
-                Ok(max)
-            }
+            Binding::MultiShard(servers) => Ok(servers
+                .link_client(id, params, transaction_start_stmt)
+                .await?),
 
             _ => Ok(0),
         }

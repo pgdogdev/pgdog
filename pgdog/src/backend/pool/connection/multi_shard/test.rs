@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn test_inconsistent_row_descriptions() {
     let route = Route::default();
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
 
     // Create two different row descriptions
     let rd1 = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
@@ -32,7 +32,7 @@ fn test_inconsistent_row_descriptions() {
 #[test]
 fn test_inconsistent_data_rows() {
     let route = Route::default();
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
 
     // Set up row description first
     let rd = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
@@ -63,7 +63,7 @@ fn test_inconsistent_data_rows() {
 #[test]
 fn test_rd_before_dr() {
     let mut multi_shard = MultiShard::new(
-        vec![0, 1, 2],
+        3,
         &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
     );
     let rd = RowDescription::new(&[Field::bigint("id")]);
@@ -131,7 +131,7 @@ fn test_distinct_state_resets_between_requests() {
         Default::default(),
         Some(DistinctBy::Row),
     );
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
     let row_description = RowDescription::new(&[Field::bigint("id")]);
     let mut data_row = DataRow::new();
     data_row.add(1_i64);
@@ -173,7 +173,7 @@ fn test_distinct_state_resets_between_requests() {
 #[test]
 fn test_ready_for_query_error_preservation() {
     let route = Route::default();
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
 
     // Create ReadyForQuery messages - one with transaction error, one normal
     let rfq_error = ReadyForQuery::error();
@@ -201,7 +201,7 @@ fn test_ready_for_query_error_preservation() {
 fn test_omni_command_complete_not_summed() {
     // For omni-sharded tables, we should NOT sum row counts across shards.
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
-    let mut multi_shard = MultiShard::new(vec![0, 1, 2], &route);
+    let mut multi_shard = MultiShard::new(3, &route);
 
     let backend1 = BackendPid::for_test(1);
     let backend2 = BackendPid::for_test(2);
@@ -240,7 +240,7 @@ fn test_omni_command_complete_not_summed() {
 fn test_omni_command_complete_uses_first_shard_row_count() {
     // For omni, we use the first shard's row count for consistency with DataRow behavior.
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
 
     let backend1 = BackendPid::for_test(1);
     let backend2 = BackendPid::for_test(2);
@@ -273,7 +273,7 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
 fn test_omni_data_rows_only_from_first_server() {
     // For omni-sharded tables with RETURNING, only forward DataRows from the first server.
     let route = Route::write(ShardWithPriority::new_table_omni(Shard::All)).with_omnisharded(true);
-    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+    let mut multi_shard = MultiShard::new(2, &route);
 
     let backend1 = BackendPid::for_test(1);
     let backend2 = BackendPid::for_test(2);
@@ -319,7 +319,7 @@ fn test_omni_data_rows_only_from_first_server() {
 fn test_pipelined_describe_forwards_every_group() {
     for shards in [1, 2] {
         let mut multi_shard = MultiShard::new(
-            (0..shards).collect(),
+            shards,
             &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
         );
 
@@ -351,7 +351,7 @@ fn test_pipelined_describe_forwards_every_group() {
 #[test]
 fn test_bind_result_formats_apply_per_statement() {
     let mut multi_shard = MultiShard::new(
-        vec![0, 1],
+        2,
         &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
     );
 
@@ -389,7 +389,7 @@ fn test_bind_result_formats_apply_per_statement() {
 #[test]
 fn test_ready_for_query_drops_pending_binds() {
     let mut multi_shard = MultiShard::new(
-        vec![0, 1],
+        2,
         &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
     );
 

@@ -88,6 +88,22 @@ impl Connection {
         Ok(())
     }
 
+    #[allow(unused)]
+    pub(crate) async fn ensure_connected(
+        &mut self,
+        request: &Request,
+        route: &Route,
+    ) -> Result<(), Error> {
+        match self.binding {
+            Binding::Direct(_, _) => Ok(()),
+            Binding::NotConnected => Err(Error::NotConnected),
+            Binding::MultiShard(ref mut servers) => {
+                Ok(servers.ensure_connected(request, route).await?)
+            }
+            Binding::Admin(_) => Ok(()),
+        }
+    }
+
     /// Send client request to mirrors.
     pub(crate) fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
         for mirror in self.cluster.mirrors() {
@@ -356,7 +372,9 @@ impl Connection {
     pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
         let servers: Vec<&Guard> = match self.binding {
             Binding::Direct(ref server, ..) => vec![server],
-            Binding::MultiShard(ref servers) => servers.iter().collect(),
+            Binding::MultiShard(ref servers) => {
+                servers.iter().map(|server| server.deref()).collect()
+            }
             _ => return Ok(()),
         };
 
