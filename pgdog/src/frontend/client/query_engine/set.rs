@@ -99,7 +99,11 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        context.params.reset_all();
+        context.params.reset_all(context.startup_params);
+        if !context.in_transaction() {
+            context.params.commit();
+            self.comms.update_params(context.params);
+        }
 
         if self.backend.connected() {
             self.execute(context, None).await?;

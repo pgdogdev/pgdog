@@ -762,3 +762,72 @@ async fn test_lock_timeout() {
         "lock_timeout should be cleared after RESET"
     );
 }
+
+#[tokio::test]
+async fn test_reset_all_restores_startup_parameters() {
+    for end in [None, Some("COMMIT"), Some("ROLLBACK")] {
+        let mut startup = Parameters::default();
+        startup.insert("search_path", "s1");
+        startup.insert("timezone", "Asia/Tokyo");
+        let mut client = TestClient::new_sharded(startup.clone()).await;
+
+        for query in [
+            "SET search_path TO runtime",
+            "SET timezone TO 'Europe/Paris'",
+            "SET statement_timeout TO '5s'",
+        ] {
+            client.send_simple(Query::new(query)).await;
+            client.read_until('Z').await.expect("SET completed");
+        }
+        if end.is_some() {
+            client.send_simple(Query::new("BEGIN")).await;
+            client.read_until('Z').await.expect("BEGIN completed");
+        }
+        client.send_simple(Query::new("RESET ALL")).await;
+        client.read_until('Z').await.expect("RESET ALL completed");
+
+        assert_eq!(
+            client.client().params.get("search_path"),
+            startup.get("search_path")
+        );
+        assert_eq!(
+            client.client().params.get("timezone"),
+            startup.get("timezone")
+        );
+        assert_eq!(client.client().params.get("statement_timeout"), None);
+
+        if let Some(end) = end {
+            client.send_simple(Query::new(end)).await;
+            client.read_until('Z').await.expect("transaction completed");
+        }
+        let (search_path, timezone, timeout) = if end == Some("ROLLBACK") {
+            (
+                "runtime",
+                "Europe/Paris",
+                Some(ParameterValue::String("5s".into())),
+            )
+        } else {
+            ("s1", "Asia/Tokyo", None)
+        };
+        assert_eq!(
+            client
+                .client()
+                .params
+                .get("search_path")
+                .and_then(ParameterValue::as_str),
+            Some(search_path)
+        );
+        assert_eq!(
+            client
+                .client()
+                .params
+                .get("timezone")
+                .and_then(ParameterValue::as_str),
+            Some(timezone)
+        );
+        assert_eq!(
+            client.client().params.get("statement_timeout"),
+            timeout.as_ref()
+        );
+    }
+}

@@ -271,9 +271,10 @@ impl Parameters {
         self.hash = Self::compute_hash(&self.params);
     }
 
-    /// Reset all tracked parameters.
-    pub(crate) fn reset_all(&mut self) {
+    /// Reset tracked parameters to their startup values, retaining rollback state.
+    pub(crate) fn reset_all(&mut self, startup: &Parameters) {
         let mut keys: Vec<String> = self.params.keys().cloned().collect();
+        keys.extend(startup.params.keys().cloned());
         keys.extend(self.transaction_params.keys().cloned());
         keys.extend(self.transaction_local_params.keys().cloned());
         keys.sort();
@@ -282,6 +283,9 @@ impl Parameters {
         for key in keys {
             if !UNTRACKED_PARAMS.contains(&key) {
                 self.reset(&key);
+                if let Some(value) = startup.params.get(&key) {
+                    self.insert_transaction(&key, value.clone(), false);
+                }
             }
         }
     }
@@ -864,7 +868,7 @@ mod test {
         }
 
         // Update local tracking
-        params.reset_all();
+        params.reset_all(&Parameters::default());
 
         // Verify params are reset to defaults on server
         let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
@@ -901,7 +905,7 @@ mod test {
         }
 
         // Update local tracking
-        params.reset_all();
+        params.reset_all(&Parameters::default());
 
         // Verify params are reset to defaults on server
         let timeout: Vec<String> = server.fetch_all("SHOW statement_timeout").await.unwrap();
@@ -1021,13 +1025,50 @@ mod test {
     }
 
     #[test]
+    fn test_reset_all_restores_startup_with_commit_and_rollback() {
+        let mut startup = Parameters::default();
+        startup.insert("search_path", "s1");
+        startup.insert("timezone", "Asia/Tokyo");
+        for rollback in [false, true] {
+            let mut params = startup.clone();
+            params.insert("search_path", "runtime");
+            params.insert("statement_timeout", "5s");
+            params.insert_transaction("search_path", "in_transaction", false);
+            params.insert_transaction("timezone", "Europe/Paris", true);
+
+            params.reset_all(&startup);
+
+            assert_eq!(params.get("search_path"), startup.get("search_path"));
+            assert_eq!(params.get("timezone"), startup.get("timezone"));
+            assert_eq!(params.get("statement_timeout"), None);
+            if rollback {
+                params.rollback();
+                assert_eq!(
+                    params.get("search_path"),
+                    Some(&ParameterValue::String("runtime".into()))
+                );
+                assert_eq!(
+                    params.get("statement_timeout"),
+                    Some(&ParameterValue::String("5s".into()))
+                );
+            } else {
+                params.commit();
+                params.rollback();
+                assert_eq!(params.get("search_path"), startup.get("search_path"));
+                assert_eq!(params.get("statement_timeout"), None);
+            }
+            assert_eq!(params.get("timezone"), startup.get("timezone"));
+        }
+    }
+
+    #[test]
     fn test_reset_all_basic() {
         let mut params = Parameters::default();
         params.insert("search_path", "public");
         params.insert("timezone", "UTC");
         params.insert("application_name", "myapp");
 
-        params.reset_all();
+        params.reset_all(&Parameters::default());
 
         // All tracked params should be removed
         assert_eq!(params.get("search_path"), None);
@@ -1042,7 +1083,7 @@ mod test {
         // "database" is in UNTRACKED_PARAMS
         params.insert("database", "mydb");
 
-        params.reset_all();
+        params.reset_all(&Parameters::default());
 
         // Tracked params should be removed
         assert_eq!(params.get("search_path"), None);
@@ -1059,7 +1100,7 @@ mod test {
         params.insert("search_path", "public");
         params.insert("timezone", "UTC");
 
-        params.reset_all();
+        params.reset_all(&Parameters::default());
         assert_eq!(params.get("search_path"), None);
         assert_eq!(params.get("timezone"), None);
 
@@ -1082,7 +1123,7 @@ mod test {
         params.insert("search_path", "public");
         params.insert("timezone", "UTC");
 
-        params.reset_all();
+        params.reset_all(&Parameters::default());
         params.commit();
 
         // After commit, rollback should not restore
@@ -1098,7 +1139,7 @@ mod test {
         params.insert_transaction("search_path", "transaction", false);
         params.insert_transaction("timezone", "local_tz", true);
 
-        params.reset_all();
+        params.reset_all(&Parameters::default());
 
         // All scopes should be cleared for tracked params
         assert_eq!(params.get("search_path"), None);
