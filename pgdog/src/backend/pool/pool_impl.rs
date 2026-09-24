@@ -307,7 +307,6 @@ impl Pool {
     }
 
     /// Connection pool unique identifier.
-    #[inline]
     pub(crate) fn id(&self) -> u64 {
         self.inner.id
     }
@@ -431,7 +430,6 @@ impl Pool {
     }
 
     /// Pool exclusive lock.
-    #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
         self.inner.inner.lock()
     }
@@ -442,25 +440,21 @@ impl Pool {
     /// advisory lock / manual pin, so `sv_locked` reflects reality per-pool.
     /// On checkin the `Taken` entry is removed entirely, so no explicit
     /// cleanup is needed on drop.
-    #[inline]
     pub(crate) fn set_locked(&self, backend: BackendPid, locked: bool) {
         self.lock().set_locked(backend, locked);
     }
 
     /// Internal notifications.
-    #[inline]
     pub(super) fn comms(&self) -> &Comms {
         &self.inner.comms
     }
 
     /// Pool address.
-    #[inline]
     pub(crate) fn addr(&self) -> &Address {
         &self.inner.addr
     }
 
     /// Get pool configuration.
-    #[inline]
     pub(crate) fn config(&self) -> &Config {
         &self.inner.config
     }

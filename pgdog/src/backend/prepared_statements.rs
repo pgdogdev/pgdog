@@ -26,7 +26,6 @@ use super::{
 
 /// Rough size of one local cache entry. Ignores the LRU node itself,
 /// so it undercounts a little.
-#[inline]
 fn entry_mem(s: &str) -> usize {
     s.len() + std::mem::size_of::<String>() + std::mem::size_of::<LocalStatement>()
 }
@@ -140,7 +139,6 @@ impl PreparedStatements {
     }
 
     /// Apply the pool's prepared statement settings.
-    #[inline]
     pub(crate) fn configure(&mut self, config: PreparedStatementsConfig) {
         self.config = config;
     }

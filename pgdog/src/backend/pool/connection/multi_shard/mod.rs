@@ -118,7 +118,6 @@ impl MultiShard {
         //  4. Pending Binds, pushed before this run
     }
 
-    #[inline]
     fn reset(&mut self) {
         self.request_state = RequestState::default();
         self.buffer = Buffer::default();
