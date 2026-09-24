@@ -113,7 +113,7 @@ fn advisory_locks_from_func_call(
 
         if hash_func_evaluated_to_num.is_some() {
             return vec![AdvisoryLock {
-                id: Some(hash_func_evaluated_to_num),
+                id: hash_func_evaluated_to_num,
                 unlock,
                 unlock_all: false,
                 scope,
