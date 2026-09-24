@@ -147,6 +147,11 @@ impl QueryEngine {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
+        // Queue up request to mirrors, if any.
+        // Do this before doing any acutal work
+        // to have accurate timings between queries.
+        self.backend.mirror(context.client_request);
+
         log_query_stdout(context);
 
         // Rewrite prepared statements.
@@ -180,11 +185,6 @@ impl QueryEngine {
         }
 
         self.hooks.before_execution(context)?;
-
-        // Queue up request to mirrors, if any.
-        // Do this before sending query to actual server
-        // to have accurate timings between queries.
-        self.backend.mirror(context.client_request);
 
         self.pending_explain = None;
 
