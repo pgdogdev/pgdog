@@ -260,15 +260,19 @@ impl MultiShard {
             self.buffer.mark_full();
 
             if !self.buffer.is_empty() {
+                // Helpers remain in the internal row through aggregation and
+                // sorting, then are removed before client-visible operations.
                 self.buffer
                     .aggregate(
                         self.route.aggregate(),
                         &self.decoder,
-                        self.route.aggregate_rewrite_plan(),
+                        &self.route.projection_rewrite_plan,
                     )
                     .map_err(Error::from)?;
 
                 self.buffer.sort(self.route.order_by(), &self.decoder);
+                self.buffer
+                    .drop_helper_columns(&self.route.projection_rewrite_plan, &self.decoder);
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
                 self.buffer.limit(self.route.limit());
             }
@@ -311,11 +315,11 @@ impl MultiShard {
         {
             // Only send it to the client once all shards sent it,
             // so we don't get early requests from clients.
-            let plan = self.route.aggregate_rewrite_plan();
+            let plan = &self.route.projection_rewrite_plan;
             if plan.is_noop() {
                 forward = Some(message);
             } else {
-                let client_rd = rd.drop_columns(plan.drop_columns());
+                let client_rd = rd.drop_columns(plan.drop_columns(&rd));
                 forward = Some(client_rd.message());
             }
 

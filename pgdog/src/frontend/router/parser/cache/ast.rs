@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Instant;
 
+use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tracing::warn;
@@ -14,6 +15,7 @@ use crate::config::Role;
 use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
+use crate::frontend::router::parser::rewrite::statement::projection::PostRouteRewrite;
 use crate::frontend::router::sharding::ShardOrLookup;
 
 /// Abstract syntax tree (query) cache entry,
@@ -40,6 +42,9 @@ pub(crate) struct AstInner {
     pub(crate) stats: Mutex<Stats>,
     /// Rewrite plan.
     pub(crate) rewrite_plan: RewritePlan,
+    /// Lazily generated cross-shard SQL and response metadata. This is derived
+    /// only from the AST so Bind values cannot permanently change a cache entry.
+    pub(crate) post_route_rewrite: OnceCell<Option<PostRouteRewrite>>,
     /// Original query.
     pub(crate) query_without_comment: Arc<str>,
 }
@@ -51,6 +56,7 @@ impl AstInner {
             ast,
             stats: Mutex::new(Stats::new()),
             rewrite_plan: RewritePlan::default(),
+            post_route_rewrite: OnceCell::new(),
             query_without_comment: "".into(),
         }
     }
@@ -121,6 +127,7 @@ impl Ast {
                 stats: Mutex::new(stats),
                 ast,
                 rewrite_plan,
+                post_route_rewrite: OnceCell::new(),
                 query_without_comment: query.query_without_comment.into(),
             }),
         })

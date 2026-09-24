@@ -3,7 +3,8 @@ use crate::frontend::router::parser::aggregate::{Aggregate, AggregateFunction};
 use itertools::*;
 use pg_raw_parse::{Node, make, nodes};
 
-use super::{AggregateRewritePlan, HelperKind, HelperMapping, RewriteOutput};
+use super::{AggregateHelper, HelperKind};
+use crate::frontend::router::parser::rewrite::statement::projection::ProjectionRewritePlan;
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
 /// variance-related functions that require additional helper aggregates when run
@@ -17,8 +18,8 @@ impl AggregatesRewrite {
         select: &mut nodes::SelectStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
         aggregate: &Aggregate,
-    ) -> RewriteOutput {
-        let mut plan = AggregateRewritePlan::new();
+    ) -> ProjectionRewritePlan {
+        let mut plan = ProjectionRewritePlan::default();
 
         let helper_nodes = aggregate
             .targets()
@@ -37,15 +38,13 @@ impl AggregatesRewrite {
                     .into_iter()
                     .map(move |spec| (target, spec))
             })
-            .enumerate()
-            .map(|(idx, (target, HelperSpec { func, kind }))| {
+            .map(|(target, HelperSpec { func, kind })| {
                 let helper_alias =
                     format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
                 let node = mem.make_res_target(Some(&helper_alias), mem.empty(), func.uncast());
 
-                plan.add_helper(HelperMapping {
+                plan.aggregate_helpers.push(AggregateHelper {
                     target_column: target.column(),
-                    helper_column: select.target_list().len() + idx,
                     distinct: target.is_distinct(),
                     kind,
                     alias: helper_alias,
@@ -54,14 +53,12 @@ impl AggregatesRewrite {
             })
             .collect::<Vec<_>>();
 
-        if helper_nodes.is_empty() {
-            RewriteOutput::default()
-        } else {
+        if !helper_nodes.is_empty() {
             select
                 .target_list_mut()
                 .extend(mem, mem.make_list(&helper_nodes));
-            RewriteOutput::new(plan)
         }
+        plan
     }
 
     fn build_sum_of_squares_func<'a>(
@@ -163,10 +160,10 @@ mod tests {
     use crate::frontend::router::parser::aggregate::Aggregate;
     use pg_raw_parse::{Node, Owned, make, nodes};
 
-    fn rewrite(sql: &str) -> (Owned<nodes::SelectStmt>, RewriteOutput) {
+    fn rewrite(sql: &str) -> (Owned<nodes::SelectStmt>, ProjectionRewritePlan) {
         let ast = pg_raw_parse::parse(sql).unwrap();
 
-        let mut output = None;
+        let mut plan = None;
         let select = make::owned(|mem| {
             let Node::SelectStmt(stmt) = ast.stmts().next().unwrap() else {
                 unreachable!("not a select");
@@ -174,32 +171,31 @@ mod tests {
             let mut stmt = mem.make_unique(stmt);
 
             let aggregate = Aggregate::parse(&stmt, &Default::default());
-            output = Some(AggregatesRewrite::rewrite_select(
+            plan = Some(AggregatesRewrite::rewrite_select(
                 &mut stmt.as_mut(),
                 mem,
                 &aggregate,
             ));
             stmt
         });
-        (select, output.unwrap())
+        (select, plan.unwrap())
     }
 
     #[test]
     fn rewrite_engine_noop() {
-        let (ast, output) = rewrite("SELECT COUNT(price) FROM menu");
-        assert!(output.plan.is_noop());
+        let (ast, plan) = rewrite("SELECT COUNT(price) FROM menu");
+        assert!(plan.is_noop());
         assert_eq!(ast.target_list().len(), 1);
     }
 
     #[test]
     fn rewrite_engine_adds_helper() {
-        let (ast, output) = rewrite("SELECT AVG(price) FROM menu");
-        assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1]);
-        assert_eq!(output.plan.helpers().len(), 1);
-        let helper = &output.plan.helpers()[0];
+        let (ast, plan) = rewrite("SELECT AVG(price) FROM menu");
+        assert!(!plan.is_noop());
+        assert_eq!(plan.aggregate_helpers.len(), 1);
+        let helper = &plan.aggregate_helpers[0];
         assert_eq!(helper.target_column, 0);
-        assert_eq!(helper.helper_column, 1);
+        assert_eq!(helper.alias, "__pgdog_count_col0");
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -215,12 +211,11 @@ mod tests {
 
     #[test]
     fn rewrite_engine_handles_mismatched_pair() {
-        let (ast, output) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
-        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2]);
-        assert_eq!(output.plan.helpers().len(), 1);
-        let helper = &output.plan.helpers()[0];
+        let (ast, plan) = rewrite("SELECT COUNT(price::numeric), AVG(price) FROM menu");
+        assert_eq!(plan.aggregate_helpers.len(), 1);
+        let helper = &plan.aggregate_helpers[0];
         assert_eq!(helper.target_column, 1);
-        assert_eq!(helper.helper_column, 2);
+        assert_eq!(helper.alias, "__pgdog_count_col1");
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -238,18 +233,17 @@ mod tests {
 
     #[test]
     fn rewrite_engine_multiple_avg_helpers() {
-        let (ast, output) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
-        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[2, 3]);
-        assert_eq!(output.plan.helpers().len(), 2);
+        let (ast, plan) = rewrite("SELECT AVG(price), AVG(discount) FROM menu");
+        assert_eq!(plan.aggregate_helpers.len(), 2);
 
-        let helper_price = &output.plan.helpers()[0];
+        let helper_price = &plan.aggregate_helpers[0];
         assert_eq!(helper_price.target_column, 0);
-        assert_eq!(helper_price.helper_column, 2);
+        assert_eq!(helper_price.alias, "__pgdog_count_col0");
         assert!(matches!(helper_price.kind, HelperKind::Count));
 
-        let helper_discount = &output.plan.helpers()[1];
+        let helper_discount = &plan.aggregate_helpers[1];
         assert_eq!(helper_discount.target_column, 1);
-        assert_eq!(helper_discount.helper_column, 3);
+        assert_eq!(helper_discount.alias, "__pgdog_count_col1");
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
         let aggregate = Aggregate::parse(&ast, &Default::default());
@@ -266,14 +260,12 @@ mod tests {
 
     #[test]
     fn rewrite_engine_stddev_helpers() {
-        let (ast, output) = rewrite("SELECT STDDEV(price) FROM menu");
-        assert!(!output.plan.is_noop());
-        assert_eq!(output.plan.drop_columns().collect::<Vec<_>>(), &[1, 2, 3]);
-        assert_eq!(output.plan.helpers().len(), 3);
+        let (ast, plan) = rewrite("SELECT STDDEV(price) FROM menu");
+        assert!(!plan.is_noop());
+        assert_eq!(plan.aggregate_helpers.len(), 3);
 
-        let kinds: Vec<HelperKind> = output
-            .plan
-            .helpers()
+        let kinds: Vec<HelperKind> = plan
+            .aggregate_helpers
             .iter()
             .map(|helper| {
                 assert_eq!(helper.target_column, 0);

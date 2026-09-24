@@ -386,7 +386,7 @@ impl QueryParser {
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
                     )));
                 } else {
-                    self.select(statement, stmt, context)
+                    self.select(stmt, context)
                 }
             }
 
@@ -442,7 +442,7 @@ impl QueryParser {
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
-            Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(stmt, context),
 
             Node::DiscardStmt(stmt) => {
                 let target = match stmt.target {

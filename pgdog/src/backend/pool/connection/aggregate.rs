@@ -6,7 +6,7 @@ use std::mem;
 use crate::{
     frontend::router::parser::{
         Aggregate, AggregateFunction, AggregateTarget,
-        rewrite::statement::aggregate::{AggregateRewritePlan, HelperKind},
+        rewrite::statement::{aggregate::HelperKind, projection::ProjectionRewritePlan},
     },
     net::{
         Decoder,
@@ -245,7 +245,7 @@ impl<'a> Aggregates<'a> {
         rows: &'a VecDeque<DataRow>,
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Option<Self> {
         let mut helper_columns: HashMap<usize, HelperColumns> = HashMap::new();
 
@@ -262,7 +262,7 @@ impl<'a> Aggregates<'a> {
             }
         }
 
-        for helper in plan.helpers() {
+        for helper in &plan.aggregate_helpers {
             let Some(index) = decoder.row_description().field_index(&helper.alias) else {
                 continue;
             };
@@ -523,7 +523,7 @@ mod test {
         shard1.add("3");
         rows.push_back(shard1);
 
-        let plan = AggregateRewritePlan::default();
+        let plan = ProjectionRewritePlan::default();
         let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
             .unwrap()
             .aggregate()
@@ -571,7 +571,7 @@ mod test {
                 );
                 rows.push_back(row);
             }
-            let plan = AggregateRewritePlan::default();
+            let plan = ProjectionRewritePlan::default();
             let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
                 .expect("count aggregate")
                 .aggregate()
@@ -609,7 +609,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()
@@ -654,7 +654,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()
@@ -701,7 +701,7 @@ mod test {
             &rows,
             &decoder,
             &aggregate,
-            &AggregateRewritePlan::default(),
+            &ProjectionRewritePlan::default(),
         )
         .unwrap()
         .aggregate()
