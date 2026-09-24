@@ -108,7 +108,7 @@ impl QueryEngine {
         if self.backend.connected() {
             if !context.in_error() {
                 context.client_request.reset_params = Some(Box::new(ResetParams {
-                    client: context.params.clone(),
+                    client: context.params.tracked_state(),
                     startup: context.startup_params.tracked(),
                 }));
             }

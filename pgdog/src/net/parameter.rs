@@ -290,6 +290,21 @@ impl Parameters {
         }
     }
 
+    /// Backend-tracked parameters, including changes needed for commit or rollback.
+    pub(crate) fn tracked_state(&self) -> Self {
+        let mut tracked = self.clone();
+        for params in [
+            &mut tracked.params,
+            &mut tracked.transaction_params,
+            &mut tracked.transaction_local_params,
+            &mut tracked.reset_params,
+        ] {
+            params.retain(|name, _| !UNTRACKED_PARAMS.contains(name));
+        }
+        tracked.hash = Self::compute_hash(&tracked.params);
+        tracked
+    }
+
     /// Commit params we saved during the transaction.
     pub(crate) fn commit(&mut self) -> bool {
         debug!(
@@ -1029,6 +1044,7 @@ mod test {
         let mut startup = Parameters::default();
         startup.insert("search_path", "s1");
         startup.insert("timezone", "Asia/Tokyo");
+        startup.insert("user", "pgdog");
         for rollback in [false, true] {
             let mut params = startup.clone();
             params.insert("search_path", "runtime");
@@ -1041,6 +1057,8 @@ mod test {
             assert_eq!(params.get("search_path"), startup.get("search_path"));
             assert_eq!(params.get("timezone"), startup.get("timezone"));
             assert_eq!(params.get("statement_timeout"), None);
+            let mut params = params.tracked_state();
+            assert_eq!(params.get("user"), None);
             if rollback {
                 params.rollback();
                 assert_eq!(
