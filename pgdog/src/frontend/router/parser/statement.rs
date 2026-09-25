@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::StatementParameters;
 use crate::frontend::router::sharding::{varchar_extended, varchar_not_extended};
+use crate::net::ParameterWithFormat;
 use crate::util::ResultControlFlowExt;
 use itertools::*;
 use pg_raw_parse::walk::Recurse;
@@ -924,10 +925,10 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // Own the extracted values so the context can borrow them
             // past the match arms below.
             let translated: Option<Arc<str>>;
-            let param;
+            let mut param;
             let context = ContextBuilder::new(table);
-            let context = match value {
-                Value::Placeholder(pos) => {
+            let context = match &value {
+                place if let Some(pos) = place.placeholder_pos() => {
                     let bound = self
                         .bind
                         .map(|bind| bind.parameter(pos as usize - 1))
@@ -943,6 +944,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     if param.is_null() {
                         return Ok(Some(Shard::All));
                     }
+                    if matches!(&value, Value::Cast(_)) {
+                        param = ParameterWithFormat::new(param.parameter(), Format::Text);
+                    }
+                    // FIXME: We need to use the type from the statement's
+                    // ParameterDescription message here, not the type of the
+                    // column.
                     translated = match param.format() {
                         Format::Text => param
                             .text()
@@ -975,13 +982,13 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     // configured, and itoa formats it on the stack.
                     translated = if table.lookup_query.is_some() {
                         let mut buf = itoa::Buffer::new();
-                        self.translate_sharding_key(table, buf.format(val))
+                        self.translate_sharding_key(table, buf.format(*val))
                     } else {
                         None
                     };
                     match translated.as_deref() {
                         Some(translated) => context.data(translated),
-                        None => context.data(val),
+                        None => context.data(*val),
                     }
                 }
                 Value::Null => return Ok(Some(Shard::All)),
@@ -2604,6 +2611,33 @@ mod test {
             result,
             Ok(None),
             "Should not be able to route based on an unrecognized expr"
+        );
+    }
+
+    #[test]
+    fn test_column_with_value_and_cast() {
+        let cast_result = run_test_column_only(
+            "SELECT * FROM users WHERE tenant_id = ($1)::int4",
+            // Text parameter sent in binary format, then cast to int
+            Some(&Bind::new_params_codes(
+                "",
+                &[Parameter::new(b"1")],
+                &[Format::Binary],
+            )),
+        )
+        .unwrap();
+        let text_result = run_test_column_only(
+            "SELECT * FROM users WHERE tenant_id = $1",
+            Some(&Bind::new_params_codes(
+                "",
+                &[Parameter::new(b"1")],
+                &[Format::Text],
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            cast_result, text_result,
+            "Should interpret text param sent as binary then cast identically to param sent as text"
         );
     }
 

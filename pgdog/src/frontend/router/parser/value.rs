@@ -18,6 +18,7 @@ pub(crate) enum Value<'a> {
     Null,
     Placeholder(i32),
     Vector(Vector),
+    Cast(Box<Value<'a>>),
 }
 
 impl Display for Value<'_> {
@@ -37,6 +38,7 @@ impl Display for Value<'_> {
                     .join(",")
             ),
             Self::Placeholder(p) => write!(f, "${}", p),
+            Self::Cast(v) => v.fmt(f),
         }
     }
 }
@@ -47,6 +49,16 @@ impl Value<'_> {
     fn vector(self) -> Option<Vector> {
         match self {
             Self::Vector(vector) => Some(vector),
+            _ => None,
+        }
+    }
+
+    /// Get the position of a placeholder, if this is a placeholder or a cast
+    /// placeholder
+    pub(in crate::frontend) fn placeholder_pos(&self) -> Option<i32> {
+        match self {
+            Self::Placeholder(pos) => Some(*pos),
+            Self::Cast(inner) => inner.placeholder_pos(),
             _ => None,
         }
     }
@@ -89,7 +101,7 @@ impl<'a> TryFrom<Node<'a>> for Value<'a> {
         match value {
             Node::A_Const(c) => Ok(Self::from(c)),
             Node::ParamRef(pr) => Ok(Self::Placeholder(pr.number)),
-            Node::TypeCast(c) => Self::try_from(c.arg()),
+            Node::TypeCast(c) => Ok(Self::Cast(Box::new(Self::try_from(c.arg())?))),
             Node::A_Expr(expr @ nodes::A_Expr { kind: AEXPR_OP, .. })
                 if let Ok(n) = expr.name().into_iter().exactly_one()
                     && n.as_str() == Some("-")

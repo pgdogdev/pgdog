@@ -111,7 +111,7 @@ impl<'a> ParameterWithFormat<'a> {
         self.parameter.len < 0
     }
 
-    pub(crate) fn parameter(&self) -> &Parameter {
+    pub(crate) fn parameter(&self) -> &'a Parameter {
         self.parameter
     }
 }
