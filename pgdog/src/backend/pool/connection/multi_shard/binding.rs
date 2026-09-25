@@ -53,7 +53,7 @@ impl MultiBinding {
                 .map(|(server, shard)| LinkedServer {
                     server,
                     shard,
-                    linked: true,
+                    linked: false,
                 })
                 .collect(),
         }
@@ -73,7 +73,7 @@ impl MultiBinding {
         client_id: FrontendPid,
         params: &Parameters,
         transaction_start_stmt: Option<&str>,
-    ) -> Result<usize, super::Error> {
+    ) -> Result<usize, Error> {
         let futures = self
             .servers
             .iter_mut()
