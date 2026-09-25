@@ -275,7 +275,7 @@ pub(super) fn begin_copy_data(lsn: i64) -> CopyData {
     )
 }
 
-fn commit_copy_data(end_lsn: i64) -> CopyData {
+pub(super) fn commit_copy_data(end_lsn: i64) -> CopyData {
     xlog_copy_data(
         Commit {
             flags: 0,
