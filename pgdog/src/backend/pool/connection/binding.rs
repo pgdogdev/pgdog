@@ -16,6 +16,7 @@ use futures::future::join_all;
 
 use super::*;
 use crate::util::safe_sleep;
+use multi_shard::MultiBinding;
 
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
@@ -25,7 +26,7 @@ pub(crate) enum Binding {
     /// Admin database connection.
     Admin(AdminServer),
     /// Multi-shard transaction.
-    MultiShard(Vec<Guard>, Box<MultiShard>),
+    MultiShard(MultiBinding),
     /// Not connected.
     #[default]
     NotConnected,
@@ -47,8 +48,8 @@ impl Binding {
     pub(crate) fn force_close(&mut self) {
         match self {
             Binding::Direct(guard, _) => guard.stats_mut().state(State::ForceClose),
-            Binding::MultiShard(guards, _) => {
-                for guard in guards {
+            Binding::MultiShard(servers) => {
+                for guard in servers.iter_mut() {
                     guard.stats_mut().state(State::ForceClose);
                 }
             }
@@ -62,7 +63,7 @@ impl Binding {
     pub(crate) fn connected(&self) -> bool {
         match self {
             Binding::Direct(_, _) => true,
-            Binding::MultiShard(servers, _) => !servers.is_empty(),
+            Binding::MultiShard(servers) => !servers.is_empty(),
             Binding::Admin(_) => true,
             Binding::NotConnected => false,
         }
@@ -79,7 +80,7 @@ impl Binding {
     pub(crate) fn connected_servers(&self) -> usize {
         match self {
             Binding::Direct(_, _) => 1,
-            Binding::MultiShard(servers, _) => servers.len(),
+            Binding::MultiShard(servers) => servers.len(),
             Binding::Admin(_) => 1,
             _ => 0,
         }
@@ -94,40 +95,18 @@ impl Binding {
             },
 
             Binding::Admin(backend) => Ok(backend.read().await?),
-            Binding::MultiShard(shards, state) => {
-                if shards.is_empty() {
+            Binding::MultiShard(servers) => {
+                if servers.is_empty() {
                     loop {
                         safe_sleep(Duration::MAX).await;
                     }
                 } else {
-                    // Loop until we read a message from a shard
-                    // or there are no more messages to be read.
-                    loop {
-                        // Return all sorted data rows if any.
-                        if let Some(message) = state.get_server_message() {
-                            return Ok(message);
-                        }
-                        let mut read = false;
-                        for server in shards.iter_mut() {
-                            if !server.has_more_messages() {
-                                continue;
-                            }
-
-                            let message = server.read().await?;
-
-                            read = true;
-                            if let Some(message) = state.handle_server_message(message)? {
-                                return Ok(message);
-                            }
-                        }
-
-                        if !read {
-                            break;
-                        }
+                    if let Some(message) = servers.read().await? {
+                        return Ok(message);
                     }
 
                     loop {
-                        state.query_complete();
+                        servers.state_mut().query_complete();
                         safe_sleep(Duration::MAX).await;
                     }
                 }
@@ -139,54 +118,9 @@ impl Binding {
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
-
             Binding::Direct(server, _) => server.send(client_request).await,
-
             Binding::NotConnected => Err(Error::NotConnected),
-
-            Binding::MultiShard(servers, state) => {
-                let mut shards_sent = servers.len();
-                let mut futures = Vec::new();
-
-                for (position, server) in servers.iter_mut().enumerate() {
-                    // Map positional index to actual shard number.
-                    // When only a subset of shards is connected (Shard::Multi binding),
-                    // positional indices don't match actual shard numbers.
-                    let shard = state.shard_number(position);
-                    let send = match client_request.route().shard() {
-                        Shard::Direct(s) => {
-                            shards_sent = 1;
-                            *s == shard
-                        }
-                        Shard::Multi(shards) => {
-                            shards_sent = shards.len();
-                            shards.contains(&shard)
-                        }
-                        Shard::All => true,
-                    };
-
-                    if send {
-                        futures.push(server.send(client_request));
-                    }
-                }
-
-                let results = join_all(futures).await;
-
-                for result in results {
-                    result?;
-                }
-
-                // For Sync-only requests, update shards count but don't reset counters.
-                // Sync needs correct shards for ReadyForQuery counting, but we must
-                // preserve buffered CommandComplete from previous queries.
-                if client_request.is_sync_only() {
-                    state.update_shards(shards_sent);
-                } else {
-                    state.update(shards_sent, client_request.route());
-                }
-
-                Ok(())
-            }
+            Binding::MultiShard(servers) => servers.send(client_request).await,
         }
     }
 
@@ -203,72 +137,16 @@ impl Binding {
         route: &Route,
     ) -> Result<(), Error> {
         match self {
-            Binding::Direct(server, ..) => {
-                server.send_ignore(message).await?;
-            }
-            Binding::MultiShard(servers, state) => {
-                if !servers.is_empty() {
-                    let mut futures = Vec::new();
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
-                        let send = match route.shard() {
-                            Shard::Direct(s) => *s == shard,
-                            Shard::Multi(shards) => shards.contains(&shard),
-                            Shard::All => true,
-                        };
-                        if send {
-                            futures.push(server.send_ignore(message));
-                        }
-                    }
-                    let results = join_all(futures).await;
-
-                    for result in results {
-                        result?;
-                    }
-                }
-            }
-
-            _ => return Err(Error::NotConnected),
+            Binding::Direct(server, ..) => server.send_ignore(message).await,
+            Binding::MultiShard(servers) => servers.send_ignore(message, route).await,
+            _ => Err(Error::NotConnected),
         }
-
-        Ok(())
     }
 
     /// Send copy messages to shards they are destined to go.
     pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, state) => {
-                for row in rows {
-                    for (position, server) in servers.iter_mut().enumerate() {
-                        let shard = state.shard_number(position);
-                        match row.shard() {
-                            Shard::Direct(row_shard) => {
-                                if shard == *row_shard {
-                                    server
-                                        .send_one(&ProtocolMessage::from(row.message()))
-                                        .await?;
-                                }
-                            }
-
-                            Shard::All => {
-                                server
-                                    .send_one(&ProtocolMessage::from(row.message()))
-                                    .await?;
-                            }
-
-                            Shard::Multi(multi) => {
-                                if multi.contains(&shard) {
-                                    server
-                                        .send_one(&ProtocolMessage::from(row.message()))
-                                        .await?;
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(())
-            }
-
+            Binding::MultiShard(servers) => servers.send_copy(rows).await,
             Binding::Direct(server, ..) => {
                 for row in rows {
                     server
@@ -278,7 +156,6 @@ impl Binding {
 
                 Ok(())
             }
-
             _ => Err(Error::CopyNotConnected),
         }
     }
@@ -287,7 +164,7 @@ impl Binding {
         match self {
             Binding::Admin(admin) => admin.done(),
             Binding::Direct(server, ..) => server.done(),
-            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.done()),
+            Binding::MultiShard(servers) => servers.iter().all(|s| s.done()),
             _ => true,
         }
     }
@@ -296,8 +173,8 @@ impl Binding {
         match self {
             Binding::Admin(admin) => !admin.done(),
             Binding::Direct(server, ..) => server.has_more_messages(),
-            Binding::MultiShard(servers, state) => {
-                state.has_more_messages() || servers.iter().any(|s| s.has_more_messages())
+            Binding::MultiShard(servers) => {
+                servers.state().has_more_messages() || servers.iter().any(|s| s.has_more_messages())
             }
             _ => false,
         }
@@ -307,7 +184,7 @@ impl Binding {
     pub(crate) fn out_of_sync(&self) -> bool {
         match self {
             Binding::Direct(server, ..) => server.out_of_sync(),
-            Binding::MultiShard(servers, _state) => servers.iter().any(|s| s.out_of_sync()),
+            Binding::MultiShard(servers) => servers.iter().any(|s| s.out_of_sync()),
             _ => false,
         }
     }
@@ -322,7 +199,7 @@ impl Binding {
                 );
                 server.stats().get_state() == state
             }
-            Binding::MultiShard(servers, _) => servers.iter().all(|s| {
+            Binding::MultiShard(servers) => servers.iter().all(|s| {
                 debug!(
                     "server is in \"{}\" state [{}]",
                     s.stats().get_state(),
@@ -346,7 +223,7 @@ impl Binding {
                 result.extend(server.execute(query).await?);
             }
 
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 let futures = servers
                     .iter_mut()
                     .map(|server| server.execute(query.clone()));
@@ -404,7 +281,7 @@ impl Binding {
         ignore_missing: bool,
     ) -> Result<(), Error> {
         match self {
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 Self::two_pc_on_guards(servers, transaction, phase, ignore_missing).await
             }
 
@@ -423,7 +300,7 @@ impl Binding {
             Binding::Direct(server, ..) => {
                 server.link_client(id, params, transaction_start_stmt).await
             }
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 let futures = servers
                     .iter_mut()
                     .map(|server| server.link_client(id, params, transaction_start_stmt));
@@ -447,7 +324,7 @@ impl Binding {
     pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
         match self {
             Binding::Direct(server, ..) => server.transaction_params_hook(rollback),
-            Binding::MultiShard(servers, _) => servers
+            Binding::MultiShard(servers) => servers
                 .iter_mut()
                 .for_each(|server| server.transaction_params_hook(rollback)),
             _ => (),
@@ -457,7 +334,7 @@ impl Binding {
     pub(crate) fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Direct(server, ..) => server.changed_params().clone(),
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 if let Some(first) = servers.first() {
                     first.changed_params().clone()
                 } else {
@@ -471,9 +348,7 @@ impl Binding {
     pub(super) fn dirty(&mut self) {
         match self {
             Binding::Direct(server, ..) => server.mark_dirty(true),
-            Binding::MultiShard(servers, _state) => {
-                servers.iter_mut().for_each(|s| s.mark_dirty(true))
-            }
+            Binding::MultiShard(servers) => servers.iter_mut().for_each(|s| s.mark_dirty(true)),
             _ => (),
         }
     }
@@ -483,8 +358,8 @@ impl Binding {
     pub(super) fn set_locked(&mut self, locked: bool) {
         match self {
             Binding::Direct(server, ..) => server.set_locked(locked),
-            Binding::MultiShard(servers, _) => {
-                for server in servers {
+            Binding::MultiShard(servers) => {
+                for server in servers.iter_mut() {
                     server.set_locked(locked);
                 }
             }
@@ -499,7 +374,7 @@ impl Binding {
     pub(super) fn is_locked(&self) -> bool {
         match self {
             Binding::Direct(server, ..) => server.is_locked(),
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 debug_assert!(
                     servers.iter().all(|s| s.is_locked()) == servers.iter().any(|s| s.is_locked()),
                     "Shards disagree on lock status {servers:?}"
@@ -513,7 +388,7 @@ impl Binding {
 
     pub(crate) fn is_multishard(&self) -> bool {
         match self {
-            Binding::MultiShard(servers, _) => !servers.is_empty(),
+            Binding::MultiShard(servers) => !servers.is_empty(),
             _ => false,
         }
     }
@@ -530,7 +405,7 @@ impl Binding {
     pub(crate) fn in_copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
-            Binding::MultiShard(servers, _state) => servers.iter().all(|s| s.in_copy_mode()),
+            Binding::MultiShard(servers) => servers.iter().all(|s| s.in_copy_mode()),
             Binding::Direct(server, ..) => server.in_copy_mode(),
             _ => false,
         }
@@ -541,7 +416,7 @@ impl Binding {
         Ok(match self {
             Binding::Admin(_) => 1,
             Binding::Direct(_, _) => 1,
-            Binding::MultiShard(servers, _) => {
+            Binding::MultiShard(servers) => {
                 if servers.is_empty() {
                     return Err(Error::MultiShardNotConnected);
                 } else {
