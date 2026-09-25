@@ -105,7 +105,6 @@ impl Describe {
         }
     }
 
-    #[inline]
     pub(crate) fn statement(&self) -> &str {
         // SAFETY: Name is checked for utf-8 in Bytes::from_bytes
         unsafe { from_utf8_unchecked(&self.payload[6..self.payload.len() - 1]) }
