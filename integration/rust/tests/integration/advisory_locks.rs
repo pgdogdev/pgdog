@@ -1,4 +1,7 @@
-use integration_tests_rust::setup::connections_sqlx;
+use std::process;
+
+use integration_tests_rust::setup::{admin_sqlx, connections_sqlx};
+use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Row, postgres::PgConnectOptions};
 
 // Same test as `advisory_locks_working_generally` but with an inner hashtext() & hashtextextended func.
 // We previously weren't parsing out and resolving hash funcs that can be used inside advisory locks.
@@ -205,4 +208,44 @@ pub async fn advisory_locks_multiple_shards() {
             .message()
             .contains("the advisory locks in this query resolve to different shards")
     );
+}
+
+#[tokio::test]
+async fn advisory_unlock_null_parameter_keeps_session_lock()
+-> Result<(), Box<dyn std::error::Error>> {
+    let application = format!("advisory_unlock_scope_{}", process::id());
+    let options: PgConnectOptions =
+        "postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded".parse()?;
+    let mut owner = PgConnection::connect_with(&options.application_name(&application)).await?;
+    let admin = admin_sqlx().await;
+
+    owner.execute("SELECT pg_advisory_lock(2026092109)").await?;
+    assert!(advisory_client_locked(&mut owner, &admin, &application).await?);
+
+    let result: Option<bool> = sqlx::query_scalar("SELECT pg_advisory_unlock($1::bigint)")
+        .bind(None::<i64>)
+        .fetch_one(&mut owner)
+        .await?;
+    assert_eq!(result, None);
+    assert!(advisory_client_locked(&mut owner, &admin, &application).await?);
+
+    owner.execute("SELECT pg_advisory_unlock_all()").await?;
+    assert!(!advisory_client_locked(&mut owner, &admin, &application).await?);
+    owner.close().await?;
+    Ok(())
+}
+
+async fn advisory_client_locked(
+    owner: &mut PgConnection,
+    admin: &Pool<Postgres>,
+    application: &str,
+) -> Result<bool, sqlx::Error> {
+    // Finish another request so SHOW CLIENTS observes the preceding unlock.
+    owner.execute("SELECT 1").await?;
+    let clients = sqlx::query("SHOW CLIENTS").fetch_all(admin).await?;
+    let client = clients
+        .iter()
+        .find(|row| row.get::<String, _>("application_name") == application)
+        .expect("owner appears in SHOW CLIENTS");
+    client.try_get("locked")
 }
