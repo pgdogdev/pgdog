@@ -18,7 +18,7 @@ impl StatementRewrite<'_> {
     ///   or replace DEFAULT values with pgdog.unique_id()
     /// - `rewrite_omni`: Rewrite only omnisharded tables using pgdog.unique_id()
     /// - `rewrite_omni_global`: Rewrite only omnisharded tables using
-    ///   pgdog.nextval('[schema_]table_column_seq')
+    ///   pgdog.nextval('schema_table_column_seq')
     ///
     /// This runs before function replacement so injected calls will be
     /// processed by the unique_id and nextval rewriters.
@@ -70,11 +70,8 @@ impl StatementRewrite<'_> {
                 RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
             ) && !is_sharded;
 
-        let sequence_prefix =
-            (mode == RewriteMode::RewriteOmniGlobal && !is_sharded).then(|| match table.schema {
-                Some(schema) => format!("{schema}_{}", table.name),
-                None => table.name.to_owned(),
-            });
+        let sequence_prefix = (mode == RewriteMode::RewriteOmniGlobal && !is_sharded)
+            .then(|| format!("{}_{}", relation.schema(), relation.name));
 
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
