@@ -3,37 +3,93 @@ use std::ops::{Deref, DerefMut};
 use futures::future::join_all;
 
 use crate::backend::Error;
+use crate::backend::pool::Request;
 use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Shard;
 use crate::frontend::router::{CopyRow, Route};
-use crate::net::{Message, ProtocolMessage};
+use crate::net::{FrontendPid, Message, Parameters, ProtocolMessage};
 
 use super::super::Guard;
 use super::MultiShard;
 
+#[derive(Debug)]
+pub(crate) struct LinkedServer {
+    server: Guard,
+    // Shard number.
+    shard: usize,
+    // Parameters were sync'ed.
+    linked: bool,
+}
+
+impl Deref for LinkedServer {
+    type Target = Guard;
+
+    fn deref(&self) -> &Self::Target {
+        &self.server
+    }
+}
+
+impl DerefMut for LinkedServer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.server
+    }
+}
+
 /// Handle talking to multiple servers for cross-shard queries.
 #[derive(Debug)]
 pub(crate) struct MultiBinding {
-    servers: Vec<Guard>,
+    servers: Vec<LinkedServer>,
     state: Box<MultiShard>,
-}
-
-impl From<Vec<Guard>> for MultiBinding {
-    fn from(value: Vec<Guard>) -> Self {
-        Self {
-            servers: value,
-            state: Box::default(),
-        }
-    }
 }
 
 impl MultiBinding {
     /// Create new multi-shard binding.
     pub(crate) fn new(servers: Vec<Guard>, shard_indices: Vec<usize>, route: &Route) -> Self {
         Self {
-            state: Box::new(MultiShard::new(shard_indices, route)),
-            servers,
+            state: Box::new(MultiShard::new(servers.len(), route)),
+            servers: servers
+                .into_iter()
+                .zip(shard_indices.into_iter())
+                .map(|(server, shard)| LinkedServer {
+                    server,
+                    shard,
+                    linked: false,
+                })
+                .collect(),
         }
+    }
+
+    #[allow(unused)]
+    pub(crate) async fn ensure_connected(
+        &mut self,
+        request: &Request,
+        route: &Route,
+    ) -> Result<(), super::Error> {
+        Ok(())
+    }
+
+    pub(crate) async fn link_client(
+        &mut self,
+        client_id: FrontendPid,
+        params: &Parameters,
+        transaction_start_stmt: Option<&str>,
+    ) -> Result<usize, Error> {
+        let futures = self
+            .servers
+            .iter_mut()
+            .filter(|server| !server.linked)
+            .map(|server| server.link_client(client_id, params, transaction_start_stmt));
+        let results = join_all(futures).await;
+
+        let mut max = 0;
+        for result in results {
+            let synced = result?;
+            if max < synced {
+                max = synced;
+            }
+        }
+
+        Ok(max)
     }
 
     /// Read-only handle to internal state.
@@ -83,11 +139,11 @@ impl MultiBinding {
         let mut shards_sent = self.servers.len();
         let mut futures = Vec::new();
 
-        for (position, server) in self.servers.iter_mut().enumerate() {
+        for server in self.servers.iter_mut() {
             // Map positional index to actual shard number.
             // When only a subset of shards is connected (Shard::Multi binding),
             // positional indices don't match actual shard numbers.
-            let shard = self.state.shard_number(position);
+            let shard = server.shard;
             let send = match client_request.route().shard() {
                 Shard::Direct(s) => {
                     shards_sent = 1;
@@ -134,8 +190,8 @@ impl MultiBinding {
         }
 
         let mut futures = Vec::new();
-        for (position, server) in self.servers.iter_mut().enumerate() {
-            let shard = self.state.shard_number(position);
+        for server in self.servers.iter_mut() {
+            let shard = server.shard;
             let send = match route.shard() {
                 Shard::Direct(s) => *s == shard,
                 Shard::Multi(shards) => shards.contains(&shard),
@@ -157,8 +213,8 @@ impl MultiBinding {
     /// Send COPY rows to all shards.
     pub(crate) async fn send_copy(&mut self, rows: Vec<CopyRow>) -> Result<(), Error> {
         for row in rows {
-            for (position, server) in self.servers.iter_mut().enumerate() {
-                let shard = self.state.shard_number(position);
+            for server in self.servers.iter_mut() {
+                let shard = server.shard;
                 match row.shard() {
                     Shard::Direct(row_shard) => {
                         if shard == *row_shard {
@@ -190,7 +246,7 @@ impl MultiBinding {
 }
 
 impl Deref for MultiBinding {
-    type Target = Vec<Guard>;
+    type Target = Vec<LinkedServer>;
 
     fn deref(&self) -> &Self::Target {
         &self.servers
