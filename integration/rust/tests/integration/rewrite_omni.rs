@@ -158,15 +158,13 @@ async fn test_omni_default_values_primary_keys() -> Result<(), Box<dyn std::erro
         .await?;
 
     let mut ids = Vec::new();
-    for columns in ["", "(value)", "(id)", "(value, id)"] {
-        let sql = format!(
-            "INSERT INTO public.omni_default_values {columns} DEFAULT VALUES RETURNING id, value"
-        );
+    let sql = "INSERT INTO public.omni_default_values DEFAULT VALUES RETURNING id, value";
+    for _ in 0..4 {
         for extended in [false, true] {
             let rows = if extended {
-                sqlx::query(&sql).fetch_all(&sharded).await?
+                sqlx::query(sql).fetch_all(&sharded).await?
             } else {
-                sqlx::raw_sql(&sql).fetch_all(&sharded).await?
+                sqlx::raw_sql(sql).fetch_all(&sharded).await?
             };
             assert_eq!(rows.len(), 1);
             let id: i64 = rows[0].try_get("id")?;

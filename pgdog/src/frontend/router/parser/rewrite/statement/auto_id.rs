@@ -77,31 +77,17 @@ impl StatementRewrite<'_> {
             });
 
         if rewrite && matches!(node.select_stmt(), Node::None) {
-            // DEFAULT VALUES has no SelectStmt. Give it one row so generated
-            // IDs are chosen once by PgDog and shared across all shards.
-            for column in &missing_columns {
-                node.cols_mut().push(
-                    mem,
-                    mem.make_res_target(Some(column), mem.empty(), mem.none())
-                        .uncast(),
-                );
-            }
-            let values: Vec<_> = node
-                .cols()
+            // DEFAULT VALUES has no SelectStmt or column list. Generate one
+            // row of primary keys; PostgreSQL supplies the other defaults.
+            let values: Vec<_> = missing_columns
                 .iter()
-                .map(|col| {
-                    let Node::ResTarget(target) = col else {
-                        unreachable!("InsertStmt.cols is always ResTarget");
-                    };
-                    let column = target.name().expect("INSERT column has a name");
-                    if present_pk_positions.iter().any(|(_, name)| *name == column)
-                        || missing_columns.contains(&column)
-                    {
-                        plan.auto_id_injected += 1;
-                        Self::auto_id_func_call(mem, column, sequence_prefix.as_deref()).uncast()
-                    } else {
-                        mem.make_node::<nodes::SetToDefault>().uncast()
-                    }
+                .map(|column| {
+                    node.cols_mut().push(
+                        mem,
+                        mem.make_res_target(Some(column), mem.empty(), mem.none())
+                            .uncast(),
+                    );
+                    Self::auto_id_func_call(mem, column, sequence_prefix.as_deref()).uncast()
                 })
                 .collect();
             let mut select = mem.make_node::<nodes::SelectStmt>();
@@ -109,6 +95,7 @@ impl StatementRewrite<'_> {
                 .as_mut()
                 .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
             node.set_select_stmt(select.uncast());
+            plan.auto_id_injected += missing_columns.len() as u16;
             self.rewritten = true;
             return Ok(());
         }
@@ -403,23 +390,26 @@ mod tests {
     #[test]
     fn test_rewrite_default_values_generates_primary_key() {
         let db_schema = make_schema_with_bigint_pk();
-        for columns in ["", "(name)", "(id)", "(name, id)"] {
+        for mode in [
+            RewriteMode::Rewrite,
+            RewriteMode::RewriteOmni,
+            RewriteMode::RewriteOmniGlobal,
+        ] {
             for prefix in ["", "PREPARE defaults AS "] {
                 let (sql, plan) = rewrite_sql_with_mode(
-                    &format!("{prefix}INSERT INTO users {columns} DEFAULT VALUES RETURNING id"),
+                    &format!("{prefix}INSERT INTO users DEFAULT VALUES RETURNING id"),
                     &db_schema,
-                    RewriteMode::Rewrite,
+                    mode,
                 )
                 .expect("DEFAULT VALUES rewrite");
-                assert_eq!(plan.unique_ids, 1, "{sql}");
                 assert_eq!(plan.auto_id_injected, 1, "{sql}");
+                assert_eq!(
+                    plan.unique_ids,
+                    u16::from(mode != RewriteMode::RewriteOmniGlobal)
+                );
                 assert!(!sql.contains("DEFAULT VALUES"), "{sql}");
                 assert!(sql.contains("RETURNING id"), "{sql}");
-                if columns.contains("name") {
-                    assert!(sql.contains("(name, id) VALUES (DEFAULT,"), "{sql}");
-                } else {
-                    assert!(sql.contains("(id) VALUES ("), "{sql}");
-                }
+                assert!(sql.contains("(id) VALUES ("), "{sql}");
             }
         }
     }
