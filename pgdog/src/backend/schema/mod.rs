@@ -570,6 +570,38 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_install_sharded_sequence_quoted_names() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut server = test_server().await;
+        server.execute_checked("BEGIN").await?;
+        server
+            .execute_checked(
+                r#"CREATE SCHEMA "tenant's ""Schema";
+                   CREATE TABLE "tenant's ""Schema"."Order's ""Table" (
+                       "row's ""ID" BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+                   )"#,
+            )
+            .await?;
+
+        Schema::install_server(&mut server).await?;
+        server
+            .execute_checked(
+                "INSERT INTO pgdog.config (shard, shards)
+                 SELECT 0, 1 WHERE NOT EXISTS (SELECT 1 FROM pgdog.config)",
+            )
+            .await?;
+        let query = r#"INSERT INTO "tenant's ""Schema"."Order's ""Table"
+                       DEFAULT VALUES RETURNING "row's ""ID""#;
+        let first = server.fetch_all::<i64>(query).await?;
+        let second = server.fetch_all::<i64>(query).await?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_ne!(first, second);
+        server.execute_checked("ROLLBACK").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_loading_aggregate_functions() {
         let mut server = test_server().await;
         server.execute_checked("BEGIN").await.unwrap();
