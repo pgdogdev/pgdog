@@ -242,7 +242,7 @@ async fn advisory_client_locked(
 ) -> Result<bool, sqlx::Error> {
     // Finish another request so SHOW CLIENTS observes the preceding unlock.
     owner.execute("SELECT 1").await?;
-    let clients = sqlx::query("SHOW CLIENTS").fetch_all(admin).await?;
+    let clients = admin.fetch_all("SHOW CLIENTS").await?;
     let client = clients
         .iter()
         .find(|row| row.get::<String, _>("application_name") == application)
