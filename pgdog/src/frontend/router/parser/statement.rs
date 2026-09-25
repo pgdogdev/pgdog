@@ -3178,6 +3178,25 @@ mod test {
         }
 
         #[test]
+        fn unresolved_unlock_is_distinct_from_unlock_all() {
+            let null_bind = Bind::new_params("", &[Parameter::new_null()]);
+            for query in [
+                "SELECT pg_advisory_unlock(NULL::bigint)",
+                "SELECT pg_advisory_unlock($1::bigint)",
+                "SELECT pg_advisory_unlock(1, NULL::integer)",
+                "SELECT pg_advisory_unlock((SELECT 42))",
+                "SELECT pg_advisory_unlock(value) FROM (VALUES (NULL::bigint)) AS t(value)",
+            ] {
+                assert_eq!(
+                    locks_with_bind(query, Some(&null_bind)),
+                    vec![session(None, true)],
+                    "{query}"
+                );
+            }
+            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()]);
+        }
+
+        #[test]
         fn lock_and_unlock() {
             assert_eq!(
                 locks("SELECT pg_advisory_lock(42)"),
