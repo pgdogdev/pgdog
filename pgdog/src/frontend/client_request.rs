@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     frontend::router::Ast,
     net::{
-        Error, Flush, Parse, ProtocolMessage,
+        Error, Flush, Parse, Prepare, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
@@ -35,6 +35,10 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
+    /// SQL PREPARE completed by this request's Execute message.
+    pub(crate) sql_prepare: Option<Box<Prepare>>,
+    /// Per-execution SQL EXECUTE rewrite, parsed internally before Bind.
+    pub(crate) rewritten_parse: Option<Box<Parse>>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -60,6 +64,8 @@ impl ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
+            sql_prepare: None,
+            rewritten_parse: None,
         }
     }
 
@@ -92,6 +98,8 @@ impl ClientRequest {
         }
 
         self.messages.clear();
+        self.sql_prepare = None;
+        self.rewritten_parse = None;
         self.route = None;
         self.ast = None;
     }
@@ -218,6 +226,8 @@ impl ClientRequest {
             ast: self.ast.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
+            sql_prepare: self.sql_prepare.clone(),
+            rewritten_parse: self.rewritten_parse.clone(),
         }
     }
 
@@ -401,6 +411,8 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             ast: None,
             last_parse: None,
             anonymous_client_params: None,
+            sql_prepare: None,
+            rewritten_parse: None,
         }
     }
 }

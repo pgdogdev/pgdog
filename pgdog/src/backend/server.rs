@@ -475,8 +475,33 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
+        let mut rewritten_parse = client_request.rewritten_parse.as_deref();
         for message in client_request.messages.iter() {
-            self.send_one(message).await?;
+            match message {
+                ProtocolMessage::Bind(bind) if client_request.rewritten_parse.is_some() => {
+                    if let Some(parse) = rewritten_parse.take() {
+                        // Any injected SQL PREPARE runs first, since it destroys the
+                        // backend's unnamed statement.
+                        let mut parse = parse.clone();
+                        self.prepared_statements
+                            .rewrite_parse_data_types(&mut parse);
+                        self.send_ignore(&parse.into()).await?;
+                    }
+                    let mut bind = bind.clone();
+                    bind.anonymize();
+                    self.send_one(&bind.into()).await?;
+                }
+                ProtocolMessage::Execute(_)
+                    if let Some(prepare) = client_request.sql_prepare.as_deref() =>
+                {
+                    if self.prepared_statements.handle_execute_prepare(prepare)
+                        == HandleResult::Forward
+                    {
+                        self.send_stream(message).await?;
+                    }
+                }
+                _ => self.send_one(message).await?,
+            }
         }
         self.flush().await?;
 
