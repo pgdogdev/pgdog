@@ -33,7 +33,6 @@ pub(crate) enum ExecutionCode {
 }
 
 impl MemoryUsage for ExecutionCode {
-    #[inline(always)]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<ExecutionCode>()
     }
@@ -63,7 +62,6 @@ pub(crate) enum ExecutionItem {
 }
 
 impl MemoryUsage for ExecutionItem {
-    #[inline(always)]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<Self>()
     }
@@ -77,7 +75,6 @@ pub(crate) struct ProtocolState {
 }
 
 impl MemoryUsage for ProtocolState {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.queue.memory_usage() + self.simulated.memory_usage() + self.out_of_sync.memory_usage()
     }

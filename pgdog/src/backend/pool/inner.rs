@@ -91,20 +91,17 @@ impl Inner {
         }
     }
     /// Total number of connections managed by the pool.
-    #[inline]
     pub(super) fn total(&self) -> usize {
         self.idle() + self.checked_out()
     }
 
     /// The pool is full and will not
     /// create any more connections.
-    #[inline]
     pub(super) fn full(&self) -> bool {
         self.total() >= self.max()
     }
 
     /// Number of idle connections in the pool.
-    #[inline]
     pub(super) fn idle(&self) -> usize {
         self.idle_connections.len()
     }
@@ -116,25 +113,21 @@ impl Inner {
 
     /// Number of connections checked out of the pool
     /// by clients.
-    #[inline]
     pub(super) fn checked_out(&self) -> usize {
         self.taken.len()
     }
 
     /// Number of checked-out connections currently pinned to their client.
-    #[inline]
     pub(super) fn count_locked_connections(&self) -> usize {
         self.taken.locked_count()
     }
 
     /// Mark a checked-out backend as pinned (or release the pin)
-    #[inline]
     pub(super) fn set_locked(&mut self, backend: BackendPid, locked: bool) {
         self.taken.set_locked(backend, locked);
     }
 
     /// Cancel key for the server currently assigned to this client.
-    #[inline]
     pub(super) fn cancel_key(&self, client: FrontendPid) -> Option<&BackendKeyData> {
         self.taken.cancel_key(client)
     }
@@ -146,7 +139,6 @@ impl Inner {
 
     /// How many connections can be removed from the pool
     /// without affecting the minimum connection requirement.
-    #[inline]
     pub(super) fn can_remove(&self) -> usize {
         let total = self.total() as i64;
         let min = self.min() as i64;
@@ -155,7 +147,6 @@ impl Inner {
     }
 
     /// Minimum number of connections the pool should keep open.
-    #[inline]
     pub(super) fn min(&self) -> usize {
         RoleSpecificConfig {
             value: self.config.min,
@@ -166,7 +157,6 @@ impl Inner {
     }
 
     /// Maximum number of connections in the pool.
-    #[inline]
     pub(super) fn max(&self) -> usize {
         RoleSpecificConfig {
             value: self.config.max,
@@ -177,7 +167,6 @@ impl Inner {
     }
 
     /// Close connections that have been idle for longer than this.
-    #[inline]
     pub(super) fn idle_timeout(&self) -> Duration {
         RoleSpecificConfig {
             value: self.config.idle_timeout,
@@ -188,7 +177,6 @@ impl Inner {
     }
 
     /// The pool should create more connections now.
-    #[inline]
     pub(super) fn should_create(&self) -> ShouldCreate {
         let below_min = self.total() < self.min();
         let below_max = self.total() < self.max();
@@ -218,7 +206,6 @@ impl Inner {
     }
 
     /// Close connections that have exceeded the max age.
-    #[inline]
     pub(crate) fn close_old(&mut self, now: Instant) -> usize {
         let base_max_age = self.config.max_age;
         let mut removed = 0;
@@ -240,7 +227,6 @@ impl Inner {
 
     /// Close connections that have been idle for too long
     /// without affecting the minimum pool size requirement.
-    #[inline]
     pub(crate) fn close_idle(&mut self, now: Instant) -> usize {
         let (mut remove, mut removed) = (self.can_remove(), 0);
         let idle_timeout = self.idle_timeout();
@@ -267,13 +253,11 @@ impl Inner {
     }
 
     /// Pool configuration options.
-    #[inline]
     pub(super) fn config(&self) -> &Config {
         &self.config
     }
 
     /// Take connection from the idle pool.
-    #[inline(always)]
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
         match self.idle_connections.pop() {
             Some(conn) => {
@@ -288,7 +272,6 @@ impl Inner {
 
     /// Place connection back into the pool
     /// or give it to a waiting client.
-    #[inline]
     pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
         // Try to give it to a client that's been waiting, if any.
         let cancel_key = conn.key().clone();
@@ -313,26 +296,22 @@ impl Inner {
         Ok(())
     }
 
-    #[inline]
     pub(super) fn set_taken(&mut self, taken: Taken) {
         self.taken = taken;
     }
 
-    #[inline]
     pub(super) fn credentials_generation(&self) -> u64 {
         self.credentials_generation
     }
 
     /// Rotate credentials generation: evict all idle connections and bump the
     /// counter so checked-out connections are closed on check-in.
-    #[inline]
     pub(super) fn bump_credentials_generation(&mut self) {
         self.credentials_generation += 1;
         self.dump_idle();
     }
 
     /// Dump all idle connections.
-    #[inline]
     pub(super) fn dump_idle(&mut self) {
         for conn in &mut self.idle_connections {
             conn.disconnect_reason(DisconnectReason::Offline);
@@ -342,7 +321,6 @@ impl Inner {
 
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
-    #[inline]
     #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between containers is expensive.
     pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
@@ -361,7 +339,6 @@ impl Inner {
     /// Otherwise, drop the connection and close it.
     ///
     /// Return: true if the pool should be banned, false otherwise.
-    #[inline(always)]
     pub(super) fn maybe_check_in(
         &mut self,
         mut server: Box<Server>,
@@ -455,7 +432,6 @@ impl Inner {
     ///
     /// This happens if the waiter timed out, e.g. checkout timeout,
     /// or the caller got cancelled.
-    #[inline]
     pub(super) fn remove_waiter(&mut self, id: FrontendPid) {
         if let Some(waiter) = self.waiting.pop_front()
             && waiter.request.id != id
@@ -474,14 +450,12 @@ impl Inner {
         }
     }
 
-    #[inline]
     pub(super) fn close_waiters(&mut self, err: Error) {
         for waiter in self.waiting.drain(..) {
             let _ = waiter.tx.send(Err(err));
         }
     }
 
-    #[inline]
     pub(super) fn set_role(&mut self, role: Role) -> bool {
         let changed = role != self.role;
         self.role = role;

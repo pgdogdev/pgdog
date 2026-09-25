@@ -133,7 +133,6 @@ impl Stats {
     }
 
     /// Sync local stats to shared (called on I/O operations).
-    #[inline]
     fn sync_to_shared(&self) {
         self.shared.lock().stats = self.local;
     }
@@ -311,12 +310,10 @@ impl Stats {
         self.sync_to_shared();
     }
 
-    #[inline]
     pub(crate) fn memory_used(&mut self, stats: MemoryStats) {
         self.local.memory = *stats;
     }
 
-    #[inline]
     pub(crate) fn cleaned(&mut self) {
         self.local.last_checkout.cleaned += 1;
         self.local.total.cleaned += 1;
@@ -344,65 +341,55 @@ impl Stats {
     // Fast accessor methods - read from local, no locking.
 
     /// Get current state (local, no lock).
-    #[inline]
     pub(crate) fn get_state(&self) -> State {
         self.local.state
     }
 
     /// Get created_at timestamp (local, no lock).
-    #[inline]
     pub(crate) fn created_at(&self) -> Instant {
         self.local.created_at
     }
 
     /// Get last_used timestamp (local, no lock).
-    #[inline]
     pub(crate) fn last_used(&self) -> Instant {
         self.local.last_used
     }
 
     /// Get last_healthcheck timestamp (local, no lock).
-    #[inline]
     pub(crate) fn last_healthcheck(&self) -> Option<Instant> {
         self.local.last_healthcheck
     }
 
     /// Get pool_id (local, no lock).
-    #[inline]
     #[cfg(test)]
     pub(crate) fn pool_id(&self) -> u64 {
         self.local.pool_id
     }
 
     /// Set pool_id.
-    #[inline]
     pub(crate) fn set_pool_id(&mut self, pool_id: u64) {
         self.local.pool_id = pool_id;
         self.shared.lock().stats.pool_id = pool_id;
     }
 
     /// Get total counts (local, no lock).
-    #[inline]
     #[cfg(test)]
     pub(crate) fn total(&self) -> Counts {
         self.local.total
     }
 
     /// Get last_checkout counts (local, no lock).
-    #[inline]
     #[cfg(test)]
     pub(crate) fn last_checkout(&self) -> Counts {
         self.local.last_checkout
     }
 
     /// Clear client_id.
-    #[inline]
     pub(crate) fn clear_client_id(&mut self) {
         self.local.client_id = None;
     }
 
     /// Legacy update method - syncs local to shared.
-    #[inline]
     pub(crate) fn update(&self) {
         self.sync_to_shared();
     }
