@@ -1,4 +1,5 @@
 //! Schema operations.
+use crate::util::sql::quote_literal;
 pub(crate) mod cache;
 pub(crate) mod columns;
 pub(crate) mod relation;
@@ -159,8 +160,10 @@ impl Schema {
                 );
 
                 let query = format!(
-                    "SELECT pgdog.install_sharded_sequence('{}', '{}', '{}')",
-                    column.1.table_schema, column.1.table_name, column.1.column_name,
+                    "SELECT pgdog.install_sharded_sequence({}, {}, {})",
+                    quote_literal(&column.1.table_schema),
+                    quote_literal(&column.1.table_name),
+                    quote_literal(&column.1.column_name),
                 );
 
                 server.execute_checked(&query).await?;
