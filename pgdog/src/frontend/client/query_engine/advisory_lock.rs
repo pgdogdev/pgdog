@@ -13,12 +13,12 @@ pub(crate) struct AdvisoryLocks {
 impl AdvisoryLocks {
     pub(crate) fn merge(&mut self, locks: &ParserAdvisoryLocks) {
         for lock in locks.iter() {
-            if lock.unlock {
+            if lock.unlock_all {
+                self.locks.clear();
+            } else if lock.unlock {
+                // An unresolved individual unlock cannot release every tracked lock.
                 if let Some(id) = lock.id {
                     self.locks.remove(&id);
-                } else {
-                    // pg_advisory_unlock_all() clears every advisory lock.
-                    self.locks.clear();
                 }
             } else if let Some(id) = lock.id
                 && lock.scope == LockScope::Session
