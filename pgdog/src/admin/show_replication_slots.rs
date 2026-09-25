@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, Local};
 
 use crate::{
-    backend::replication::logical::status::ReplicationSlots,
+    backend::replication::logical::publisher::replication_slot::ReplicationSlots,
     net::{ToDataRowColumn, data_row::Data},
     util::{format_bytes, format_time},
 };
@@ -31,7 +31,8 @@ impl Command for ShowReplicationSlots {
             Field::text("lsn"),
             Field::text("lag"),
             Field::bigint("lag_bytes"),
-            Field::bool("copy_data"),
+            Field::bool("temporary"),
+            Field::bool("existing"),
             Field::text("last_transaction"),
             Field::bigint("last_transaction_ms"),
             Field::bigint("task_id"),
@@ -39,9 +40,7 @@ impl Command for ShowReplicationSlots {
         let mut messages = vec![rd.message()];
         let now = SystemTime::now();
 
-        for entry in ReplicationSlots::get().iter() {
-            let slot = entry.value();
-
+        for slot in ReplicationSlots::snapshot() {
             let last_transaction_ms = slot
                 .last_transaction
                 .and_then(|t| now.duration_since(t).ok())
@@ -59,7 +58,8 @@ impl Command for ShowReplicationSlots {
                 .add(slot.lsn.to_string().as_str())
                 .add(format_bytes(slot.lag as u64).as_str())
                 .add(slot.lag)
-                .add(slot.copy_data)
+                .add(slot.temporary)
+                .add(slot.existing)
                 .add(if let Some(s) = &last_transaction_str {
                     s.as_str().to_data_row_column()
                 } else {

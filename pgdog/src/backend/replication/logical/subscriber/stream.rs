@@ -963,13 +963,45 @@ impl StreamSubscriber {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::begin_copy_data;
+    use super::super::tests::{begin_copy_data, commit_copy_data};
     use super::*;
     use crate::config::config;
 
     fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
         StreamSubscriber::new(&cluster, vec![])
+    }
+
+    #[tokio::test]
+    async fn apply_begin_no_status_update() {
+        let cluster = Cluster::new_test(&config());
+        cluster.launch();
+        let mut stream = StreamSubscriber::new(&cluster, vec![]);
+        stream.connect().await.unwrap();
+
+        let result = stream.handle(begin_copy_data(1)).await;
+
+        assert!(
+            result.unwrap().is_none(),
+            "Begin event must not emit a status update"
+        );
+        cluster.shutdown();
+    }
+
+    #[tokio::test]
+    async fn apply_commit_emits_status_update() {
+        let cluster = Cluster::new_test(&config());
+        cluster.launch();
+        let mut stream = StreamSubscriber::new(&cluster, vec![]);
+        stream.connect().await.unwrap();
+
+        let result = stream.handle(commit_copy_data(1)).await;
+
+        assert!(
+            result.unwrap().is_some(),
+            "commit should produce a status update"
+        );
+        cluster.shutdown();
     }
 
     #[test]
