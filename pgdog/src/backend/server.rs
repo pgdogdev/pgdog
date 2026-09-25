@@ -1036,6 +1036,28 @@ impl Server {
         Ok(())
     }
 
+    /// Abort an unfinished extended transaction before its recovery Sync.
+    ///
+    /// Sync alone would commit a successful implicit transaction. The caller
+    /// must drain pending replies first; requests that already failed can use
+    /// normal synchronization because their implicit transaction has aborted.
+    pub(super) async fn rollback_and_synchronize(&mut self) -> Result<(), Error> {
+        let request = ServerRequest::parameterized("ROLLBACK", &[]);
+        self.send(&request.messages.into()).await?;
+
+        while !self.in_sync() {
+            self.read().await?;
+        }
+
+        if !self.in_transaction() {
+            self.stats.rollback();
+            self.transaction_params_hook(true);
+        }
+        self.re_synced = true;
+
+        Ok(())
+    }
+
     /// Drain any remaining messages on the server connection,
     /// attempting to return the connection into a synchronized state.
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
