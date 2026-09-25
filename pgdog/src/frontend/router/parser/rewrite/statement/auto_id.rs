@@ -704,25 +704,24 @@ mod tests {
                         path.iter().copied().map(str::to_owned).collect(),
                     );
                     let mut prepared = PreparedStatements::default();
-                    let mut rewriter = StatementRewrite::new(StatementRewriteContext {
-                        extended,
-                        prepared: extended,
-                        prepared_statements: &mut prepared,
-                        schema: &schema,
-                        db_schema: &db_schema,
+                    let context = crate::frontend::router::parser::AstContext {
+                        sharding_schema: schema.clone(),
+                        db_schema: db_schema.clone(),
                         user: "tenant_a",
                         search_path: Some(&search_path),
-                        timezone: None,
-                        query_timestamps: QueryTimestamps::default(),
-                    });
-                    let mut plan = RewritePlan::default();
-                    make::owned(|mem| {
-                        let mut ast = mem.parse(&sql).expect("valid INSERT");
-                        plan = rewriter
-                            .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
-                            .expect("rewrite succeeds");
-                        ast
-                    });
+                        ..Default::default()
+                    };
+                    let query = if extended {
+                        crate::frontend::BufferedQuery::Prepared(crate::net::Parse::new_anonymous(
+                            &sql,
+                        ))
+                    } else {
+                        crate::frontend::BufferedQuery::Query(crate::net::Query::new(&sql))
+                    };
+                    let ast = crate::frontend::router::parser::Cache::get()
+                        .query(&query, &context, &mut prepared)
+                        .expect("rewrite succeeds");
+                    let plan = &ast.rewrite_plan;
                     assert_eq!(plan.generated_params.len(), 1);
                     assert_eq!(
                         plan.generated_params[0].generated_id,
