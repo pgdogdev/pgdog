@@ -40,8 +40,21 @@ impl StatementRewrite<'_> {
             return Ok(());
         };
 
-        // Get the columns specified in the INSERT (preserving order)
-        let insert_columns: IndexSet<&str> = self.get_insert_column_names_ordered(&node);
+        // Without a column list, VALUES supplies the first N table columns.
+        let implicit_columns = if node.cols().is_empty()
+            && let Node::SelectStmt(select) = node.select_stmt()
+        {
+            select
+                .values_lists()
+                .first()
+                .map(|values| values.expect_node_list().len())
+        } else {
+            None
+        };
+        let insert_columns: IndexSet<&str> = match implicit_columns {
+            Some(count) => relation.column_names().take(count).collect(),
+            None => self.get_insert_column_names_ordered(&node),
+        };
 
         // Find BIGINT primary key columns
         let bigint_pk_columns: Vec<&str> = relation
@@ -99,6 +112,15 @@ impl StatementRewrite<'_> {
         }
 
         if rewrite {
+            if let Some(count) = implicit_columns {
+                for column in relation.column_names().take(count) {
+                    node.cols_mut().push(
+                        mem,
+                        mem.make_res_target(Some(column), mem.empty(), mem.none())
+                            .uncast(),
+                    );
+                }
+            }
             for column in missing_columns {
                 self.inject_column_with_auto_id(&mut node, mem, column, sequence_prefix.as_deref());
                 plan.auto_id_injected += 1;
@@ -394,6 +416,46 @@ mod tests {
         assert_eq!(plan.auto_id_injected, 2);
         assert!(sql.starts_with("INSERT INTO users VALUES ("), "{sql}");
         assert!(!sql.contains("DEFAULT"), "{sql}");
+    }
+
+    #[test]
+    fn test_auto_id_implicit_columns_append_omitted_key() {
+        let base = make_schema_with_bigint_pk();
+        let mut columns = base
+            .table(
+                Table {
+                    schema: Some("public"),
+                    name: "users",
+                    alias: None,
+                },
+                "",
+                None,
+            )
+            .expect("users table")
+            .columns()
+            .clone();
+        columns.swap_indices(0, 1);
+        let columns = columns
+            .into_iter()
+            .map(|(name, column)| (name, column.into()))
+            .collect();
+        let relation = Relation::test_table("public", "users", columns);
+        let db_schema = Schema::from_parts(
+            vec!["public".into()],
+            HashMap::from([(("public".into(), "users".into()), relation)]),
+        );
+        let (sql, plan) = rewrite_sql_with_mode(
+            "INSERT INTO users VALUES ('test')",
+            &db_schema,
+            RewriteMode::Rewrite,
+        )
+        .expect("omitted positional primary key");
+        assert!(
+            sql.starts_with("INSERT INTO users (name, id) VALUES ('test',"),
+            "{sql}"
+        );
+        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(plan.unique_ids, 1);
     }
 
     #[test]
