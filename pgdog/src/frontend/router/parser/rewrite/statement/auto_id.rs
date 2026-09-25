@@ -654,6 +654,90 @@ mod tests {
     }
 
     #[test]
+    fn test_global_sequence_follows_resolved_schema() {
+        let base = make_schema_with_bigint_pk();
+        let columns = base
+            .table(
+                Table {
+                    name: "users",
+                    schema: Some("public"),
+                    alias: None,
+                },
+                "",
+                None,
+            )
+            .expect("users table")
+            .columns()
+            .clone();
+        let relations = ["public", "tenant_a", "tenant_b"]
+            .into_iter()
+            .map(|name| {
+                let columns = columns
+                    .clone()
+                    .into_iter()
+                    .map(|(key, mut column)| {
+                        column.table_schema = name.into();
+                        (key, column.into())
+                    })
+                    .collect();
+                (
+                    (name.into(), "users".into()),
+                    Relation::test_table(name, "users", columns),
+                )
+            })
+            .collect();
+        let db_schema = Schema::from_parts(vec!["public".into()], relations);
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+        for extended in [false, true] {
+            for (path, table, expected) in [
+                (vec!["tenant_a", "public"], "users", "tenant_a_users_id_seq"),
+                (vec!["tenant_b", "public"], "users", "tenant_b_users_id_seq"),
+                (vec!["missing", "public"], "users", "public_users_id_seq"),
+                (vec!["$user", "public"], "users", "tenant_a_users_id_seq"),
+                (vec!["tenant_b"], "tenant_a.users", "tenant_a_users_id_seq"),
+            ] {
+                for sql in [
+                    format!("INSERT INTO {table} (name) VALUES ('a')"),
+                    format!("INSERT INTO {table} (name, id) VALUES ('a', DEFAULT)"),
+                ] {
+                    let search_path = crate::net::parameter::ParameterValue::Tuple(
+                        path.iter().copied().map(str::to_owned).collect(),
+                    );
+                    let mut prepared = PreparedStatements::default();
+                    let mut rewriter = StatementRewrite::new(StatementRewriteContext {
+                        extended,
+                        prepared: extended,
+                        prepared_statements: &mut prepared,
+                        schema: &schema,
+                        db_schema: &db_schema,
+                        user: "tenant_a",
+                        search_path: Some(&search_path),
+                        timezone: None,
+                        query_timestamps: QueryTimestamps::default(),
+                    });
+                    let mut plan = RewritePlan::default();
+                    make::owned(|mem| {
+                        let mut ast = mem.parse(&sql).expect("valid INSERT");
+                        plan = rewriter
+                            .maybe_rewrite(ast.as_mut().into_iter().next().expect("statement"), mem)
+                            .expect("rewrite succeeds");
+                        ast
+                    });
+                    assert_eq!(plan.generated_params.len(), 1);
+                    assert_eq!(
+                        plan.generated_params[0].generated_id,
+                        GeneratedId::Sequence(SequenceCall::Nextval(expected.to_owned())),
+                        "{sql}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_rewrite_omni_global_uses_column_sequence() {
         let db_schema = make_schema_with_bigint_pk();
         let schema = ShardingSchema {
@@ -662,7 +746,7 @@ mod tests {
         };
 
         for (table, sequence) in [
-            ("users", "users_id_seq"),
+            ("users", "public_users_id_seq"),
             ("public.users", "public_users_id_seq"),
         ] {
             for (columns, values, expected_values, injected) in [
