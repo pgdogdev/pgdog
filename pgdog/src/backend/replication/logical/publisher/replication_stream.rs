@@ -66,7 +66,8 @@ impl ReplicationStream {
             p.advance_applied_lsn(final_lsn);
             p.missed_rows.merge(missed);
         });
-        result
+        result?;
+        Ok(())
     }
 
     async fn update_progress(
@@ -94,8 +95,13 @@ impl ReplicationStream {
                 missed
             );
         }
+        let measured_at = Instant::now();
         let lag = slot.replication_lag().await?;
-        self.updater.update(|p| p.replication_lag = Some(lag));
+        self.updater.update(|p| {
+            p.replication_lag = Some(lag.lag);
+            p.source_measured_at = Some(measured_at);
+            p.source_lsn = Some(lag.current_lsn);
+        });
         Ok(())
     }
 
@@ -128,7 +134,11 @@ impl ReplicationStream {
             let done: Result<bool, Error> = select! {
                 biased;
 
-                _ = stop.cancelled(), if !stopping => {
+                _ = stop.cancelled(), if !stopping &&
+                // make sure we have finished all the transactions before stopping
+                // to avoid dropping data in progress.
+                !stream.in_transaction() && !stream.has_in_flight() => {
+                    slot.status_update(stream.status_update()).await?;
                     slot.stop_replication().await?;
                     Ok(false)
                 }
@@ -166,6 +176,9 @@ impl ReplicationStream {
                         let Some(replication_data) = replication_data? else {
                             return Ok(true);
                         };
+                        if slot.stopped() {
+                            return Ok(false);
+                        }
                         match replication_data {
                             ReplicationData::CopyData(data) => {
                                 if let Some(ReplicationMeta::KeepAlive(ka)) =

@@ -13,8 +13,8 @@ use super::logical::resharding_state::ReshardingState;
 use crate::{
     api::{
         MigrationError,
-        copy_data::TableDataSyncTask,
-        replication::{ReplicationClusterStop, ReplicationClusterTask},
+        copy_data::{CopyDataTask, TableDataSyncTask},
+        replication::{ReplicationClusterStop, ReplicationClusterTask, ReplicationTask},
         resharding::ReshardTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
@@ -643,10 +643,8 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
 // Verify that we catch some data inconsistencies after resharding
 // in case we created one. It's created artificially during copy,
 // since we don't know for cases when we do this wrong for now.
-#[ignore = "No validation for now"]
 #[tokio::test]
-async fn test_replication_fk_inconsistent_check_on_cutover()
--> Result<(), Box<dyn std::error::Error>> {
+async fn test_replication_fk_inconsistent_validation() -> Result<(), Box<dyn std::error::Error>> {
     let schema = "fk_post_copy_test";
     let destination = "fk_post_copy_test_dest";
     let original_config = config();
@@ -724,19 +722,29 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
             .await?;
         drop(server);
 
-        run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
-
         // wait for the valid source rows to arrive without repairing the orphan
         replicate_until_caught_up(&state, schema).await?;
-
-        // cutover should reject the orphan left on the destination
-        let cutover = run_task(schema_sync.phase(SchemaSyncPhase::Cutover).build()).await;
-        Ok::<_, Box<dyn std::error::Error>>((dest, cutover))
+        run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
+        // validation should reject the orphan while forward replication is running
+        let validation = schema_sync
+            .clone()
+            .phase(SchemaSyncPhase::PostDataValidation)
+            .build();
+        let cutover = schema_sync.phase(SchemaSyncPhase::Cutover).build();
+        let replication = run_task(
+            ReplicationTask::builder()
+                .state(state)
+                .validation(validation)
+                .schema_sync(cutover)
+                .build(),
+        )
+        .await;
+        Ok::<_, Box<dyn std::error::Error>>((dest, replication))
     }
     .await;
 
     let validation = async {
-        let (dest, cutover) = result?;
+        let (dest, validation) = result?;
         let mut server = dest.primary(0, &Request::default()).await?;
         let parents: Vec<i64> = server
             .fetch_all(format!("SELECT id FROM {schema}.parents ORDER BY id"))
@@ -746,21 +754,25 @@ async fn test_replication_fk_inconsistent_check_on_cutover()
                 "SELECT parent_id FROM {schema}.children ORDER BY id"
             ))
             .await?;
-        Ok::<_, Box<dyn std::error::Error>>((parents, children, cutover))
+        Ok::<_, Box<dyn std::error::Error>>((parents, children, validation))
     }
     .await;
 
     cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
-    let (parents, children, cutover) = validation?;
+    let (parents, children, validation) = validation?;
     assert_eq!(parents, [1, 2]);
     assert_eq!(children, [1, 2, 999]);
     assert!(
         matches!(
-            &cutover,
-            Err(TaskError::Failed(SchemaSyncError::Backend(BackendError::ExecutionError(error))))
-                if error.code == "23503"
+            &validation,
+            Err(TaskError::Failed(Error::SchemaSync(error)))
+                if matches!(
+                    error.as_ref(),
+                    SchemaSyncError::Backend(BackendError::ExecutionError(error))
+                        if error.code == "23503"
+                )
         ),
-        "cutover did not reject the orphan with a foreign key error: {cutover:?}"
+        "validation did not reject the orphan with a foreign key error: {validation:?}"
     );
     Ok(())
 }
@@ -985,5 +997,85 @@ async fn copy_data_cancelled_during_replication_removes_its_slots()
     assert_eq!(leftover, Vec::<String>::new());
     assert_eq!(copied, [10]);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn copy_data_fails_when_post_data_index_rejects_copied_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let schema = "copy_data_index_error";
+    let destination = "copy_data_index_error_dest";
+    let original_config = config();
+    let mut admin = test_server().await;
+    let result = async {
+        setup_replication_test(&mut admin, schema, destination).await?;
+        let source = databases::databases().schema_owner(schema)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.items (id BIGINT PRIMARY KEY, val TEXT NOT NULL); \
+                 CREATE UNIQUE INDEX items_val_idx ON {schema}.items (val); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.items"
+            ))
+            .await?;
+        drop(server);
+
+        let state = ReshardingState::builder()
+            .source(schema)
+            .destination(destination)
+            .publication(schema)
+            .maybe_replication_slot(Some(schema.into()))
+            .build()?;
+        let schema_sync = SchemaSyncTask::builder()
+            .databases(state.databases())
+            .publication(schema.into());
+        run_task(schema_sync.clone().phase(SchemaSyncPhase::Pre).build()).await?;
+
+        let source = databases::databases().schema_owner(schema)?;
+        let mut server = source.primary(0, &Request::default()).await?;
+        server
+            .execute_checked(format!(
+                "DROP INDEX {schema}.items_val_idx; \
+                 INSERT INTO {schema}.items (id, val) VALUES (1, 'same'), (2, 'same')"
+            ))
+            .await?;
+        drop(server);
+
+        let mut state = state;
+        state.reload()?;
+        let copied = run_task(
+            CopyDataTask::builder()
+                .state(state.clone())
+                .format(config().config.general.resharding_copy_format)
+                .schema_sync(schema_sync.phase(SchemaSyncPhase::Post).build())
+                .build(),
+        )
+        .await;
+        state.drop_slots().await?;
+
+        let mut server = state.destination.primary(0, &Request::default()).await?;
+        let rows: Vec<i64> = server
+            .fetch_all(format!("SELECT id FROM {schema}.items ORDER BY id"))
+            .await?;
+        Ok::<_, Box<dyn std::error::Error>>((rows, copied))
+    }
+    .await;
+
+    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
+    let (rows, copied) = result?;
+    assert_eq!(rows, [1, 2]);
+    assert!(
+        matches!(
+            &copied,
+            Err(TaskError::Failed(Error::SchemaSync(error)))
+                if matches!(
+                    error.as_ref(),
+                    SchemaSyncError::Backend(BackendError::ExecutionError(error))
+                        if error.code == "23505"
+                )
+        ),
+        "copy data did not report the unique index error: {copied:?}"
+    );
     Ok(())
 }

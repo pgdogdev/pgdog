@@ -219,6 +219,12 @@
         "pg_dump_path": "pg_dump"
       }
     },
+    "resharding": {
+      "$ref": "#/$defs/Resharding",
+      "default": {
+        "post_data_validation": "during_replication"
+      }
+    },
     "rewrite": {
       "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling two-phase commit when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>",
       "$ref": "#/$defs/Rewrite",
@@ -1753,6 +1759,15 @@
         }
       ]
     },
+    "PostDataValidationStage": {
+      "type": "string",
+      "enum": [
+        "off",
+        "during_replication",
+        "before_cutover",
+        "after_cutover"
+      ]
+    },
     "PreparedStatementsLevel": {
       "description": "prepared statement support mode.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>",
       "oneOf": [
@@ -1930,6 +1945,16 @@
           "default": "pg_dump"
         }
       }
+    },
+    "Resharding": {
+      "type": "object",
+      "properties": {
+        "post_data_validation": {
+          "$ref": "#/$defs/PostDataValidationStage",
+          "default": "during_replication"
+        }
+      },
+      "additionalProperties": false
     },
     "Rewrite": {
       "description": "Controls PgDog's automatic SQL rewrites for sharded databases. It affects sharding key updates and multi-tuple inserts.\n\n**Note:** Consider enabling [two-phase commit](https://docs.pgdog.dev/features/sharding/2pc/) when either feature is set to `rewrite`. Without it, rewrites are committed shard-by-shard and can leave partial changes if a transaction fails.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/>",

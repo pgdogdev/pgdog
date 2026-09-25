@@ -13,6 +13,7 @@ pub mod pool;
 pub mod pooling;
 pub mod prepared_statements;
 pub mod replication;
+pub mod resharding;
 pub mod rewrite;
 pub mod role_config;
 pub mod server_tls;

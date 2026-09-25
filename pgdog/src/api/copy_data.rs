@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::api::Task;
+use crate::api::replication::ReplicationClusterTask;
+use crate::api::schema_sync::SchemaSyncTask;
 use crate::api::task::TaskContext;
 use crate::backend::Cluster;
 use crate::backend::pool::Address;
@@ -12,19 +14,21 @@ use crate::backend::replication::data_sync::{
     validate_replica_identity,
 };
 use crate::backend::replication::logical::Error;
+use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
-use crate::util::safe_sleep;
 use crate::util::stats::average_rate;
 use crate::util::sync::WorkerPool;
+use crate::util::{safe_interval, safe_sleep};
 use futures::prelude::stream::{FuturesUnordered, StreamExt};
 use pgdog_config::CopyFormat;
 use pgdog_stats::{
-    CopyDataDefinition, CopyDataStage, CopyDataStatus, TableCopyDefinition, TableCopyStage,
-    TableCopyStatus, TaskDefinition,
+    CopyDataDefinition, CopyDataStage, CopyDataStatus, ReplicationDirection,
+    SynchronizeTablesStatus, TableCopyDefinition, TableCopyStage, TableCopyStatus, TaskDefinition,
 };
+use tokio::select;
 use tracing::{info, warn};
 
 const STATUS_REPORT_INTERVAL: Duration = Duration::from_secs(1);
@@ -34,16 +38,99 @@ const LOG_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 ///
 /// # Invariants
 ///
-/// This task does only the copy of tables without creating replication slots by itself.
-/// The replication slots to preserve any updates while copy is in progress should be created
-/// upfront before calling this task.
+/// This task creates replication slots before copying tables.
+/// These slots preserve updates while copying and post-data schema sync run.
+/// The task synchronizes tables before it returns.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
     pub(crate) state: ReshardingState,
     pub(crate) format: CopyFormat,
-    /// Require a usable replica identity per table. Only streaming needs it,
-    /// so a sync-only migration passes `false`.
-    pub(crate) require_replica_identity: bool,
+    pub(crate) schema_sync: SchemaSyncTask,
+}
+
+#[derive(Debug)]
+struct SynchronizeTablesTask {
+    state: ReshardingState,
+    schema_sync: SchemaSyncTask,
+}
+
+impl Task for SynchronizeTablesTask {
+    type Status = SynchronizeTablesStatus;
+    type Output = ();
+    type Error = Error;
+
+    fn definition(&self) -> impl Into<TaskDefinition> {
+        "synchronize tables"
+    }
+
+    async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
+        ctx.run(self.schema_sync).await?;
+        ctx.set_status(SynchronizeTablesStatus::InitializingReplicationStreams);
+        let mut state = self.state;
+        state.reload()?;
+        let mut tables = state.tables();
+        let mut targets = tables
+            .iter()
+            .filter_map(|(shard, tables)| {
+                tables
+                    .iter()
+                    .map(|table| table.lsn)
+                    .max()
+                    .map(|lsn| (*shard, lsn))
+            })
+            .collect::<HashMap<_, _>>();
+
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        let progress = ReplicationProgress::new(state.source.shards().len());
+        let (task, stop) = ReplicationClusterTask::new(
+            state.clone(),
+            ReplicationDirection::Forward,
+            progress.clone(),
+        );
+        let mut replication = Box::pin(ctx.run(task));
+        let mut check = safe_interval(STATUS_REPORT_INTERVAL);
+
+        loop {
+            select! {
+                result = &mut replication => {
+                    result?;
+                    return Err(Error::ReplicationStreamStopped);
+                }
+                _ = check.tick() => {
+                    ctx.set_status(SynchronizeTablesStatus::SynchronizingTables {
+                        progress: progress.snapshot(),
+                    });
+                    targets.retain(|shard, target| {
+                        let reached = progress
+                            .shard(*shard)
+                            .and_then(|progress| progress.applied_lsn)
+                            .is_some_and(|applied| applied >= *target);
+                        if reached {
+                            info!("source shard {shard} synchronized at {target}");
+                        }
+                        !reached
+                    });
+
+                    if targets.is_empty() {
+                        stop.stop(None);
+                        replication.await?;
+                        for (shard, tables) in &mut tables {
+                            if let Some(applied) = progress.shard(*shard).and_then(|progress| progress.applied_lsn) {
+                                for table in tables {
+                                    table.lsn = table.lsn.max(applied);
+                                }
+                            }
+                        }
+                        state.set_tables(tables);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Task for CopyDataTask {
@@ -67,10 +154,8 @@ impl Task for CopyDataTask {
         ctx.set_status(CopyDataStage::LoadingTableMetadata.into());
         state.sync_tables().await?;
 
-        if self.require_replica_identity {
-            ctx.set_status(CopyDataStage::ValidatingTables.into());
-            validate_replica_identity(&state.tables())?;
-        }
+        ctx.set_status(CopyDataStage::ValidatingTables.into());
+        validate_replica_identity(&state.tables())?;
 
         ctx.set_status(CopyDataStage::CreatingSlots.into());
         state.create_slots(&cancel).await?;
@@ -140,6 +225,13 @@ impl Task for CopyDataTask {
         guard.disarm();
 
         state.set_tables(result);
+
+        ctx.set_status(CopyDataStage::SynchronizingTables.into());
+        ctx.run(SynchronizeTablesTask {
+            state: state.clone(),
+            schema_sync: self.schema_sync,
+        })
+        .await?;
 
         Ok(())
     }

@@ -29,7 +29,7 @@ pub enum ReshardStatus {
     /// Running the data-copy child task.
     #[display("syncing data")]
     SyncingData,
-    /// Running the post-data schema-sync child task (indexes, constraints).
+    /// Running the post-data schema-sync child task without a copy.
     #[display("finalizing schema")]
     FinalizingSchema,
     /// Running the replication child task.
