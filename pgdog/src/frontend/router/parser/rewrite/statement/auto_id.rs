@@ -76,6 +76,43 @@ impl StatementRewrite<'_> {
                 None => table.name.to_owned(),
             });
 
+        if rewrite && matches!(node.select_stmt(), Node::None) {
+            // DEFAULT VALUES has no SelectStmt. Give it one row so generated
+            // IDs are chosen once by PgDog and shared across all shards.
+            for column in &missing_columns {
+                node.cols_mut().push(
+                    mem,
+                    mem.make_res_target(Some(column), mem.empty(), mem.none())
+                        .uncast(),
+                );
+            }
+            let values: Vec<_> = node
+                .cols()
+                .iter()
+                .map(|col| {
+                    let Node::ResTarget(target) = col else {
+                        unreachable!("InsertStmt.cols is always ResTarget");
+                    };
+                    let column = target.name().expect("INSERT column has a name");
+                    if present_pk_positions.iter().any(|(_, name)| *name == column)
+                        || missing_columns.contains(&column)
+                    {
+                        plan.auto_id_injected += 1;
+                        Self::auto_id_func_call(mem, column, sequence_prefix.as_deref()).uncast()
+                    } else {
+                        mem.make_node::<nodes::SetToDefault>().uncast()
+                    }
+                })
+                .collect();
+            let mut select = mem.make_node::<nodes::SelectStmt>();
+            select
+                .as_mut()
+                .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
+            node.set_select_stmt(select.uncast());
+            self.rewritten = true;
+            return Ok(());
+        }
+
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
             let replaced = self.replace_set_to_default_at_positions(
