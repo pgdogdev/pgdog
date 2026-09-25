@@ -66,20 +66,21 @@ impl DataSync<'_> {
         let mut copy_sub = CopySubscriber::new(copy.statement(), self.source, self.dest)?;
         copy_sub.connect().await?;
 
-        let mut slot = ReplicationSlot::data_sync(&table.publication, address);
-        slot.connect().await?;
-        table.lsn = slot.create_slot().await?;
+        let slot = ReplicationSlot::new_temporary(&table.publication, address);
         slot.set_task_id(self.task_id);
 
-        // Reload table info just to be sure it's consistent.
-        table.reload(slot.server()?).await?;
+        let mut stream = slot.create().await?;
+        table.lsn = stream.lsn();
 
-        copy.start(slot.server()?).await?;
+        // Reload table info just to be sure it's consistent.
+        table.reload(stream.server()).await?;
+
+        copy.start(stream.server()).await?;
         copy_sub.start_copy().await?;
 
         let mut copied = CopyProgress::default();
 
-        while let Some(data_row) = copy.data(slot.server()?).await? {
+        while let Some(data_row) = copy.data(stream.server()).await? {
             select! {
                 _ = cancel.cancelled() =>  {
                     warn!("aborting data sync for table {}", table.table);
@@ -99,15 +100,16 @@ impl DataSync<'_> {
 
         copy_sub.disconnect().await?;
 
-        slot.server()?.execute("COMMIT").await?;
+        stream.server().execute("COMMIT").await?;
 
-        slot.start_replication().await?;
-        slot.status_update(StatusUpdate::new_reply(table.lsn))
+        stream.start_replication().await?;
+        stream
+            .status_update(StatusUpdate::new_reply(table.lsn))
             .await?;
-        slot.stop_replication().await?;
+        stream.stop_replication().await?;
 
         // Drain slot. It is temporary and will be dropped when the connection closes.
-        while slot.replicate(Duration::MAX).await?.is_some() {}
+        while stream.replicate(Duration::MAX).await?.is_some() {}
 
         info!(
             "data sync for \"{}\".\"{}\" finished at lsn {} [{}]",
@@ -218,8 +220,8 @@ pub(crate) fn validate_replica_identity(tables: &HashMap<usize, Vec<Table>>) -> 
 
 #[cfg(test)]
 mod test {
-    use super::super::publisher::publisher_impl::Publisher;
     use super::super::publisher::{PublicationTable, ReplicaIdentity};
+    use super::super::tables_sync::tables_sync;
     use super::*;
     use crate::backend::replication::publisher::Lsn;
     use crate::backend::server::test::test_replication_server;
@@ -246,10 +248,14 @@ mod test {
         let source = Cluster::new_test(&config());
         source.launch();
 
-        let mut publisher = Publisher::new("publication_no_pk_validation", "sync_test_slot".into());
-
-        publisher.sync_tables(true, &source).await.unwrap();
-        let result = validate_replica_identity(&publisher.tables);
+        let tables = tables_sync(
+            &source,
+            source.sharded_tables(),
+            "publication_no_pk_validation",
+        )
+        .await
+        .unwrap();
+        let result = validate_replica_identity(&tables);
 
         let err = result.expect_err("validation must fail for a publication with no-pk tables");
 
@@ -292,13 +298,14 @@ mod test {
         let source = Cluster::new_test(&config());
         source.launch();
 
-        let mut publisher = Publisher::new(
+        let tables = tables_sync(
+            &source,
+            source.sharded_tables(),
             "pub_full_identity_nothing_test",
-            "pub_full_identity_nothing_slot".into(),
-        );
-
-        publisher.sync_tables(true, &source).await.unwrap();
-        let result = validate_replica_identity(&publisher.tables);
+        )
+        .await
+        .unwrap();
+        let result = validate_replica_identity(&tables);
 
         let err = result.expect_err("validation must fail for REPLICA IDENTITY NOTHING table");
         assert!(
@@ -334,11 +341,14 @@ mod test {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
 
-        let mut publisher =
-            Publisher::new("pub_data_sync_leftover_rows", "leftover_rows_slot".into());
-        publisher.sync_tables(true, &cluster).await.unwrap();
-        let table = publisher
-            .tables
+        let tables = tables_sync(
+            &cluster,
+            cluster.sharded_tables(),
+            "pub_data_sync_leftover_rows",
+        )
+        .await
+        .unwrap();
+        let table = tables
             .values()
             .flatten()
             .next()
