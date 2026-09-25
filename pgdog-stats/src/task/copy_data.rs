@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::Databases;
+use crate::{Databases, ReplicationProgress};
 
 /// The bulk data copy one copy-data task runs.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
@@ -50,7 +50,21 @@ pub enum CopyDataStage {
     /// Copying table data to the destination shards.
     #[display("copying tables")]
     CopyingTables,
+    #[display("synchronizing tables")]
+    SynchronizingTables,
     /// A stage this build does not know.
+    #[display("")]
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SynchronizeTablesStatus {
+    #[display("initializing replication streams")]
+    InitializingReplicationStreams,
+    #[display("synchronizing tables, {progress}")]
+    SynchronizingTables { progress: ReplicationProgress },
     #[display("")]
     #[serde(other)]
     Other,

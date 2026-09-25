@@ -148,6 +148,7 @@ pub enum ReplicationClusterStatus {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReplicationProgress {
     pub lag_bytes: Option<u64>,
+    pub lag_age_ms: Option<u64>,
     pub last_transaction_ms: Option<u64>,
     pub rows: u64,
     pub bytes: u64,

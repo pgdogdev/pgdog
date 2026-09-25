@@ -24,6 +24,23 @@ the task id. `SHOW TASKS` reports the progress.
 > The [Enterprise Edition control plane](https://docs.pgdog.dev/enterprise_edition/control_plane/)
 > is required for coordinated cutover across multiple PgDog containers.
 
+## Manual copy and replication
+
+`COPY_DATA` runs the migration without automatic cutover:
+
+```sql
+COPY_DATA source destination publication migration_slot;
+SHOW TASKS;
+```
+
+It runs pre-data schema, bulk copying, post-data schema, table synchronization, and forward replication.
+Do not start another replication task while this task runs.
+
+The copy task always restores post-data schema and synchronizes tables, including with `data-sync --skip-schema-sync`.
+That option skips pre-data schema sync and replicate-only post-data schema sync.
+A manual `schema-sync --phase post` rerun ignores statement errors by default, as does admin `SCHEMA_SYNC post`.
+Avoid a rerun while destination writes are active, because it can rebuild existing indexes.
+
 ---
 
 ## Orchestrator
@@ -33,17 +50,26 @@ the task id. `SHOW TASKS` reports the progress.
 - `publisher: Arc<Mutex<Publisher>>` — manages replication slots, table list, and lag tracking
 - `replication_slot: String` — auto-generated as `__pgdog_repl_<random19>` unless overridden
 
-`ReshardTask::run` drives the five steps below in sequence:
+`ReshardTask::run` drives the migration stages below in sequence:
 
 ```mermaid
 flowchart LR
-    A["1. load_schema<br>pg_dump on source"]
-    B["2. schema_sync_pre<br>pre-data to dest<br>reload schema cache"]
-    C["3. data_sync<br>ParallelSyncManager<br>binary COPY"]
-    D["4. schema_sync_post<br>secondary indexes"]
-    E["5. ReplicationTask<br>WAL drain<br>traffic swap"]
+    A["Pre-data schema"]
+    subgraph CopyDataTask
+        B["Bulk COPY"]
+        C["Post-data schema"]
+        D["Table synchronization"]
+        B --> C --> D
+    end
+    F["Validation"]
+    G["Forward replication"]
+    H["Cutover"]
 
-    A --> B --> C --> D --> E
+    A --> B
+    D --> F
+    D --> G
+    F --> H
+    G --> H
 ```
 
 ---
@@ -68,29 +94,28 @@ into `SyncState` phases so they can be applied in the right order later.
 3. If the destination has `RewriteMode::RewriteOmni`, installs the sharded sequence schema via
    `Schema::install()`.
 
-> **Prerequisite:** all tables in the publication must have a primary key. `Table::valid()` in
-> [`pgdog/src/backend/replication/logical/publisher/table.rs`](../pgdog/src/backend/replication/logical/publisher/table.rs) checks this and returns
-> `Error::NoPrimaryKey(table)` before any data moves. Without a PK, the upsert conflict target
-> is undefined and the replication stream cannot be made idempotent.
+Each source table needs a supported replica identity.
+PgDog accepts primary keys, suitable unique indexes, or `REPLICA IDENTITY FULL`.
+A `FULL` table without sharding also needs a unique index on each destination.
+Post-data schema sync creates these destination indexes before synchronization.
 
 ---
 
-## Step 3 — Data sync (parallel COPY)
+## Step 3 — Data sync
 
-`Orchestrator::data_sync()` delegates to `Publisher::data_sync()`, which builds a
-`ParallelSyncManager` and calls `manager.run().await`.
+`CopyDataTask` runs bulk copying, post-data schema sync, and table synchronization in order.
+Its status reports `CopyingTables` and `SynchronizingTables`.
+`ReshardTask` reports `SyncingData` until both stages finish.
 
-### ParallelSyncManager ([`publisher/parallel_sync.rs`](../pgdog/src/backend/replication/logical/publisher/parallel_sync.rs))
+### Bulk copy
 
-`ParallelSyncManager::new()` takes the table list, a set of source replica connection pools, and
-the destination cluster. It sizes a `Semaphore` to
-`replicas.len() × dest.resharding_parallel_copies()`. Each table is spawned as a `tokio::spawn`
-task via `ParallelSync::run()`. All tasks share an `UnboundedSender`; the manager collects
-completions via `rx.recv()`. Replicas are round-robined across tasks.
+`CopyDataTask` creates a worker pool for each source shard from its configured source replicas.
+Each pool limits concurrent copies to `dest.resharding_parallel_copies()`.
+Each `TableDataSyncTask` uses a separate snapshot on its selected source replica.
+The copy task collects each table's result before it restores post-data schema.
 
-> **Replica isolation:** replicas tagged `resharding_only = true` in `pgdog.toml` are included
-> here and excluded from normal application traffic. The `Semaphore` ensures the source replicas
-> and destination shards are not overwhelmed.
+> **Replica isolation:** replicas tagged `resharding_only = true` in `pgdog.toml` accept copy work but not normal application traffic.
+> Each worker pool limits concurrent copies to protect the source replicas and destination shards.
 
 > **WAL disk space:** each per-table `ReplicationSlot` created during the copy prevents PostgreSQL
 > from recycling WAL on the source until the slot is drained. Estimate WAL write rate × copy
@@ -116,23 +141,53 @@ Each task performs this sequence against its assigned source replica:
    automatically dropped when the replication connection closes.
 8. `COMMIT` closes the transaction on the source replica.
 
-The recorded LSN becomes the replay watermark for that table's WAL stream in Step 5.
+Each table records its copy LSN.
+`CopyDataTask` stores these results before it restores post-data schema and synchronizes tables.
+
+### Post-data schema sync
+
+`CopyDataTask` starts `SynchronizeTablesTask` after every bulk copy finishes.
+The child runs `SchemaSyncTask` with `SyncState::PostData` before it starts replication.
+The schema task shares the dump with the other migration phases.
+Post-data creates secondary indexes, unique and exclusion constraints, and index partition attachments.
+It also restores each table's `REPLICA IDENTITY` and adds foreign keys in dump order.
+Eligible foreign keys are added as `NOT VALID` to avoid a blocking data scan.
+Schema errors stop the copy task before temporary replication starts.
+Creating indexes after `COPY` avoids index maintenance during copying.
+
+### Table synchronization
+
+After post-data schema sync succeeds, `SynchronizeTablesTask` starts temporary forward replication through the permanent migration slots.
+Each source shard must reach the largest copy LSN recorded for its tables.
+The task stops and drains temporary replication before it returns.
+The destination replication connections use `session_replication_role = replica`.
+Table synchronization streams even with `data-sync --sync-only`.
+So `--sync-only` also needs a supported replica identity on each source table.
 
 ---
 
-## Step 4 — Post-data schema sync
+## Step 4 — Validation and forward replication
 
-`schema_sync_post()` restores `SyncState::PostData` for secondary indexes and non-PK constraints.
-It creates eligible foreign keys as `NOT VALID`, which avoids a blocking data scan.
-Deferring index creation also avoids index maintenance during the bulk copy.
+`SyncState::PostDataValidation` runs `VALIDATE CONSTRAINT` for each foreign key that post-data restored as `NOT VALID`.
+Validation is strict. A violation fails the validation task and stops the migration.
+The `[resharding] post_data_validation` setting selects when validation runs.
+`ReplicationTask` reads this setting once, when it starts.
 
----
+| Value | When validation runs |
+|---|---|
+| `during_replication` (default) | Together with forward replication. Cutover cannot start before validation succeeds. |
+| `before_cutover` | After forward replication catches up, while source traffic is paused. Traffic stays paused until validation finishes. |
+| `after_cutover` | On the new source, together with reverse replication after each cutover. A failure marks the validation task as failed, but reverse replication continues and a rollback stays possible. A rollback does not wait for validation. |
+| `off` | Never. The foreign keys stay `NOT VALID`. |
 
-## Step 5 — Replication and cutover
+Validation never runs for `data-sync --skip-schema-sync`, `--replicate-only`, or `--sync-only`.
+Foreign keys that post-data restored in these runs stay `NOT VALID`.
 
-`ReplicationTask` builds a `Migration` and calls `Migration::run`
-([`api/replication.rs`](../pgdog/src/api/replication.rs)). `run` streams until a cutover signal,
-cuts over, flips direction, and then streams in reverse so a rollback stays possible.
+## Step 5 — Cutover
+
+`ReplicationTask` waits for its cutover signal or automatic policy.
+With `during_replication`, it also waits until validation succeeds.
+It cuts over, flips direction, and then streams in reverse so a rollback stays possible.
 
 ### Publisher and StreamSubscriber
 
@@ -141,8 +196,8 @@ module responsibilities, and unchanged-TOAST handling.
 
 Two behaviours are specific to the resharding context:
 
-- **LSN watermark**: each table's replay starts from the LSN recorded at the end of its Step 3
-  COPY. Messages at or below that LSN are skipped; the row is already on the destination.
+- **LSN watermark**: each table starts replay from its recorded copy LSN. Messages at or below
+  that LSN are skipped because the row already exists on the destination.
 - **Omnisharded tables** (`statements.omni = true`): upsert is broadcast to all shards
   simultaneously rather than routed to a single shard.
 - **Table ownership** ([`tables_sync()`](../pgdog/src/backend/replication/logical/tables_sync.rs)):
@@ -178,8 +233,23 @@ triggers can fire cutover (whichever comes first):
 The `LastTransaction` trigger needs a measured transaction. A stream that has applied nothing
 reports no value, so the trigger stays silent and only the timeout can fire.
 
+The `Lag` trigger uses only lag values that each stream measured after `wait_for_catchup()` started.
+Each stream measures lag once per second, so this trigger can wait up to 1 second.
+An older value can hide a commit that arrived just before the traffic stop.
+
+After a trigger fires, `wait_for_catchup()` waits until every shard applies the source WAL written before the traffic stop.
+Each lag measurement also reads `pg_current_wal_lsn()` on the source shard.
+For each shard, the policy keeps the position from a measurement taken after `wait_for_catchup()` started.
+Then it waits until the applied LSN of the shard reaches that position.
+The applied LSN counts only changes that every destination shard flushed.
+Keepalive messages move it past WAL that has no published changes.
+The triggers above therefore only decide when this wait starts. The wait never skips committed changes.
+If the wait takes longer than 120 s, the policy returns `Error::CatchUpTimeout`.
+`prepare_cutover()` then resumes traffic, and the cutover does not start.
+
 **Phase 3 — drain**: `replicate_until_cutover()` stops the cluster task and waits for every
-stream to drain. The budget is `ReplicationClusterTask::drain_timeout()` (300 s) for the cluster
+stream to drain. Every change written before the traffic stop is already applied.
+The budget is `ReplicationClusterTask::drain_timeout()` (300 s) for the cluster
 and `stream_drain_timeout()` (120 s) for the streams. A stream that does not drain in time is
 aborted, and its `SlotGuard` drops the replication slot on a detached task. A failed drain
 returns `Error::DrainTimeout`.
@@ -199,11 +269,11 @@ returns `Error::DrainTimeout`.
 The reverse phase runs in the same task, not in a separate one. A `STOP_TASK` during the reverse
 phase ends the rollback window, and the task reports the migration as finished.
 
-`SyncState::Cutover` runs as an awaited `SchemaSyncTask` before the traffic swap.
-`SyncState::PostDataValidation` is not part of cutover.
-Run it manually against the destination during replication or at another time.
+With the default `during_replication` setting, `SyncState::PostDataValidation` starts beside forward
+replication after table synchronization.
 It validates each deferred foreign key with `ALTER TABLE ... VALIDATE CONSTRAINT`.
-Validation failures remain visible through `SHOW TASKS`.
+A validation failure stops replication before cutover. Successful validation releases the
+cutover gate. See Step 4 for the other settings.
 
 ---
 
@@ -211,16 +281,23 @@ Validation failures remain visible through `SHOW TASKS`.
 
 ### Pre-cutover failures — plain propagation
 
-Steps 1–4 (`load_schema`, `schema_sync_pre`, `data_sync`, `schema_sync_post`) propagate errors
-with `?` directly from `Migration::run()`. Maintenance mode is never entered during these
-steps. A failure here leaves traffic unaffected and the source untouched, making a full restart safe.
+The pre-data, copy, post-data, and table synchronization stages stop the migration if they fail.
+The effect of a validation failure depends on `[resharding] post_data_validation`:
+
+- `during_replication` (default): the failure stops the forward stream before maintenance mode. Source traffic does not change.
+- `before_cutover`: validation runs while source traffic is paused. The failure stops the migration before cutover, and traffic resumes on the original source.
+- `after_cutover`: the failure marks the validation task as failed. Traffic stays on the new cluster, and reverse replication continues.
+- `off`: validation does not run.
 
 ### Schema DDL — intentional error tolerance
 
-The pre-data, post-data, and cutover stages use `ignore_errors = true`.
-This setting tolerates objects left by an earlier failed schema sync.
-The validation stage uses `ignore_errors = false`.
-A foreign key violation therefore marks the validation task as failed.
+The pre-data and cutover stages use `ignore_errors = true`.
+The copy task runs post-data schema sync with `ignore_errors = false`.
+A required index failure therefore stops the migration before table synchronization.
+Replicate-only migrations retain error tolerance for their separate post-data restore.
+Manual CLI and admin post-data syncs also ignore statement errors by default.
+The validation stage is also strict.
+A foreign key violation marks the validation task as failed.
 
 ### Data sync — abort propagation and cooperative cancellation
 
@@ -281,8 +358,9 @@ Several mechanisms make it safe to replay data across a restart:
 | Mechanism | Where | Effect |
 |---|---|---|
 | Temporary replication slots | `Table::data_sync()` | Auto-dropped on connection close; no orphaned per-table slots |
-| `ignore_errors = true` | Pre-data, post-data, and cutover schema sync | Pre-existing DDL does not abort the run |
-| FK validation | Manual validation schema sync | Validates deferred foreign keys in a reported task |
-| LSN watermark guard | `StreamSubscriber::lsn_applied()` | Rows bulk-copied in Step 3 are skipped during WAL replay in Step 5 |
+| `ignore_errors = true` | Pre-data and cutover schema sync | Pre-existing DDL does not abort the run |
+| Strict post-data restore | Inside `CopyDataTask`, after bulk copying | Stops table synchronization if required schema fails |
+| FK validation | Set by `[resharding] post_data_validation` (default: beside forward replication) | Validates deferred foreign keys; skipped for `off`, `--skip-schema-sync`, `--replicate-only`, and `--sync-only` |
+| LSN watermark guard | Copy synchronization and normal replication | Skips rows already included in each table copy |
 | Upsert on INSERT messages | `Table::insert(upsert=true)` | `ON CONFLICT (pk) DO UPDATE SET` prevents duplicates on WAL re-delivery |
 | PK validation | `Table::valid()` | Fails before any data moves; restart is clean |

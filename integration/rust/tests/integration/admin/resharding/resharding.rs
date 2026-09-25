@@ -25,7 +25,7 @@ async fn test_reshard() {
         run_task_command(&admin, &format!("RESHARD pgdog pgdog_sharded {TEST_PUB}")).await;
 
     wait_for_task(&admin, "reshard task", |t| {
-        t.id == Some(task_id) && t.kind.starts_with("reshard ")
+        t.id == Some(task_id) && t.kind == "reshard"
     })
     .await;
 

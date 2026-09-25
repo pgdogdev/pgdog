@@ -18,8 +18,9 @@ use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::publisher::replication_stream::ReplicationStream;
-use crate::backend::replication::logical::publisher::{Permanent, ReplicationSlot, Table};
+use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
     databases::{cancel_all, cutover},
     maintenance_mode,
@@ -27,10 +28,11 @@ use crate::backend::{
 use crate::config::config;
 use crate::tasks;
 use crate::util::{safe_interval, safe_timeout};
+use pgdog_config::resharding::PostDataValidationStage;
 use pgdog_stats::{
-    MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus, ReplicationCutoverReason,
-    ReplicationDefinition, ReplicationDirection, ReplicationShardDefinition,
-    ReplicationShardStatus, ReplicationStatus, TaskDefinition,
+    Databases, MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus,
+    ReplicationCutoverReason, ReplicationDefinition, ReplicationDirection,
+    ReplicationShardDefinition, ReplicationShardStatus, ReplicationStatus, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -42,6 +44,7 @@ pub(crate) struct ReplicationTask {
     #[builder(default)]
     pub(crate) auto_cutover: bool,
     pub(crate) schema_sync: SchemaSyncTask,
+    pub(crate) validation: Option<SchemaSyncTask>,
 }
 
 /// Executes the whole replication process. It runs a replication until a cutover,
@@ -75,13 +78,14 @@ impl Task for ReplicationTask {
         let Self {
             state,
             schema_sync,
+            validation,
             auto_cutover,
         } = self;
 
         let mut replication = Replication::new(&ctx, state.clone());
         // run the replication until it's stopped - it can cutover multiple times but
         // it's stopped eventually only by the cancellation process.
-        let result = replication.run(schema_sync, auto_cutover).await;
+        let result = replication.run(schema_sync, validation, auto_cutover).await;
         replication.resume_traffic();
 
         let stopped_in_rollback_window = replication.cancelled()
@@ -154,20 +158,44 @@ impl<'a> Replication<'a> {
         }
     }
 
-    async fn run(&mut self, schema_sync: SchemaSyncTask, auto_cutover: bool) -> Result<(), Error> {
+    async fn run(
+        &mut self,
+        schema_sync: SchemaSyncTask,
+        validation: Option<SchemaSyncTask>,
+        auto_cutover: bool,
+    ) -> Result<(), Error> {
+        let stage = config().config.resharding.post_data_validation;
+        let validation_at = |point| validation.as_ref().filter(|_| stage == point);
+
         info!(
-            "[replication] starting {}, auto_cutover={auto_cutover}",
+            "[replication] starting {}, auto_cutover={auto_cutover}, post_data_validation={stage}",
             self.state.databases()
         );
-        self.replicate_until_cutover(auto_cutover).await?;
+        self.replicate_until_cutover(
+            auto_cutover,
+            PostDataValidationStage::DuringReplication,
+            validation_at(PostDataValidationStage::DuringReplication),
+        )
+        .await?;
         self.sync_schema(schema_sync).await?;
+        Self::validate_post_data(
+            self.ctx,
+            &self.state,
+            PostDataValidationStage::BeforeCutover,
+            validation_at(PostDataValidationStage::BeforeCutover),
+        )
+        .await?;
 
         loop {
             self.cutover().await?;
             self.flip_direction();
-            self.replicate_until_cutover(false).await?;
+            self.replicate_until_cutover(
+                false,
+                PostDataValidationStage::AfterCutover,
+                validation_at(PostDataValidationStage::AfterCutover),
+            )
+            .await?;
             self.sync_schema(
-                // new schema sync tasks with updated state
                 SchemaSyncTask::builder()
                     .databases(self.state.databases())
                     .publication(self.state.publication.clone())
@@ -176,6 +204,43 @@ impl<'a> Replication<'a> {
                     .build(),
             )
             .await?;
+        }
+    }
+
+    async fn validate_post_data(
+        ctx: &TaskContext<ReplicationTask>,
+        state: &ReshardingState,
+        stage: PostDataValidationStage,
+        validation: Option<&SchemaSyncTask>,
+    ) -> Result<(), Error> {
+        let Some(validation) = validation else {
+            return Ok(());
+        };
+        let validation = if stage == PostDataValidationStage::AfterCutover {
+            let databases = state.databases();
+            SchemaSyncTask::builder()
+                .databases(Databases {
+                    source: databases.destination,
+                    destination: databases.source,
+                })
+                .publication(state.publication.clone())
+                .phase(SchemaSyncPhase::PostDataValidation)
+                .build()
+        } else {
+            validation.clone()
+        };
+        match ctx.run(validation).await {
+            Ok(()) => {
+                info!("[replication] post-data validation finished at {stage}");
+                Ok(())
+            }
+            Err(SchemaSyncError::Aborted) if ctx.cancellation_token().is_cancelled() => {
+                Err(Error::ReplicationAborted)
+            }
+            Err(err) => {
+                warn!("[replication] post-data validation failed at {stage}: {err}");
+                Err(err.into())
+            }
         }
     }
 
@@ -203,8 +268,15 @@ impl<'a> Replication<'a> {
 
     /// Run the replication until we get the cutover signal and [`CutoverPolicy`]
     /// waited for the stop_traffic conditions
-    async fn replicate_until_cutover(&mut self, auto_cutover: bool) -> Result<(), Error> {
+    async fn replicate_until_cutover(
+        &mut self,
+        auto_cutover: bool,
+        stage: PostDataValidationStage,
+        validation: Option<&SchemaSyncTask>,
+    ) -> Result<(), Error> {
+        let validation_gates_cutover = stage != PostDataValidationStage::AfterCutover;
         let ctx = self.ctx;
+        let direction = self.direction;
         let task_cancel = ctx.cancellation_token();
         let cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
         let progress = ReplicationProgress::new(self.state.source.shards().len());
@@ -212,27 +284,51 @@ impl<'a> Replication<'a> {
         let (cluster, stop_cluster_replication) =
             ReplicationClusterTask::new(self.state.clone(), self.direction, progress.clone());
 
-        info!("[replication] {} stream starting", self.direction);
-        ctx.set_status(match self.direction {
+        info!("[replication] {direction} stream starting");
+        ctx.set_status(match direction {
             ReplicationDirection::Forward => ReplicationStatus::Replicating,
             ReplicationDirection::Reverse => ReplicationStatus::ReverseReplicating,
         });
         let mut cluster_run = pin!(ctx.run(cluster).fuse());
 
-        let result = select! {
-            biased;
-            _ = task_cancel.cancelled() => {
-                info!("[replication] {} stream cancelled", self.direction);
-                Err(Error::ReplicationAborted)
-            },
-            result = &mut cluster_run => result.and(Err(Error::ReplicationStreamStopped)),
-            result = async {
+        let result = async {
+            let mut validation_run = pin!(Self::validate_post_data(
+                ctx,
+                &self.state,
+                stage,
+                validation,
+            ));
+            let mut validation_done = false;
+            let mut cutover_run = pin!(async {
                 if let Some(cutover) = cutover.as_ref() {
                     cutover.requested().await;
                 }
-                self.prepare_cutover(progress).await
-            } => result.map(|reason| cutover_reason = Some(reason)),
-        };
+                Self::prepare_cutover(ctx, &self.state, &mut self.maintenance, progress).await
+            });
+
+            loop {
+                select! {
+                    biased;
+                    _ = task_cancel.cancelled() => {
+                        info!("[replication] {direction} stream cancelled");
+                        break Err(Error::ReplicationAborted);
+                    },
+                    result = &mut cluster_run => {
+                        break result.and(Err(Error::ReplicationStreamStopped));
+                    },
+                    result = &mut validation_run, if !validation_done => {
+                        validation_done = true;
+                        if validation_gates_cutover {
+                            result?;
+                        }
+                    },
+                    result = &mut cutover_run, if validation_done || !validation_gates_cutover => {
+                        break result.map(|reason| cutover_reason = Some(reason));
+                    },
+                }
+            }
+        }
+        .await;
 
         if result.is_err() {
             self.resume_traffic();
@@ -259,22 +355,23 @@ impl<'a> Replication<'a> {
     /// Wait for cutover initial conditions, stop the traffic
     /// and wait until the replication catch up with the source
     async fn prepare_cutover(
-        &mut self,
+        ctx: &TaskContext<ReplicationTask>,
+        state: &ReshardingState,
+        maintenance: &mut MaintenanceMode,
         progress: ReplicationProgress,
     ) -> Result<ReplicationCutoverReason, Error> {
         let cutover_policy = CutoverPolicy::new(config().as_ref().into(), progress);
         cutover_policy.wait_for_stop_threshold().await;
-        self.ctx.set_status(ReplicationStatus::StoppingTraffic);
-        self.maintenance.stop_traffic();
+        ctx.set_status(ReplicationStatus::StoppingTraffic);
+        maintenance.stop_traffic();
         let result = async {
-            cancel_all(&self.state.source.identifier().database).await?;
-            self.ctx.set_status(ReplicationStatus::WaitingForCatchUp);
+            cancel_all(&state.source.identifier().database).await?;
+            ctx.set_status(ReplicationStatus::WaitingForCatchUp);
             cutover_policy.wait_for_catchup().await
         }
         .await;
         if result.is_err() {
-            // in case of errors, after stop_traffic, resume it immediately
-            self.maintenance.resume_traffic();
+            maintenance.resume_traffic();
         }
         result
     }
@@ -602,8 +699,14 @@ impl Task for ReplicationShardTask {
                 }
             }
         };
-
+        drop(replication_run);
+        drop(stream);
         let status = replication_stream.progress().snapshot(initial_lsn);
+        let result = match result {
+            Ok(()) => verify_confirmed_lsn(&slot, status.lsn).await,
+            Err(err) => Err(err),
+        };
+
         match &result {
             Ok(()) => info!(
                 shard = source_shard,
@@ -618,6 +721,22 @@ impl Task for ReplicationShardTask {
 
         result
     }
+}
+
+async fn verify_confirmed_lsn(
+    slot: &ReplicationSlot<Permanent>,
+    expected: Lsn,
+) -> Result<(), Error> {
+    slot.reload().await?;
+    let confirmed = slot.lsn();
+    if confirmed < expected {
+        return Err(Error::SlotLsnNotConfirmed {
+            slot: slot.name().to_owned(),
+            expected: expected.to_string(),
+            confirmed: confirmed.to_string(),
+        });
+    }
+    Ok(())
 }
 
 type ReplicationStreams = FuturesUnordered<AbortOnDropHandle<Result<(), Error>>>;

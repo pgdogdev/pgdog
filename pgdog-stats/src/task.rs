@@ -65,6 +65,7 @@ pub enum TaskStatus {
     SchemaShard(SchemaShardStatus),
     TableCopy(TableCopyStatus),
     CopyData(CopyDataStatus),
+    SynchronizeTables(SynchronizeTablesStatus),
     // in progress, not used
     Replication(ReplicationStatus),
     ReplicationCluster(ReplicationClusterStatus),
@@ -630,6 +631,7 @@ mod test {
                 stage: CopyDataStage::CopyingTables,
                 tables_per_shard: Some(vec![5, 3]),
             }),
+            TaskStatus::SynchronizeTables(SynchronizeTablesStatus::InitializingReplicationStreams),
             TaskStatus::SchemaSync(SchemaSyncStatus::ApplyingStatements {
                 statements: Arc::new(vec![
                     SchemaSyncStatement::new("CREATE INDEX ...").set_skip_if_exists(),
@@ -671,6 +673,7 @@ mod test {
                 direction: ReplicationDirection::Reverse,
                 progress: ReplicationProgress {
                     lag_bytes: Some(2048),
+                    lag_age_ms: Some(300),
                     last_transaction_ms: Some(150),
                     rows: 10,
                     bytes: 4096,
@@ -707,6 +710,7 @@ mod test {
                 TaskStatus::RatioProgress(_)
                 | TaskStatus::Reshard(_)
                 | TaskStatus::CopyData(_)
+                | TaskStatus::SynchronizeTables(_)
                 | TaskStatus::SchemaSync(_)
                 | TaskStatus::SchemaShard(_)
                 | TaskStatus::TableCopy(_)
