@@ -1,20 +1,14 @@
 //! Server connection requested by a frontend.
 
 use futures::future::try_join_all;
-use mirror::MirrorHandler;
-use pgdog_config::users::PasswordKind;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
     admin::server::AdminServer,
-    backend::{
-        PubSubClient,
-        databases::{self, databases},
-        pool, reload_notify,
-    },
-    config::{PoolerMode, User, config},
+    backend::{PubSubClient, pool},
+    config::PoolerMode,
     frontend::{
         ClientRequest, Router,
         router::{CopyRow, Route, parser::Shard},
@@ -38,25 +32,20 @@ pub(crate) mod binding;
 #[cfg(test)]
 pub(crate) mod binding_test;
 pub(crate) mod buffer;
+pub(crate) mod cluster_connection;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
 
 use aggregate::Aggregates;
 use binding::Binding;
-use mirror::Mirror;
+use cluster_connection::ClusterConnection;
 use multi_shard::MultiShard;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
 pub(crate) struct Connection {
-    user: String,
-    database: String,
     binding: Binding,
-    cluster: Option<Cluster>,
-    /// Each client polls own child node instead of contending on the shared `Cluster` node.
-    /// Cancelled when an admin terminates the cluster (`FORCE_RELOAD`)
-    cancellation_token: CancellationToken,
-    mirrors: Vec<MirrorHandler>,
+    cluster: ClusterConnection,
     pub_sub: PubSubClient,
 }
 
@@ -69,16 +58,12 @@ impl Connection {
             } else {
                 Binding::NotConnected
             },
-            cluster: None,
-            cancellation_token: CancellationToken::new(),
-            user: user.to_owned(),
-            database: database.to_owned(),
-            mirrors: vec![],
+            cluster: ClusterConnection::new(user, database),
             pub_sub: PubSubClient::new(),
         };
 
         if !admin {
-            conn.reload()?;
+            conn.cluster.reload()?;
         }
 
         Ok(conn)
@@ -93,19 +78,7 @@ impl Connection {
         };
 
         if connect {
-            match self.try_conn(request, route).await {
-                Ok(()) => (),
-                Err(Error::Pool(super::Error::Offline | super::Error::AllReplicasDown)) => {
-                    debug!("detected configuration reload, reloading cluster");
-
-                    // Wait to reload pools until they are ready.
-                    self.safe_reload().await?;
-                    return self.try_conn(request, route).await;
-                }
-                Err(err) => {
-                    return Err(err);
-                }
-            }
+            self.connect_internal(request, route).await?;
 
             if !self.binding.state_check(State::Idle) {
                 return Err(Error::NotInSync);
@@ -117,63 +90,36 @@ impl Connection {
 
     /// Send client request to mirrors.
     pub(crate) fn mirror(&mut self, buffer: &crate::frontend::ClientRequest) {
-        for mirror in &mut self.mirrors {
+        for mirror in self.cluster.mirrors() {
             mirror.send(buffer);
         }
     }
 
     /// Tell mirrors to flush buffered transaction.
     pub(crate) fn mirror_flush(&mut self) {
-        for mirror in &mut self.mirrors {
+        for mirror in self.cluster.mirrors() {
             mirror.flush();
         }
     }
 
     /// Remove transaction from mirrors buffers.
     pub(crate) fn mirror_clear(&mut self) {
-        for mirror in &mut self.mirrors {
+        for mirror in self.cluster.mirrors() {
             mirror.clear();
         }
     }
 
     /// Try to get a connection for the given route.
-    async fn try_conn(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if let Shard::Direct(shard) = route.shard() {
-            let mut server = if route.is_read() {
-                self.cluster()?.replica(*shard, request).await?
-            } else {
-                self.cluster()?.primary(*shard, request).await?
-            };
-
-            // Cleanup session mode connections when
-            // they are done.
-            if self.session_mode() {
-                server.reset = true;
-            }
+            let server = self
+                .cluster
+                .get_conn(request, *shard, route.is_read())
+                .await?;
 
             self.binding = Binding::Direct(server, *shard);
         } else {
-            let mut shards = vec![];
-            let mut shard_indices = vec![];
-            for (i, shard) in self.cluster()?.shards().iter().enumerate() {
-                if let Shard::Multi(numbers) = route.shard()
-                    && !numbers.contains(&i)
-                {
-                    continue;
-                };
-                let mut server = if route.is_read() {
-                    shard.replica(request).await?
-                } else {
-                    shard.primary(request).await?
-                };
-
-                if self.session_mode() {
-                    server.reset = true;
-                }
-
-                shards.push(server);
-                shard_indices.push(i);
-            }
+            let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 
             self.binding =
                 Binding::MultiShard(shards, Box::new(MultiShard::new(shard_indices, route)));
@@ -283,7 +229,7 @@ impl Connection {
         for _ in 0..2 {
             if let Some(shard) = self.cluster()?.shards().get(num) {
                 match shard.notify(channel, payload).await {
-                    Err(super::Error::Offline) => self.reload()?,
+                    Err(super::Error::Offline) => self.safe_reload().await?,
                     Err(err) => return Err(err.into()),
                     Ok(_) => break,
                 }
@@ -350,77 +296,11 @@ impl Connection {
 
     /// Reload synchronized with partial config changes.
     pub(crate) async fn safe_reload(&mut self) -> Result<(), Error> {
-        if let Some(wait) = reload_notify::ready() {
-            wait.await;
-        }
-
-        self.reload()
-    }
-
-    /// Fetch the cluster from the global database store.
-    fn reload(&mut self) -> Result<(), Error> {
         if matches!(self.binding, Binding::Admin(_)) {
             return Ok(());
         }
 
-        let user = (self.user.as_str(), self.database.as_str());
-        let config = config();
-
-        // Check if we need re-configure passthrough auth using our existing password.
-        //
-        // This happens on configuration reload (RELOAD/sighup), because we
-        // only load databases from the config. RELOAD effectively removes all passthrough
-        // connection pools until a client needs to query it and we re-create it.
-        //
-        if config.config.general.passthrough_auth()
-            && databases().passwords(user).is_none()
-            && let Some(ref cluster) = self.cluster
-        {
-            let mut user = User {
-                name: self.user.clone(),
-                database: self.database.clone(),
-                ..Default::default()
-            };
-            for pass in cluster.passwords() {
-                match pass {
-                    PasswordKind::Hashed(hashed) => {
-                        user.password_hash = Some(hashed.clone());
-                    }
-
-                    PasswordKind::Plain(plain) => {
-                        user.passwords.push(plain.clone());
-                    }
-
-                    // Vault static roles are for client auth only; skip for passthrough.
-                    PasswordKind::VaultStaticRole(_) => {}
-                }
-            }
-
-            databases::add(user)?;
-        }
-
-        let databases = databases();
-        let cluster = databases.cluster(user)?;
-
-        self.cancellation_token = cluster.get_cancellation_token().child_token();
-        self.cluster = Some(cluster.clone());
-        let source_db = cluster.name();
-        self.mirrors = databases
-            .mirrors(user)?
-            .unwrap_or(&[])
-            .iter()
-            .map(|dest_cluster| {
-                let mirror_config = databases.mirror_config(source_db, dest_cluster.name());
-                Mirror::spawn(source_db, dest_cluster, mirror_config)
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        debug!(
-            r#"database "{}" has {} mirrors"#,
-            self.cluster()?.name(),
-            self.mirrors.len()
-        );
-
-        Ok(())
+        self.cluster.safe_reload().await
     }
 
     pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
@@ -493,12 +373,12 @@ impl Connection {
 
     /// Token cancelled when an admin terminates this connection's `Cluster`.
     pub(crate) fn cancellation_token(&self) -> CancellationToken {
-        self.cancellation_token.clone()
+        self.cluster.query_cancellation_token()
     }
 
     /// Get cluster if any.
     pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
+        self.cluster.cluster()
     }
 
     /// Pooler is in session mode.
