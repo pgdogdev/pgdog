@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use pg_raw_parse::{Error as ParseError, deparse, nodes};
+use pg_raw_parse::{Error as ParseError, Node, deparse, nodes};
+use pgdog_config::RewriteMode;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -110,12 +111,25 @@ impl Cache {
     ) -> Result<Ast, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        // Global sequence names depend on the resolved table schema. A SQL-only
+        // cache key cannot distinguish clients with different search paths.
+        let context_independent = |entry: &Ast| {
+            ctx.sharding_schema.rewrite.primary_key != RewriteMode::RewriteOmniGlobal
+                || !matches!(
+                    entry.ast.stmts().next(),
+                    Some(Node::InsertStmt(_) | Node::PrepareStmt(_))
+                )
+        };
         {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
-            });
+            let ast = guard
+                .queries
+                .get_mut(query_and_comment.query)
+                .filter(|entry| context_independent(entry))
+                .map(|entry| {
+                    entry.stats.lock().hits += 1; // No contention on this.
+                    entry.clone()
+                });
             if let Some(mut ast) = ast {
                 guard.stats.hits += 1;
                 ast.comment_role = query_and_comment.role;
@@ -147,7 +161,9 @@ impl Cache {
         // subsequent uncommented lookup would hit this entry and receive an
         // already-rewritten plan that was built against the commented
         // (direct-shard) variant.
-        let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
+        let cacheable = (entry.comment_shard.is_none() || entry.rewrite_plan.is_empty())
+            && context_independent(&entry);
+        entry.cached = cacheable;
         if cacheable {
             guard
                 .queries
