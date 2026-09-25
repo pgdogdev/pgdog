@@ -70,11 +70,8 @@ impl StatementRewrite<'_> {
                 RewriteMode::RewriteOmni | RewriteMode::RewriteOmniGlobal
             ) && !is_sharded;
 
-        let sequence_prefix =
-            (mode == RewriteMode::RewriteOmniGlobal && !is_sharded).then(|| match table.schema {
-                Some(schema) => format!("{schema}_{}", table.name),
-                None => table.name.to_owned(),
-            });
+        let sequence_prefix = (mode == RewriteMode::RewriteOmniGlobal && !is_sharded)
+            .then(|| format!("{}_{}", relation.schema(), relation.name));
 
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
@@ -246,15 +243,26 @@ mod tests {
     use crate::config::PreparedStatementsLevel;
     use crate::frontend::PreparedStatements;
     use crate::frontend::router::parser::StatementRewriteContext;
+    use crate::net::parameter::ParameterValue;
     use crate::test_utils::set_env_var;
 
     pub(super) fn make_schema_with_bigint_pk() -> Schema {
+        make_schema_with_bigint_pk_in("public")
+    }
+
+    fn make_schema_with_bigint_pk_in(schema: &str) -> Schema {
+        let relation = make_bigint_pk_relation(schema);
+        let relations = HashMap::from([((schema.into(), "users".into()), relation)]);
+        Schema::from_parts(vec![schema.into()], relations)
+    }
+
+    fn make_bigint_pk_relation(schema: &str) -> Relation {
         let mut columns = IndexMap::new();
         columns.insert(
             "id".to_string(),
             SchemaColumn {
                 table_catalog: "test".into(),
-                table_schema: "public".into(),
+                table_schema: schema.into(),
                 table_name: "users".into(),
                 column_name: "id".into(),
                 column_default: String::new(),
@@ -270,7 +278,7 @@ mod tests {
             "name".to_string(),
             SchemaColumn {
                 table_catalog: "test".into(),
-                table_schema: "public".into(),
+                table_schema: schema.into(),
                 table_name: "users".into(),
                 column_name: "name".into(),
                 column_default: String::new(),
@@ -282,9 +290,7 @@ mod tests {
             }
             .into(),
         );
-        let relation = Relation::test_table("public", "users", columns);
-        let relations = HashMap::from([(("public".into(), "users".into()), relation)]);
-        Schema::from_parts(vec!["public".into()], relations)
+        Relation::test_table(schema, "users", columns)
     }
 
     fn make_schema_with_non_bigint_pk() -> Schema {
@@ -533,8 +539,17 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
     ) -> Result<(String, RewritePlan), Error> {
+        rewrite_sql_with_search_path(sql, db_schema, schema, None)
+    }
+
+    fn rewrite_sql_with_search_path(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+        search_path: Option<&ParameterValue>,
+    ) -> Result<(String, RewritePlan), Error> {
         let mut prepared = PreparedStatements::default();
-        rewrite_sql_with_prepared_statements(sql, db_schema, schema, &mut prepared)
+        rewrite_sql_with_context(sql, db_schema, schema, &mut prepared, search_path)
     }
 
     fn rewrite_sql_with_prepared_statements(
@@ -542,6 +557,16 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
         prepared: &mut PreparedStatements,
+    ) -> Result<(String, RewritePlan), Error> {
+        rewrite_sql_with_context(sql, db_schema, schema, prepared, None)
+    }
+
+    fn rewrite_sql_with_context(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+        prepared: &mut PreparedStatements,
+        search_path: Option<&ParameterValue>,
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let ast = pg_raw_parse::parse(sql).unwrap();
@@ -552,7 +577,7 @@ mod tests {
             schema,
             db_schema,
             user: "",
-            search_path: None,
+            search_path,
             timezone: None,
             query_timestamps: QueryTimestamps::default(),
         });
@@ -662,7 +687,7 @@ mod tests {
         };
 
         for (table, sequence) in [
-            ("users", "users_id_seq"),
+            ("users", "public_users_id_seq"),
             ("public.users", "public_users_id_seq"),
         ] {
             for (columns, values, expected_values, injected) in [
@@ -715,6 +740,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_rewrite_omni_global_uses_search_path_schema() {
+        let db_schema = Schema::from_parts(
+            vec!["public".into()],
+            HashMap::from([
+                (
+                    ("public".into(), "users".into()),
+                    make_bigint_pk_relation("public"),
+                ),
+                (
+                    ("tenant".into(), "users".into()),
+                    make_bigint_pk_relation("tenant"),
+                ),
+            ]),
+        );
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+        let search_path = ParameterValue::Tuple(vec!["tenant".into(), "public".into()]);
+
+        let (sql, plan) = rewrite_sql_with_search_path(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+            Some(&search_path),
+        )
+        .expect("rewrite succeeds");
+
+        assert_eq!(
+            sql,
+            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('tenant_users_id_seq'))"
+        );
+        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(
+            plan.generated_params,
+            vec![GeneratedParam {
+                param_num: 1,
+                generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
+                    "tenant_users_id_seq".into()
+                )),
+            }]
+        );
     }
 
     #[test]
