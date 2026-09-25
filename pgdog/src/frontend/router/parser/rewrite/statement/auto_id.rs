@@ -364,6 +364,30 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_default_values_generates_primary_key() {
+        let db_schema = make_schema_with_bigint_pk();
+        for columns in ["", "(name)", "(id)", "(name, id)"] {
+            for prefix in ["", "PREPARE defaults AS "] {
+                let (sql, plan) = rewrite_sql_with_mode(
+                    &format!("{prefix}INSERT INTO users {columns} DEFAULT VALUES RETURNING id"),
+                    &db_schema,
+                    RewriteMode::Rewrite,
+                )
+                .expect("DEFAULT VALUES rewrite");
+                assert_eq!(plan.unique_ids, 1, "{sql}");
+                assert_eq!(plan.auto_id_injected, 1, "{sql}");
+                assert!(!sql.contains("DEFAULT VALUES"), "{sql}");
+                assert!(sql.contains("RETURNING id"), "{sql}");
+                if columns.contains("name") {
+                    assert!(sql.contains("(name, id) VALUES (DEFAULT,"), "{sql}");
+                } else {
+                    assert!(sql.contains("(id) VALUES ("), "{sql}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_error_mode_returns_error() {
         let db_schema = make_schema_with_bigint_pk();
         let result = rewrite_sql_with_mode(
