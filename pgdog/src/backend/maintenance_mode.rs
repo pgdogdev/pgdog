@@ -97,7 +97,6 @@ struct MaintenanceState {
 impl MaintenanceMode {
     /// Check whether the given database is currently in maintenance mode.
     #[cfg(test)]
-    #[inline]
     fn paused(&self, database: &str) -> bool {
         self.get_waiter(database).is_some()
     }

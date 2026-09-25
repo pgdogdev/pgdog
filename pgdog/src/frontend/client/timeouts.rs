@@ -29,7 +29,6 @@ impl Timeouts {
     }
 
     /// Get active query timeout.
-    #[inline]
     pub(crate) fn query_timeout(&self, state: &State) -> Duration {
         match state {
             State::Active => self.query_timeout,
@@ -37,7 +36,6 @@ impl Timeouts {
         }
     }
 
-    #[inline]
     pub(crate) fn client_idle_timeout(
         &self,
         state: &State,

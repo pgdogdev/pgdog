@@ -162,7 +162,6 @@ pub(crate) struct Server {
 }
 
 impl MemoryUsage for Server {
-    #[inline]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<BackendKeyData>()
             + self.params.memory_usage()
@@ -867,13 +866,11 @@ impl Server {
     }
 
     /// Server is still inside a transaction.
-    #[inline]
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
     }
 
     /// The server connection permanently failed.
-    #[inline]
     pub(crate) fn error(&self) -> bool {
         self.stats().get_state() == State::Error
     }
@@ -911,7 +908,6 @@ impl Server {
     }
 
     /// Server parameters.
-    #[inline]
     pub(crate) fn params(&self) -> &Parameters {
         &self.params
     }
@@ -1150,28 +1146,23 @@ impl Server {
     }
 
     /// Reset error state caused by schema change.
-    #[inline]
     pub(crate) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
-    #[inline]
     pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
     }
 
-    #[inline]
     pub(crate) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
-    #[inline]
     pub(crate) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
-    #[inline]
     pub(crate) fn disconnect_reason(&mut self, reason: DisconnectReason) {
         if self.disconnect_reason.is_none() {
             self.disconnect_reason = Some(reason);
@@ -1179,25 +1170,21 @@ impl Server {
     }
 
     /// Server connection unique identifier.
-    #[inline]
     pub(crate) fn id(&self) -> BackendPid {
         self.id
     }
 
     /// Backend key data for query cancellation.
-    #[inline]
     pub(crate) fn key(&self) -> &BackendKeyData {
         &self.key
     }
 
     /// Number of password attempts it took to authenticate this connection.
-    #[inline]
     pub(crate) fn password_attempts(&self) -> usize {
         self.password_attempts
     }
 
     /// How old this connection is.
-    #[inline]
     pub(crate) fn age(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats().created_at())
     }
@@ -1207,7 +1194,6 @@ impl Server {
     /// retirement of connection cohorts. Saturates at zero on
     /// negative overflow. No-op when `jitter` is zero. Called once
     /// by the pool after a successful connect.
-    #[inline]
     pub(crate) fn apply_lifetime_jitter(&mut self, base: Duration, jitter: Duration) {
         if jitter.is_zero() {
             return;
@@ -1227,29 +1213,24 @@ impl Server {
 
     /// Effective max_age for this connection: the per-connection
     /// jittered value if one was sampled, otherwise `base`.
-    #[inline]
     pub(crate) fn effective_max_age(&self, base: Duration) -> Duration {
         self.max_age.unwrap_or(base)
     }
 
-    #[inline]
     pub(crate) fn credentials_generation(&self) -> u64 {
         self.credentials_generation
     }
 
-    #[inline]
     pub(crate) fn set_credentials_generation(&mut self, generation: u64) {
         self.credentials_generation = generation;
     }
 
     /// How long this connection has been idle.
-    #[inline]
     pub(crate) fn idle_for(&self, instant: Instant) -> Duration {
         instant.duration_since(self.stats().last_used())
     }
 
     /// How long has it been since the last connection healthcheck.
-    #[inline]
     pub(crate) fn healthcheck_age(&self, instant: Instant) -> Duration {
         if let Some(last_healthcheck) = self.stats().last_healthcheck() {
             instant.duration_since(last_healthcheck)
@@ -1259,72 +1240,59 @@ impl Server {
     }
 
     /// Get server address.
-    #[inline]
     pub(crate) fn addr(&self) -> &Address {
         &self.addr
     }
 
-    #[inline]
     fn stream(&mut self) -> &mut Stream {
         self.stream.as_mut().unwrap()
     }
 
     /// Server needs a cleanup because client changed a session variable,
     /// parameter, or advisory lock state
-    #[inline]
     pub(crate) fn dirty(&self) -> bool {
         self.dirty
     }
 
-    #[inline]
     pub(crate) fn mark_dirty(&mut self, dirty: bool) {
         self.dirty = dirty;
     }
 
     /// Server has been cleaned.
-    #[inline]
     pub(super) fn cleaned(&mut self) {
         self.dirty = false;
         self.stats.cleaned();
     }
 
-    #[inline]
     pub(crate) fn stats(&self) -> &Stats {
         &self.stats
     }
 
-    #[inline]
     pub(crate) fn stats_mut(&mut self) -> &mut Stats {
         &mut self.stats
     }
 
-    #[inline]
     pub(crate) fn set_pooler_mode(&mut self, pooler_mode: PoolerMode) {
         self.pooler_mode = pooler_mode;
     }
 
-    #[inline]
     pub(crate) fn pooler_mode(&self) -> &PoolerMode {
         &self.pooler_mode
     }
 
-    #[inline]
     pub(crate) fn replication_mode(&self) -> bool {
         self.replication_mode
     }
 
-    #[inline]
     pub(crate) fn prepared_statements_mut(&mut self) -> &mut PreparedStatements {
         &mut self.prepared_statements
     }
 
-    #[inline]
     #[cfg(test)]
     pub(crate) fn prepared_statements(&self) -> &PreparedStatements {
         &self.prepared_statements
     }
 
-    #[inline]
     pub(crate) fn memory_stats(&self) -> MemoryStats {
         MemoryStats {
             inner: pgdog_stats::MemoryStats {

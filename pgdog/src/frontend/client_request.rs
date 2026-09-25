@@ -42,7 +42,6 @@ pub(crate) struct ClientRequest {
 }
 
 impl MemoryUsage for ClientRequest {
-    #[inline]
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
         self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()

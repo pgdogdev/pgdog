@@ -782,7 +782,6 @@ impl Client {
 }
 
 impl MemoryUsage for Client {
-    #[inline]
     fn memory_usage(&self) -> usize {
         std::mem::size_of::<SocketAddr>()
             + std::mem::size_of::<Stream>()
