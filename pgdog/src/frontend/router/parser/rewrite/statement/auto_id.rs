@@ -76,6 +76,30 @@ impl StatementRewrite<'_> {
                 None => table.name.to_owned(),
             });
 
+        if rewrite && matches!(node.select_stmt(), Node::None) {
+            // DEFAULT VALUES has no SelectStmt or column list. Generate one
+            // row of primary keys; PostgreSQL supplies the other defaults.
+            let values: Vec<_> = missing_columns
+                .iter()
+                .map(|column| {
+                    node.cols_mut().push(
+                        mem,
+                        mem.make_res_target(Some(column), mem.empty(), mem.none())
+                            .uncast(),
+                    );
+                    Self::auto_id_func_call(mem, column, sequence_prefix.as_deref()).uncast()
+                })
+                .collect();
+            let mut select = mem.make_node::<nodes::SelectStmt>();
+            select
+                .as_mut()
+                .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
+            node.set_select_stmt(select.uncast());
+            plan.auto_id_injected += missing_columns.len() as u16;
+            self.rewritten = true;
+            return Ok(());
+        }
+
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
             let replaced = self.replace_set_to_default_at_positions(
@@ -361,6 +385,33 @@ mod tests {
         // pgdog.unique_id() should be replaced with actual bigint value
         assert!(!sql.contains("pgdog.unique_id"));
         assert!(sql.contains("::bigint")); // value is cast to bigint
+    }
+
+    #[test]
+    fn test_rewrite_default_values_generates_primary_key() {
+        let db_schema = make_schema_with_bigint_pk();
+        for mode in [
+            RewriteMode::Rewrite,
+            RewriteMode::RewriteOmni,
+            RewriteMode::RewriteOmniGlobal,
+        ] {
+            for prefix in ["", "PREPARE defaults AS "] {
+                let (sql, plan) = rewrite_sql_with_mode(
+                    &format!("{prefix}INSERT INTO users DEFAULT VALUES RETURNING id"),
+                    &db_schema,
+                    mode,
+                )
+                .expect("DEFAULT VALUES rewrite");
+                assert_eq!(plan.auto_id_injected, 1, "{sql}");
+                assert_eq!(
+                    plan.unique_ids,
+                    u16::from(mode != RewriteMode::RewriteOmniGlobal)
+                );
+                assert!(!sql.contains("DEFAULT VALUES"), "{sql}");
+                assert!(sql.contains("RETURNING id"), "{sql}");
+                assert!(sql.contains("(id) VALUES ("), "{sql}");
+            }
+        }
     }
 
     #[test]
