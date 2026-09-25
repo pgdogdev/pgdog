@@ -1307,11 +1307,8 @@ impl Server {
     pub(crate) fn replace_oids(&mut self, oids: &Arc<Oids>) {
         self.prepared_statements.replace_oids(oids);
     }
-}
 
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stats().disconnect();
+    pub(crate) fn terminate(&mut self) {
         if let Some(mut stream) = self.stream.take() {
             info!(
                 "closing server connection: state={}, reason={} [{}]",
@@ -1326,6 +1323,13 @@ impl Drop for Server {
                 Ok::<(), Error>(())
             });
         }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stats().disconnect();
+        self.terminate();
     }
 }
 
