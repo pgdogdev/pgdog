@@ -386,6 +386,24 @@ mod tests {
     }
 
     #[test]
+    fn test_error_mode_returns_error() {
+        let db_schema = make_schema_with_bigint_pk();
+        let result = rewrite_sql_with_mode(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            RewriteMode::Error,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("primary key is missing"),
+            "Expected MissingPrimaryKey error, got: {}",
+            err
+        );
+    }
+
+    #[test]
     fn test_auto_id_implicit_columns_preserve_supplied_key() {
         let db_schema = make_schema_with_bigint_pk();
         for mode in [RewriteMode::Rewrite, RewriteMode::Error] {
@@ -456,24 +474,6 @@ mod tests {
         );
         assert_eq!(plan.auto_id_injected, 1);
         assert_eq!(plan.unique_ids, 1);
-    }
-
-    #[test]
-    fn test_error_mode_returns_error() {
-        let db_schema = make_schema_with_bigint_pk();
-        let result = rewrite_sql_with_mode(
-            "INSERT INTO users (name) VALUES ('test')",
-            &db_schema,
-            RewriteMode::Error,
-        );
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("primary key is missing"),
-            "Expected MissingPrimaryKey error, got: {}",
-            err
-        );
     }
 
     #[test]
