@@ -2560,13 +2560,18 @@ mod test {
 
     // Column-only sharded table detection tests (using loaded schema)
 
-    fn run_test_column_only(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
+    fn run_test_with_column_data_type(
+        stmt: &str,
+        bind: Option<&Bind>,
+        data_type: DataType,
+    ) -> Result<Option<Shard>, Error> {
         // Use column-only sharded table config (no table name)
         let schema = ShardingSchema {
             shards: 3,
             tables: ShardedTables::new(
                 vec![ShardedTable {
                     column: "tenant_id".into(),
+                    data_type,
                     // No table name - column-only config
                     ..Default::default()
                 }],
@@ -2580,6 +2585,10 @@ mod test {
         let stmt = raw.stmts().next().unwrap();
         let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
         parser.shard()
+    }
+
+    fn run_test_column_only(stmt: &str, bind: Option<&Bind>) -> Result<Option<Shard>, Error> {
+        run_test_with_column_data_type(stmt, bind, Default::default())
     }
 
     #[test]
@@ -2604,6 +2613,36 @@ mod test {
             result,
             Ok(None),
             "Should not be able to route based on an unrecognized expr"
+        );
+    }
+
+    #[test]
+    fn test_column_with_text_value_sent_as_binary_and_cast() {
+        let cast_result = run_test_with_column_data_type(
+            "SELECT * FROM users WHERE tenant_id = $1::uuid",
+            Some(&Bind::new_params_codes(
+                "",
+                &[Parameter::new(b"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")],
+                &[Format::Binary],
+            )),
+            DataType::Uuid,
+        )
+        .unwrap();
+        let text_result = run_test_with_column_data_type(
+            "SELECT * FROM users WHERE tenant_id = $1",
+            Some(&Bind::new_params_codes(
+                "",
+                &[Parameter::new(b"a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")],
+                &[Format::Text],
+            )),
+            DataType::Uuid,
+        )
+        .unwrap();
+        // This test can be safely deleted or replaced if it begins failing
+        // due to more intelligent handling of parameter types
+        assert_eq!(
+            cast_result, text_result,
+            "Should treat text sent as binary cast to type identically to type sent as text"
         );
     }
 
