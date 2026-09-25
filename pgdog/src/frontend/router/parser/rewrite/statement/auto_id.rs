@@ -364,6 +364,39 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_id_implicit_columns_preserve_supplied_key() {
+        let db_schema = make_schema_with_bigint_pk();
+        for mode in [RewriteMode::Rewrite, RewriteMode::Error] {
+            for sql in [
+                "INSERT INTO users VALUES (42, 'test')",
+                "INSERT INTO users VALUES (42)",
+                "INSERT INTO users VALUES (42, 'a'), (43, 'b')",
+            ] {
+                let (rewritten, plan) =
+                    rewrite_sql_with_mode(sql, &db_schema, mode).expect("valid positional INSERT");
+                assert_eq!(rewritten, sql);
+                assert_eq!(plan.auto_id_injected, 0);
+                assert_eq!(plan.unique_ids, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_auto_id_implicit_columns_replace_default() {
+        let db_schema = make_schema_with_bigint_pk();
+        let (sql, plan) = rewrite_sql_with_mode(
+            "INSERT INTO users VALUES (DEFAULT, 'a'), (DEFAULT, 'b')",
+            &db_schema,
+            RewriteMode::Rewrite,
+        )
+        .expect("positional defaults");
+        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.auto_id_injected, 2);
+        assert!(sql.starts_with("INSERT INTO users VALUES ("), "{sql}");
+        assert!(!sql.contains("DEFAULT"), "{sql}");
+    }
+
+    #[test]
     fn test_error_mode_returns_error() {
         let db_schema = make_schema_with_bigint_pk();
         let result = rewrite_sql_with_mode(
