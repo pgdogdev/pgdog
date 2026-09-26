@@ -24,6 +24,21 @@ impl QueryEngine {
             return Ok(());
         }
 
+        // `SELECT set_config(...)` is a query and Postgres answers it, so take a
+        // server before touching the parameters: syncing a change the statement
+        // is about to make itself would just send it twice.
+        if set_config && !self.backend.connected() {
+            let connected = if context.in_transaction() {
+                self.connect_transaction(context).await?
+            } else {
+                self.connect(context, None).await?
+            };
+
+            if !connected {
+                return Ok(());
+            }
+        }
+
         let mut fake_command = "SET";
         for param in params {
             let is_pin = param.name == PGDOG_PIN;

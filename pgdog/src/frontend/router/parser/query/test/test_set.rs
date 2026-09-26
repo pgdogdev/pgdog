@@ -311,14 +311,14 @@ fn test_set_config_bound_params() {
     match command {
         Command::Set {
             ref params,
-            is_select,
+            set_config,
             ..
         } => {
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].name, "search_path");
             assert_eq!(params[0].value, Some(ParameterValue::String("".into())));
             assert!(!params[0].local);
-            assert!(is_select);
+            assert!(set_config);
         }
         _ => panic!("expected Command::Set, got {command:#?}"),
     }
