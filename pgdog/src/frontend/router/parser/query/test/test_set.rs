@@ -7,7 +7,7 @@ use crate::{
             route::{OverrideReason, ShardSource},
         },
     },
-    net::{Format, messages::Parameter, parameter::ParameterValue},
+    net::{Format, messages::bind::Parameter, parameter::ParameterValue},
 };
 
 use super::Error;
