@@ -10,6 +10,7 @@ use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
 use crate::net::{self, Stream, tweak};
 use crate::sighup::Sighup;
+use crate::state::State;
 use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
 use tokio::signal::ctrl_c;
 use tokio::{select, spawn};
@@ -146,13 +147,19 @@ impl Listener {
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
-        info!(
-            "waiting up to {:.3}s for {} clients to finish transactions",
-            shutdown_timeout.as_secs_f64(),
-            comms().tracker().len(),
-        );
-
         let comms = comms();
+        let clients = comms.clients();
+        let idle_clients = clients
+            .values()
+            .filter(|client| client.stats.state == State::Idle && !client.stats.locked)
+            .count();
+
+        info!(
+            "waiting up to {:.3}s for {} clients to finish transactions, {} idle clients notified",
+            shutdown_timeout.as_secs_f64(),
+            clients.len() - idle_clients,
+            idle_clients,
+        );
 
         if safe_timeout(shutdown_timeout, comms.tracker().wait())
             .await

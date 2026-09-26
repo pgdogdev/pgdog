@@ -156,6 +156,11 @@ impl MessageBuffer {
         }
     }
 
+    /// No bytes have been read from the stream that aren't part of a message we already returned.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
     /// Re-allcoate buffer if it exceeds capacity.
     pub(crate) fn shrink_to_fit(&mut self) -> bool {
         // Re-allocate the buffer to save on memory.
