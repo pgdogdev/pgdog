@@ -4,19 +4,21 @@ Runs against a database with a single server connection, so the next client
 always gets the connection the previous one used. current_setting() is used
 instead of SHOW because SHOW can be answered by PgDog itself.
 
-Every test runs against two copies of that database that differ only in parser
-level: "on" always parses, "auto" leaves a single-primary cluster to the regex
-gate. A statement that only the gate can let through -- set_config(), a function
-call inside a SELECT rather than a statement-start keyword -- reaches the parser
-on one and has to earn it on the other.
+Every test runs at two parser levels: "on" always parses, "auto" leaves a
+single-primary cluster to the regex gate. A statement that only the gate can let
+through -- set_config(), a function call inside a SELECT rather than a
+statement-start keyword -- reaches the parser on one and has to earn it on the
+other. "auto" needs its own config (gate/), where nothing else turns the parser
+on; run.sh runs these tests a second time against it.
 """
 
+import os
 import uuid
 
 import psycopg
 import pytest
 
-DATABASES = ["pgdog_leak", "pgdog_leak_auto"]
+DATABASES = os.environ.get("PGDOG_LEAK_DATABASES", "pgdog_leak").split(",")
 
 
 def connect(dbname):
