@@ -790,7 +790,7 @@ impl Server {
 
     /// Record a client's parameter change, so we know what to undo before
     /// this connection goes to somebody else.
-    pub fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
+    pub(crate) fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
         for param in params {
             match (&param.value, in_transaction) {
                 (Some(value), true) => {
@@ -808,7 +808,7 @@ impl Server {
         self.params_recorded = true;
     }
 
-    pub fn record_reset_all(&mut self, in_transaction: bool) {
+    pub(crate) fn record_reset_all(&mut self, in_transaction: bool) {
         if in_transaction {
             self.client_params.reset_all_transaction();
         } else {
