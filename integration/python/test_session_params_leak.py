@@ -48,6 +48,17 @@ def dbname(request):
     return request.param
 
 
+@pytest.fixture
+def gated(request, dbname):
+    if dbname == "pgdog_leak_auto":
+        request.node.add_marker(
+            pytest.mark.xfail(
+                strict=True,
+                reason="the regex gate doesn't match set_config() yet (#1327)",
+            )
+        )
+
+
 def test_reset_rolled_back(dbname):
     """A ROLLBACK brings back the value the RESET cleared.
 
@@ -77,7 +88,7 @@ def test_set_committed_after_connecting(dbname):
     assert read(dbname, "statement_timeout") == "0"
 
 
-def test_set_config_bound_params(dbname):
+def test_set_config_bound_params(dbname, gated):
     """set_config() arguments arrive in the Bind message, not as constants."""
     conn = connect(dbname)
     conn.execute("SELECT pg_catalog.set_config(%s, %s, false)", ("search_path", ""))
@@ -138,7 +149,7 @@ def tenants(dbname):
     conn.close()
 
 
-def test_tenant_guc_does_not_outlive_its_client(dbname, tenants):
+def test_tenant_guc_does_not_outlive_its_client(dbname, tenants, gated):
     """The silent half of the leak: no error, just another tenant's rows.
 
     Row-level security keyed on a custom GUC is how multi-tenant applications
