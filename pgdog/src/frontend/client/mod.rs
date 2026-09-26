@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use pgdog_config::PoolerMode;
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
 use tokio::{select, spawn};
@@ -532,6 +533,7 @@ impl Client {
             }
 
             let client_state = query_engine.client_state();
+            let pooler_mode = query_engine.pooler_mode();
 
             let cancellation_token = query_engine.cancellation_token();
 
@@ -546,7 +548,7 @@ impl Client {
                     self.server_message(&mut query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state, &cancellation_token) => {
+                buffer = self.buffer(client_state, pooler_mode, &cancellation_token) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
@@ -649,14 +651,21 @@ impl Client {
     async fn buffer(
         &mut self,
         state: State,
+        pooler_mode: Option<PoolerMode>,
         cancellation_token: &CancellationToken,
     ) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
         // Check config once per request.
         let config = config::config();
-        // Configure prepared statements cache.
-        self.prepared_statements.level = config.prepared_statements();
+        // Configure prepared statements cache using the pooler mode this
+        // client's pool actually runs in. The `[general]` default alone is
+        // wrong when it is session mode but this user is transaction pooled:
+        // untracked Parse and Bind could land on different servers.
+        self.prepared_statements.level = match pooler_mode {
+            Some(pooler_mode) => config.prepared_statements_for(pooler_mode),
+            None => config.prepared_statements(),
+        };
         self.timeouts = Timeouts::from_config(&config.config.general);
         self.query_log_stdout = config.config.general.query_log_stdout;
         self.query_size_limit = config.config.general.query_size_limit;
