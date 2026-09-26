@@ -456,6 +456,11 @@ impl Connection {
         }
     }
 
+    /// Mark connected servers as containing client-specific session state.
+    pub(crate) fn mark_dirty(&mut self) {
+        self.binding.dirty();
+    }
+
     /// Check if any held server connection is currently locked to a client.
     #[cfg(test)]
     pub(crate) fn locked(&self) -> bool {

@@ -720,6 +720,7 @@ impl Server {
         let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
             let tracked = params.tracked_and_different(&self.client_params);
+            let sets_role = tracked.get("role").is_some();
             // Construct RESET queries to reset any current params
             // to their default values.
             let mut queries = self.client_params.reset_queries(params);
@@ -733,6 +734,9 @@ impl Server {
             if !queries.is_empty() {
                 debug!("syncing {} params", queries.len());
 
+                if sets_role {
+                    self.mark_dirty(true);
+                }
                 self.execute_batch(&queries).await?;
                 clear_params = true;
             }
@@ -754,6 +758,9 @@ impl Server {
             if !transaction_sets.is_empty() {
                 debug!("syncing {} in-transaction params", transaction_sets.len());
 
+                if params.get("role").is_some() {
+                    self.mark_dirty(true);
+                }
                 self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
 
@@ -2462,6 +2469,7 @@ pub(crate) mod test {
             .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 1);
+        assert!(!server.dirty());
 
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
@@ -2482,6 +2490,59 @@ pub(crate) mod test {
                 .await?;
             assert_eq!(changed, 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_link_client_marks_server_dirty_when_setting_role()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut params = Parameters::default();
+        params.insert("role", "pgdog");
+
+        let mut server = test_server().await;
+        assert!(!server.dirty());
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await?;
+
+        assert_eq!(changed, 1);
+        assert!(server.dirty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_link_client_marks_server_dirty_before_role_batch_failure() {
+        let mut params = Parameters::default();
+        params.insert("role", "pgdog");
+        params.insert("work_mem", "not-a-size");
+
+        let mut server = test_server().await;
+        assert!(
+            server
+                .link_client(FrontendPid::new(), &params, None)
+                .await
+                .is_err()
+        );
+        assert!(server.dirty());
+    }
+
+    #[tokio::test]
+    async fn test_link_client_marks_server_dirty_for_transaction_role()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut params = Parameters::default();
+        params.insert_transaction("role", "pgdog", false);
+
+        let mut server = test_server().await;
+        let changed = server
+            .link_client(FrontendPid::new(), &params, Some("BEGIN"))
+            .await?;
+
+        assert_eq!(changed, 1);
+        assert!(server.dirty());
+        server.rollback().await?;
 
         Ok(())
     }

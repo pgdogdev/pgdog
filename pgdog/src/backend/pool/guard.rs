@@ -113,8 +113,26 @@ mod test {
             },
             server::test::test_server,
         },
-        net::{Describe, Flush, Parse, Protocol, ProtocolMessage, Query, Sync},
+        net::{DataRow, Describe, Flush, Parse, Protocol, ProtocolMessage, Query, Sync},
     };
+
+    async fn identity(guard: &mut Guard) -> (String, String) {
+        let messages = guard
+            .execute("SELECT session_user, current_user")
+            .await
+            .unwrap();
+        let row: DataRow = messages
+            .into_iter()
+            .find(|message| message.code() == 'D')
+            .expect("identity query should return one row")
+            .try_into()
+            .unwrap();
+
+        (
+            row.get_text(0).expect("session_user"),
+            row.get_text(1).expect("current_user"),
+        )
+    }
 
     #[tokio::test]
     async fn test_cleanup_dirty() {
@@ -174,6 +192,49 @@ mod test {
 
         guard.mark_dirty(true);
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_dirty_resets_session_identity() {
+        crate::logger();
+        let pool = pool();
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        let server_id = guard.id();
+        let role = format!("pgdog_cleanup_role_{}", std::process::id());
+
+        guard
+            .execute_checked(format!("CREATE ROLE {role}"))
+            .await
+            .unwrap();
+        guard
+            .execute_checked(format!("SET ROLE {role}"))
+            .await
+            .unwrap();
+        assert_eq!(identity(&mut guard).await, ("pgdog".into(), role.clone()));
+
+        guard.mark_dirty(true);
+        drop(guard);
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(guard.id(), server_id);
+        assert_eq!(identity(&mut guard).await, ("pgdog".into(), "pgdog".into()));
+
+        guard
+            .execute_checked(format!("SET SESSION AUTHORIZATION {role}"))
+            .await
+            .unwrap();
+        assert_eq!(identity(&mut guard).await, (role.clone(), role.clone()));
+
+        guard.mark_dirty(true);
+        drop(guard);
+
+        let mut guard = pool.get(&Request::default()).await.unwrap();
+        assert_eq!(guard.id(), server_id);
+        assert_eq!(identity(&mut guard).await, ("pgdog".into(), "pgdog".into()));
+        guard
+            .execute_checked(format!("DROP ROLE {role}"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
