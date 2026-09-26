@@ -443,7 +443,7 @@ impl Binding {
         }
     }
 
-    pub fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
+    pub(crate) fn record_params(&mut self, params: &[SetParam], in_transaction: bool) {
         match self {
             Binding::Direct(server, ..) => server.record_params(params, in_transaction),
             Binding::MultiShard(servers, _) => servers
@@ -453,7 +453,7 @@ impl Binding {
         }
     }
 
-    pub fn record_reset_all(&mut self, in_transaction: bool) {
+    pub(crate) fn record_reset_all(&mut self, in_transaction: bool) {
         match self {
             Binding::Direct(server, ..) => server.record_reset_all(in_transaction),
             Binding::MultiShard(servers, _) => servers
