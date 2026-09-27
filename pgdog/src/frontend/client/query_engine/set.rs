@@ -24,6 +24,20 @@ impl QueryEngine {
             return Ok(());
         }
 
+        // Take a server before touching the parameters: syncing a change the
+        // statement is about to make itself would send it twice.
+        if set_config && !self.backend.connected() {
+            let connected = if context.in_transaction() {
+                self.connect_transaction(context).await?
+            } else {
+                self.connect(context, None).await?
+            };
+
+            if !connected {
+                return Ok(());
+            }
+        }
+
         let mut fake_command = "SET";
         for param in params {
             let is_pin = param.name == PGDOG_PIN;
@@ -46,7 +60,11 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if context.in_transaction() {
+                    context.params.reset_transaction(&param.name);
+                } else {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -58,6 +76,9 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            // The server is ours, so its session changes with the client's:
+            // record it or we won't know what to undo for the next client.
+            self.backend.record_params(params, context.in_transaction());
             self.execute(context, None).await?;
         } else {
             let fake_response = set_config
@@ -99,7 +120,9 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        if context.in_transaction() || self.backend.connected() {
+        if context.in_transaction() {
+            context.params.reset_all_transaction();
+        } else if self.backend.connected() {
             context.params.reset_all();
         } else {
             context.params.restore_startup(context.startup_params);
@@ -107,6 +130,7 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
+            self.backend.record_reset_all(context.in_transaction());
             self.execute(context, None).await?;
         } else {
             self.fake_command_response(context, "RESET", None).await?;
