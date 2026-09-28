@@ -10,6 +10,7 @@ impl QueryEngine {
     pub(super) async fn discard(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
         target: DiscardTarget,
         extended: bool,
     ) -> Result<(), Error> {
@@ -28,12 +29,16 @@ impl QueryEngine {
                         _ => TransactionType::ErrorReadWrite,
                     },
                 ));
-                self.error_response(context, ErrorResponse::discard_all_in_transaction())
-                    .await?;
+                self.error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::discard_all_in_transaction(),
+                )
+                .await?;
                 return Ok(());
             }
             DiscardTarget::Temp if self.backend.connected() => {
-                self.execute(context, None).await?;
+                self.execute(context, client_request, None).await?;
                 if !context.in_error() {
                     self.temp_tables.discard(context.in_transaction());
                     self.check_lock();

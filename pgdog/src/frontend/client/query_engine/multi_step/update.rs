@@ -34,14 +34,15 @@ impl<'a> UpdateMulti<'a> {
     pub(crate) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<(), Error> {
-        match self.execute_internal(context).await {
+        match self.execute_internal(context, client_request).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 // These are recoverable with a ROLLBACK.
                 if matches!(err, Error::Update(_) | Error::Execution(_)) {
                     self.engine
-                        .error_response(context, ErrorResponse::from_err(&err))
+                        .error_response(context, client_request, ErrorResponse::from_err(&err))
                         .await?;
                     Ok(())
                 } else {
@@ -56,8 +57,9 @@ impl<'a> UpdateMulti<'a> {
     pub(super) async fn execute_internal(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<(), Error> {
-        let mut check = self.rewrite.check.build_request(context.client_request)?;
+        let mut check = self.rewrite.check.build_request(client_request)?;
         self.route(&mut check, context)?;
 
         // The new row is on the same shard as the old row
@@ -69,19 +71,19 @@ impl<'a> UpdateMulti<'a> {
         // you're using an ORM that puts all record columns
         // into the SET clause.
         //
-        if self.is_same_shard(context)? {
+        if self.is_same_shard(context, client_request)? {
             // Serve original request as-is.
             debug!("[update] row is on the same shard");
-            self.execute_original(context).await?;
+            self.execute_original(context, client_request).await?;
 
             return Ok(());
         }
 
-        if self.move_row(context).await?.is_none() {
+        if self.move_row(context, client_request).await?.is_none() {
             // This happens, but the UPDATE's WHERE clause
             // doesn't match any rows, so this whole thing is a no-op.
             self.engine
-                .fake_command_response(context, "UPDATE 0", None)
+                .fake_command_response(context, &client_request.messages, "UPDATE 0", None)
                 .await?;
         }
 
@@ -94,6 +96,7 @@ impl<'a> UpdateMulti<'a> {
     pub(super) async fn move_row(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<Option<()>, Error> {
         if !context.in_transaction() || !self.engine.backend.is_multishard()
         // Do this check at the last possible moment.
@@ -108,12 +111,12 @@ impl<'a> UpdateMulti<'a> {
             return Err(UpdateError::ForeignKeyOnDelete.into());
         }
 
-        let Some(row) = self.delete_and_fetch_row(context).await? else {
+        let Some(row) = self.delete_and_fetch_row(context, client_request).await? else {
             return Ok(None);
         };
 
         let mut request = self.rewrite.build_insert_request(
-            context.client_request,
+            client_request,
             &row.row_description,
             &row.data_row,
         )?;
@@ -124,13 +127,22 @@ impl<'a> UpdateMulti<'a> {
         // Check if we are allowed to do this operation by the config.
         if self.engine.backend.cluster()?.rewrite().shard_key == RewriteMode::Error {
             self.engine
-                .error_response(context, ErrorResponse::from_err(&UpdateError::Disabled))
+                .error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::from_err(&UpdateError::Disabled),
+                )
                 .await?;
             return Ok(Some(()));
         }
 
-        self.execute_request_internal(context, &mut request, self.rewrite.is_returning())
-            .await?;
+        self.execute_request_internal(
+            context,
+            client_request,
+            &mut request,
+            self.rewrite.is_returning(),
+        )
+        .await?;
 
         self.engine
             .process_server_message(context, CommandComplete::new("UPDATE 1").message()) // We only allow to update one row at a time.
@@ -172,15 +184,16 @@ impl<'a> UpdateMulti<'a> {
     async fn execute_request_internal(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        request: &mut ClientRequest,
+        client_request: &ClientRequest,
+        internal_request: &mut ClientRequest,
         forward_reply: bool,
     ) -> Result<(), Error> {
         self.engine
             .backend
-            .handle_client_request(request, &mut Router::default(), false)
+            .handle_client_request(internal_request, &mut Router::default(), false)
             .await?;
 
-        let mut checker = ForwardCheck::new(context.client_request);
+        let mut checker = ForwardCheck::new(client_request);
 
         while self.engine.backend.has_more_messages() {
             let message = self.engine.read_server_message().await?;
@@ -201,12 +214,13 @@ impl<'a> UpdateMulti<'a> {
     async fn execute_original(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<(), Error> {
         // Serve original request as-is.
         self.engine
             .backend
             .handle_client_request(
-                context.client_request,
+                client_request,
                 &mut self.engine.router,
                 self.engine.streaming,
             )
@@ -223,8 +237,9 @@ impl<'a> UpdateMulti<'a> {
     pub(super) async fn delete_and_fetch_row(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<Option<Row>, Error> {
-        let mut request = self.rewrite.delete.build_request(context.client_request)?;
+        let mut request = self.rewrite.delete.build_request(client_request)?;
         self.route(&mut request, context)?;
 
         self.engine
@@ -262,12 +277,16 @@ impl<'a> UpdateMulti<'a> {
     ///
     /// This is an optimization to avoid doing a multi-shard UPDATE when
     /// we don't have to.
-    pub(super) fn is_same_shard(&self, context: &QueryEngineContext<'_>) -> Result<bool, Error> {
-        let mut check = self.rewrite.check.build_request(context.client_request)?;
+    pub(super) fn is_same_shard(
+        &self,
+        context: &QueryEngineContext<'_>,
+        client_request: &ClientRequest,
+    ) -> Result<bool, Error> {
+        let mut check = self.rewrite.check.build_request(client_request)?;
         self.route(&mut check, context)?;
 
         let new_shard = check.route().shard();
-        let old_shard = context.client_request.route().shard();
+        let old_shard = client_request.route().shard();
 
         // The sharding key isn't actually being changed
         // or it maps to the same shard as before.

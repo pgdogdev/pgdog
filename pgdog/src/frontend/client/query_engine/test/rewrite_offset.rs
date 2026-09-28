@@ -14,9 +14,12 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     client.client_request = ClientRequest::from(messages);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     match rewrite_result {
         Some(RewriteResult::InPlace { offset }) => offset,
@@ -101,9 +104,12 @@ async fn test_offset_limit_not_sharded() {
     ))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(rewrite_result.is_none());
 }
@@ -126,12 +132,15 @@ async fn test_offset_with_unique_id_simple() {
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     // After parse_and_rewrite, the Query message should have unique_id replaced.
-    let rewritten_sql = match &context.client_request.messages[0] {
+    let rewritten_sql = match &client_request.messages[0] {
         ProtocolMessage::Query(q) => q.query().to_owned(),
         _ => panic!("expected Query"),
     };
@@ -144,9 +153,9 @@ async fn test_offset_with_unique_id_simple() {
         "should have bigint cast: {rewritten_sql}"
     );
 
-    context.client_request.route = Some(cross_shard_route());
+    client_request.route = Some(cross_shard_route());
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
     )
@@ -154,10 +163,10 @@ async fn test_offset_with_unique_id_simple() {
     rewrite_result
         .as_ref()
         .unwrap()
-        .apply_after_route(context.client_request)
+        .apply_after_route(client_request)
         .unwrap();
 
-    let final_sql = match &context.client_request.messages[0] {
+    let final_sql = match &client_request.messages[0] {
         ProtocolMessage::Query(q) => q.query().to_owned(),
         _ => panic!("expected Query"),
     };
@@ -202,12 +211,15 @@ async fn test_offset_with_unique_id_extended() {
     ]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     // After parse_and_rewrite, Parse should have unique_id rewritten to $4::bigint.
-    let rewritten_sql = match &context.client_request.messages[0] {
+    let rewritten_sql = match &client_request.messages[0] {
         ProtocolMessage::Parse(p) => p.query().to_owned(),
         _ => panic!("expected Parse"),
     };
@@ -216,9 +228,9 @@ async fn test_offset_with_unique_id_extended() {
         "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3"
     );
 
-    context.client_request.route = Some(cross_shard_route());
+    client_request.route = Some(cross_shard_route());
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
     )
@@ -226,10 +238,10 @@ async fn test_offset_with_unique_id_extended() {
     rewrite_result
         .as_ref()
         .unwrap()
-        .apply_after_route(context.client_request)
+        .apply_after_route(client_request)
         .unwrap();
 
-    let final_sql = match &context.client_request.messages[0] {
+    let final_sql = match &client_request.messages[0] {
         ProtocolMessage::Parse(p) => p.query().to_owned(),
         _ => panic!("expected Parse"),
     };
@@ -238,7 +250,7 @@ async fn test_offset_with_unique_id_extended() {
         "SQL must push down limit+offset"
     );
 
-    if let ProtocolMessage::Bind(bind) = &context.client_request.messages[1] {
+    if let ProtocolMessage::Bind(bind) = &client_request.messages[1] {
         assert_eq!(bind.params_raw()[0].data.as_ref(), b"hello");
         assert_eq!(bind.params_raw()[1].data.as_ref(), b"10");
         assert_eq!(bind.params_raw()[2].data.as_ref(), b"5");
@@ -263,11 +275,14 @@ async fn split_anonymous_pagination_keeps_original_plan() {
 
     {
         let mut engine = QueryEngine::from_client(&client).unwrap();
-        let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-        context.client_request.route = Some(cross_shard_route());
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
+        let result = engine
+            .parse_and_rewrite(&mut context, client_request)
+            .await
+            .unwrap();
+        client_request.route = Some(cross_shard_route());
         projection::finalize_after_route(
-            context.client_request,
+            client_request,
             &Schema::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
@@ -275,7 +290,7 @@ async fn split_anonymous_pagination_keeps_original_plan() {
         result
             .as_ref()
             .unwrap()
-            .apply_after_route(context.client_request)
+            .apply_after_route(client_request)
             .unwrap();
     }
 
@@ -294,11 +309,14 @@ async fn split_anonymous_pagination_keeps_original_plan() {
     client.client_request.push(ProtocolMessage::Sync(Sync));
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(cross_shard_route());
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(cross_shard_route());
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
@@ -306,15 +324,15 @@ async fn split_anonymous_pagination_keeps_original_plan() {
     result
         .as_ref()
         .unwrap()
-        .apply_after_route(context.client_request)
+        .apply_after_route(client_request)
         .unwrap();
 
     assert_eq!(
-        context.client_request.last_parse.as_ref().unwrap().query(),
+        client_request.last_parse.as_ref().unwrap().query(),
         "SELECT * FROM test LIMIT 10::bigint + 5::bigint"
     );
     assert_eq!(
-        context.client_request.route().limit(),
+        client_request.route().limit(),
         &Limit {
             limit: Some(10),
             offset: Some(5),

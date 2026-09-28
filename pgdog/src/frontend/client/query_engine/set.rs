@@ -16,11 +16,15 @@ impl QueryEngine {
     pub(crate) async fn set(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
         params: &[SetParam],
         set_config: bool,
     ) -> Result<(), Error> {
         // Make sure client isn't changing route mid-transaction.
-        if self.route_change_check(context, params).await? {
+        if self
+            .route_change_check(context, client_request, params)
+            .await?
+        {
             return Ok(());
         }
 
@@ -58,13 +62,18 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            self.execute(context, None).await?;
+            self.execute(context, client_request, None).await?;
         } else {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))
                 .map(|values| FakeResponse::new_params(&["set_config"], values));
-            self.fake_command_response(context, fake_command, fake_response)
-                .await?;
+            self.fake_command_response(
+                context,
+                &client_request.messages,
+                fake_command,
+                fake_response,
+            )
+            .await?;
         }
 
         Ok(())
@@ -75,6 +84,7 @@ impl QueryEngine {
     async fn route_change_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
         params: &[SetParam],
     ) -> Result<bool, Error> {
         if !self.backend.connected() {
@@ -89,8 +99,12 @@ impl QueryEngine {
             return Ok(false);
         };
 
-        self.error_response(context, ErrorResponse::set_shard_after_connect(&param.name))
-            .await?;
+        self.error_response(
+            context,
+            client_request,
+            ErrorResponse::set_shard_after_connect(&param.name),
+        )
+        .await?;
 
         Ok(true)
     }
@@ -98,6 +112,7 @@ impl QueryEngine {
     pub(crate) async fn reset_all(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<(), Error> {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
@@ -107,9 +122,10 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            self.execute(context, None).await?;
+            self.execute(context, client_request, None).await?;
         } else {
-            self.fake_command_response(context, "RESET", None).await?;
+            self.fake_command_response(context, &client_request.messages, "RESET", None)
+                .await?;
         }
 
         Ok(())

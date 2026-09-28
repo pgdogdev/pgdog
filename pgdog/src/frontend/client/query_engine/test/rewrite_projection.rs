@@ -29,35 +29,32 @@ async fn direct_aggregate_keeps_base_sql() {
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
-    let query = match &context.client_request.messages[0] {
+    let query = match &client_request.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
     };
     assert_eq!(query.query(), sql, "pre-route phase must not add helpers");
 
-    context.client_request.route = Some(route(Shard::Direct(0)));
+    client_request.route = Some(route(Shard::Direct(0)));
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
-    let query = match &context.client_request.messages[0] {
+    let query = match &client_request.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
     };
     assert_eq!(query.query(), sql);
-    assert!(
-        context
-            .client_request
-            .route()
-            .projection_rewrite_plan
-            .is_noop()
-    );
+    assert!(client_request.route().projection_rewrite_plan.is_noop());
 }
 
 #[tokio::test]
@@ -68,25 +65,27 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
     ))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(route(Shard::All));
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
-    let query = match &context.client_request.messages[0] {
+    let query = match &client_request.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
     };
     assert!(query.query().contains("__pgdog_count_col0"));
     assert_eq!(
-        context
-            .client_request
+        client_request
             .route()
             .projection_rewrite_plan
             .aggregate_helpers
@@ -109,31 +108,36 @@ async fn named_prepared_aggregate_uses_cross_shard_variant() {
     ]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    engine.rewrite_extended(&mut context).unwrap();
-    let base = match &context.client_request.messages[1] {
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    engine
+        .rewrite_extended(&mut context, &mut client_request.messages)
+        .unwrap();
+    let base = match &client_request.messages[1] {
         ProtocolMessage::Bind(bind) => bind.statement().to_owned(),
         _ => panic!("expected Bind"),
     };
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(route(Shard::All));
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
     let variant = format!("{base}_cross_shard");
-    match &context.client_request.messages[0] {
+    match &client_request.messages[0] {
         ProtocolMessage::Parse(parse) => {
             assert_eq!(parse.name(), variant);
             assert!(parse.query().contains("__pgdog_count_col0"));
         }
         _ => panic!("expected Parse"),
     }
-    match &context.client_request.messages[1] {
+    match &client_request.messages[1] {
         ProtocolMessage::Bind(bind) => assert_eq!(bind.statement(), variant),
         _ => panic!("expected Bind"),
     }
@@ -170,30 +174,35 @@ async fn named_prepared_direct_aggregate_keeps_base_variant() {
     ]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    engine.rewrite_extended(&mut context).unwrap();
-    let base = match &context.client_request.messages[1] {
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    engine
+        .rewrite_extended(&mut context, &mut client_request.messages)
+        .unwrap();
+    let base = match &client_request.messages[1] {
         ProtocolMessage::Bind(bind) => bind.statement().to_owned(),
         _ => panic!("expected Bind"),
     };
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(route(Shard::Direct(0)));
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::Direct(0)));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
-    match &context.client_request.messages[0] {
+    match &client_request.messages[0] {
         ProtocolMessage::Parse(parse) => {
             assert_eq!(parse.name(), base);
             assert!(!parse.query().contains("__pgdog_"));
         }
         _ => panic!("expected Parse"),
     }
-    match &context.client_request.messages[1] {
+    match &client_request.messages[1] {
         ProtocolMessage::Bind(bind) => assert_eq!(bind.statement(), base),
         _ => panic!("expected Bind"),
     }
@@ -212,9 +221,12 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(Route::select(
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![OrderBy::AscColumn("price".into())],
         Default::default(),
@@ -223,24 +235,23 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     ));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
-    let query = match &context.client_request.messages[0] {
+    let query = match &client_request.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
     };
     assert!(query.query().contains("price AS __pgdog_order_col0"));
     assert_eq!(
-        context.client_request.route().order_by(),
+        client_request.route().order_by(),
         &[OrderBy::AscColumn("__pgdog_order_col0".into())]
     );
     assert_eq!(
-        context
-            .client_request
+        client_request
             .route()
             .projection_rewrite_plan
             .order_by_helpers
@@ -386,9 +397,12 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     ))]);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(Route::select(
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![OrderBy::AscColumn("created_at".into())],
         Default::default(),
@@ -397,7 +411,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     ));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
@@ -405,10 +419,10 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     result
         .as_ref()
         .unwrap()
-        .apply_after_route(context.client_request)
+        .apply_after_route(client_request)
         .unwrap();
 
-    let query = match &context.client_request.messages[0] {
+    let query = match &client_request.messages[0] {
         ProtocolMessage::Query(query) => query,
         _ => panic!("expected Query"),
     };
@@ -417,7 +431,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
     assert!(query.query().contains("LIMIT 10::bigint + 5::bigint"));
     assert!(!query.query().contains("OFFSET"));
 
-    let route = context.client_request.route();
+    let route = client_request.route();
     assert_eq!(
         route.order_by(),
         &[OrderBy::AscColumn("__pgdog_order_col0".into())]
@@ -455,11 +469,14 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
 
     {
         let mut engine = QueryEngine::from_client(&client).unwrap();
-        let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-        context.client_request.route = Some(route(Shard::All));
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
+        let result = engine
+            .parse_and_rewrite(&mut context, client_request)
+            .await
+            .unwrap();
+        client_request.route = Some(route(Shard::All));
         projection::finalize_after_route(
-            context.client_request,
+            client_request,
             &Schema::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
@@ -491,20 +508,22 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
     client.client_request.push(ProtocolMessage::Sync(Sync));
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(route(Shard::All));
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
 
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
     assert_eq!(
-        context
-            .client_request
+        client_request
             .last_parse
             .as_ref()
             .unwrap()
@@ -514,8 +533,7 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
         1
     );
     assert!(
-        context
-            .client_request
+        client_request
             .messages
             .iter()
             .all(|message| !matches!(message, ProtocolMessage::Parse(_)))
@@ -535,16 +553,21 @@ async fn named_statement_can_switch_from_direct_to_cross_shard_variant() {
 
     let base = {
         let mut engine = QueryEngine::from_client(&client).unwrap();
-        let mut context = QueryEngineContext::new(&mut client);
-        engine.rewrite_extended(&mut context).unwrap();
-        let base = match &context.client_request.messages[0] {
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
+        engine
+            .rewrite_extended(&mut context, &mut client_request.messages)
+            .unwrap();
+        let base = match &client_request.messages[0] {
             ProtocolMessage::Parse(parse) => parse.name().to_owned(),
             _ => panic!("expected Parse"),
         };
-        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-        context.client_request.route = Some(route(Shard::Direct(0)));
+        let result = engine
+            .parse_and_rewrite(&mut context, client_request)
+            .await
+            .unwrap();
+        client_request.route = Some(route(Shard::Direct(0)));
         projection::finalize_after_route(
-            context.client_request,
+            client_request,
             &Schema::default(),
             result.as_ref().and_then(RewriteResult::offset_plan),
         )
@@ -562,18 +585,23 @@ async fn named_statement_can_switch_from_direct_to_cross_shard_variant() {
     client.client_request.push(ProtocolMessage::Sync(Sync));
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    engine.rewrite_extended(&mut context).unwrap();
-    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
-    context.client_request.route = Some(route(Shard::All));
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    engine
+        .rewrite_extended(&mut context, &mut client_request.messages)
+        .unwrap();
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
     projection::finalize_after_route(
-        context.client_request,
+        client_request,
         &Schema::default(),
         result.as_ref().and_then(RewriteResult::offset_plan),
     )
     .unwrap();
 
-    match &context.client_request.messages[0] {
+    match &client_request.messages[0] {
         ProtocolMessage::Bind(bind) => {
             assert_eq!(bind.statement(), format!("{base}_cross_shard"));
         }
