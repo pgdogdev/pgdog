@@ -10,10 +10,15 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     client.client_request = ClientRequest::from(messages);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    engine.rewrite_extended(&mut context).unwrap();
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine
+        .rewrite_extended(&mut context, &mut client_request.messages)
+        .unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(
         matches!(rewrite_result, Some(RewriteResult::InsertSplit(_))),
@@ -140,8 +145,11 @@ async fn test_insert_split_not_sharded() {
         ProtocolMessage::Other(Flush.message()),
     ]);
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(rewrite_result.is_none());
 }

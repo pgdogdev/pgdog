@@ -21,6 +21,7 @@ impl QueryEngine {
     pub(crate) async fn cluster_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<ClusterCheck, Error> {
         // Admin doesn't have a cluster.
         let res = match self.backend.cluster() {
@@ -36,6 +37,7 @@ impl QueryEngine {
                     } else {
                         self.error_response(
                             context,
+                            client_request,
                             ErrorResponse::connection(&identifier.user, &identifier.database),
                         )
                         .await?;
@@ -67,13 +69,17 @@ impl QueryEngine {
     pub(super) async fn route_query(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
         rewrite_result: Option<&RewriteResult>,
     ) -> Result<bool, Error> {
         // Check that we can route this transaction at all.
-        if self.backend.pooler_mode() == PoolerMode::Statement && context.client_request.is_begin()
-        {
-            self.error_response(context, ErrorResponse::transaction_statement_mode())
-                .await?;
+        if self.backend.pooler_mode() == PoolerMode::Statement && client_request.is_begin() {
+            self.error_response(
+                context,
+                client_request,
+                ErrorResponse::transaction_statement_mode(),
+            )
+            .await?;
             return Ok(false);
         }
 
@@ -85,7 +91,7 @@ impl QueryEngine {
         };
 
         let router_context = RouterContext::new(
-            context.client_request,
+            client_request,
             cluster,
             context.params,
             context.transaction,
@@ -106,7 +112,7 @@ impl QueryEngine {
                 match lookup::resolve(cluster, pending).await {
                     Ok(resolved) => {
                         let router_context = RouterContext::new(
-                            context.client_request,
+                            client_request,
                             cluster,
                             context.params,
                             context.transaction,
@@ -122,6 +128,7 @@ impl QueryEngine {
                         {
                             self.error_response(
                                 context,
+                                client_request,
                                 ErrorResponse::sharding_key_lookup(
                                     "lookups did not resolve routing",
                                 ),
@@ -132,7 +139,8 @@ impl QueryEngine {
                     }
 
                     Err(response) => {
-                        self.error_response(context, response).await?;
+                        self.error_response(context, client_request, response)
+                            .await?;
                         return Ok(false);
                     }
                 }
@@ -142,44 +150,48 @@ impl QueryEngine {
         match result {
             Ok(()) => {
                 let command = self.router.command();
-                context.client_request.route = Some(command.route().clone());
-                trace!(
-                    "routing {:#?} to {:#?}",
-                    context.client_request.messages, command,
-                );
+                client_request.route = Some(command.route().clone());
+                trace!("routing {:#?} to {:#?}", client_request.messages, command,);
 
                 projection::finalize_after_route(
-                    context.client_request,
+                    client_request,
                     &cluster.schema(),
                     rewrite_result.and_then(RewriteResult::offset_plan),
                 )?;
 
                 if let Some(rewrite_result) = rewrite_result {
-                    rewrite_result.apply_after_route(context.client_request)?;
+                    rewrite_result.apply_after_route(client_request)?;
                 }
 
                 // Only validate shard placement for requests that actually execute
                 // a query. Bare protocol-control batches (e.g. a lone Sync or Flush)
                 // route to a default/cross-shard target but must still be forwarded
                 // to the already-connected backend to finish the exchange.
-                if context.client_request.is_executable()
-                    && Self::is_shard_switch(command, &self.backend)
-                {
-                    self.error_response(context, ErrorResponse::direct_shard_mismatch())
-                        .await?;
+                if client_request.is_executable() && Self::is_shard_switch(command, &self.backend) {
+                    self.error_response(
+                        context,
+                        client_request,
+                        ErrorResponse::direct_shard_mismatch(),
+                    )
+                    .await?;
                     return Ok(false);
                 }
             }
 
             Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {
-                self.error_response(context, ErrorResponse::omni_write_with_directive())
-                    .await?;
+                self.error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::omni_write_with_directive(),
+                )
+                .await?;
 
                 return Ok(false);
             }
             Err(RouterError::Parser(ParserError::UnmappedShardKey(shard_key))) => {
                 self.error_response(
                     context,
+                    client_request,
                     ErrorResponse::unmapped_sharding_key_in_cross_shard_disabled(
                         shard_key.as_str(),
                     ),
@@ -189,8 +201,12 @@ impl QueryEngine {
                 return Ok(false);
             }
             Err(err) => {
-                self.error_response(context, ErrorResponse::syntax(err.to_string().as_str()))
-                    .await?;
+                self.error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::syntax(err.to_string().as_str()),
+                )
+                .await?;
 
                 return Ok(false);
             }

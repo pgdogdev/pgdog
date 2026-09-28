@@ -2,18 +2,18 @@ use tracing::{info, warn};
 
 use super::QueryEngineContext;
 use crate::config::config;
+use crate::frontend::ClientRequest;
 use crate::net::ProtocolMessage;
 use crate::util::{sanitize_log_sample, user_database_from_params};
 
-pub(super) fn log_query_stdout(context: &QueryEngineContext<'_>) {
+pub(super) fn log_query_stdout(context: &QueryEngineContext<'_>, client_request: &ClientRequest) {
     let size_limit = context.query_size_limit;
 
     // Largest query message in the request, when it exceeds the limit.
     // The limit protects the query parser, so only messages carrying SQL
     // count.
     let oversize = size_limit.and_then(|size_limit| {
-        context
-            .client_request
+        client_request
             .messages
             .iter()
             .filter(|m| matches!(m, ProtocolMessage::Query(_) | ProtocolMessage::Parse(_)))
@@ -26,7 +26,7 @@ pub(super) fn log_query_stdout(context: &QueryEngineContext<'_>) {
         return;
     }
 
-    let Ok(Some(query)) = context.client_request.query() else {
+    let Ok(Some(query)) = client_request.query() else {
         return;
     };
 
