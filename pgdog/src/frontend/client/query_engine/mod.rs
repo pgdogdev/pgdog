@@ -75,6 +75,7 @@ pub(crate) struct QueryEngine {
     // or disconnect.
     manual_lock: bool,
     temp_tables: TempTables,
+    last_server_error: bool,
 }
 
 impl QueryEngine {
@@ -103,6 +104,7 @@ impl QueryEngine {
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
             temp_tables: Default::default(),
+            last_server_error: false,
         })
     }
 
@@ -139,6 +141,7 @@ impl QueryEngine {
             return Ok(result);
         }
 
+        self.last_server_error = false;
         self.stats
             .received(context.client_request.total_message_len());
         self.set_state(State::Active); // Client is active.

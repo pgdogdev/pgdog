@@ -430,13 +430,21 @@ impl Binding {
                 let results = join_all(futures).await;
 
                 let mut max = 0;
+                let mut error = None;
                 for result in results {
-                    let synced = result?;
-                    if max < synced {
-                        max = synced;
+                    match result {
+                        Ok(synced) => max = max.max(synced),
+                        Err(err) => error = Some(err),
                     }
                 }
-                Ok(max)
+                if let Some(error) = error {
+                    for server in servers {
+                        server.force_close();
+                    }
+                    Err(error)
+                } else {
+                    Ok(max)
+                }
             }
 
             _ => Ok(0),

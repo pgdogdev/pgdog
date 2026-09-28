@@ -1,6 +1,7 @@
 use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
+use crate::frontend::router::parser::ShardWithPriority;
 use crate::net::messages::ErrorResponse;
 
 use super::*;
@@ -10,7 +11,6 @@ use super::*;
 /// queries route to a different shard than the one we're pinned to, so they may
 /// only be set before any query connects to a backend.
 const SHARD_TARGETING_PARAMS: [&str; 2] = [PGDOG_SHARD, PGDOG_SHARDING_KEY];
-const SESSION_IDENTITY_PARAMS: [&str; 2] = ["role", "session_authorization"];
 
 impl QueryEngine {
     /// Handle a `SET` statement or equivalent `SELECT set_config([...])` query.
@@ -25,12 +25,24 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let identity_changed = params
+            .iter()
+            .any(|param| Parameters::is_session_identity(&param.name));
+        let identity_before = (identity_changed && self.backend.connected())
+            .then(|| Box::new(context.params.clone()));
         let mut fake_command = "SET";
         for param in params {
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
-                if context.in_transaction() {
+                if context.params.insert_identity(
+                    &param.name,
+                    &value,
+                    context.in_transaction(),
+                    param.local,
+                ) {
+                    continue;
+                } else if context.in_transaction() {
                     context
                         .params
                         .insert_transaction(&param.name, value, param.local);
@@ -47,7 +59,13 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if !context.params.reset_identity(
+                    &param.name,
+                    context.in_transaction(),
+                    param.local,
+                ) {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -59,14 +77,23 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            if params.iter().any(|param| {
-                SESSION_IDENTITY_PARAMS
-                    .iter()
-                    .any(|name| param.name.eq_ignore_ascii_case(name))
-            }) {
+            if identity_changed {
+                context.client_request.route = Some(Route::write(
+                    ShardWithPriority::new_override_transaction(Shard::All),
+                ));
                 self.backend.mark_dirty();
             }
-            self.execute(context, None).await?;
+            let result = self.execute(context, None).await;
+            if result.is_err() || self.last_server_error {
+                if let Some(params) = identity_before {
+                    context.params.clone_from(&params);
+                    self.comms.update_params(context.params);
+                }
+                if self.backend.connected() {
+                    self.backend.force_close();
+                }
+            }
+            result?;
         } else {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))

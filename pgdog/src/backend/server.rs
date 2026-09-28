@@ -674,6 +674,7 @@ impl Server {
                     "DISCARD ALL" => {
                         self.prepared_statements.clear();
                         self.client_params.clear();
+                        self.client_params.clear_session_identity();
                     }
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
@@ -718,10 +719,15 @@ impl Server {
         let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
             let tracked = params.tracked_and_different(&self.client_params);
-            let sets_role = tracked.get("role").is_some();
+            let identity_queries = self
+                .client_params
+                .session_identity(false)
+                .reconcile(&params.session_identity(false), false);
+            let identity_changed = !identity_queries.is_empty();
+            let mut queries = identity_queries;
             // Construct RESET queries to reset any current params
             // to their default values.
-            let mut queries = self.client_params.reset_queries(params);
+            queries.extend(self.client_params.reset_queries(params));
 
             // Combine both to create a new, fresh session state
             // on this connection.
@@ -732,10 +738,12 @@ impl Server {
             if !queries.is_empty() {
                 debug!("syncing {} params", queries.len());
 
-                if sets_role {
-                    self.mark_dirty(true);
+                if let Err(err) = self.execute_batch(&queries).await {
+                    if identity_changed {
+                        self.force_close();
+                    }
+                    return Err(err);
                 }
-                self.execute_batch(&queries).await?;
                 clear_params = true;
             }
 
@@ -751,15 +759,28 @@ impl Server {
         // need to be revered on rollback or commited on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let transaction_sets = params.set_queries(true);
+            let mut current_identity = self.client_params.session_identity(false);
+            let mut identity_queries = vec![];
+            if let Some(identity) = params.transaction_session_identity() {
+                identity_queries.extend(current_identity.reconcile(identity, false));
+                current_identity.clone_from(identity);
+            }
+            if let Some(identity) = params.local_session_identity() {
+                identity_queries.extend(current_identity.reconcile(identity, true));
+            }
+            let identity_changed = !identity_queries.is_empty();
+            let mut transaction_sets = identity_queries;
+            transaction_sets.extend(params.set_queries(true));
 
             if !transaction_sets.is_empty() {
                 debug!("syncing {} in-transaction params", transaction_sets.len());
 
-                if params.get("role").is_some() {
-                    self.mark_dirty(true);
+                if let Err(err) = self.execute_batch(&transaction_sets).await {
+                    if identity_changed {
+                        self.force_close();
+                    }
+                    return Err(err);
                 }
-                self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
 
                 self.client_params.copy_in_transaction(params);
@@ -1128,6 +1149,7 @@ impl Server {
     #[inline]
     pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
+        self.client_params.clear_session_identity();
     }
 
     #[inline]
@@ -2510,10 +2532,10 @@ pub(crate) mod test {
     }
 
     #[tokio::test]
-    async fn test_link_client_marks_server_dirty_when_setting_role()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_link_client_reconciles_session_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut params = Parameters::default();
-        params.insert("role", "pgdog");
+        params.insert_identity("role", &"pgdog".into(), false, false);
 
         let mut server = test_server().await;
         assert!(!server.dirty());
@@ -2522,16 +2544,21 @@ pub(crate) mod test {
             .link_client(FrontendPid::new(), &params, None)
             .await?;
 
-        assert_eq!(changed, 1);
-        assert!(server.dirty());
+        assert_eq!(changed, 2);
+        assert!(!server.dirty());
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await?;
+        assert_eq!(changed, 0);
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_link_client_marks_server_dirty_before_role_batch_failure() {
+    async fn test_link_client_force_closes_after_identity_batch_failure() {
         let mut params = Parameters::default();
-        params.insert("role", "pgdog");
+        params.insert_identity("role", &"pgdog".into(), false, false);
         params.insert("work_mem", "not-a-size");
 
         let mut server = test_server().await;
@@ -2541,22 +2568,22 @@ pub(crate) mod test {
                 .await
                 .is_err()
         );
-        assert!(server.dirty());
+        assert!(server.is_force_close());
     }
 
     #[tokio::test]
-    async fn test_link_client_marks_server_dirty_for_transaction_role()
+    async fn test_link_client_reconciles_transaction_identity()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut params = Parameters::default();
-        params.insert_transaction("role", "pgdog", false);
+        params.insert_identity("role", &"pgdog".into(), true, false);
 
         let mut server = test_server().await;
         let changed = server
             .link_client(FrontendPid::new(), &params, Some("BEGIN"))
             .await?;
 
-        assert_eq!(changed, 1);
-        assert!(server.dirty());
+        assert_eq!(changed, 2);
+        assert!(!server.dirty());
         server.rollback().await?;
 
         Ok(())

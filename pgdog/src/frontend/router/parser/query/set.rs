@@ -23,7 +23,7 @@ impl QueryParser {
                     .with_read(context.read_only),
             ))
         } else {
-            let param = Self::parse_set_param(stmt)?;
+            let param = Self::parse_set_param(stmt, context.query()?.query())?;
             Ok(Command::Set {
                 params: vec![param],
                 route: Route::write(context.shards_calculator.shard()),
@@ -33,25 +33,38 @@ impl QueryParser {
     }
 
     /// Parse a single SET statement into a SetParam
-    fn parse_set_param(stmt: &nodes::VariableSetStmt) -> Result<SetParam, Error> {
-        let value = if stmt.kind == VAR_SET_VALUE {
+    fn parse_set_param(stmt: &nodes::VariableSetStmt, query: &str) -> Result<SetParam, Error> {
+        let mut value = if stmt.kind == VAR_SET_VALUE {
             Some(Self::parse_set_values(stmt)?)
         } else if stmt.kind == VAR_RESET || stmt.kind == VAR_SET_DEFAULT {
             None
         } else {
             panic!("parse_set_param called on invalid kind {}", stmt.kind);
         };
+        let name = stmt.name().expect("SET always has name");
+
+        // PostgreSQL's raw parse tree normalizes both NONE and a quoted role
+        // named "none" to the same string. Preserve the keyword form by
+        // checking the original token at its parser-provided location.
+        if name == "role"
+            && value.as_ref().and_then(ParameterValue::as_str) == Some("none")
+            && let Some(Node::A_Const(constant)) = stmt.args().first()
+            && let Some(first) = query.as_bytes().get(constant.location as usize)
+            && !matches!(first, b'\'' | b'"')
+        {
+            value = None;
+        }
 
         match value {
             value @ Some(_) => Ok(SetParam {
-                name: stmt.name().expect("SET always has name").to_string(),
+                name: name.to_string(),
                 value,
                 local: stmt.is_local,
             }),
             None => Ok(SetParam {
-                name: stmt.name().expect("SET always has name").to_string(),
+                name: name.to_string(),
                 value: None,
-                local: false,
+                local: stmt.is_local,
             }),
         }
     }
@@ -70,12 +83,13 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {
         let mut has_other = false;
+        let query = context.query()?.query();
 
         let params = stmts
             .into_iter()
             .filter_map(|stmt| match stmt.stmt() {
                 Node::VariableSetStmt(stmt) if stmt.kind != VAR_SET_MULTI => {
-                    Some(Self::parse_set_param(stmt))
+                    Some(Self::parse_set_param(stmt, query))
                 }
                 _ => {
                     has_other = true;
