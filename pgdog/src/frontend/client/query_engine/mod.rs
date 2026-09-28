@@ -156,19 +156,22 @@ impl QueryEngine {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
-        // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context, client_request).await {
-            Ok(rewrite_result) => rewrite_result,
-            Err(e) => {
-                self.error_response(
-                    context,
-                    client_request,
-                    ErrorResponse::syntax(e.to_string()),
-                )
-                .await?;
-                return Ok(QueryEngineResult::Done(context.transaction()));
-            }
-        };
+        if let Err(e) = self.parse_request(context, client_request) {
+            self.error_response(
+                context,
+                client_request,
+                ErrorResponse::syntax(e.to_string()),
+            )
+            .await?;
+            return Ok(QueryEngineResult::Done(context.transaction()));
+        }
+
+        // Queue up request to mirrors, if any.
+        // Do this before sending query to actual server
+        // to have accurate timings between queries.
+        self.backend.mirror(client_request);
+
+        let rewrite_result = self.rewrite_request(context, client_request).await?;
 
         // Intercept commands we don't have to forward to a server.
         if self
@@ -190,11 +193,6 @@ impl QueryEngine {
         }
 
         self.hooks.before_execution(context)?;
-
-        // Queue up request to mirrors, if any.
-        // Do this before sending query to actual server
-        // to have accurate timings between queries.
-        self.backend.mirror(client_request);
 
         self.pending_explain = None;
 

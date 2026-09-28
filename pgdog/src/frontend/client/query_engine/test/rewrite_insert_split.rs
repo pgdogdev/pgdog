@@ -144,7 +144,7 @@ async fn test_insert_split_not_sharded() {
         )),
         ProtocolMessage::Other(Flush.message()),
     ]);
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let rewrite_result = engine
         .parse_and_rewrite(&mut context, client_request)

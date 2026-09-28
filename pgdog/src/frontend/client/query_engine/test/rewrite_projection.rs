@@ -28,7 +28,7 @@ async fn direct_aggregate_keeps_base_sql() {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)
@@ -64,7 +64,7 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
         "SELECT AVG(price) FROM products",
     ))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)
@@ -220,7 +220,7 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)
@@ -396,7 +396,7 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
         "SELECT AVG(value) FROM measurements ORDER BY created_at LIMIT 10 OFFSET 5",
     ))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)
@@ -468,7 +468,7 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
     client.client_request.push(Flush.into());
 
     {
-        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let engine = QueryEngine::from_client(&client).unwrap();
         let (mut context, client_request) = QueryEngineContext::new(&mut client);
         let result = engine
             .parse_and_rewrite(&mut context, client_request)
@@ -507,7 +507,7 @@ async fn split_anonymous_prepare_rewrites_each_execution_once() {
         .push(ProtocolMessage::Execute(Execute::new()));
     client.client_request.push(ProtocolMessage::Sync(Sync));
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)
