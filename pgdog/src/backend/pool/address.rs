@@ -43,6 +43,8 @@ pub(crate) struct Address {
     pub(crate) vault_refresh_percent: Option<u8>,
     /// Database number (in the config).
     pub(crate) database_number: usize,
+    /// Shard number.
+    pub(crate) shard: usize,
     /// Role given to the database at configuration time.
     /// For automatic roles, this can change at runtime.
     pub(crate) configured_role: Role,
@@ -108,6 +110,7 @@ impl Address {
             database_number,
             configured_role: database.role,
             tls: database.tls.clone(),
+            shard: database.shard,
         }
     }
 
@@ -227,6 +230,7 @@ impl Address {
             database_number: 0,
             configured_role: Role::Primary,
             tls: ServerTls::default(),
+            shard: 0,
         }
     }
 }
