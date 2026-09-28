@@ -50,7 +50,7 @@ impl QueryEngine {
         rollback: bool,
     ) -> Result<usize, Error> {
         let mut reply = vec![];
-        for message in context.client_request.iter() {
+        for message in &context.client_request.messages {
             match message.code() {
                 'P' => reply.push(ParseComplete.message()),
                 'B' => reply.push(BindComplete.message()),

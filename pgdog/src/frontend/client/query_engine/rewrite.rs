@@ -8,7 +8,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<(), Error> {
-        for message in context.client_request.iter_mut() {
+        for message in &mut context.client_request.messages {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
                 if level.handles_extended() && (level.rewrite_anonymous() || !message.anonymous()) {

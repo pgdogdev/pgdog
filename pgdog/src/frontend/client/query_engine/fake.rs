@@ -45,7 +45,7 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         let mut sent = 0;
 
-        for message in context.client_request.iter() {
+        for message in &context.client_request.messages {
             sent += match message {
                 ProtocolMessage::Parse(_) => context.stream.send(&ParseComplete).await?,
                 ProtocolMessage::Bind(_) => context.stream.send(&BindComplete).await?,

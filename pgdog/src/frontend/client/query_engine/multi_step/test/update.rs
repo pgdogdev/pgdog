@@ -67,7 +67,11 @@ async fn cleanup_fk_child(client: &mut TestClient) {
 
 async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
-    client.client().client_request.extend(request.messages);
+    client
+        .client()
+        .client_request
+        .messages
+        .extend(request.messages);
 
     let mut context = QueryEngineContext::new(&mut client.client);
     let rewrite_result = client.engine.parse_and_rewrite(&mut context).await?;
