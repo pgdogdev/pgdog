@@ -59,7 +59,7 @@ jobs:
           echo "PR_BASE=$(jq -r .pull_request.base.ref event.json)" >> "$GITHUB_ENV"
           echo "PR_BASE_SHA=$(jq -r .pull_request.base.sha event.json)" >> "$GITHUB_ENV"
           echo "PR_NUMBER=$(jq -r .number event.json)" >> "$GITHUB_ENV"
-      - uses: bencherdev/bencher@main
+      - uses: bencherdev/bencher@80847436d7157936b40525db4c2a1064124f04a
       - name: Run ${{ matrix.suite }} on Bencher bare metal
         # This will run one test per job (all in parallel).
         # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
@@ -71,6 +71,8 @@ jobs:
         #
         # Why --github-actions? This allows it to comment on the PR with the result.
         # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
+        # Why --detach & --ci-callback-token? This allows us to exit early, and defer posting a comment until repository_dispatch is fired on
+        # a separate workflow (bencher_followup.yml)
         run: |
           bencher run \
             --project pgdog \
@@ -92,4 +94,6 @@ jobs:
             --ci-only-on-alert \
             --adapter json \
             --image $IMAGE \
+            --detach \
+            --ci-callback-token '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
             "bash benches/perf/bencher.sh ${{ matrix.suite }}"
