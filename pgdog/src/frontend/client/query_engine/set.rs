@@ -1,7 +1,6 @@
 use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
-use crate::frontend::router::parser::ShardWithPriority;
 use crate::net::messages::ErrorResponse;
 
 use super::*;
@@ -25,11 +24,6 @@ impl QueryEngine {
             return Ok(());
         }
 
-        let identity_changed = params
-            .iter()
-            .any(|param| Parameters::is_session_identity(&param.name));
-        let identity_before = (identity_changed && self.backend.connected())
-            .then(|| Box::new(context.params.clone()));
         let mut fake_command = "SET";
         for param in params {
             let is_pin = param.name == PGDOG_PIN;
@@ -77,23 +71,10 @@ impl QueryEngine {
         }
 
         if self.backend.connected() {
-            if identity_changed {
-                context.client_request.route = Some(Route::write(
-                    ShardWithPriority::new_override_transaction(Shard::All),
-                ));
-                self.backend.mark_dirty();
+            self.execute(context, None).await?;
+            if !self.last_server_error {
+                self.backend.sync_client_params(context.params);
             }
-            let result = self.execute(context, None).await;
-            if result.is_err() || self.last_server_error {
-                if let Some(params) = identity_before {
-                    context.params.clone_from(&params);
-                    self.comms.update_params(context.params);
-                }
-                if self.backend.connected() {
-                    self.backend.force_close();
-                }
-            }
-            result?;
         } else {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))

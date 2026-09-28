@@ -235,7 +235,7 @@ async fn test_transaction_role_rollback_restores_identity() {
 }
 
 #[tokio::test]
-async fn test_rejected_connected_role_restores_state_and_discards_backend() {
+async fn test_rejected_connected_role_restores_identity_on_rollback() {
     load_single_connection_test_pool();
     let mut client = TestClient::new(Parameters::default()).await;
 
@@ -252,11 +252,8 @@ async fn test_rejected_connected_role_restores_state_and_discards_backend() {
     client.send_simple(Query::new("ROLLBACK")).await;
     client.read_until('Z').await.unwrap();
     let after = identity(&mut client).await;
+    assert_eq!(after.0, before.0);
     assert_default_identity(&after);
-    assert_ne!(
-        after.0, before.0,
-        "identity error should discard the ambiguous physical backend"
-    );
 }
 
 #[tokio::test]

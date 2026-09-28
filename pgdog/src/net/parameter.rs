@@ -34,6 +34,7 @@ static UNTRACKED_PARAMS: Lazy<Vec<String>> = Lazy::new(|| {
         String::from("integer_datetimes"),
         // Client SETs are tracked separately in SessionIdentity; don't replay
         // the server-reported ParameterStatus as an ordinary GUC.
+        String::from("role"),
         String::from("session_authorization"),
         String::from("in_hot_standby"),
         String::from("pgdog.role"),
@@ -212,7 +213,7 @@ impl SessionIdentity {
     }
 
     /// Queries that transform this identity into `target`.
-    pub(crate) fn reconcile(&self, target: &Self, local: bool) -> Vec<Query> {
+    fn reconcile(&self, target: &Self, local: bool) -> Vec<Query> {
         if self == target {
             return vec![];
         }
@@ -331,11 +332,6 @@ impl Parameters {
         self.transaction_local_identity = None;
     }
 
-    /// Whether a parameter changes PostgreSQL session identity.
-    pub(crate) fn is_session_identity(name: &str) -> bool {
-        SessionIdentity::parameter(&name.to_lowercase())
-    }
-
     /// Get parameter.
     pub(crate) fn get(&self, name: &str) -> Option<&ParameterValue> {
         if let Some(param) = self.transaction_local_params.get(name) {
@@ -432,6 +428,7 @@ impl Parameters {
     }
 
     /// Current session identity, including transaction overrides when requested.
+    #[cfg(test)]
     pub(crate) fn session_identity(&self, transaction: bool) -> SessionIdentity {
         if !transaction {
             return self.identity.clone();
@@ -442,14 +439,6 @@ impl Parameters {
             .or(self.transaction_identity.as_deref())
             .unwrap_or(&self.identity)
             .clone()
-    }
-
-    pub(crate) fn transaction_session_identity(&self) -> Option<&SessionIdentity> {
-        self.transaction_identity.as_deref()
-    }
-
-    pub(crate) fn local_session_identity(&self) -> Option<&SessionIdentity> {
-        self.transaction_local_identity.as_deref()
     }
 
     /// Insert a parameter, but only for the duration of the transaction.
@@ -579,10 +568,6 @@ impl Parameters {
     }
 
     /// Filter parameters tracked on a pooled server.
-    ///
-    /// Session identity is deliberately omitted: any backend that receives an
-    /// identity override is marked dirty and restored to authenticated defaults
-    /// before it returns to the pool.
     pub(crate) fn tracked(&self) -> Parameters {
         let params = self
             .tracked_iter()
@@ -594,6 +579,7 @@ impl Parameters {
         Self {
             params,
             hash,
+            identity: self.identity.clone(),
             ..Default::default()
         }
     }
@@ -642,12 +628,22 @@ impl Parameters {
         }
 
         if transaction_only {
-            let mut sets = self
-                .transaction_params
-                .iter()
-                .filter(|(key, _)| !SessionIdentity::parameter(key))
-                .map(|(key, value)| query(key, value, false))
-                .collect::<Vec<_>>();
+            let mut current = self.identity.clone();
+            let mut sets = vec![];
+            if let Some(identity) = self.transaction_identity.as_deref() {
+                sets.extend(current.reconcile(identity, false));
+                current.clone_from(identity);
+            }
+            if let Some(identity) = self.transaction_local_identity.as_deref() {
+                sets.extend(current.reconcile(identity, true));
+            }
+
+            sets.extend(
+                self.transaction_params
+                    .iter()
+                    .filter(|(key, _)| !SessionIdentity::parameter(key))
+                    .map(|(key, value)| query(key, value, false)),
+            );
 
             sets.extend(
                 self.transaction_local_params
@@ -660,6 +656,7 @@ impl Parameters {
         } else {
             self.params
                 .iter()
+                .filter(|(key, _)| !SessionIdentity::parameter(key))
                 .map(|(key, value)| query(key, value, false))
                 .collect()
         }
@@ -674,11 +671,16 @@ impl Parameters {
     /// have a value on the incoming client.
     ///
     pub(crate) fn reset_queries(&self, other: &Self) -> Vec<Query> {
-        self.params
-            .keys()
-            .filter(|name| !other.contains_key(*name))
-            .map(|name| Query::new(format!(r#"RESET "{}""#, name)))
-            .collect()
+        let mut queries = self.identity.reconcile(&other.identity, false);
+        queries.extend(
+            self.params
+                .keys()
+                .filter(|name| {
+                    !other.contains_key(*name) && !SessionIdentity::parameter(name.as_str())
+                })
+                .map(|name| Query::new(format!(r#"RESET "{}""#, name))),
+        );
+        queries
     }
 
     /// Get parameter value or returned an error.
@@ -944,17 +946,57 @@ mod test {
     }
 
     #[test]
-    fn test_server_snapshot_omits_session_identity() {
+    fn test_server_snapshot_keeps_session_identity() {
         let mut params = Parameters::default();
         params.insert_identity("role", &"reporting".into(), false, false);
 
         let snapshot = params.tracked();
 
         assert_eq!(
-            params.session_identity(false).role.as_deref(),
+            snapshot.session_identity(false).role.as_deref(),
             Some("reporting")
         );
-        assert_eq!(snapshot.session_identity(false), SessionIdentity::default());
+    }
+
+    #[test]
+    fn test_reset_queries_include_session_identity() {
+        let mut server = Parameters::default();
+        server.insert_identity("role", &"reporting".into(), false, false);
+        server.insert("work_mem", "1MB");
+
+        let client = Parameters::default();
+        let queries = server
+            .reset_queries(&client)
+            .into_iter()
+            .map(|query| query.query().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            queries,
+            ["SET SESSION AUTHORIZATION DEFAULT", r#"RESET "work_mem""#,]
+        );
+    }
+
+    #[test]
+    fn test_set_queries_include_transaction_identity() {
+        let mut params = Parameters::default();
+        params.insert_identity("role", &"reporting".into(), true, false);
+        params.insert_transaction("work_mem", "1MB", false);
+
+        let queries = params
+            .set_queries(true)
+            .into_iter()
+            .map(|query| query.query().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            queries,
+            [
+                "SET SESSION AUTHORIZATION DEFAULT",
+                r#"SET ROLE "reporting""#,
+                r#"SET "work_mem" TO "1MB""#,
+            ]
+        );
     }
 
     #[test]

@@ -721,15 +721,9 @@ impl Server {
         let mut executed = if !params.identical(&self.client_params) {
             // Construct client parameter SET queries.
             let tracked = params.tracked_and_different(&self.client_params);
-            let identity_queries = self
-                .client_params
-                .session_identity(false)
-                .reconcile(&params.session_identity(false), false);
-            let identity_changed = !identity_queries.is_empty();
-            let mut queries = identity_queries;
             // Construct RESET queries to reset any current params
-            // to their default values.
-            queries.extend(self.client_params.reset_queries(params));
+            // to their default values. Session identity is included here.
+            let mut queries = self.client_params.reset_queries(params);
 
             // Combine both to create a new, fresh session state
             // on this connection.
@@ -740,15 +734,7 @@ impl Server {
             if !queries.is_empty() {
                 debug!("syncing {} params", queries.len());
 
-                if identity_changed {
-                    self.mark_dirty(true);
-                }
-                if let Err(err) = self.execute_batch(&queries).await {
-                    if identity_changed {
-                        self.force_close();
-                    }
-                    return Err(err);
-                }
+                self.execute_batch(&queries).await?;
                 clear_params = true;
             }
 
@@ -764,31 +750,12 @@ impl Server {
         // need to be revered on rollback or commited on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let mut current_identity = self.client_params.session_identity(false);
-            let mut identity_queries = vec![];
-            if let Some(identity) = params.transaction_session_identity() {
-                identity_queries.extend(current_identity.reconcile(identity, false));
-                current_identity.clone_from(identity);
-            }
-            if let Some(identity) = params.local_session_identity() {
-                identity_queries.extend(current_identity.reconcile(identity, true));
-            }
-            let identity_changed = !identity_queries.is_empty();
-            let mut transaction_sets = identity_queries;
-            transaction_sets.extend(params.set_queries(true));
+            let transaction_sets = params.set_queries(true);
 
             if !transaction_sets.is_empty() {
                 debug!("syncing {} in-transaction params", transaction_sets.len());
 
-                if identity_changed {
-                    self.mark_dirty(true);
-                }
-                if let Err(err) = self.execute_batch(&transaction_sets).await {
-                    if identity_changed {
-                        self.force_close();
-                    }
-                    return Err(err);
-                }
+                self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
 
                 self.client_params.copy_in_transaction(params);
@@ -1163,6 +1130,15 @@ impl Server {
     pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
         self.client_params.clear_session_identity();
+    }
+
+    /// Record the client's current parameters on this backend.
+    ///
+    /// Used after a connected `SET` so the next checkout can diff against
+    /// the identity and GUCs this connection actually has.
+    pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
+        self.client_params = params.tracked();
+        self.client_params.copy_in_transaction(params);
     }
 
     pub(crate) fn reset_re_synced(&mut self) {
@@ -2536,33 +2512,18 @@ pub(crate) mod test {
             .await?;
 
         assert_eq!(changed, 2);
-        assert!(server.dirty());
+        assert!(!server.dirty());
 
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
             .await?;
-        assert_eq!(
-            changed, 2,
-            "identity must be reapplied from the authenticated baseline"
-        );
+        assert_eq!(changed, 0, "identity stays on the server snapshot");
+
+        let peer = Parameters::default();
+        let changed = server.link_client(FrontendPid::new(), &peer, None).await?;
+        assert_eq!(changed, 1, "next client resets identity from the snapshot");
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_link_client_force_closes_after_identity_batch_failure() {
-        let mut params = Parameters::default();
-        params.insert_identity("role", &"pgdog".into(), false, false);
-        params.insert("work_mem", "not-a-size");
-
-        let mut server = test_server().await;
-        assert!(
-            server
-                .link_client(FrontendPid::new(), &params, None)
-                .await
-                .is_err()
-        );
-        assert!(server.is_force_close());
     }
 
     #[tokio::test]
@@ -2577,7 +2538,7 @@ pub(crate) mod test {
             .await?;
 
         assert_eq!(changed, 2);
-        assert!(server.dirty());
+        assert!(!server.dirty());
         server.rollback().await?;
 
         Ok(())

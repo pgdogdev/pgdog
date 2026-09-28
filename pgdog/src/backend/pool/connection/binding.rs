@@ -430,21 +430,11 @@ impl Binding {
                 let results = join_all(futures).await;
 
                 let mut max = 0;
-                let mut error = None;
                 for result in results {
-                    match result {
-                        Ok(synced) => max = max.max(synced),
-                        Err(err) => error = Some(err),
-                    }
+                    let synced = result?;
+                    max = max.max(synced);
                 }
-                if let Some(error) = error {
-                    for server in servers {
-                        server.force_close();
-                    }
-                    Err(error)
-                } else {
-                    Ok(max)
-                }
+                Ok(max)
             }
 
             _ => Ok(0),
@@ -458,6 +448,18 @@ impl Binding {
             Binding::MultiShard(servers, _) => servers
                 .iter_mut()
                 .for_each(|server| server.transaction_params_hook(rollback)),
+            _ => (),
+        }
+    }
+
+    pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
+        match self {
+            Binding::Direct(server, ..) => server.sync_client_params(params),
+            Binding::MultiShard(servers, _) => {
+                for server in servers {
+                    server.sync_client_params(params);
+                }
+            }
             _ => (),
         }
     }
