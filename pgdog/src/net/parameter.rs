@@ -570,7 +570,11 @@ impl Parameters {
             .filter(|(k, _)| !UNTRACKED_PARAMS.contains(k))
     }
 
-    /// Filter our parameters that we would track with SET queries.
+    /// Filter parameters tracked on a pooled server.
+    ///
+    /// Session identity is deliberately omitted: any backend that receives an
+    /// identity override is marked dirty and restored to authenticated defaults
+    /// before it returns to the pool.
     pub(crate) fn tracked(&self) -> Parameters {
         let params = self
             .tracked_iter()
@@ -581,7 +585,6 @@ impl Parameters {
 
         Self {
             params,
-            identity: self.identity.clone(),
             hash,
             ..Default::default()
         }
@@ -930,6 +933,20 @@ mod test {
             params.session_identity(false).role.as_deref(),
             Some("reporting")
         );
+    }
+
+    #[test]
+    fn test_server_snapshot_omits_session_identity() {
+        let mut params = Parameters::default();
+        params.insert_identity("role", &"reporting".into(), false, false);
+
+        let snapshot = params.tracked();
+
+        assert_eq!(
+            params.session_identity(false).role.as_deref(),
+            Some("reporting")
+        );
+        assert_eq!(snapshot.session_identity(false), SessionIdentity::default());
     }
 
     #[test]

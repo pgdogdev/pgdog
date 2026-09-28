@@ -2517,7 +2517,10 @@ pub(crate) mod test {
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
             .await?;
-        assert_eq!(changed, 0);
+        assert_eq!(
+            changed, 2,
+            "identity must be reapplied from the authenticated baseline"
+        );
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
