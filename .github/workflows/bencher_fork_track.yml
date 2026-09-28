@@ -82,6 +82,7 @@ jobs:
             --start-point "$PR_BASE" \
             --start-point-hash "$PR_BASE_SHA" \
             --start-point-clone-thresholds \
+            --start-point-reset \
             --spec intel-v1 \
             --threshold-measure throughput \
             --threshold-test percentage \
