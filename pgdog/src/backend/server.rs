@@ -738,6 +738,9 @@ impl Server {
             if !queries.is_empty() {
                 debug!("syncing {} params", queries.len());
 
+                if identity_changed {
+                    self.mark_dirty(true);
+                }
                 if let Err(err) = self.execute_batch(&queries).await {
                     if identity_changed {
                         self.force_close();
@@ -775,6 +778,9 @@ impl Server {
             if !transaction_sets.is_empty() {
                 debug!("syncing {} in-transaction params", transaction_sets.len());
 
+                if identity_changed {
+                    self.mark_dirty(true);
+                }
                 if let Err(err) = self.execute_batch(&transaction_sets).await {
                     if identity_changed {
                         self.force_close();
@@ -2545,7 +2551,7 @@ pub(crate) mod test {
             .await?;
 
         assert_eq!(changed, 2);
-        assert!(!server.dirty());
+        assert!(server.dirty());
 
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
@@ -2583,7 +2589,7 @@ pub(crate) mod test {
             .await?;
 
         assert_eq!(changed, 2);
-        assert!(!server.dirty());
+        assert!(server.dirty());
         server.rollback().await?;
 
         Ok(())
