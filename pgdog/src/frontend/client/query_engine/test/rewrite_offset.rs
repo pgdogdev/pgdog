@@ -1,6 +1,7 @@
+use crate::backend::schema::Schema;
 use crate::frontend::router::parser::Limit;
 use crate::frontend::router::parser::rewrite::statement::{
-    offset::OffsetPlan, plan::RewriteResult,
+    offset::OffsetPlan, plan::RewriteResult, projection,
 };
 use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
 
@@ -143,12 +144,17 @@ async fn test_offset_with_unique_id_simple() {
         "should have bigint cast: {rewritten_sql}"
     );
 
-    // apply_after_parser with a cross-shard route.
     context.client_request.route = Some(cross_shard_route());
+    projection::finalize_after_route(
+        context.client_request,
+        &Schema::default(),
+        rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
     rewrite_result
         .as_ref()
         .unwrap()
-        .apply_after_parser(context.client_request)
+        .apply_after_route(context.client_request)
         .unwrap();
 
     let final_sql = match &context.client_request.messages[0] {
@@ -159,16 +165,16 @@ async fn test_offset_with_unique_id_simple() {
     // unique_id rewrite must survive.
     assert!(
         !final_sql.contains("pgdog.unique_id"),
-        "unique_id rewrite must survive apply_after_parser: {final_sql}"
+        "unique_id rewrite must survive post-route finalization: {final_sql}"
     );
     assert!(
-        final_sql.contains("::bigint"),
-        "bigint cast must survive: {final_sql}"
+        final_sql.contains(")::bigint FROM"),
+        "unique_id bigint cast must survive: {final_sql}"
     );
     // LIMIT/OFFSET must be rewritten for cross-shard.
     assert!(
-        final_sql.contains("LIMIT 15"),
-        "LIMIT should be 10+5=15: {final_sql}"
+        final_sql.contains("LIMIT 10::bigint + 5::bigint"),
+        "LIMIT should request limit+offset rows: {final_sql}"
     );
     assert!(
         !final_sql.contains("OFFSET"),
@@ -210,30 +216,108 @@ async fn test_offset_with_unique_id_extended() {
         "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3"
     );
 
-    // apply_after_parser with cross-shard route should only rewrite Bind params.
     context.client_request.route = Some(cross_shard_route());
+    projection::finalize_after_route(
+        context.client_request,
+        &Schema::default(),
+        rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
     rewrite_result
         .as_ref()
         .unwrap()
-        .apply_after_parser(context.client_request)
+        .apply_after_route(context.client_request)
         .unwrap();
 
-    // SQL unchanged (all limit/offset are params).
     let final_sql = match &context.client_request.messages[0] {
         ProtocolMessage::Parse(p) => p.query().to_owned(),
         _ => panic!("expected Parse"),
     };
     assert_eq!(
-        final_sql, "SELECT $4::bigint, $1 FROM test LIMIT $2 OFFSET $3",
-        "SQL must be unchanged for all-param case"
+        final_sql, "SELECT $4::bigint, $1 FROM test LIMIT $2::bigint + $3::bigint",
+        "SQL must push down limit+offset"
     );
 
-    // Bind params: $1=hello unchanged, $2=limit rewritten to 15, $3=offset rewritten to 0.
     if let ProtocolMessage::Bind(bind) = &context.client_request.messages[1] {
         assert_eq!(bind.params_raw()[0].data.as_ref(), b"hello");
-        assert_eq!(bind.params_raw()[1].data.as_ref(), b"15");
-        assert_eq!(bind.params_raw()[2].data.as_ref(), b"0");
+        assert_eq!(bind.params_raw()[1].data.as_ref(), b"10");
+        assert_eq!(bind.params_raw()[2].data.as_ref(), b"5");
     } else {
         panic!("expected Bind");
     }
+}
+
+#[tokio::test]
+async fn split_anonymous_pagination_keeps_original_plan() {
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::default();
+    client
+        .client_request
+        .push(ProtocolMessage::Parse(Parse::new_anonymous(
+            "SELECT * FROM test LIMIT 10 OFFSET 5",
+        )));
+    client
+        .client_request
+        .push(ProtocolMessage::Describe(Describe::new_statement("")));
+    client.client_request.push(Flush.into());
+
+    {
+        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let mut context = QueryEngineContext::new(&mut client);
+        let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+        context.client_request.route = Some(cross_shard_route());
+        projection::finalize_after_route(
+            context.client_request,
+            &Schema::default(),
+            result.as_ref().and_then(RewriteResult::offset_plan),
+        )
+        .unwrap();
+        result
+            .as_ref()
+            .unwrap()
+            .apply_after_route(context.client_request)
+            .unwrap();
+    }
+
+    assert_eq!(
+        client.client_request.last_parse.as_ref().unwrap().query(),
+        "SELECT * FROM test LIMIT 10 OFFSET 5"
+    );
+
+    client.client_request.clear();
+    client
+        .client_request
+        .push(ProtocolMessage::Bind(Bind::new_params("", &[])));
+    client
+        .client_request
+        .push(ProtocolMessage::Execute(Execute::new()));
+    client.client_request.push(ProtocolMessage::Sync(Sync));
+
+    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let mut context = QueryEngineContext::new(&mut client);
+    let result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    context.client_request.route = Some(cross_shard_route());
+    projection::finalize_after_route(
+        context.client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+    result
+        .as_ref()
+        .unwrap()
+        .apply_after_route(context.client_request)
+        .unwrap();
+
+    assert_eq!(
+        context.client_request.last_parse.as_ref().unwrap().query(),
+        "SELECT * FROM test LIMIT 10::bigint + 5::bigint"
+    );
+    assert_eq!(
+        context.client_request.route().limit(),
+        &Limit {
+            limit: Some(10),
+            offset: Some(5),
+        }
+    );
 }
