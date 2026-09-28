@@ -206,6 +206,11 @@ impl SessionIdentity {
         self.set(name, value.to_owned());
     }
 
+    #[cfg(test)]
+    pub(crate) fn role(&self) -> Option<&str> {
+        self.role.as_deref()
+    }
+
     /// Queries that transform this identity into `target`.
     pub(crate) fn reconcile(&self, target: &Self, local: bool) -> Vec<Query> {
         if self == target {
@@ -479,10 +484,15 @@ impl Parameters {
     /// Restore parameters to the values supplied in the startup message,
     /// dropping everything changed since with `SET`.
     pub(crate) fn restore_startup(&mut self, startup: &Parameters) {
-        self.params.clone_from(&startup.params);
+        self.restore_startup_parameters(startup);
         self.identity.clone_from(&startup.identity);
         self.transaction_identity = None;
         self.transaction_local_identity = None;
+    }
+
+    /// Restore ordinary startup parameters while preserving session identity.
+    pub(crate) fn restore_startup_parameters(&mut self, startup: &Parameters) {
+        self.params.clone_from(&startup.params);
         self.reset_params.clear();
         self.hash = Self::compute_hash(&self.params);
     }
@@ -945,6 +955,23 @@ mod test {
             Some("reporting")
         );
         assert_eq!(snapshot.session_identity(false), SessionIdentity::default());
+    }
+
+    #[test]
+    fn test_restore_startup_parameters_preserves_session_identity() {
+        let mut startup = Parameters::default();
+        startup.insert("search_path", "public");
+
+        let mut params = Parameters::default();
+        params.insert("search_path", "private");
+        params.insert_identity("role", &"reporting".into(), false, false);
+        params.restore_startup_parameters(&startup);
+
+        assert_eq!(params.get("search_path"), startup.get("search_path"));
+        assert_eq!(
+            params.session_identity(false).role.as_deref(),
+            Some("reporting")
+        );
     }
 
     #[test]

@@ -111,6 +111,11 @@ async fn test_deferred_role_reconciled_before_backend_reuse() {
 
     source.send_simple(Query::new("RESET ALL")).await;
     source.read_until('Z').await.unwrap();
+    assert_eq!(
+        source.client().params.session_identity(false).role(),
+        Some(role.as_str()),
+        "RESET ALL must preserve the frontend's logical role"
+    );
     let after_reset_all = identity(&mut source).await;
     assert_eq!(
         after_reset_all, before,

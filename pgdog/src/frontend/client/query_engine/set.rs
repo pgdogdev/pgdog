@@ -137,7 +137,9 @@ impl QueryEngine {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
-            context.params.restore_startup(context.startup_params);
+            context
+                .params
+                .restore_startup_parameters(context.startup_params);
             self.comms.update_params(context.params);
         }
 
