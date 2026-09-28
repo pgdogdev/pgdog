@@ -22,4 +22,5 @@ jobs:
           --key '${{ secrets.BENCHER_API_KEY }}' \
           --job "$JOB_UUID" \
           --error-on-alert \
+          --ci-only-on-alert \
           --github-actions '${{ secrets.GITHUB_TOKEN }}'

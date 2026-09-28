@@ -54,7 +54,7 @@ jobs:
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
       - name: Run ${{ matrix.suite }} on Bencher bare metal
         env:
-          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds', github.base_ref, github.event.pull_request.base.sha) || '' }}
+          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
         # This will run one test per job (all in parallel).
         # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
         #
