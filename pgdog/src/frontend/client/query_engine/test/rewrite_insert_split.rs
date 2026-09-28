@@ -56,11 +56,11 @@ async fn test_insert_split() {
         ("1".as_bytes(), "test@test.com".as_bytes()),
         ("1234567890102334".as_bytes(), "test2@test.com".as_bytes()),
     ]) {
-        assert!(
-            matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.anonymous()),
+        std::assert_matches!(
+            &request.messages[0], ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.anonymous(),
             "expected single tuple insert with no name"
         );
-        match request[1].clone() {
+        match &request.messages[1] {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -95,11 +95,11 @@ async fn test_insert_split_prepared() {
         ("1".as_bytes(), "test@test.com".as_bytes()),
         ("1234567890102334".as_bytes(), "test2@test.com".as_bytes()),
     ]) {
-        assert!(
-            matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.name() == "__pgdog_2"),
+        std::assert_matches!(
+            &request.messages[0], ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.name() == "__pgdog_2",
             "expected single tuple insert"
         );
-        match request[1].clone() {
+        match &request.messages[1] {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -119,21 +119,15 @@ async fn test_insert_split_simple() {
 
     assert_eq!(requests.len(), 2);
 
-    match requests[0][0].clone() {
-        ProtocolMessage::Query(query) => assert_eq!(
-            query.query(),
-            "INSERT INTO test (id, email) VALUES (1, 'test@test.com') RETURNING *"
-        ),
-        _ => panic!("not a query"),
-    }
+    std::assert_matches!(
+        &requests[0].messages[0],
+        ProtocolMessage::Query(query) if query.query() == "INSERT INTO test (id, email) VALUES (1, 'test@test.com') RETURNING *",
+    );
 
-    match requests[1][0].clone() {
-        ProtocolMessage::Query(query) => assert_eq!(
-            query.query(),
-            "INSERT INTO test (id, email) VALUES (2, 'test2@test.com') RETURNING *"
-        ),
-        _ => panic!("not a query"),
-    }
+    std::assert_matches!(
+        &requests[1].messages[0],
+        ProtocolMessage::Query(query) if query.query() == "INSERT INTO test (id, email) VALUES (2, 'test2@test.com') RETURNING *",
+    );
 }
 
 #[tokio::test]
