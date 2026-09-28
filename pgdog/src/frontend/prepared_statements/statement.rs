@@ -59,7 +59,6 @@ impl MemoryUsage for StatementType {
 }
 
 impl MemoryUsage for Statement {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.stmt.memory_usage()
             + if let Some(row_description) = &self.row_description {

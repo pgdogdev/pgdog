@@ -1,13 +1,40 @@
+use std::cmp::Ordering;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use super::{Error, Format};
 use crate::{DataType, Datum};
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Array {
     elements: Vec<Datum>,
     pub(crate) element_oid: i32,
     dim: Dimension,
+}
+
+impl PartialOrd for Array {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        for (left, right) in self.elements.iter().zip(&other.elements) {
+            // PostgreSQL orders NULL array elements after all non-NULL elements.
+            let ordering = match (left, right) {
+                (Datum::Null, Datum::Null) => Ordering::Equal,
+                (Datum::Null, _) => Ordering::Greater,
+                (_, Datum::Null) => Ordering::Less,
+                _ => left.partial_cmp(right)?,
+            };
+            if ordering != Ordering::Equal {
+                return Some(ordering);
+            }
+        }
+
+        Some(
+            self.elements
+                .len()
+                .cmp(&other.elements.len())
+                .then_with(|| self.element_oid.cmp(&other.element_oid))
+                .then_with(|| self.dim.cmp(&other.dim)),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Hash, Ord, PartialOrd, PartialEq, Eq)]
@@ -393,6 +420,44 @@ fn decode_binary(bytes: &[u8], expected_element_oid: i32) -> Result<Array, Error
 mod tests {
     use super::*;
     use crate::ToDataRowColumn;
+
+    #[test]
+    fn test_array_null_element_ordering() {
+        let ordered = [
+            "{}",
+            "{1}",
+            "{1,2}",
+            "{1,NULL}",
+            "{2}",
+            "{NULL}",
+            "[0:1]={NULL,1}",
+            "{NULL,1}",
+            "{NULL,2}",
+            "{NULL,NULL}",
+        ];
+        for format in [Format::Text, Format::Binary] {
+            let arrays: Vec<_> = ordered
+                .iter()
+                .map(|text| {
+                    let array = Array::decode_typed(text.as_bytes(), Format::Text, 23)
+                        .expect("valid integer array");
+                    let encoded = array.encode(format).expect("array encoding");
+                    Array::decode_typed(&encoded, format, 23).expect("array decoding")
+                })
+                .collect();
+            for (left_index, left) in arrays.iter().enumerate() {
+                for (right_index, right) in arrays.iter().enumerate() {
+                    assert_eq!(
+                        left.partial_cmp(right),
+                        Some(left_index.cmp(&right_index)),
+                        "{} vs {} ({format:?})",
+                        ordered[left_index],
+                        ordered[right_index]
+                    );
+                }
+            }
+        }
+    }
 
     // ── Text decode ──────────────────────────────────────────────────
 

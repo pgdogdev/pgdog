@@ -102,7 +102,6 @@ impl ToDataRowColumn for &'_ ParameterValue {
 }
 
 impl MemoryUsage for ParameterValue {
-    #[inline]
     fn memory_usage(&self) -> usize {
         match self {
             Self::String(v) => v.memory_usage(),
@@ -283,7 +282,6 @@ impl Display for Parameters {
 }
 
 impl MemoryUsage for Parameters {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.params.memory_usage()
             + self.identity.memory_usage()

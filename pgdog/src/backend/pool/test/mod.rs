@@ -1261,3 +1261,54 @@ async fn test_move_conns_to_does_not_pause_destination_when_source_is_not_paused
 
     destination.shutdown();
 }
+
+#[test]
+fn test_move_conns_to_preserves_statistics() {
+    let source = Pool::new_test();
+    let destination = Pool::new_test();
+
+    {
+        let mut guard = source.lock();
+        guard.stats.counts.query_count = 42;
+        guard.stats.counts.errors = 3;
+        guard.errors = 4;
+        guard.re_synced = 5;
+        guard.out_of_sync = 6;
+        guard.force_close = 7;
+    }
+
+    source.move_conns_to(&destination).unwrap();
+
+    let state = destination.state();
+    assert_eq!(state.stats.counts.query_count, 42);
+    assert_eq!(state.stats.counts.errors, 3);
+    assert_eq!(state.errors, 4);
+    assert_eq!(state.re_synced, 5);
+    assert_eq!(state.out_of_sync, 6);
+    assert_eq!(state.force_close, 7);
+}
+
+#[test]
+fn test_reset_stats_clears_cumulative_statistics() {
+    let pool = Pool::new_test();
+
+    {
+        let mut guard = pool.lock();
+        guard.stats.counts.query_count = 42;
+        guard.stats.counts.errors = 3;
+        guard.errors = 4;
+        guard.re_synced = 5;
+        guard.out_of_sync = 6;
+        guard.force_close = 7;
+    }
+
+    pool.reset_stats();
+
+    let state = pool.state();
+    assert_eq!(state.stats.counts.query_count, 0);
+    assert_eq!(state.stats.counts.errors, 0);
+    assert_eq!(state.errors, 0);
+    assert_eq!(state.re_synced, 0);
+    assert_eq!(state.out_of_sync, 0);
+    assert_eq!(state.force_close, 0);
+}

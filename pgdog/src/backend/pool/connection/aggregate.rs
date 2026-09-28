@@ -208,7 +208,7 @@ impl State {
         match self {
             State::Avg(state) => Ok(state.finalize()?),
             State::Cmp(state) => Ok(state.finalize()),
-            State::Count(state) => Ok(state.finalize()),
+            State::Count(state) => state.finalize().map_err(Into::into),
             State::Sum(state) => Ok(state.finalize()),
             State::Variance(state) => Ok(state.finalize()?),
         }
@@ -533,6 +533,58 @@ mod test {
         let row = result.pop_front().unwrap();
         let total_count = row.get::<i32>(0, Format::Text).unwrap();
         assert_eq!(total_count, 5);
+    }
+
+    #[test]
+    fn aggregate_count_preserves_binary_result_types() {
+        use pgdog_postgres_types::Float;
+
+        for (cast, oid, partial, expected) in [
+            ("smallint", 21, Datum::SmallInt(3), Datum::SmallInt(6)),
+            ("integer", 23, Datum::Integer(3), Datum::Integer(6)),
+            ("bigint", 20, Datum::Bigint(3), Datum::Bigint(6)),
+            (
+                "real",
+                700,
+                Datum::Float(Float(3.0)),
+                Datum::Float(Float(6.0)),
+            ),
+            (
+                "double precision",
+                701,
+                Datum::Double(Double(3.0)),
+                Datum::Double(Double(6.0)),
+            ),
+        ] {
+            let aggregate = parse(&format!("SELECT COUNT(*)::{cast} FROM users"));
+            let mut field = integer_field("count");
+            field.type_oid = oid;
+            field.format = 1;
+            let decoder = Decoder::from(RowDescription::new(&[field]));
+            let mut rows = VecDeque::new();
+            for _ in 0..2 {
+                let mut row = DataRow::new();
+                row.add(
+                    partial
+                        .encode(Format::Binary)
+                        .expect("encode partial count"),
+                );
+                rows.push_back(row);
+            }
+            let plan = AggregateRewritePlan::default();
+            let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+                .expect("count aggregate")
+                .aggregate()
+                .expect("merge partial counts");
+            let row = result.pop_front().expect("count result");
+            assert_eq!(
+                row.get_column_checked(0, &decoder)
+                    .expect("decode count")
+                    .value,
+                expected,
+                "COUNT(*)::{cast}"
+            );
+        }
     }
 
     #[test]

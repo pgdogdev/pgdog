@@ -192,7 +192,7 @@ mod tests {
 
         assert_eq!(hash1, hash2);
 
-        // Different values should (likely) have different hashes
+        // 0.0 and -0.0 compare equal, so they must hash the same
         let mut hasher3 = DefaultHasher::new();
         zero.hash(&mut hasher3);
         let hash3 = hasher3.finish();
@@ -201,8 +201,13 @@ mod tests {
         neg_zero.hash(&mut hasher4);
         let hash4 = hasher4.finish();
 
-        // Note: 0.0 and -0.0 have different bit patterns
-        assert_ne!(hash3, hash4);
+        assert_eq!(zero, neg_zero);
+        assert_eq!(hash3, hash4);
+
+        // Values that differ must still land on different hashes
+        let mut hasher5 = DefaultHasher::new();
+        Float(1.0).hash(&mut hasher5);
+        assert_ne!(hash3, hasher5.finish());
     }
 
     #[test]

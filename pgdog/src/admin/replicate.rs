@@ -5,7 +5,7 @@ use tracing::info;
 use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
-use crate::backend::replication::orchestrator::Orchestrator;
+use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::prelude::*;
 
@@ -54,24 +54,23 @@ impl Command for Replicate {
             self.from_database, self.to_database, self.publication
         );
 
-        let orchestrator = Orchestrator::new(
-            &self.from_database,
-            &self.to_database,
-            &self.publication,
-            self.replication_slot.clone(),
-        )?;
+        let state = ReshardingState::builder()
+            .source(&self.from_database)
+            .destination(&self.to_database)
+            .publication(&self.publication)
+            .maybe_replication_slot(self.replication_slot.clone())
+            .build()?;
 
         let schema_sync = SchemaSyncTask::builder()
-            .databases(orchestrator.databases())
+            .databases(state.databases())
             .publication(self.publication.clone())
             .phase(SchemaSyncPhase::Cutover)
             .ignore_errors(true)
             .build();
 
-        let waiter = orchestrator.replicate().await?;
         let task_id = run_task(
             ReplicationTask::builder()
-                .waiter(waiter)
+                .state(state)
                 .schema_sync(schema_sync)
                 .build(),
         )

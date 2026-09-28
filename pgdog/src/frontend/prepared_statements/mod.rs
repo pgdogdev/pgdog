@@ -205,7 +205,6 @@ impl PreparedStatements {
 }
 
 /// Approximate memory used by a String.
-#[inline]
 fn str_mem(s: &str) -> usize {
     s.len() + std::mem::size_of::<String>()
 }

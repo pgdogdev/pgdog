@@ -36,11 +36,17 @@ async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
     .await
     {
         Ok(server) => Ok(server),
-        Err(BackendError::ConnectionError(error)) if error.code == "42501" => {
+        Err(error)
+            if matches!(
+                &error,
+                BackendError::ConnectionError(response) | BackendError::ExecutionError(response)
+                    if response.code == "42501"
+            ) =>
+        {
             Err(Error::ReshardingPermissionDenied {
                 user: primary.addr().user.clone(),
                 database: primary.addr().database_name.clone(),
-                source: Box::new(BackendError::ConnectionError(error)),
+                source: Box::new(error),
             })
         }
         Err(error) => Err(error.into()),

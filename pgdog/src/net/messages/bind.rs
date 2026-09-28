@@ -197,7 +197,6 @@ impl Bind {
         self.statement.len() == 1
     }
 
-    #[inline]
     pub(crate) fn statement(&self) -> &str {
         // SAFETY: We check that this is valid UTF-8 in FromBytes::from_bytes below.
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }

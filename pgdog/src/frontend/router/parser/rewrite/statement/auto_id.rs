@@ -112,7 +112,7 @@ impl StatementRewrite<'_> {
     /// Get the table from an INSERT statement.
     pub(crate) fn get_insert_table<'a>(&self, insert: &'a nodes::InsertStmt) -> (Table<'a>, bool) {
         let relation = insert.relation().expect("INSERT always has table");
-        let is_sharded = StatementParser::new(insert.into(), None, self.schema, None).is_sharded(
+        let is_sharded = StatementParser::new(insert.into(), None, self.schema).is_sharded(
             self.db_schema,
             self.user,
             self.search_path,

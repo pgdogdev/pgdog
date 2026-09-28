@@ -35,7 +35,6 @@ pub(crate) struct GlobalCache {
 }
 
 impl MemoryUsage for GlobalCache {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.statements.memory_usage()
             + self.names.memory_usage()

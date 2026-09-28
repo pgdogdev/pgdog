@@ -72,11 +72,12 @@ impl QueryEngine {
             return Ok(());
         }
 
-        // 2pc is used only for writes and is not needed for rollbacks.
+        // 2pc is used for cross-shard writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
             && context.client_request.route().is_write()
             && !rollback
-            && context.transaction().map(|t| t.write()).unwrap_or(false);
+            && context.transaction().map(|t| t.write()).unwrap_or(false)
+            && self.backend.connected_servers() > 1;
 
         self.temp_tables.finish_transaction(rollback);
 

@@ -166,7 +166,6 @@ impl CopyParser {
         Ok(parser)
     }
 
-    #[inline]
     fn delimiter(&self) -> char {
         self.delimiter.unwrap_or('\t')
     }

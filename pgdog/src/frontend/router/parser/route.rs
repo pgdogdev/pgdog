@@ -381,9 +381,7 @@ impl Route {
         &self.advisory_locks
     }
 
-    /// True when the statement acquires an advisory lock whose lifetime outlives
-    /// a single transaction — the client must stay pinned to the same backend.
-    #[cfg(test)]
+    /// Returns true when this statement has an advisory lock function that acquires a lock.
     pub(crate) fn is_lock_session(&self) -> bool {
         self.advisory_locks.has_lock()
     }
@@ -452,6 +450,7 @@ pub(crate) enum RoundRobinReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub(crate) enum OverrideReason {
+    AdvisoryLock,
     DryRun,
     ParserDisabled,
     Transaction,
@@ -594,6 +593,14 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::SearchPath(schema.to_string()),
+        }
+    }
+
+    /// An advisory lock is used in the query whose id hashes to `shard`
+    pub(crate) fn new_override_advisory_lock(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::AdvisoryLock),
         }
     }
 

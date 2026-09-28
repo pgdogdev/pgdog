@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod advisory_lock;
+mod advisory_unlock;
 mod close_parse;
 mod close_parse_global_cache;
 mod cross_shard_disabled;
@@ -43,6 +44,7 @@ mod spliced;
 mod temp_table;
 mod test_omnisharded;
 mod transaction_state;
+mod two_pc_single_shard;
 
 pub(super) fn test_client() -> Client {
     load_test();

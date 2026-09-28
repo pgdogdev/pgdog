@@ -1,11 +1,16 @@
-use std::{num::ParseIntError, ops::Add, ops::AddAssign};
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+    num::ParseIntError,
+    ops::{Add, AddAssign},
+};
 
 use crate::Data;
 
 use super::*;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Default, Debug, Clone, Copy, Hash)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Interval {
     years: i64,
     months: i32,
@@ -14,6 +19,45 @@ pub struct Interval {
     minutes: i64,
     seconds: i64,
     micros: i32,
+}
+
+impl Interval {
+    /// PostgreSQL compares intervals using 30-day months and 24-hour days.
+    /// The full interval range exceeds i64 microseconds.
+    fn comparison_value(&self) -> i128 {
+        let months = i128::from(self.years) * 12 + i128::from(self.months);
+        let days = months * 30 + i128::from(self.days);
+        let hours = days * 24 + i128::from(self.hours);
+        let minutes = hours * 60 + i128::from(self.minutes);
+        let seconds = minutes * 60 + i128::from(self.seconds);
+        seconds * 1_000_000 + i128::from(self.micros)
+    }
+}
+
+impl PartialEq for Interval {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Interval {}
+
+impl PartialOrd for Interval {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Interval {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.comparison_value().cmp(&other.comparison_value())
+    }
+}
+
+impl Hash for Interval {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.comparison_value().hash(state);
+    }
 }
 
 impl Add for Interval {
@@ -246,6 +290,66 @@ impl FromDataType for Interval {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn equivalent_intervals_compare_and_hash_equally() {
+        for (left, right) in [
+            ("1 day", "24:00:00"),
+            ("1 mon", "30 days"),
+            ("1 year", "12 mons"),
+            ("1 mon -30 days", "00:00:00"),
+            ("-1 day", "-24:00:00"),
+            ("1 day -00:00:00.000001", "23:59:59.999999"),
+        ] {
+            let left = Interval::decode(left.as_bytes(), Format::Text).expect(left);
+            let right = Interval::decode(right.as_bytes(), Format::Text).expect(right);
+            for format in [Format::Text, Format::Binary] {
+                let encoded = right.encode(format).expect("encode interval");
+                let decoded = Interval::decode(&encoded, format).expect("decode interval");
+                assert_eq!(left, decoded);
+                assert_eq!(left.cmp(&decoded), Ordering::Equal);
+                assert_eq!(HashSet::from([left, decoded]).len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn interval_order_uses_the_combined_duration() {
+        for (shorter, longer) in [
+            ("1 mon", "31 days"),
+            ("24:00:00", "2 days"),
+            ("1 year -1 mon", "340 days"),
+            ("-31 days", "-1 mon"),
+            ("1 day -25:00:00", "00:00:00"),
+        ] {
+            let shorter = Interval::decode(shorter.as_bytes(), Format::Text).expect(shorter);
+            let longer = Interval::decode(longer.as_bytes(), Format::Text).expect(longer);
+            assert!(shorter < longer, "{shorter:?} should precede {longer:?}");
+        }
+    }
+
+    #[test]
+    fn interval_comparison_does_not_overflow() {
+        for months in [i32::MIN, i32::MAX] {
+            let interval = Interval {
+                years: i64::from(months / 12),
+                months: months % 12,
+                ..Default::default()
+            };
+            // A PostgreSQL interval can span more than i64 microseconds.
+            let shorter = Interval {
+                micros: -1,
+                ..interval
+            };
+            let longer = Interval {
+                micros: 1,
+                ..interval
+            };
+            assert!(shorter < interval);
+            assert!(interval < longer);
+        }
+    }
 
     #[test]
     fn test_interval_ord() {

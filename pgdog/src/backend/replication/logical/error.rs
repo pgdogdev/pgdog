@@ -125,17 +125,32 @@ pub(crate) enum Error {
     #[error("parser: {0}")]
     Parser(#[from] crate::frontend::router::parser::Error),
 
-    #[error("not connected")]
-    NotConnected,
-
     #[error("replication timeout")]
     ReplicationTimeout,
+
+    #[error("replication streams did not drain in time")]
+    DrainTimeout,
+
+    #[error("replication slot \"{0}\" was not dropped in time")]
+    SlotDropTimeout(String),
+
+    #[error("replication slot \"{0}\" is in use")]
+    SlotInUse(String),
+
+    #[error("replication slots for \"{0}\" are already created")]
+    SlotsAlreadyCreated(String),
+
+    #[error("replication stream stopped before shutdown was requested")]
+    ReplicationStreamStopped,
 
     #[error("publication \"{0}\" has no tables")]
     EmptyPublication(String),
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication table entry")]
+    NoReplicationTables(usize),
 
     #[error("parallel connection error")]
     ParallelConnection,
@@ -160,6 +175,9 @@ pub(crate) enum Error {
 
     #[error("data sync has been aborted")]
     DataSyncAborted,
+
+    #[error("replication has been aborted")]
+    ReplicationAborted,
 
     #[error("cutover abort timeout")]
     AbortTimeout,
@@ -245,7 +263,7 @@ impl Error {
             Self::Pool(inner) => inner.is_retryable(),
             Self::Backend(inner) => inner.is_retryable(),
             // No connection yet, or primary is down.
-            Self::NotConnected | Self::NoPrimary => true,
+            Self::NoPrimary => true,
             // Replication stalled; temporary slot is gone, next attempt starts fresh.
             Self::ReplicationTimeout => true,
             // Postgres sent a transient error (e.g. admin_shutdown, cannot_connect_now).
@@ -278,7 +296,6 @@ mod tests {
         assert!(Error::Net(NE::UnexpectedEof).is_retryable());
         assert!(Error::Pool(PE::NoPrimary).is_retryable());
         assert!(Error::Pool(PE::CheckoutTimeout).is_retryable());
-        assert!(Error::NotConnected.is_retryable());
         assert!(Error::NoPrimary.is_retryable());
         assert!(Error::ReplicationTimeout.is_retryable());
     }

@@ -47,6 +47,11 @@ impl Hash for Float {
         if self.0.is_nan() {
             // All NaN values hash to the same value
             0u8.hash(state);
+        } else if self.0 == 0.0 {
+            // 0.0 and -0.0 compare equal but have different bit patterns,
+            // so they must hash to the same value. Postgres normalizes the
+            // sign of zero the same way, in hashfloat4.
+            0.0_f32.to_bits().hash(state);
         } else {
             // Use bit representation for consistent hashing
             self.0.to_bits().hash(state);
@@ -79,5 +84,37 @@ impl From<f32> for Float {
 impl From<Float> for f32 {
     fn from(value: Float) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::collections::hash_map::DefaultHasher;
+
+    fn hash_of(float: Float) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        float.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn test_negative_zero_hashes_like_zero() {
+        assert_eq!(Float(0.0), Float(-0.0));
+        assert_eq!(hash_of(Float(0.0)), hash_of(Float(-0.0)));
+
+        let mut set = HashSet::new();
+        set.insert(Float(0.0));
+        set.insert(Float(-0.0));
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&Float(-0.0)));
+    }
+
+    #[test]
+    fn test_distinct_values_still_hash_apart() {
+        assert_ne!(hash_of(Float(1.0)), hash_of(Float(-1.0)));
+        assert_ne!(hash_of(Float(0.0)), hash_of(Float(1.0)));
+        assert_ne!(hash_of(Float(f32::NAN)), hash_of(Float(0.0)));
     }
 }

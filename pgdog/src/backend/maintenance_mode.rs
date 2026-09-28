@@ -80,11 +80,6 @@ pub(crate) fn stop(database: Option<&str>) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn is_on(database: &str) -> bool {
-    MAINTENANCE_MODE.paused(database)
-}
-
 #[derive(Debug)]
 struct MaintenanceMode {
     state: ArcSwap<MaintenanceState>,
@@ -102,7 +97,6 @@ struct MaintenanceState {
 impl MaintenanceMode {
     /// Check whether the given database is currently in maintenance mode.
     #[cfg(test)]
-    #[inline]
     fn paused(&self, database: &str) -> bool {
         self.get_waiter(database).is_some()
     }
