@@ -51,7 +51,7 @@ jobs:
         suite: [pooler, lb, sharding]
     steps:
       - uses: actions/checkout@v6
-      - uses: bencherdev/bencher@main
+      - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
       - name: Run ${{ matrix.suite }} on Bencher bare metal
         env:
           START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds', github.base_ref, github.event.pull_request.base.sha) || '' }}
@@ -65,6 +65,8 @@ jobs:
         #
         # Why --github-actions? This allows it to comment on the PR with the result.
         # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
+        # Why --detach & --ci-callback-token? This allows us to exit early, and defer posting a comment until repository_dispatch is fired on
+        # a separate workflow (bencher_followup.yml)
         run: |
           bencher run \
             --project pgdog \
@@ -82,4 +84,6 @@ jobs:
             --ci-only-on-alert \
             --adapter json \
             --image $IMAGE \
+            --detach \
+            --ci-callback-token '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
             "bash benches/perf/bencher.sh ${{ matrix.suite }}"
