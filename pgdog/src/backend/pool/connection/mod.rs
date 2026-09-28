@@ -497,20 +497,17 @@ impl Connection {
     }
 
     /// Get cluster if any.
-    #[inline]
     pub(crate) fn cluster(&self) -> Result<&Cluster, Error> {
         self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
     }
 
     /// Pooler is in session mode.
-    #[inline]
     pub(crate) fn session_mode(&self) -> bool {
         self.cluster()
             .map(|c| c.pooler_mode() == PoolerMode::Session)
             .unwrap_or(true)
     }
 
-    #[inline]
     pub(crate) fn pooler_mode(&self) -> PoolerMode {
         self.cluster().map(|c| c.pooler_mode()).unwrap_or_default()
     }

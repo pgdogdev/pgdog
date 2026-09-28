@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::replication_progress::{ReplicationProgressShardUpdater, ReplicationShardProgress};
-use super::{Lsn, ReplicationData, ReplicationSlot, Table};
+use super::{Lsn, ReplicationData, ReplicationSlotGuard, Table};
 use crate::backend::Cluster;
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
@@ -42,7 +42,7 @@ impl ReplicationStream {
 
     pub(crate) async fn run(
         &self,
-        slot: &mut ReplicationSlot,
+        slot: &mut ReplicationSlotGuard,
         tables: Vec<Table>,
         stop: &CancellationToken,
     ) -> Result<(), Error> {
@@ -64,7 +64,7 @@ impl ReplicationStream {
 
     async fn update_progress(
         &self,
-        slot: &mut ReplicationSlot,
+        slot: &mut ReplicationSlotGuard,
         stream: &mut StreamSubscriber,
     ) -> Result<(), Error> {
         let missed = stream.missed_rows();
@@ -94,7 +94,7 @@ impl ReplicationStream {
 
     async fn replicate(
         &self,
-        slot: &mut ReplicationSlot,
+        slot: &mut ReplicationSlotGuard,
         stream: &mut StreamSubscriber,
         stop: &CancellationToken,
     ) -> Result<(), Error> {
@@ -185,31 +185,35 @@ impl ReplicationStream {
                     match done {
                         Ok(true) => break,
                         Ok(false) => {}
-                        Err(err)
-                            if err.is_retryable()
-                                && (max_attempts == 0 || attempt < max_attempts) =>
-                        {
+                        Err(mut err) => loop {
+                            if stop.is_cancelled()
+                                || !err.is_retryable()
+                                || (max_attempts != 0 && attempt >= max_attempts)
+                            {
+                                return Err(err);
+                            }
                             attempt += 1;
                             warn!(
                                 "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
                                 delay.as_millis()
                             );
-                            safe_sleep(delay).await;
+                            if stop
+                                .run_until_cancelled(safe_sleep(delay))
+                                .await
+                                .is_none()
+                            {
+                                return Err(err);
+                            }
                             let missed = stream.missed_rows();
                             self.updater.update(|p| p.missed_rows.merge(missed));
-                            if let Err(reconnect_err) =
-                                try_join!(slot.reconnect(), stream.reconnect())
-                            {
-                                if !reconnect_err.is_retryable() {
-                                    return Err(reconnect_err);
+                            match try_join!(slot.reconnect(), stream.reconnect()) {
+                                Ok(_) => break,
+                                Err(reconnect_err) => {
+                                    stream.reset_connections();
+                                    err = reconnect_err;
                                 }
-                                stream.reset_connections();
-                                warn!(
-                                    "[replication] reconnect error ({attempt}/{max_attempts}): {reconnect_err}, will retry"
-                                );
                             }
-                        }
-                        Err(err) => return Err(err),
+                        },
                     }
                 }
             }
@@ -229,6 +233,7 @@ mod tests {
     };
 
     use crate::{
+        backend::replication::logical::publisher::ReplicationSlot,
         backend::replication::logical::publisher::replication_progress::{
             ReplicationProgress, ReplicationShardProgress,
         },
@@ -292,20 +297,22 @@ mod tests {
             let table = tables.first_mut().ok_or("publication has no table")?;
             table.table.parent_name = self.destination_table.clone();
             table.table.parent_schema = table.table.schema.clone();
-            let mut slot = ReplicationSlot::replication(
+            let slot = ReplicationSlot::new_permanent(
                 &self.publication,
                 self.server.addr(),
                 Some(self.slot_base.clone()),
                 0,
             );
-            slot.create_slot().await?;
+            slot.create().await?;
+            let mut guard = slot.get_existing().await?;
             if self.replication.progress().replication_lag.is_some() {
                 return Err("lag was measured before replication started".into());
             }
             let replication = Arc::clone(&self.replication);
             let stop = self.stop.clone();
             self.worker = Some(tokio::spawn(async move {
-                let result = Box::pin(replication.run(&mut slot, tables, &stop)).await;
+                let result = Box::pin(replication.run(&mut guard, tables, &stop)).await;
+                drop(guard);
                 let dropped = slot.drop_slot().await;
                 result.and(dropped)
             }));

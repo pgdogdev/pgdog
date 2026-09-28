@@ -10,7 +10,7 @@ use crate::api::run_task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::tasks_storage;
 use crate::backend::databases::databases;
-use crate::backend::replication::orchestrator::Orchestrator;
+use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::router::cli::RouterCli;
 use pgdog_stats::Databases;
@@ -220,16 +220,16 @@ pub(crate) async fn replicate_and_cutover(
         replication_slot,
     } = commands
     {
-        let orchestrator = Orchestrator::new(
-            &from_database,
-            &to_database,
-            &publication,
-            replication_slot.clone(),
-        )?;
+        let state = ReshardingState::builder()
+            .source(&from_database)
+            .destination(&to_database)
+            .publication(&publication)
+            .maybe_replication_slot(replication_slot.clone())
+            .build()?;
 
         run_to_completion(
             ReshardTask::builder()
-                .orchestrator(orchestrator)
+                .state(state)
                 .auto_cutover(true)
                 .build(),
         )
@@ -250,12 +250,16 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         skip_schema_sync,
     } = commands
     {
-        let orchestrator =
-            Orchestrator::new(&from_database, &to_database, &publication, replication_slot)?;
+        let state = ReshardingState::builder()
+            .source(&from_database)
+            .destination(&to_database)
+            .publication(&publication)
+            .maybe_replication_slot(replication_slot)
+            .build()?;
 
         run_to_completion(
             ReshardTask::builder()
-                .orchestrator(orchestrator)
+                .state(state)
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)

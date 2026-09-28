@@ -10,6 +10,18 @@ pub(crate) enum Error {
     #[error("Error parsing query: {0}")]
     Parse(#[from] pg_raw_parse::Error),
 
+    // Technically, the user is not aware that we hash the IDs to shards,
+    // and thus might be confused by this message.
+    //
+    // A better message could advise them to use a singular advisory lock
+    // per query. However, that's not necessarily the limitation at hand...
+    //
+    // We could also tell them the algorithm used internally in the docs.
+    // Or, perhaps, make it configurable to an extent, e.g., with what we
+    // do with sharding keys (mapping specific lock IDs to specific shards)
+    #[error("the advisory locks in this query resolve to different shards")]
+    CrossShardAdvisoryLockAttempt,
+
     #[error("no sharding column in CSV")]
     NoShardingColumn,
 

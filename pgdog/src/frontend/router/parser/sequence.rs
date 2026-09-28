@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use super::{Column, Table, error::Error};
-use crate::util::escape_identifier;
+use crate::util::{escape_identifier, sql::quote_literal};
 
 /// Sequence name in a query.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -19,7 +19,7 @@ impl Display for Sequence<'_> {
 impl<'a> Sequence<'a> {
     /// Generate a setval statement to set the sequence to the max value of the given column
     pub(crate) fn setval_from_column(&self, column: &Column<'a>) -> Result<String, Error> {
-        let sequence_name = self.table.to_string();
+        let sequence_name = quote_literal(&self.table.to_string());
 
         let table = column.table().ok_or(Error::ColumnNoTable)?;
         let table_name = table.to_string();
@@ -27,7 +27,7 @@ impl<'a> Sequence<'a> {
         let column_name = format!("\"{}\"", escape_identifier(column.name));
 
         Ok(format!(
-            "SELECT setval('{}', COALESCE((SELECT MAX({}) FROM {}), 1), true);",
+            "SELECT setval({}, COALESCE((SELECT MAX({}) FROM {}), 1), true);",
             sequence_name, column_name, table_name
         ))
     }
@@ -62,6 +62,52 @@ mod test {
             setval_sql,
             "SELECT setval('\"public\".\"user_profiles_id_seq\"', COALESCE((SELECT MAX(\"id\") FROM \"public\".\"user_profiles\"), 1), true);"
         );
+    }
+
+    #[test]
+    fn test_sequence_setval_quotes_names() {
+        let sequence = Sequence::from(Table {
+            schema: Some("tenant's \"schema\""),
+            name: "customer's \"id\" sequence",
+            alias: None,
+        });
+        let sql = sequence
+            .setval_from_column(&Column {
+                schema: Some("tenant's \"schema\""),
+                table: Some("customer's table"),
+                name: "customer's \"id\"",
+            })
+            .expect("column has a table");
+        pg_raw_parse::parse(&sql).expect("cutover SQL must accept quoted identifiers");
+    }
+
+    #[tokio::test]
+    async fn test_sequence_setval_quoted_name_executes() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::server::test::test_server;
+
+        let mut server = test_server().await;
+        server
+            .execute("CREATE TEMP TABLE \"customer's table\" (\"id\" SERIAL)")
+            .await?;
+        server
+            .execute("INSERT INTO \"customer's table\" VALUES (42)")
+            .await?;
+        let sql = Sequence::from(Table {
+            schema: Some("pg_temp"),
+            name: "customer's table_id_seq",
+            alias: None,
+        })
+        .setval_from_column(&Column {
+            schema: Some("pg_temp"),
+            table: Some("customer's table"),
+            name: "id",
+        })?;
+        server.execute(sql).await?;
+        let next: Vec<i32> = server
+            .fetch_all("INSERT INTO \"customer's table\" DEFAULT VALUES RETURNING id")
+            .await?;
+        assert_eq!(next, vec![43]);
+        Ok(())
     }
 
     #[test]

@@ -287,7 +287,7 @@ impl StatementRewrite<'_> {
         next_param: &mut i32,
         plan: &mut RewritePlan,
     ) -> Result<(), Error> {
-        let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema, None);
+        let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema);
 
         // We allow `ShardedTable`s on a case-by-case basis (see `apply_rewrite_on_sharded_tables`)
         let is_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);

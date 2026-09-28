@@ -1,7 +1,9 @@
 #[link(name = "postgres_hash")]
 unsafe extern "C" {
-    /// Hash any size data using its bytes representation.
-    pub(super) fn hash_bytes_extended(k: *const u8, keylen: i64) -> u64;
+    /// Hash any size data using its bytes representation (32-bit)
+    pub(super) fn hash_bytes(k: *const u8, keylen: i64) -> u32;
+    /// Hash any size data using its bytes representation (64-bit, incl. custom seed)
+    pub(super) fn hash_bytes_extended(k: *const u8, keylen: i64, seed: u64) -> u64;
     /// Special hashing function for BIGINT (i64).
     pub(super) fn hashint8extended(k: i64) -> u64;
     /// Combine multiple hashes into one in the case of multi-column hashing keys.

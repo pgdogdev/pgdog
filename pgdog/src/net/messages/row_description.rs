@@ -30,7 +30,6 @@ pub(crate) struct Field {
 }
 
 impl MemoryUsage for Field {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.name.capacity()
             + self.table_oid.memory_usage()
@@ -137,12 +136,10 @@ impl Field {
     }
 
     /// Get the column data type.
-    #[inline]
     pub(crate) fn data_type(&self) -> DataType {
         DataType::from_oid(self.type_oid)
     }
 
-    #[inline]
     pub(crate) fn format(&self) -> Format {
         match self.format {
             0 => Format::Text,
@@ -159,7 +156,6 @@ pub(crate) struct RowDescription {
 }
 
 impl MemoryUsage for RowDescription {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.fields.iter().map(|f| f.memory_usage()).sum::<usize>()
     }
@@ -174,7 +170,6 @@ impl RowDescription {
     }
 
     /// Get field info.
-    #[inline]
     pub(crate) fn field(&self, index: usize) -> Option<&Field> {
         self.fields.get(index)
     }

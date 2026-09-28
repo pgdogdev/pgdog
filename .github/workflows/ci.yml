@@ -2,18 +2,11 @@ name: ci
 on:
   push:
     branches:
-      - main
       - main-ent
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
-      - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
-      - "integration/**"
+  merge_group:
+    types: [checks_requested]
 
 jobs:
   # Build both pgdog artifacts in parallel:
@@ -38,7 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 5
+          command: bash integration/ci/install-deps.sh        
       # Compute the binary key before restoring rust-cache: rust-cache restores
       # target/ build outputs that would otherwise change the key. Use the
       # split cache actions so pgdog binaries are saved immediately after the
@@ -126,7 +124,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 5
+          command: bash integration/ci/install-deps.sh
       - name: Compute cache key
         id: cache-key
         run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
@@ -181,12 +184,12 @@ jobs:
         if: always()
         run: bash integration/ci/ensure-pgdog-stopped.sh
       - name: Generate coverage report
-        if: always()
+        if: ${{ github.event_name != 'merge_group' }}
         run: cargo llvm-cov report --package pgdog --lcov --output-path ${{ matrix.name }}.lcov
       # Codecov merges uploads per flag server-side, so each suite uploads
       # its own lcov under the shared "integration" flag.
       - name: Upload coverage to Codecov
-        if: always()
+        if: ${{ github.event_name != 'merge_group' }}
         uses: codecov/codecov-action@v4
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
@@ -195,3 +198,9 @@ jobs:
           flags: integration
           name: integration-${{ matrix.name }}
           fail_ci_if_error: false
+  success:
+    name: All Integration Tests Passed
+    needs: ci
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+    - run: echo Done!

@@ -172,6 +172,18 @@ impl TestClient {
         Self::new(params).await
     }
 
+    /// New sharded client with two-phase commit enabled.
+    pub(crate) async fn new_sharded_two_pc(params: Parameters) -> Self {
+        load_test_sharded();
+
+        let mut config = config().deref().clone();
+        config.config.general.two_phase_commit = true;
+        set(config).unwrap();
+        reload_from_existing().unwrap();
+
+        Self::new(params).await
+    }
+
     /// New client with cross-shard-queries disabled.
     pub(crate) async fn new_cross_shard_disabled(params: Parameters) -> Self {
         load_test_sharded();

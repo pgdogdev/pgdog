@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use pg_raw_parse::{deparse, nodes};
+use pg_raw_parse::{Error as ParseError, deparse, nodes};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -190,7 +190,7 @@ impl Cache {
         Ok(entry)
     }
 
-    pub(crate) fn record(&self, query: &str) -> Result<Ast, Error> {
+    pub(crate) fn record(&self, query: &str) -> Result<Ast, ParseError> {
         {
             let mut guard = self.inner.lock();
             if let Some(entry) = guard.queries.get_mut(query) {

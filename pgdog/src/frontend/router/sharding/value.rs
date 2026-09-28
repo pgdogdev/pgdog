@@ -62,7 +62,20 @@ impl<'a> Value<'a> {
         data_type: DataType,
     ) -> Result<Self, Error> {
         let data = param.data();
-        let format = param.format();
+        let mut format = param.format();
+        // Hacky workaround to make `$1::uuid` work if `$1` is a text
+        // parameter sent in binary format. Uuid is the only type we can safely
+        // detect this case for
+        // FIXME: This is a hack and we should remove it once the parser
+        // is able to be aware of the actual data type of parameters instead of
+        // guessing
+        if data_type == DataType::Uuid
+            && data.len() != 16
+            && let Ok(text) = from_utf8(data)
+            && Uuid::from_str(text).is_ok()
+        {
+            format = Format::Text
+        }
 
         match format {
             Format::Text => Ok(Self::new(from_utf8(data)?, data_type)),
