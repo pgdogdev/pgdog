@@ -88,7 +88,7 @@ impl<'a> InsertMulti<'a> {
             self.engine
                 .backend
                 .handle_client_request(
-                    &client_request,
+                    client_request,
                     &mut self.engine.router,
                     self.engine.streaming,
                 )
