@@ -16,7 +16,8 @@ impl QueryEngine {
     pub(crate) async fn set(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
         params: &[SetParam],
         set_config: bool,
     ) -> Result<(), Error> {
@@ -112,7 +113,8 @@ impl QueryEngine {
     pub(crate) async fn reset_all(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
     ) -> Result<(), Error> {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();

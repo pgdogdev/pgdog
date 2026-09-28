@@ -13,7 +13,8 @@ impl QueryEngine {
     pub(super) async fn start_transaction(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
         begin: BufferedQuery,
         transaction_type: TransactionType,
         extended: bool,

@@ -59,7 +59,7 @@ impl<'a> InsertMulti<'a> {
     pub(crate) async fn execute(
         &'a mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        client_request: &mut ClientRequest,
     ) -> Result<bool, Error> {
         let cluster = self.engine.backend.cluster()?;
         for request in self.requests.iter_mut() {
@@ -82,13 +82,9 @@ impl<'a> InsertMulti<'a> {
         // All tuples map to the same shard: send the original multi-row INSERT
         // as a single statement, skipping the multi-step path entirely.
         if let Some(shard_n) = self.uniform_shard() {
-            // FIXME(sage): Shouldn't the original query already have this route?
-            let client_request = ClientRequest {
-                route: Some(Route::write(ShardWithPriority::new_table(Shard::Direct(
-                    shard_n,
-                )))),
-                ..client_request.clone()
-            };
+            client_request.route = Some(Route::write(ShardWithPriority::new_table(Shard::Direct(
+                shard_n,
+            ))));
             self.engine
                 .backend
                 .handle_client_request(

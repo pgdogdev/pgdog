@@ -23,7 +23,9 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): `mut` only used to set the route on same shard insert split. Should be done
+        // earlier
+        client_request: &mut ClientRequest,
         query_planner: Option<RewriteResult>,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
@@ -118,7 +120,7 @@ impl QueryEngine {
     async fn client_server_exchange(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        client_request: &mut ClientRequest,
         rewrite_result: Option<RewriteResult>,
     ) -> Result<(), Error> {
         match rewrite_result {

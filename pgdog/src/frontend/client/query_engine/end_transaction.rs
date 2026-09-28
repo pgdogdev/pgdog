@@ -47,7 +47,8 @@ impl QueryEngine {
     pub(super) async fn end_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {

@@ -10,7 +10,8 @@ impl QueryEngine {
     pub(super) async fn discard(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_request: &ClientRequest,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
         target: DiscardTarget,
         extended: bool,
     ) -> Result<(), Error> {
