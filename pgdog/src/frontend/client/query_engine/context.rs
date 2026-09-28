@@ -24,8 +24,6 @@ pub(crate) struct QueryEngineContext<'a> {
     pub(super) params: &'a mut Parameters,
     /// Parameters from the client's startup message.
     pub(super) startup_params: &'a Parameters,
-    /// Request.
-    pub(super) client_request: &'a mut ClientRequest,
     /// How many requests are left to execute in an extended pipeline.
     pub(super) pipeline: Pipeline,
     /// Client's socket to send responses to.
@@ -53,46 +51,46 @@ pub(crate) struct QueryEngineContext<'a> {
 }
 
 impl<'a> QueryEngineContext<'a> {
-    pub(crate) fn new(client: &'a mut Client) -> Self {
+    pub(crate) fn new(client: &'a mut Client) -> (Self, &'a mut ClientRequest) {
         let memory_stats = client.memory_stats();
 
-        Self {
-            id: FrontendPid::from(&client.key),
-            prepared_statements: &mut client.prepared_statements,
-            params: &mut client.params,
-            startup_params: &client.startup_params,
-            client_request: &mut client.client_request,
-            stream: &mut client.stream,
-            transaction: client.transaction,
-            timeouts: client.timeouts,
-            cross_shard_disabled: None,
-            memory_stats,
-            admin: client.admin,
-            pipeline: Pipeline::None,
-            rollback: false,
-            sticky: client.sticky,
-            query_log_stdout: client.query_log_stdout,
-            query_size_limit: client.query_size_limit,
-            statement_start: client.statement_start,
-        }
+        (
+            Self {
+                id: FrontendPid::from(&client.key),
+                prepared_statements: &mut client.prepared_statements,
+                params: &mut client.params,
+                startup_params: &client.startup_params,
+                stream: &mut client.stream,
+                transaction: client.transaction,
+                timeouts: client.timeouts,
+                cross_shard_disabled: None,
+                memory_stats,
+                admin: client.admin,
+                pipeline: Pipeline::None,
+                rollback: false,
+                sticky: client.sticky,
+                query_log_stdout: client.query_log_stdout,
+                query_size_limit: client.query_size_limit,
+                statement_start: client.statement_start,
+            },
+            &mut client.client_request,
+        )
     }
 
     /// The request is an extended protocol pipeline
     /// with a counter of how many requests are left to process.
-    pub(crate) fn pipelined(mut self, req: &'a mut ClientRequest, pipeline: Pipeline) -> Self {
-        self.client_request = req;
+    pub(crate) fn pipelined(mut self, pipeline: Pipeline) -> Self {
         self.pipeline = pipeline;
         self
     }
 
     /// Create context from mirror.
-    pub(crate) fn new_mirror(mirror: &'a mut Mirror, buffer: &'a mut ClientRequest) -> Self {
+    pub(crate) fn new_mirror(mirror: &'a mut Mirror) -> Self {
         Self {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
             startup_params: &mirror.startup_params,
-            client_request: buffer,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,

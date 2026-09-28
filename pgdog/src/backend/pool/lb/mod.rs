@@ -486,14 +486,23 @@ impl LoadBalancer {
                 .iter()
                 .find(|t| t.pool.has_compatible_address_with(&target.pool));
 
-            if let Some(old) = old_target
-                && let Some(Error::InitialHealthCheck) = old.ban.error()
-            {
-                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                target.health().toggle(old.health().healthy());
-            } else if target.pool.config().require_healthcheck_on_discovery {
-                target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                target.health().toggle(false);
+            match old_target {
+                // Still waiting for its first health check, keep it banned.
+                Some(old) if old.ban.error() == Some(Error::InitialHealthCheck) => {
+                    target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                    target.health().toggle(old.health().healthy());
+                }
+
+                // Existing target that is already serving traffic. Banning it
+                // would dump the idle connections we just moved over.
+                Some(_) => (),
+
+                None if target.pool.config().require_healthcheck_on_discovery => {
+                    target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
+                    target.health().toggle(false);
+                }
+
+                None => (),
             }
         }
     }

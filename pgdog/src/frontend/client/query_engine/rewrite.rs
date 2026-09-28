@@ -1,14 +1,16 @@
 use super::*;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::{AstContext, Cache};
+use crate::net::ProtocolMessage;
 
 impl QueryEngine {
     /// Rewrite extended protocol messages.
     pub(super) fn rewrite_extended(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_messages: &mut [ProtocolMessage],
     ) -> Result<(), Error> {
-        for message in context.client_request.iter_mut() {
+        for message in client_messages {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
                 if level.handles_extended() && (level.rewrite_anonymous() || !message.anonymous()) {
@@ -23,18 +25,19 @@ impl QueryEngine {
     pub(super) async fn parse_and_rewrite(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
     ) -> Result<Option<RewriteResult>, Error> {
         let use_parser = self
             .backend
             .cluster()
-            .map(|cluster| cluster.use_query_parser(context.client_request))
+            .map(|cluster| cluster.use_query_parser(client_request))
             .unwrap_or(false);
 
         if !use_parser {
             return Ok(None);
         }
 
-        let query = context.client_request.query()?;
+        let query = client_request.query()?;
         if let Some(query) = query {
             let cluster = self.backend.cluster()?;
             let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
@@ -42,13 +45,9 @@ impl QueryEngine {
 
             let rewrite_result = ast
                 .rewrite_plan
-                .apply(
-                    context.client_request,
-                    ast_ctx.timezone,
-                    ast_ctx.query_timestamps,
-                )
+                .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
                 .await?;
-            context.client_request.ast = Some(ast);
+            client_request.ast = Some(ast);
             Ok(Some(rewrite_result))
         } else {
             Ok(None)
