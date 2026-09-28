@@ -1,5 +1,5 @@
 use crate::frontend::client::query_engine::TempTableChange;
-use pg_raw_parse::raw::OnCommitAction::ONCOMMIT_DROP;
+use pg_raw_parse::raw::OnCommitAction::{self, ONCOMMIT_DROP};
 use std::ffi::c_char;
 
 use super::*;
@@ -34,17 +34,7 @@ impl QueryParser {
             Node::CreateStmt(stmt) => {
                 schema_changed = true;
                 shard = Self::shard_ddl_table(stmt.relation(), schema)?.unwrap_or(Shard::All);
-                if let Some(rv) = stmt.relation()
-                    && rv.relpersistence == b't' as c_char
-                {
-                    temp_table = Some(TempTableChange::Create {
-                        name: rv
-                            .relname()
-                            .expect("CREATE TABLE always has table name")
-                            .to_owned(),
-                        drop_on_commit: stmt.oncommit == ONCOMMIT_DROP,
-                    });
-                }
+                temp_table = Self::temp_table_created(stmt.relation(), stmt.oncommit);
             }
 
             Node::CreateSeqStmt(stmt) => {
@@ -96,7 +86,15 @@ impl QueryParser {
                 schema_changed = true;
                 if let Some(into) = stmt.into() {
                     shard = Self::shard_ddl_table(into.rel(), schema)?.unwrap_or(Shard::All);
+                    temp_table = Self::temp_table_created(into.rel(), into.on_commit);
                 }
+            }
+
+            // SELECT ... INTO creates a table, like CREATE TABLE ... AS.
+            Node::SelectStmt(stmt) if let Some(into) = stmt.into_clause() => {
+                schema_changed = true;
+                shard = Self::shard_ddl_table(into.rel(), schema)?.unwrap_or(Shard::All);
+                temp_table = Self::temp_table_created(into.rel(), into.on_commit);
             }
 
             Node::CreateFunctionStmt(stmt) => {
@@ -227,6 +225,22 @@ impl QueryParser {
                 .with_schema_changed(schema_changed)
                 .with_temp_table_change(temp_table),
         ))
+    }
+
+    /// The table created by CREATE TABLE, CREATE TABLE ... AS or
+    /// SELECT ... INTO, if it's temporary.
+    fn temp_table_created(
+        relation: Option<&nodes::RangeVar>,
+        on_commit: OnCommitAction::Type,
+    ) -> Option<TempTableChange> {
+        let rv = relation?;
+        (rv.relpersistence == b't' as c_char).then(|| TempTableChange::Create {
+            name: rv
+                .relname()
+                .expect("CREATE TABLE always has table name")
+                .to_owned(),
+            drop_on_commit: on_commit == ONCOMMIT_DROP,
+        })
     }
 
     pub(super) fn shard_ddl_table(
