@@ -1,6 +1,6 @@
 use tokio::io::AsyncWriteExt;
 
-use crate::net::{CloseComplete, Protocol, ReadyForQuery};
+use crate::net::{CloseComplete, Protocol, ProtocolMessage, ReadyForQuery};
 
 use super::*;
 
@@ -10,6 +10,7 @@ impl QueryEngine {
     pub(super) async fn intercept_incomplete(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_messages: &[ProtocolMessage],
     ) -> Result<bool, Error> {
         // Don't intercept requests when we are connected.
         if self.backend.connected() {
@@ -17,23 +18,17 @@ impl QueryEngine {
         }
 
         // Client sent Sync only
-        let only_sync = context
-            .client_request
-            .messages
-            .iter()
-            .all(|m| m.code() == 'S');
+        let only_sync = client_messages.iter().all(|m| m.code() == 'S');
 
         // Client sent only Close.
-        let only_close = context
-            .client_request
-            .messages
+        let only_close = client_messages
             .iter()
             .all(|m| ['C', 'S'].contains(&m.code()))
             && !only_sync;
 
         let mut bytes_sent = 0;
 
-        for msg in context.client_request.messages.iter() {
+        for msg in client_messages {
             match msg.code() {
                 'C' => {
                     if only_close {

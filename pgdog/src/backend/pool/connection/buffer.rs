@@ -9,7 +9,7 @@ use std::{
 use crate::{
     frontend::router::parser::{
         Aggregate, DistinctBy, DistinctColumn, Limit, OrderBy,
-        rewrite::statement::aggregate::AggregateRewritePlan,
+        rewrite::statement::projection::ProjectionRewritePlan,
     },
     net::{
         Decoder,
@@ -140,10 +140,10 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &AggregateRewritePlan,
+        plan: &ProjectionRewritePlan,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
-        let mut rows = if aggregate.is_empty() {
+        let rows = if aggregate.is_empty() {
             buffer
         } else if let Some(aggregates) = Aggregates::new(&buffer, decoder, aggregate, plan) {
             aggregates.aggregate()?
@@ -151,20 +151,19 @@ impl Buffer {
             buffer
         };
 
-        Self::drop_helper_columns(&mut rows, plan);
         self.buffer = rows;
 
         Ok(())
     }
 
-    fn drop_helper_columns(rows: &mut VecDeque<DataRow>, plan: &AggregateRewritePlan) {
+    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
         if plan.is_noop() {
             return;
         }
 
-        let drop = plan.drop_columns().collect();
+        let drop = plan.drop_columns(decoder.row_description());
 
-        for row in rows.iter_mut() {
+        for row in self.buffer.iter_mut() {
             row.drop_columns(&drop);
         }
     }
@@ -285,7 +284,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 
@@ -312,7 +311,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &AggregateRewritePlan::default())
+        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
             .unwrap();
         buf.mark_full();
 

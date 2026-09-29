@@ -20,14 +20,12 @@ impl QueryEngine {
     pub(super) async fn connect(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        connect_route: Option<&Route>,
+        connect_route: &Route,
     ) -> Result<bool, Error> {
         if self.backend.connected() {
-            self.debug_connected(context, true);
+            self.debug_connected(connect_route, true);
             return Ok(true);
         }
-
-        let connect_route = connect_route.unwrap_or(context.client_request.route());
 
         // Pass through the cluster's `read_only` flag (propagated from `User.read_only`)
         // to determine if we should exclude the primary from being allowed to read.
@@ -40,7 +38,7 @@ impl QueryEngine {
         let connected = match self.backend.connect(&request, connect_route).await {
             Ok(_) => {
                 self.stats.connected();
-                self.debug_connected(context, false);
+                self.debug_connected(connect_route, false);
 
                 let query_timeout = context.timeouts.query_timeout(&self.stats.state);
                 let begin_stmt = self.begin_stmt.take();
@@ -99,14 +97,15 @@ impl QueryEngine {
     pub(super) async fn connect_transaction(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_route: &Route,
     ) -> Result<bool, Error> {
         debug!("connecting to backend(s) to serve transaction");
 
-        let route = self.transaction_route(context.client_request.route())?;
+        let route = self.transaction_route(client_route)?;
 
         trace!("transaction routing to {:#?}", route);
 
-        self.connect(context, Some(&route)).await
+        self.connect(context, &route).await
     }
 
     /// Return a route for the transaction statement.
@@ -147,7 +146,7 @@ impl QueryEngine {
         }
     }
 
-    fn debug_connected(&self, context: &QueryEngineContext<'_>, connected: bool) {
+    fn debug_connected(&self, route: &Route, connected: bool) {
         if let Ok(addr) = self.backend.addr() {
             debug!(
                 "{} [{}] using route [{}] [{:.4}ms]",
@@ -160,7 +159,7 @@ impl QueryEngine {
                     .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(","),
-                context.client_request.route(),
+                route,
                 self.stats.wait_time.as_secs_f64() * 1000.0
             );
         }

@@ -68,7 +68,7 @@ impl QueryParser {
         };
 
         match stmt {
-            Some(Node::SelectStmt(stmt)) => self.select(&ast, stmt, &mut context),
+            Some(Node::SelectStmt(stmt)) => self.select(stmt, &mut context),
             Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
             Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
             Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),
