@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::BindParams},
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -122,26 +122,31 @@ impl PreparedStatements {
     }
 
     /// Insert PREPARE statement into the cache.
-    pub(crate) fn insert_prepare(
+    pub(in crate::frontend) fn insert_prepare(
         &mut self,
         name: &str,
         original_query: Bytes,
         rewritten_query: Option<Bytes>,
         offset_plan: Option<OffsetPlan>,
-        generated_params: Vec<GeneratedParam>,
+        bind_params: BindParams,
     ) -> Prepare {
         let (_new, prepare) = {
             self.global.write().insert_prepare(
                 original_query,
                 rewritten_query,
                 offset_plan,
-                generated_params,
+                bind_params,
             )
         };
 
         self.insert_internal(name, prepare.name());
 
         prepare
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test(&mut self, name: &str, original_query: Bytes) -> Prepare {
+        self.insert_prepare(name, original_query, None, None, Default::default())
     }
 
     /// Get the global unique name for a prepared statement

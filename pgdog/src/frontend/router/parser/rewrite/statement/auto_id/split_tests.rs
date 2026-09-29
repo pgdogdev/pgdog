@@ -200,7 +200,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                                 .as_ref()
                                 .expect("AST")
                                 .rewrite_plan
-                                .generated_params
+                                .bind_params
                                 .is_empty()
                         );
                     }

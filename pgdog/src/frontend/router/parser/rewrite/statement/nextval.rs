@@ -2,10 +2,8 @@ use std::collections::HashMap;
 
 use pg_raw_parse::{ConstValue, Node, make, transform, walk};
 
+use super::{BindParam, BindParams, Error, RewritePlan, StatementRewrite};
 use crate::frontend::router::parser::rewrite::ee;
-use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
-
-use super::{Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SequenceCall {
@@ -112,14 +110,11 @@ impl StatementRewrite<'_> {
         &mut self,
         node: Node<'_>,
         mem: make::MemoryToken<'mem>,
-        next_param: &mut i32,
-        plan: &mut RewritePlan,
+        bind_params: &mut BindParams,
     ) -> Option<make::Unique<'mem, Node<'mem>>> {
         let sequence = sequence_call(node)?;
-        let param = *next_param;
-        *next_param += 1;
-        plan.generated_params
-            .push(GeneratedParam::Sequence(sequence));
+        let param = bind_params.len() as i32 + 1;
+        bind_params.push(BindParam::Sequence(sequence));
         // Retain simple-protocol SQL even when a sequence call is the only rewrite.
         self.rewritten = true;
         self.extended.then(|| {
@@ -206,7 +201,7 @@ mod tests {
     use crate::frontend::PreparedStatements;
     use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::StatementRewriteContext;
-    use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
+    use crate::frontend::router::parser::rewrite::statement::plan::BindParam;
     use crate::net::messages::bind::{Format, Parameter};
     use crate::net::{Bind, Parse, ProtocolMessage, Query};
     use pgdog_config::Rewrite;
@@ -256,14 +251,14 @@ mod tests {
             sql,
             "SELECT $2::bigint, $1, $3::bigint, $4::bigint, $5::bigint"
         );
-        assert_eq!(plan.params, 1);
         assert_eq!(
-            plan.generated_params,
-            vec![
-                GeneratedParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())),
-                GeneratedParam::UniqueId,
-                GeneratedParam::Sequence(SequenceCall::Currval("other.seq".to_owned())),
-                GeneratedParam::Sequence(SequenceCall::Setval {
+            plan.bind_params,
+            [
+                BindParam::FromClientBind(0),
+                BindParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())),
+                BindParam::UniqueId,
+                BindParam::Sequence(SequenceCall::Currval("other.seq".to_owned())),
+                BindParam::Sequence(SequenceCall::Setval {
                     name: "sequence.name".to_owned(),
                     value: 42,
                     is_called: false,
@@ -280,8 +275,8 @@ mod tests {
         let (sql, plan) = rewrite(original, false);
         assert_eq!(sql, original);
         assert_eq!(
-            plan.generated_params,
-            vec![GeneratedParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())); 2]
+            plan.bind_params,
+            vec![BindParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())); 2]
         );
         assert_eq!(plan.stmt.as_deref(), Some(original));
         assert!(!plan.is_empty());
@@ -297,12 +292,12 @@ mod tests {
         );
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
         assert_eq!(
-            plan.generated_params,
+            plan.bind_params,
             vec![
-                GeneratedParam::Sequence(SequenceCall::Nextval(
+                BindParam::Sequence(SequenceCall::Nextval(
                     "\"My Schema\".\"My Sequence\"".to_owned()
                 )),
-                GeneratedParam::Sequence(SequenceCall::Nextval("other.seq".to_owned())),
+                BindParam::Sequence(SequenceCall::Nextval("other.seq".to_owned())),
             ]
         );
     }
@@ -631,8 +626,8 @@ mod tests {
                     let original = format!("SELECT {call}");
                     let (sql, plan) = rewrite(&original, extended);
                     assert_eq!(
-                        plan.generated_params,
-                        [GeneratedParam::Sequence(expected.clone())],
+                        plan.bind_params,
+                        [BindParam::Sequence(expected.clone())],
                         "{call}"
                     );
                     let canonical = original.replace(
@@ -788,7 +783,7 @@ mod tests {
         ] {
             for extended in [false, true] {
                 let (_, plan) = rewrite(&format!("SELECT {call}"), extended);
-                assert!(plan.generated_params.is_empty(), "{call}");
+                assert!(plan.bind_params.is_empty(), "{call}");
                 assert!(plan.is_empty(), "{call}");
             }
         }
@@ -839,7 +834,7 @@ mod tests {
                 "{call}"
             );
             let (_, plan) = rewrite(&format!("SELECT {call}"), true);
-            assert!(plan.generated_params.is_empty(), "{call}");
+            assert!(plan.bind_params.is_empty(), "{call}");
             assert!(plan.is_empty(), "{call}");
         }
     }

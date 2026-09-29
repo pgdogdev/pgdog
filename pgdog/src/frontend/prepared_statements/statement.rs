@@ -1,5 +1,5 @@
 use crate::{
-    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::BindParams},
     net::Prepare,
     stats::memory::MemoryUsage,
 };
@@ -22,7 +22,7 @@ pub(crate) struct PreparedPlan {
     /// modify limit/offset values before execution if it ends up being cross-shard.
     pub(crate) offset_plan: Option<OffsetPlan>,
 
-    pub(crate) generated_params: Vec<GeneratedParam>,
+    pub(in crate::frontend) bind_params: BindParams,
 }
 
 #[derive(Debug, Clone)]

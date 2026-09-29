@@ -3,7 +3,7 @@
 use crate::backend::schema::Schema;
 use crate::config::config;
 use crate::frontend::PreparedStatements;
-use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
+use crate::frontend::router::parser::rewrite::statement::plan::{BindParam, BindParams};
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
 use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
@@ -126,13 +126,15 @@ impl<'a> StatementRewrite<'a> {
             _ => return Ok(plan),
         };
 
+        let mut param_count = 0;
         if let Some(parameterized_stmt) = parameterized_stmt {
             walk::walk(parameterized_stmt, |node| {
                 if let Node::ParamRef(param) = node {
-                    plan.params = plan.params.max(param.number as u16)
+                    param_count = param_count.max(param.number as u16)
                 }
             });
         }
+        plan.bind_params = BindParams::Original { param_count };
 
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
         // This must run BEFORE the unique_id rewriter so the injected
@@ -150,15 +152,13 @@ impl<'a> StatementRewrite<'a> {
         }
 
         // Track the next parameter number to use
-        let mut next_param = plan.params as i32 + 1;
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
             &mut transform::TransformClosure::new(|node| match node.as_ref() {
                 Node::FuncCall(func) if Self::is_unique_id(func) => {
-                    match Self::unique_id_value(mem, self.extended, &mut next_param) {
+                    match Self::unique_id_value(mem, self.extended, &mut plan.bind_params) {
                         Ok(replacement) => {
-                            plan.generated_params.push(GeneratedParam::UniqueId);
                             self.rewritten = true;
                             node.replace(replacement);
                         }
@@ -170,7 +170,7 @@ impl<'a> StatementRewrite<'a> {
                 }
                 node_ref
                     if let Some(replacement) =
-                        self.rewrite_sequence(node_ref, mem, &mut next_param, &mut plan) =>
+                        self.rewrite_sequence(node_ref, mem, &mut plan.bind_params) =>
                 {
                     node.replace(replacement);
                     None
@@ -194,16 +194,11 @@ impl<'a> StatementRewrite<'a> {
         if nd_function_rewrite {
             match stmt.stmt_mut() {
                 NodeMut::InsertStmt(_) => {
-                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut next_param, &mut plan)?;
+                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
-                        self.rewrite_nd_functions(
-                            prepare.query_mut(),
-                            mem,
-                            &mut next_param,
-                            &mut plan,
-                        )?;
+                        self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
                 }
                 _ => {}
