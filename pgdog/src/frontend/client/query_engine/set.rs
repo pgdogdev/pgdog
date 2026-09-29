@@ -102,7 +102,7 @@ impl QueryEngine {
         }
 
         let Some(param) = params.iter().find(|param| {
-            !(param.local && !context.in_transaction())
+            (context.in_transaction() || !param.local)
                 && SHARD_TARGETING_PARAMS
                     .iter()
                     .any(|name| param.name.eq_ignore_ascii_case(name))
