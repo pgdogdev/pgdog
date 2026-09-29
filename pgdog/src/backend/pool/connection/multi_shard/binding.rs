@@ -1,9 +1,12 @@
-use std::ops::{Deref, DerefMut};
+use std::slice::{Iter, IterMut};
 
 use futures::future::join_all;
 
 use crate::backend::Error;
 use crate::frontend::ClientRequest;
+use crate::frontend::client::query_engine::{
+    TwoPcPhase, TwoPcTransaction, statement::phase_control,
+};
 use crate::frontend::router::parser::Shard;
 use crate::frontend::router::{CopyRow, Route};
 use crate::net::{Message, ProtocolMessage};
@@ -28,6 +31,26 @@ impl From<Vec<Guard>> for MultiBinding {
 }
 
 impl MultiBinding {
+    /// Iterate over the connected servers.
+    pub(crate) fn iter(&self) -> Iter<'_, Guard> {
+        self.servers.iter()
+    }
+
+    /// Mutably iterate over the connected servers.
+    pub(crate) fn iter_mut(&mut self) -> IterMut<'_, Guard> {
+        self.servers.iter_mut()
+    }
+
+    /// Returns true when binding is not connected to any servers.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Number of connected servers.
+    pub(crate) fn len(&self) -> usize {
+        self.servers.len()
+    }
+
     /// Create new multi-shard binding.
     pub(crate) fn new(servers: Vec<Guard>, shard_indices: Vec<usize>, route: &Route) -> Self {
         Self {
@@ -187,18 +210,38 @@ impl MultiBinding {
 
         Ok(())
     }
-}
 
-impl Deref for MultiBinding {
-    type Target = Vec<Guard>;
+    /// Execute a 2pc exchange on all shards, given the 2pc transaction phase.
+    pub(crate) async fn two_pc(
+        &mut self,
+        transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
+        ignore_missing: bool,
+    ) -> Result<(), Error> {
+        let mut futures = Vec::new();
+        for (shard, server) in self.servers.iter_mut().enumerate() {
+            let query = phase_control(transaction, shard, phase);
+            futures.push(server.execute(query));
+        }
 
-    fn deref(&self) -> &Self::Target {
-        &self.servers
-    }
-}
+        let results = join_all(futures).await;
 
-impl DerefMut for MultiBinding {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.servers
+        for (shard, result) in results.into_iter().enumerate() {
+            match result {
+                Err(Error::ExecutionError(err)) => {
+                    if !(ignore_missing && err.code == "42704") {
+                        return Err(Error::ExecutionError(err));
+                    }
+                }
+                Err(err) => return Err(err),
+                Ok(_) => {
+                    if phase == TwoPcPhase::Phase2 {
+                        self.servers[shard].stats_mut().transaction_2pc();
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

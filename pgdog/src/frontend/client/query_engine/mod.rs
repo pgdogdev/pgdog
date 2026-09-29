@@ -54,6 +54,7 @@ pub(in crate::frontend) use temp_table::TempTableChange;
 use temp_table::TempTables;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
+pub(crate) use two_pc::*;
 
 /// Implements the entire client/server message exchange.
 /// State here is preserved between requests.

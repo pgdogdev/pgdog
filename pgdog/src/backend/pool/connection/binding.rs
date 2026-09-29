@@ -3,10 +3,7 @@
 use crate::{
     frontend::{
         ClientRequest,
-        client::query_engine::{
-            TwoPcPhase,
-            two_pc::{TwoPcTransaction, statement::phase_control},
-        },
+        client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
     },
     net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
     state::State,
@@ -240,39 +237,6 @@ impl Binding {
         Ok(result)
     }
 
-    pub(crate) async fn two_pc_on_guards(
-        servers: &mut [Guard],
-        transaction: TwoPcTransaction,
-        phase: TwoPcPhase,
-        ignore_missing: bool,
-    ) -> Result<(), Error> {
-        let mut futures = Vec::new();
-        for (shard, server) in servers.iter_mut().enumerate() {
-            let query = phase_control(transaction, shard, phase);
-            futures.push(server.execute(query));
-        }
-
-        let results = join_all(futures).await;
-
-        for (shard, result) in results.into_iter().enumerate() {
-            match result {
-                Err(Error::ExecutionError(err)) => {
-                    if !(ignore_missing && err.code == "42704") {
-                        return Err(Error::ExecutionError(err));
-                    }
-                }
-                Err(err) => return Err(err),
-                Ok(_) => {
-                    if phase == TwoPcPhase::Phase2 {
-                        servers[shard].stats_mut().transaction_2pc();
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     /// Execute two-phase commit transaction control statements.
     pub(crate) async fn two_pc(
         &mut self,
@@ -282,7 +246,7 @@ impl Binding {
     ) -> Result<(), Error> {
         match self {
             Binding::MultiShard(servers) => {
-                Self::two_pc_on_guards(servers, transaction, phase, ignore_missing).await
+                servers.two_pc(transaction, phase, ignore_missing).await
             }
 
             _ => Err(Error::TwoPcMultiShardOnly),
@@ -335,7 +299,7 @@ impl Binding {
         match self {
             Binding::Direct(server, ..) => server.changed_params().clone(),
             Binding::MultiShard(servers) => {
-                if let Some(first) = servers.first() {
+                if let Some(first) = servers.iter().next() {
                     first.changed_params().clone()
                 } else {
                     Parameters::default()
