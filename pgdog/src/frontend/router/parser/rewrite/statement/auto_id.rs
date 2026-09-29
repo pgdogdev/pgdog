@@ -231,7 +231,6 @@ mod split_tests;
 #[cfg(test)]
 mod tests {
     use super::super::nextval::SequenceCall;
-    use super::super::plan::GeneratedId;
     use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
     use crate::frontend::router::sharding::ShardedTable;
@@ -698,25 +697,12 @@ mod tests {
                 let unique_ids = plan
                     .generated_params
                     .iter()
-                    .filter(|param| matches!(param.generated_id, GeneratedId::UniqueId))
+                    .filter(|param| matches!(param, GeneratedParam::UniqueId))
                     .count();
                 assert_eq!(unique_ids, 0);
                 assert_eq!(
                     plan.generated_params,
-                    vec![
-                        GeneratedParam {
-                            param_num: 1,
-                            generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                                sequence.to_owned()
-                            ))
-                        },
-                        GeneratedParam {
-                            param_num: 2,
-                            generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                                sequence.to_owned()
-                            ))
-                        },
-                    ]
+                    vec![GeneratedParam::Sequence(SequenceCall::Nextval(sequence.to_owned())); 2]
                 );
             }
         }
