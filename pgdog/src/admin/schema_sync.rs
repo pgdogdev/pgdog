@@ -70,7 +70,7 @@ impl Command for SchemaSync {
                 })
                 .publication(self.publication.clone())
                 .phase(self.phase)
-                .ignore_errors(true)
+                .ignore_errors(self.phase != SchemaSyncPhase::PostDataValidation)
                 .build(),
         )
         .id();
