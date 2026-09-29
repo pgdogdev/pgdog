@@ -139,11 +139,11 @@ impl<'a> StatementRewrite<'a> {
         // function calls get processed.
         match stmt.stmt_mut() {
             NodeMut::InsertStmt(insert) => {
-                self.inject_auto_id(insert, mem, &mut plan)?;
+                self.inject_auto_id(insert, mem)?;
             }
             NodeMut::PrepareStmt(mut prepare) => {
                 if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
-                    self.inject_auto_id(insert, mem, &mut plan)?;
+                    self.inject_auto_id(insert, mem)?;
                 }
             }
             _ => {}

@@ -32,9 +32,6 @@ pub(crate) struct RewritePlan {
     /// substitute values we are rewriting.
     pub(crate) params: u16,
 
-    /// Number of auto-injected primary key columns with pgdog.unique_id().
-    pub(crate) auto_id_injected: u16,
-
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
     /// TODO: Document that this is also stored in PreparedStatement cache.
@@ -89,8 +86,7 @@ impl RewritePlan {
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
     pub(crate) fn is_empty(&self) -> bool {
-        self.auto_id_injected == 0
-            && self.generated_params.is_empty()
+        self.generated_params.is_empty()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()

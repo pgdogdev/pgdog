@@ -5,7 +5,7 @@ use itertools::*;
 use pg_raw_parse::{ConstValue, Node, NodeMut, make, nodes};
 use pgdog_config::RewriteMode;
 
-use super::{Error, RewritePlan, StatementRewrite};
+use super::{Error, StatementRewrite};
 use crate::frontend::router::parser::{StatementParser, Table};
 
 impl StatementRewrite<'_> {
@@ -26,7 +26,6 @@ impl StatementRewrite<'_> {
         &mut self,
         mut node: nodes::InsertStmtMut<'a, '_>,
         mem: make::MemoryToken<'a>,
-        plan: &mut RewritePlan,
     ) -> Result<(), Error> {
         let mode = self.schema.rewrite.primary_key;
 
@@ -85,7 +84,6 @@ impl StatementRewrite<'_> {
                 sequence_prefix.as_deref(),
             );
             if replaced > 0 {
-                plan.auto_id_injected += replaced as u16;
                 self.rewritten = true;
             }
         }
@@ -101,7 +99,6 @@ impl StatementRewrite<'_> {
         if rewrite {
             for column in missing_columns {
                 self.inject_column_with_auto_id(&mut node, mem, column, sequence_prefix.as_deref());
-                plan.auto_id_injected += 1;
             }
             self.rewritten = true;
         }
@@ -230,7 +227,7 @@ mod split_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::super::nextval::SequenceCall;
+    use super::super::{RewritePlan, nextval::SequenceCall};
     use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
     use crate::frontend::router::sharding::ShardedTable;
@@ -354,7 +351,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 1);
         assert_eq!(plan.generated_params.len(), 1); // confirms unique_id was processed
         assert!(sql.contains("id"));
         // pgdog.unique_id() should be replaced with actual bigint value
@@ -390,7 +386,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.generated_params.len(), 0);
         assert!(!sql.contains("id,"));
     }
 
@@ -404,7 +400,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.generated_params.len(), 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -418,7 +414,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.generated_params.len(), 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -432,7 +428,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.generated_params.len(), 0);
     }
 
     #[test]
@@ -445,7 +441,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(plan.generated_params.len(), 1);
         assert!(sql.contains("id"));
     }
 
@@ -581,7 +577,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(prepare_plan.params, 1);
-        assert_eq!(prepare_plan.auto_id_injected, 1);
         assert_eq!(prepare_plan.generated_params.len(), 1);
         assert!(prepare_sql.contains("(name, id)"));
         assert!(prepare_sql.contains("$2::bigint"));
@@ -624,7 +619,7 @@ mod tests {
         .unwrap();
 
         // users is sharded, so RewriteOmni should NOT inject auto id
-        assert_eq!(plan.auto_id_injected, 0);
+        assert_eq!(plan.generated_params.len(), 0);
         assert!(!sql.contains("::bigint"));
     }
 
@@ -648,7 +643,7 @@ mod tests {
         .unwrap();
 
         // users is NOT sharded, so RewriteOmni should inject auto id
-        assert_eq!(plan.auto_id_injected, 1);
+        assert_eq!(plan.generated_params.len(), 1);
         assert!(sql.contains("::bigint"));
     }
 
@@ -664,14 +659,13 @@ mod tests {
             ("users", "users_id_seq"),
             ("public.users", "public_users_id_seq"),
         ] {
-            for (columns, values, expected_values, injected) in [
+            for (columns, values, expected_values) in [
                 (
                     "name",
                     "('a'), ('b')",
                     format!(
                         "('a', pgdog.nextval('{sequence}')), ('b', pgdog.nextval('{sequence}'))"
                     ),
-                    1,
                 ),
                 (
                     "name, id",
@@ -679,7 +673,6 @@ mod tests {
                     format!(
                         "('a', pgdog.nextval('{sequence}')), ('b', 42), ('c', pgdog.nextval('{sequence}'))"
                     ),
-                    2,
                 ),
             ] {
                 let (sql, plan) = rewrite_sql_with_sharding_schema(
@@ -693,7 +686,6 @@ mod tests {
                     sql,
                     format!("INSERT INTO {table} (name, id) VALUES {expected_values}")
                 );
-                assert_eq!(plan.auto_id_injected, injected);
                 let unique_ids = plan
                     .generated_params
                     .iter()
@@ -720,7 +712,6 @@ mod tests {
                 .expect("rewrite succeeds");
 
             assert_eq!(sql, original);
-            assert_eq!(plan.auto_id_injected, 0);
             assert!(plan.generated_params.is_empty());
         }
     }
