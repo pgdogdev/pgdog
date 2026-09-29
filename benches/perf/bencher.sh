@@ -2,6 +2,15 @@
 set -e
 export PGDOG_BIN=/usr/local/bin/pgdog
 
+# Microbench run?
+if [[ $1 == "microbench" ]]; then
+   pgdog-microbench run_benches --nocapture > microbench_out.txt
+   awk -f benches/perf/divan_to_bmf.awk microbench_out.txt
+   exit 0
+fi
+
+# If we're not running a microbenchmark, then we're doing an end-to-end test
+
 # We have to make some changes to account for this being ran in a Firecracker microVM, not a Docker container (as
 # this pgdog-base-runtime image was based on that)
 printf '127.0.0.1 localhost\n::1 localhost\n' > /etc/hosts
