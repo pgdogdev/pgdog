@@ -28,11 +28,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
-      - name: Build
+
+      - name: Build PgDog release binary
         run: cargo build --release --bin pgdog
+
+      # TODO: I'm currently not using --release here for quick testing. Should add it
+      - name: Build PgDog microbenchmarks
+        run: |
+          bin=$(cargo test -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
+          cp "$bin" target/release/pgdog-microbench
 
       - name: Build image
         run: docker build --build-context bin=target/release -f benches/perf/Dockerfile -t $IMAGE .
+
       - name: Push image
         run: |
           echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
@@ -44,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [pooler, lb, sharding]
+        suite: [pooler, lb, sharding, microbench]
     steps:
       - uses: actions/checkout@v6
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a

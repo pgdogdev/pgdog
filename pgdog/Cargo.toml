@@ -12,6 +12,7 @@ default-run = "pgdog"
 
 [features]
 fips = ["tokio-rustls/fips"]
+bench = []
 
 [dependencies]
 bon.workspace = true
@@ -103,3 +104,5 @@ stats_alloc = "0.1.10"
 brunch = "0.5"
 wiremock = "0.6"
 tokio = { version = "1", features = ["full", "test-util"] }
+divan = "0.1.21"
+paste = "1.0"

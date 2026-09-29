@@ -6,7 +6,7 @@ FROM ghcr.io/pgdogdev/pgdog-base-runtime:latest
 RUN apt update && apt install -y --no-install-recommends postgresql-18 sudo iproute2
 
 WORKDIR /pgdog
-COPY --from=bin pgdog /usr/local/bin/pgdog
+COPY --from=bin pgdog pgdog-microbench /usr/local/bin/
 COPY integration/common.sh integration/setup.sh integration/
 COPY integration/ci/setup.sh integration/ci/
 COPY pgdog/src/backend/schema/setup.sql pgdog/src/backend/schema/
