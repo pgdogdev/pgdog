@@ -5,12 +5,9 @@ use tokio::{select, time::Instant};
 use tracing::{info, warn};
 
 use super::super::Error;
-use super::Lsn;
 use super::replication_progress::ReplicationProgress;
-use crate::util::{format_bytes, human_duration, safe_interval, safe_timeout};
+use crate::util::{format_bytes, human_duration, safe_interval};
 use pgdog_stats::ReplicationCutoverReason as CutoverReason;
-
-const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug)]
 pub(crate) struct CutoverConfig {
@@ -131,8 +128,7 @@ impl CutoverPolicy {
     }
 
     /// Wait until cutover conditions are met depending on the
-    /// [`CutoverConfig`] settings, then until every shard applied
-    /// the source WAL written before this call.
+    /// [`CutoverConfig`] settings
     pub(crate) async fn wait_for_catchup(&self) -> Result<CutoverReason, Error> {
         let cutover_timeout_action = self.config.timeout_action;
 
@@ -181,64 +177,14 @@ impl CutoverPolicy {
             }
         };
 
-        info!(
-            "[cutover] {reason} reached, waiting until every shard applies the source WAL written before the traffic stop"
-        );
-        self.wait_for_source_wal(start).await?;
-        info!("[cutover] performing cutover now, reason: {reason}");
+        info!("[cutover] {reason} reached");
         Ok(reason)
-    }
-
-    /// Wait until we catch up to the last seen source LSN at the moment
-    /// we trigger the cutover. This to replicate all the data
-    /// that could be committed before cutover
-    async fn wait_for_source_wal(&self, since: Instant) -> Result<(), Error> {
-        let mut check = safe_interval(Duration::from_millis(50));
-        safe_timeout(CATCH_UP_TIMEOUT, async {
-            let targets = loop {
-                check.tick().await;
-                if let Some(targets) = self.target_lsns(since) {
-                    break targets;
-                }
-            };
-            while !self.applied_target_lsns(&targets) {
-                check.tick().await;
-            }
-        })
-        .await
-        .map_err(|_| Error::CatchUpTimeout)
-    }
-
-    fn target_lsns(&self, since: Instant) -> Option<Vec<Lsn>> {
-        let mut targets = Vec::with_capacity(self.progress.len());
-        for shard in 0..self.progress.len() {
-            let progress = self.progress.shard(shard)?;
-            if progress.source_measured_at.is_none_or(|at| at < since) {
-                return None;
-            }
-            targets.push(progress.source_lsn?);
-        }
-        Some(targets)
-    }
-
-    fn applied_target_lsns(&self, targets: &[Lsn]) -> bool {
-        for (shard, target) in targets.iter().enumerate() {
-            let applied = self
-                .progress
-                .shard(shard)
-                .and_then(|progress| progress.applied_lsn);
-            if applied.is_none_or(|applied| applied < *target) {
-                return false;
-            }
-        }
-        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::replication::logical::publisher::Lsn;
     use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
     use crate::util::safe_timeout;
     use std::assert_matches;
@@ -252,15 +198,6 @@ mod tests {
             timeout: Duration::from_secs(10),
             timeout_action: CutoverTimeoutAction::Abort,
         }
-    }
-
-    fn measure(progress: &ReplicationProgress, shard: usize, source: i64, applied: i64) {
-        progress.updater_for_shard(shard).update(|s| {
-            s.replication_lag = Some(source - applied);
-            s.source_measured_at = Some(Instant::now());
-            s.source_lsn = Some(Lsn::from_i64(source));
-            s.applied_lsn = Some(Lsn::from_i64(applied));
-        });
     }
 
     #[tokio::test]
@@ -331,7 +268,10 @@ mod tests {
             async {
                 tokio::time::sleep(refresh).await;
                 for shard in 0..2 {
-                    measure(&progress, shard, 100, 100);
+                    progress.updater_for_shard(shard).update(|s| {
+                        s.replication_lag = Some(50);
+                        s.source_measured_at = Some(Instant::now());
+                    });
                 }
             }
         );
@@ -340,7 +280,7 @@ mod tests {
         assert!(returned_at - stale >= refresh);
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_wait_for_cutover_exits_when_last_transaction_old() {
         let config = CutoverConfig {
             replication_lag_threshold: 10,
@@ -354,18 +294,17 @@ mod tests {
             s.last_transaction = Some(Instant::now() - Duration::from_millis(200));
         });
 
-        let waiter = CutoverPolicy::new(config, progress.clone());
+        let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
             waiter.should_cutover(Instant::now()),
             CutoverAction::Go(CutoverReason::LastTransaction)
         );
 
-        let (reason, ()) = tokio::join!(waiter.wait_for_catchup(), async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            measure(&progress, 0, 1000, 1000);
-        });
-        assert_eq!(reason.unwrap(), CutoverReason::LastTransaction);
+        assert_eq!(
+            waiter.wait_for_catchup().await.unwrap(),
+            CutoverReason::LastTransaction
+        );
     }
 
     #[tokio::test]
@@ -390,7 +329,7 @@ mod tests {
         assert_matches!(waiter.wait_for_catchup().await, Err(Error::AbortTimeout));
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_cutover_timeout_cuts_over_when_configured() {
         let config = CutoverConfig {
             timeout: Duration::ZERO,
@@ -403,66 +342,12 @@ mod tests {
             .updater_for_shard(0)
             .update(|s| s.replication_lag = Some(5000));
 
-        let waiter = CutoverPolicy::new(config, progress.clone());
+        let waiter = CutoverPolicy::new(config, progress);
 
-        let (reason, ()) = tokio::join!(waiter.wait_for_catchup(), async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            measure(&progress, 0, 5000, 5000);
-        });
-        assert_eq!(reason.unwrap(), CutoverReason::Timeout);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_wait_for_catchup_waits_for_source_wal_measured_after_start() {
-        let config = CutoverConfig {
-            replication_lag_threshold: 10,
-            last_transaction_delay: Duration::from_millis(100),
-            ..cutover_config()
-        };
-
-        let progress = ReplicationProgress::new(1);
-        measure(&progress, 0, 100, 100);
-        progress.updater_for_shard(0).update(|s| {
-            s.last_transaction = Some(Instant::now() - Duration::from_millis(200));
-        });
-        tokio::time::advance(Duration::from_millis(10)).await;
-
-        let waiter = CutoverPolicy::new(config, progress.clone());
-        let start = Instant::now();
-        let step = Duration::from_millis(300);
-
-        let ((reason, returned_at), ()) = tokio::join!(
-            async { (waiter.wait_for_catchup().await, Instant::now()) },
-            async {
-                tokio::time::sleep(step).await;
-                measure(&progress, 0, 200, 100);
-                tokio::time::sleep(step).await;
-                progress
-                    .updater_for_shard(0)
-                    .update(|s| s.applied_lsn = Some(Lsn::from_i64(200)));
-            }
+        assert_eq!(
+            waiter.wait_for_catchup().await.unwrap(),
+            CutoverReason::Timeout
         );
-
-        assert_eq!(reason.unwrap(), CutoverReason::LastTransaction);
-        assert!(returned_at - start >= step * 2);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_wait_for_catchup_fails_when_source_wal_is_not_applied() {
-        let config = CutoverConfig {
-            timeout: Duration::ZERO,
-            timeout_action: CutoverTimeoutAction::Cutover,
-            ..cutover_config()
-        };
-
-        let progress = ReplicationProgress::new(1);
-        let waiter = CutoverPolicy::new(config, progress.clone());
-
-        let (result, ()) = tokio::join!(waiter.wait_for_catchup(), async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            measure(&progress, 0, 200, 100);
-        });
-        assert_matches!(result, Err(Error::CatchUpTimeout));
     }
 
     #[tokio::test]
