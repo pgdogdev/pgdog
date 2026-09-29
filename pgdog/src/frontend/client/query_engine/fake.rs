@@ -2,8 +2,9 @@ use itertools::Itertools;
 use tokio::io::AsyncWriteExt;
 
 use crate::net::{
-    BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, ParameterDescription,
-    ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription, parameter::ParameterValue,
+    BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, NoticeResponse,
+    ParameterDescription, ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription,
+    parameter::ParameterValue,
 };
 
 use super::*;
@@ -44,6 +45,24 @@ impl QueryEngine {
         command: &str,
         fake_response: Option<FakeResponse>,
     ) -> Result<(), Error> {
+        self.fake_command_response_with_notice(
+            context,
+            client_messages,
+            command,
+            fake_response,
+            None,
+        )
+        .await
+    }
+
+    pub(super) async fn fake_command_response_with_notice(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        client_messages: &[ProtocolMessage],
+        command: &str,
+        fake_response: Option<FakeResponse>,
+        notice: Option<&NoticeResponse>,
+    ) -> Result<(), Error> {
         let mut sent = 0;
 
         for message in client_messages {
@@ -66,7 +85,11 @@ impl QueryEngine {
                     }
                 }
                 ProtocolMessage::Execute(_) => {
-                    (if let Some(fake_response) = fake_response.as_ref() {
+                    (if let Some(notice) = notice {
+                        context.stream.send(notice).await?
+                    } else {
+                        0
+                    }) + (if let Some(fake_response) = fake_response.as_ref() {
                         context.stream.send(&fake_response.row).await?
                     } else {
                         0
@@ -79,7 +102,11 @@ impl QueryEngine {
                         .await?
                 }
                 ProtocolMessage::Query(_) => {
-                    (if let Some(fake_response) = fake_response.as_ref() {
+                    (if let Some(notice) = notice {
+                        context.stream.send(notice).await?
+                    } else {
+                        0
+                    }) + (if let Some(fake_response) = fake_response.as_ref() {
                         context.stream.send(&fake_response.row_description).await?
                             + context.stream.send(&fake_response.row).await?
                     } else {

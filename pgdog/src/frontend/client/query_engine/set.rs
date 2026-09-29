@@ -1,7 +1,7 @@
 use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
-use crate::net::messages::ErrorResponse;
+use crate::net::messages::{ErrorResponse, NoticeResponse};
 
 use super::*;
 
@@ -29,8 +29,14 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let set_local_outside_transaction =
+            !context.in_transaction() && params.iter().any(|param| param.local);
         let mut fake_command = "SET";
         for param in params {
+            if !context.in_transaction() && param.local {
+                continue;
+            }
+
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
@@ -68,11 +74,14 @@ impl QueryEngine {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))
                 .map(|values| FakeResponse::new_params(&["set_config"], values));
-            self.fake_command_response(
+            let notice = set_local_outside_transaction
+                .then(|| NoticeResponse::from(ErrorResponse::set_local_outside_transaction()));
+            self.fake_command_response_with_notice(
                 context,
                 &client_request.messages,
                 fake_command,
                 fake_response,
+                notice.as_ref(),
             )
             .await?;
         }
@@ -93,9 +102,10 @@ impl QueryEngine {
         }
 
         let Some(param) = params.iter().find(|param| {
-            SHARD_TARGETING_PARAMS
-                .iter()
-                .any(|name| param.name.eq_ignore_ascii_case(name))
+            !(param.local && !context.in_transaction())
+                && SHARD_TARGETING_PARAMS
+                    .iter()
+                    .any(|name| param.name.eq_ignore_ascii_case(name))
         }) else {
             return Ok(false);
         };
