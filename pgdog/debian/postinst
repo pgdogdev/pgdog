@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    if ! getent passwd pgdog >/dev/null; then
+        adduser --system --group --no-create-home --home /nonexistent pgdog
+    fi
+    chown root:pgdog /etc/pgdog/users.toml
+    chmod 640 /etc/pgdog/users.toml
+fi
+
+#DEBHELPER#

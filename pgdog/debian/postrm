@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+if [ "$1" = "purge" ]; then
+    deluser --system pgdog >/dev/null 2>&1 || true
+fi

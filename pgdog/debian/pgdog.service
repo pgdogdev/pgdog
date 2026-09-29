@@ -1,0 +1,15 @@
+[Unit]
+Description=PgDog PostgreSQL pooler, load balancer and sharder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pgdog
+Group=pgdog
+ExecStart=/usr/bin/pgdog --config /etc/pgdog/pgdog.toml --users /etc/pgdog/users.toml
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
