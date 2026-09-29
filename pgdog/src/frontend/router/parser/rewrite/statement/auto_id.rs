@@ -441,7 +441,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 1);
+        // One auto ID per row
+        assert_eq!(plan.generated_params.len(), 2);
         assert!(sql.contains("id"));
     }
 
