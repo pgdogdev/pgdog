@@ -79,7 +79,7 @@ jobs:
         include:
           - { name: pgbench, script: integration/pgbench/run.sh }
           - { name: schema-sync, script: integration/schema_sync/run.sh }
-          - { name: go, script: integration/go/run.sh }
+          - { name: go, script: integration/go/run.sh, go_dir: integration/go }
           - { name: js, script: integration/js/pg_tests/run.sh }
           - { name: ruby, script: integration/ruby/run.sh }
           - { name: java, script: integration/java/run.sh }
@@ -102,7 +102,11 @@ jobs:
           - { name: complex, script: integration/complex/run.sh }
           - { name: dry-run, script: integration/dry_run/run.sh }
           - { name: copy-data, script: integration/copy_data/run.sh }
-          - { name: load-balancer, script: integration/load_balancer/run.sh }
+          - {
+              name: load-balancer,
+              script: integration/load_balancer/run.sh,
+              go_dir: integration/load_balancer,
+            }
           - { name: tls, script: integration/tls/run.sh }
           - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
@@ -153,14 +157,48 @@ jobs:
         run: |
           mkdir -p target/llvm-cov-target
           rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
+      # Ask the runner's Go for its cache paths instead of hard-coding them.
+      - name: Locate Go caches
+        if: matrix.go_dir
+        id: go-env
+        run: |
+          {
+            echo "version=$(go env GOVERSION)"
+            echo "modcache=$(go env GOMODCACHE)"
+            echo "buildcache=$(go env GOCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      # GOCACHE is content-addressed, so restoring an older one is safe, and
+      # `-count 3` keeps test results out of it. Keyed per suite so each job
+      # saves the complete module set it needs.
+      - name: Cache Go modules and build cache
+        if: matrix.go_dir
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.go-env.outputs.modcache }}
+            ${{ steps.go-env.outputs.buildcache }}
+          key: go-${{ runner.os }}-${{ steps.go-env.outputs.version }}-${{ matrix.name }}-${{ hashFiles(format('{0}/**/go.mod', matrix.go_dir), format('{0}/**/go.sum', matrix.go_dir)) }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ steps.go-env.outputs.version }}-${{ matrix.name }}-
       # The runner image has no BEAM toolchain, and Ubuntu's `elixir` package
       # is several years behind, so pull a pinned precompiled pair instead.
       - name: Install Erlang/Elixir
         if: matrix.needs_beam
+        id: setup-beam
         uses: erlef/setup-beam@v1
         with:
           otp-version: "28"
           elixir-version: "1.20.3"
+      - name: Cache Mix deps and build
+        if: matrix.needs_beam
+        uses: actions/cache@v5
+        with:
+          path: |
+            integration/elixir/deps
+            integration/elixir/_build
+          key: mix-${{ runner.os }}-${{ steps.setup-beam.outputs.otp-version }}-${{ steps.setup-beam.outputs.elixir-version }}-${{ hashFiles('integration/elixir/mix.lock') }}
+          restore-keys: |
+            mix-${{ runner.os }}-${{ steps.setup-beam.outputs.otp-version }}-${{ steps.setup-beam.outputs.elixir-version }}-
       - name: Install GHC/Cabal
         if: matrix.needs_haskell
         id: setup-haskell
@@ -168,12 +206,20 @@ jobs:
         with:
           ghc-version: "9.12.4"
           cabal-version: "latest"
+      # There's no freeze file, so the resolved plan follows the Hackage index.
+      # Key the store on the plan so a resolver change produces a new cache
+      # entry instead of rebuilding every run under a stale key. setup-haskell
+      # has already run `cabal update`, so this only runs the solver.
+      - name: Resolve Cabal build plan
+        if: matrix.needs_haskell
+        working-directory: integration/haskell
+        run: cabal build all --dry-run
       - name: Cache Cabal dependencies
         if: matrix.needs_haskell
         uses: actions/cache@v5
         with:
           path: ${{ steps.setup-haskell.outputs.cabal-store }}
-          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
+          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ hashFiles('integration/haskell/dist-newstyle/cache/plan.json') }}
           restore-keys: |
             cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-
       - name: Setup dependencies
