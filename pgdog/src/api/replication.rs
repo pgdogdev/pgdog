@@ -1,7 +1,7 @@
 //! Logical-replication background task.
 
 use std::pin::pin;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -18,7 +18,9 @@ use crate::backend::replication::ee::{OrchestratorState, orchestrator_state};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
-use crate::backend::replication::logical::publisher::replication_stream::ReplicationStream;
+use crate::backend::replication::logical::publisher::replication_stream::{
+    DRAIN_TIMEOUT, ReplicationStream,
+};
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::schema::sync::SchemaSyncError;
@@ -268,7 +270,8 @@ impl<'a> Replication<'a> {
     }
 
     /// Run the replication until we get the cutover signal and [`CutoverPolicy`]
-    /// waited for the stop_traffic conditions
+    /// waited for the stop_traffic conditions. When the streams do not drain
+    /// the source WAL in time, resume the traffic and start the replication again.
     async fn replicate_until_cutover(
         &mut self,
         auto_cutover: bool,
@@ -279,83 +282,111 @@ impl<'a> Replication<'a> {
         let ctx = self.ctx;
         let direction = self.direction;
         let task_cancel = ctx.cancellation_token();
-        let cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
-        let progress = ReplicationProgress::new(self.state.source.shards().len());
-        let mut cutover_reason = None;
-        let (cluster, stop_cluster_replication) =
-            ReplicationClusterTask::new(self.state.clone(), self.direction, progress.clone());
-
-        info!("[replication] {direction} stream starting");
+        let mut cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
+        let mut validation_run = pin!(Self::validate_post_data(
+            ctx,
+            &self.state,
+            stage,
+            validation,
+        ));
+        let mut validation_done = false;
         orchestrator_state(OrchestratorState::Replication);
-        ctx.set_status(match direction {
-            ReplicationDirection::Forward => ReplicationStatus::Replicating,
-            ReplicationDirection::Reverse => ReplicationStatus::ReverseReplicating,
-        });
-        let mut cluster_run = pin!(ctx.run(cluster).fuse());
 
-        let result = async {
-            let mut validation_run = pin!(Self::validate_post_data(
-                ctx,
-                &self.state,
-                stage,
-                validation,
-            ));
-            let mut validation_done = false;
-            let mut cutover_run = pin!(async {
-                if let Some(cutover) = cutover.as_ref() {
-                    cutover.requested().await;
-                }
-                Self::prepare_cutover(ctx, &self.state, &mut self.maintenance, progress).await
+        loop {
+            let progress = ReplicationProgress::new(self.state.source.shards().len());
+            let mut tables = self.state.tables();
+            let mut cutover_reason = None;
+            let (cluster, stop_cluster_replication) =
+                ReplicationClusterTask::new(self.state.clone(), direction, progress.clone());
+
+            info!("[replication] {direction} stream starting");
+            ctx.set_status(match direction {
+                ReplicationDirection::Forward => ReplicationStatus::Replicating,
+                ReplicationDirection::Reverse => ReplicationStatus::ReverseReplicating,
             });
+            let mut cluster_run = pin!(ctx.run(cluster).fuse());
 
-            loop {
-                select! {
-                    biased;
-                    _ = task_cancel.cancelled() => {
-                        info!("[replication] {direction} stream cancelled");
-                        break Err(Error::ReplicationAborted);
-                    },
-                    result = &mut cluster_run => {
-                        break result.and(Err(Error::ReplicationStreamStopped));
-                    },
-                    result = &mut validation_run, if !validation_done => {
-                        validation_done = true;
-                        if validation_gates_cutover {
-                            result?;
-                        }
-                    },
-                    result = &mut cutover_run, if validation_done || !validation_gates_cutover => {
-                        break result.map(|reason| cutover_reason = Some(reason));
-                    },
+            let result = async {
+                let mut cutover_run = pin!(async {
+                    if let Some(cutover) = cutover.as_ref() {
+                        cutover.requested().await;
+                    }
+                    Self::prepare_cutover(ctx, &self.state, &mut self.maintenance, progress.clone())
+                        .await
+                });
+
+                loop {
+                    select! {
+                        biased;
+                        _ = task_cancel.cancelled() => {
+                            info!("[replication] {direction} stream cancelled");
+                            break Err(Error::ReplicationAborted);
+                        },
+                        result = &mut cluster_run => {
+                            break result.and(Err(Error::ReplicationStreamStopped));
+                        },
+                        result = &mut validation_run, if !validation_done => {
+                            validation_done = true;
+                            if validation_gates_cutover {
+                                result?;
+                            }
+                        },
+                        result = &mut cutover_run, if validation_done || !validation_gates_cutover => {
+                            break result.map(|reason| cutover_reason = Some(reason));
+                        },
+                    }
                 }
             }
-        }
-        .await;
+            .await;
 
-        if result.is_err() {
-            self.resume_traffic();
-        }
+            if result.is_err() {
+                self.maintenance.resume_traffic();
+            }
 
-        // stop the cluster replication and wait until it gracefully finishes,
-        // we should stop it despite if we succeed or not at this moment
-        stop_cluster_replication.stop(cutover_reason);
-        let drained = if cluster_run.is_terminated() {
-            Ok(())
-        } else {
-            safe_timeout(ReplicationClusterTask::drain_timeout(), &mut cluster_run)
-                .await
-                .unwrap_or(Err(Error::DrainTimeout))
-        };
-        let result = result.and(drained);
-        match &result {
-            Ok(()) => info!("[replication] {} stream stopped", self.direction),
-            Err(err) => warn!("[replication] {} stream failed: {err}", self.direction),
+            // stop the cluster replication and wait until it gracefully finishes,
+            // we should stop it despite if we succeed or not at this moment
+            stop_cluster_replication.stop(cutover_reason);
+            let drained = if cluster_run.is_terminated() {
+                Ok(())
+            } else {
+                safe_timeout(ReplicationClusterTask::drain_timeout(), &mut cluster_run)
+                    .await
+                    .unwrap_or(Err(Error::DrainTimeout))
+            };
+
+            if result.is_ok() && matches!(drained, Err(Error::CatchUpTimeout)) {
+                warn!(
+                    "[replication] {direction} cutover aborted: {}, traffic resumed, restarting replication",
+                    Error::CatchUpTimeout
+                );
+                self.maintenance.resume_traffic();
+                // Changes up to the applied LSN are already on the destination.
+                for (shard, tables) in &mut tables {
+                    if let Some(applied) = progress.applied_lsn(*shard) {
+                        for table in tables {
+                            table.lsn = table.lsn.max(applied);
+                        }
+                    }
+                }
+                self.state.set_tables(tables);
+                if let Some(cutover) = cutover.as_mut() {
+                    cutover.rearm();
+                }
+                continue;
+            }
+
+            let result = result.and(drained);
+            match &result {
+                Ok(()) => info!("[replication] {direction} stream stopped"),
+                Err(err) => warn!("[replication] {direction} stream failed: {err}"),
+            }
+            return result;
         }
-        result
     }
 
     /// Wait for cutover initial conditions, stop the traffic
-    /// and wait until the replication catch up with the source
+    /// and wait until the replication catch up with the source.
+    /// Resumes the traffic on any error.
     async fn prepare_cutover(
         ctx: &TaskContext<ReplicationTask>,
         state: &ReshardingState,
@@ -414,6 +445,7 @@ pub(crate) struct ReplicationClusterStop {
 }
 
 impl ReplicationClusterStop {
+    /// With a cutover reason, every stream first applies the source WAL written up to now.
     pub(crate) fn stop(self, cutover_reason: Option<ReplicationCutoverReason>) {
         let _ = self.sender.send(cutover_reason);
     }
@@ -473,21 +505,21 @@ impl Task for ReplicationClusterTask {
         } = self;
         let task_cancel = ctx.cancellation_token();
         let mut streams = ReplicationStreams::new();
-        let streams_stop = CancellationToken::new();
-        let _streams_stop_on_drop = streams_stop.clone().drop_guard();
+        let mut replication_streams = Vec::new();
 
         ctx.set_status(ReplicationClusterStatus::InitializingReplicationStreams);
         let init_result = Self::create_replication_shard_tasks(
             &ctx,
             &state,
             &progress,
-            &streams_stop,
+            &mut replication_streams,
             &mut streams,
         )
         .await;
 
         let mut report = safe_interval(Duration::from_secs(1));
         let mut stop = stop;
+        let mut drain = false;
         let result = async {
             init_result?;
             loop {
@@ -504,7 +536,8 @@ impl Task for ReplicationClusterTask {
                     stopped = &mut stop => {
                         match stopped {
                             Ok(Some(reason)) => {
-                                info!("[replication] {direction} streams stopped for cutover ({reason}), draining");
+                                info!("[replication] {direction} streams stopped for cutover ({reason}), draining up to the current source WAL");
+                                drain = true;
                                 ctx.set_status(ReplicationClusterStatus::StoppedForCutover { reason });
                             }
                             _ => info!("[replication] {direction} streams stopped, draining"),
@@ -528,8 +561,15 @@ impl Task for ReplicationClusterTask {
 
         // stop all the stream and make sure they are drained.
         // If there were error on some stream it should stop other streams.
-        streams_stop.cancel();
-        let drained = Self::drain_streams(&mut streams).await;
+        replication_streams
+            .iter()
+            .for_each(|stream| stream.stop(drain));
+        let timeout = if drain {
+            DRAIN_TIMEOUT + Self::stream_drain_timeout()
+        } else {
+            Self::stream_drain_timeout()
+        };
+        let drained = Self::drain_streams(&mut streams, timeout).await;
         result.and(drained)
     }
 }
@@ -541,7 +581,7 @@ impl ReplicationClusterTask {
         ctx: &TaskContext<Self>,
         state: &ReshardingState,
         progress: &ReplicationProgress,
-        stop: &CancellationToken,
+        replication_streams: &mut Vec<Arc<ReplicationStream>>,
         streams: &mut ReplicationStreams,
     ) -> Result<(), Error> {
         state.prepare_replication(&ctx.cancellation_token()).await?;
@@ -549,14 +589,17 @@ impl ReplicationClusterTask {
             let tables = state.pop_tables(source_shard)?;
             let slot = state.slot(source_shard)?;
             let updater = progress.updater_for_shard(source_shard);
-            let replication_stream =
-                ReplicationStream::new(&state.source, &state.destination, updater);
+            let replication_stream = Arc::new(ReplicationStream::new(
+                &state.source,
+                &state.destination,
+                updater,
+            ));
+            replication_streams.push(Arc::clone(&replication_stream));
             let task = ReplicationShardTask::builder()
                 .source_shard(source_shard)
                 .slot(slot)
                 .tables(tables)
                 .replication_stream(replication_stream)
-                .stop(stop.clone())
                 .build();
 
             streams.push(AbortOnDropHandle::new(tasks::spawn(
@@ -577,8 +620,11 @@ impl ReplicationClusterTask {
     }
 
     /// Drain all the streams - make sure they are drained and generated no errors
-    async fn drain_streams(streams: &mut ReplicationStreams) -> Result<(), Error> {
-        let drained = safe_timeout(Self::stream_drain_timeout(), async {
+    async fn drain_streams(
+        streams: &mut ReplicationStreams,
+        timeout: Duration,
+    ) -> Result<(), Error> {
+        let drained = safe_timeout(timeout, async {
             let mut result = Ok(());
             while let Some(child) = streams.next().await {
                 result = result.and(child.map_err(Error::from).and_then(|result| result));
@@ -605,8 +651,7 @@ pub(crate) struct ReplicationShardTask {
     pub(crate) slot: ReplicationSlot<Permanent>,
     pub(crate) source_shard: usize,
     pub(crate) tables: Vec<Table>,
-    pub(crate) replication_stream: ReplicationStream,
-    pub(crate) stop: CancellationToken,
+    pub(crate) replication_stream: Arc<ReplicationStream>,
 }
 
 impl Task for ReplicationShardTask {
@@ -633,14 +678,11 @@ impl Task for ReplicationShardTask {
             slot,
             tables,
             replication_stream,
-            stop,
             source_shard,
         } = self;
 
         // task got cancelled
         let task_cancel = ctx.cancellation_token();
-        // signal to stream to stop - due to cutover or fail in other streams
-        let stream_stop = stop.child_token();
 
         let slot_name = slot.name().to_owned();
         let slot_addr = slot.addr().clone();
@@ -664,19 +706,20 @@ impl Task for ReplicationShardTask {
             shard = source_shard,
             "[replication] stream starting at {initial_lsn}"
         );
-        let mut replication_run =
-            Box::pin(replication_stream.run(&mut stream, tables, &stream_stop));
+        let mut replication_run = Box::pin(replication_stream.run(&mut stream, tables));
 
         let report_interval = Duration::from_secs(5);
         let mut report = safe_interval(report_interval);
         let mut logged_rows = 0u64;
         let mut logged_bytes = 0u64;
 
+        let mut cancelled = false;
         let result = loop {
             select! {
-                _ = task_cancel.cancelled(), if !stream_stop.is_cancelled() => {
+                _ = task_cancel.cancelled(), if !cancelled => {
                     info!(shard = source_shard, "[replication] stream cancelled");
-                    stream_stop.cancel();
+                    cancelled = true;
+                    replication_stream.stop(false);
                 }
                 result = &mut replication_run => {
                     break result;
@@ -800,6 +843,12 @@ impl CutoverWaiter {
     /// a cutover that arrived earlier is delivered immediately.
     async fn requested(&self) {
         self.token.cancelled().await;
+    }
+
+    /// Replace the latched token, so that the next cutover needs a new `CUTOVER`.
+    fn rearm(&mut self) {
+        self.token = CancellationToken::new();
+        CUTOVERS.insert(self.root_id, self.token.clone());
     }
 }
 

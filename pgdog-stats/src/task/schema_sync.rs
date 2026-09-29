@@ -26,6 +26,7 @@ pub struct SchemaSyncStatement {
     pub sql: String,
     /// The statement tolerates an "already exists" error from Postgres.
     pub skip_if_exists: bool,
+    pub ignore_errors: bool,
 }
 
 impl SchemaSyncStatement {
@@ -33,11 +34,17 @@ impl SchemaSyncStatement {
         Self {
             sql: sql.into(),
             skip_if_exists: false,
+            ignore_errors: false,
         }
     }
 
     pub fn set_skip_if_exists(mut self) -> Self {
         self.skip_if_exists = true;
+        self
+    }
+
+    pub fn set_ignore_errors(mut self) -> Self {
+        self.ignore_errors = true;
         self
     }
 }

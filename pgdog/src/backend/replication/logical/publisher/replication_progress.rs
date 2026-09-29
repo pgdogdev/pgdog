@@ -13,7 +13,6 @@ use pgdog_stats::MissedRows;
 pub(crate) struct ReplicationShardProgress {
     pub(crate) replication_lag: Option<i64>,
     pub(crate) source_measured_at: Option<Instant>,
-    pub(crate) source_lsn: Option<Lsn>,
     pub(crate) last_transaction: Option<Instant>,
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
@@ -81,12 +80,10 @@ impl ReplicationProgress {
         }
     }
 
-    pub(crate) fn shard(&self, shard: usize) -> Option<ReplicationShardProgress> {
-        self.shards.get(shard).map(|progress| *progress.lock())
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.shards.len()
+    pub(crate) fn applied_lsn(&self, shard: usize) -> Option<Lsn> {
+        self.shards
+            .get(shard)
+            .and_then(|progress| progress.lock().applied_lsn)
     }
 
     /// The combined progress of every shard, as reported to `SHOW TASKS` and

@@ -237,22 +237,36 @@ The `Lag` trigger uses only lag values that each stream measured after `wait_for
 Each stream measures lag once per second, so this trigger can wait up to 1 second.
 An older value can hide a commit that arrived just before the traffic stop.
 
-After a trigger fires, `wait_for_catchup()` waits until every shard applies the source WAL written before the traffic stop.
-Each lag measurement also reads `pg_current_wal_lsn()` on the source shard.
-For each shard, the policy keeps the position from a measurement taken after `wait_for_catchup()` started.
-Then it waits until the applied LSN of the shard reaches that position.
-The applied LSN counts only changes that every destination shard flushed.
-Keepalive messages move it past WAL that has no published changes.
-The triggers above therefore only decide when this wait starts. The wait never skips committed changes.
-If the wait takes longer than 120 s, the policy returns `Error::CatchUpTimeout`.
-`prepare_cutover()` then resumes traffic, and the cutover does not start.
+**Phase 3 — drain and stop**: after a trigger fires, `replicate_until_cutover()` stops the cluster task
+with the cutover reason. The cluster task then calls `ReplicationStream::stop(true)` on every stream.
+Every other stop calls `stop(false)`: table synchronization, `STOP_TASK`, and a failed sibling stream.
+A later `stop(false)` replaces a drain, for example when the task is cancelled.
 
-**Phase 3 — drain**: `replicate_until_cutover()` stops the cluster task and waits for every
-stream to drain. Every change written before the traffic stop is already applied.
-The budget is `ReplicationClusterTask::drain_timeout()` (300 s) for the cluster
-and `stream_drain_timeout()` (120 s) for the streams. A stream that does not drain in time is
-aborted, and its `SlotGuard` drops the replication slot on a detached task. A failed drain
-returns `Error::DrainTimeout`.
+A stream stopped with drain does these steps:
+
+1. It reads `pg_current_wal_lsn()` on the source shard at once.
+   Traffic is paused, so this LSN covers every committed change.
+2. It keeps reading until its committed LSN reaches that position. The committed LSN moves only
+   after every destination shard flushed a commit. Keepalive messages move it past WAL that has
+   no published changes when no transaction is open. A connection error is retried as usual.
+   A retry rolls back the open transactions, so the stream reads them again before it stops.
+
+The triggers above therefore only decide when the drain starts. A drain never skips committed changes.
+
+Then every stop works in the same way. The stream stops reading after the open transaction,
+so new data cannot keep it busy. It waits until every destination shard flushed the applied changes,
+sends a status update, and sends `CopyDone`. The WAL that is not read stays in the slot.
+
+If a draining stream does not reach its position in `DRAIN_TIMEOUT` (120 s), it stops in the same way
+and returns `Error::CatchUpTimeout`. `replicate_until_cutover()` then resumes traffic, and the cutover is aborted.
+It raises the LSN of every table to the applied LSN, and starts a new cluster task from the same slots.
+With automatic cutover, the new task starts Phase 1 again.
+With a manual cutover, it waits for a new `CUTOVER` command.
+
+The budget is `ReplicationClusterTask::drain_timeout()` (300 s) for the cluster.
+The streams get `stream_drain_timeout()` (120 s), plus `DRAIN_TIMEOUT` for a drain.
+A stream that does not stop in time is aborted, and its `SlotGuard` drops the replication slot
+on a detached task. A failed stop returns `Error::DrainTimeout`.
 
 **Point of no return** — `Migration::cutover()` runs these steps in order:
 
@@ -294,6 +308,15 @@ The effect of a validation failure depends on `[resharding] post_data_validation
 The pre-data and cutover stages use `ignore_errors = true`.
 The copy task runs post-data schema sync with `ignore_errors = false`.
 A required index failure therefore stops the migration before table synchronization.
+Two kinds of post-data statement do not stop it. They record a failure in the shard status:
+
+- `DROP INDEX IF EXISTS` before each index. It fails when a foreign key depends on an existing index.
+  The next `CREATE INDEX IF NOT EXISTS` then keeps the existing index.
+- A foreign key on a partitioned table, when the destination runs PostgreSQL 17 or older.
+  These versions do not accept `NOT VALID` for it, so the key is validated at once.
+  Table copies use different snapshots, so the check can fail before synchronization repairs the rows.
+  A failed key is missing on the destination. Add it by hand after the migration.
+
 Replicate-only migrations retain error tolerance for their separate post-data restore.
 Manual CLI and admin post-data syncs also ignore statement errors by default.
 The validation stage is also strict.

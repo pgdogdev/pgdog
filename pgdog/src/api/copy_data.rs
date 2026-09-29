@@ -105,8 +105,7 @@ impl Task for SynchronizeTablesTask {
                     });
                     targets.retain(|shard, target| {
                         let reached = progress
-                            .shard(*shard)
-                            .and_then(|progress| progress.applied_lsn)
+                            .applied_lsn(*shard)
                             .is_some_and(|applied| applied >= *target);
                         if reached {
                             info!("source shard {shard} synchronized at {target}");
@@ -118,7 +117,7 @@ impl Task for SynchronizeTablesTask {
                         stop.stop(None);
                         replication.await?;
                         for (shard, tables) in &mut tables {
-                            if let Some(applied) = progress.shard(*shard).and_then(|progress| progress.applied_lsn) {
+                            if let Some(applied) = progress.applied_lsn(*shard) {
                                 for table in tables {
                                     table.lsn = table.lsn.max(applied);
                                 }
