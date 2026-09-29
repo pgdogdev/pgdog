@@ -5,7 +5,6 @@ use pg_raw_parse::{ConstValue, Node, make, transform, walk};
 use crate::frontend::router::parser::rewrite::ee;
 use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
 
-use super::plan::GeneratedId;
 use super::{Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,10 +118,8 @@ impl StatementRewrite<'_> {
         let sequence = sequence_call(node)?;
         let param = *next_param;
         *next_param += 1;
-        plan.generated_params.push(GeneratedParam {
-            generated_id: GeneratedId::Sequence(sequence),
-            param_num: param as u16,
-        });
+        plan.generated_params
+            .push(GeneratedParam::Sequence(sequence));
         // Retain simple-protocol SQL even when a sequence call is the only rewrite.
         self.rewritten = true;
         self.extended.then(|| {
@@ -263,30 +260,14 @@ mod tests {
         assert_eq!(
             plan.generated_params,
             vec![
-                GeneratedParam {
-                    param_num: 2,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                        "sequence.name".to_owned()
-                    ))
-                },
-                GeneratedParam {
-                    param_num: 3,
-                    generated_id: GeneratedId::UniqueId
-                },
-                GeneratedParam {
-                    param_num: 4,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Currval(
-                        "other.seq".to_owned()
-                    ))
-                },
-                GeneratedParam {
-                    param_num: 5,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Setval {
-                        name: "sequence.name".to_owned(),
-                        value: 42,
-                        is_called: false,
-                    })
-                }
+                GeneratedParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())),
+                GeneratedParam::UniqueId,
+                GeneratedParam::Sequence(SequenceCall::Currval("other.seq".to_owned())),
+                GeneratedParam::Sequence(SequenceCall::Setval {
+                    name: "sequence.name".to_owned(),
+                    value: 42,
+                    is_called: false,
+                })
             ]
         );
         assert_eq!(plan.stmt.as_deref(), Some(sql.as_str()));
@@ -300,20 +281,7 @@ mod tests {
         assert_eq!(sql, original);
         assert_eq!(
             plan.generated_params,
-            vec![
-                GeneratedParam {
-                    param_num: 1,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                        "sequence.name".to_owned()
-                    ))
-                },
-                GeneratedParam {
-                    param_num: 2,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                        "sequence.name".to_owned()
-                    ))
-                },
-            ]
+            vec![GeneratedParam::Sequence(SequenceCall::Nextval("sequence.name".to_owned())); 2]
         );
         assert_eq!(plan.stmt.as_deref(), Some(original));
         assert!(!plan.is_empty());
@@ -331,18 +299,10 @@ mod tests {
         assert_eq!(
             plan.generated_params,
             vec![
-                GeneratedParam {
-                    param_num: 1,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                        "\"My Schema\".\"My Sequence\"".to_owned()
-                    ))
-                },
-                GeneratedParam {
-                    param_num: 2,
-                    generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                        "other.seq".to_owned()
-                    ))
-                },
+                GeneratedParam::Sequence(SequenceCall::Nextval(
+                    "\"My Schema\".\"My Sequence\"".to_owned()
+                )),
+                GeneratedParam::Sequence(SequenceCall::Nextval("other.seq".to_owned())),
             ]
         );
     }
@@ -672,10 +632,7 @@ mod tests {
                     let (sql, plan) = rewrite(&original, extended);
                     assert_eq!(
                         plan.generated_params,
-                        [GeneratedParam {
-                            param_num: 1,
-                            generated_id: GeneratedId::Sequence(expected.clone()),
-                        }],
+                        [GeneratedParam::Sequence(expected.clone())],
                         "{call}"
                     );
                     let canonical = original.replace(

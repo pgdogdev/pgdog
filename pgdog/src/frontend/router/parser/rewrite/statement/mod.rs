@@ -26,7 +26,6 @@ pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
 use pgdog_config::RewriteMode;
 //use pgdog_config::RewriteMode;
-use plan::GeneratedId;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
@@ -140,11 +139,11 @@ impl<'a> StatementRewrite<'a> {
         // function calls get processed.
         match stmt.stmt_mut() {
             NodeMut::InsertStmt(insert) => {
-                self.inject_auto_id(insert, mem, &mut plan)?;
+                self.inject_auto_id(insert, mem)?;
             }
             NodeMut::PrepareStmt(mut prepare) => {
                 if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
-                    self.inject_auto_id(insert, mem, &mut plan)?;
+                    self.inject_auto_id(insert, mem)?;
                 }
             }
             _ => {}
@@ -159,10 +158,7 @@ impl<'a> StatementRewrite<'a> {
                 Node::FuncCall(func) if Self::is_unique_id(func) => {
                     match Self::unique_id_value(mem, self.extended, &mut next_param) {
                         Ok(replacement) => {
-                            plan.generated_params.push(GeneratedParam {
-                                param_num: plan.params + plan.generated_params.len() as u16 + 1,
-                                generated_id: GeneratedId::UniqueId,
-                            });
+                            plan.generated_params.push(GeneratedParam::UniqueId);
                             self.rewritten = true;
                             node.replace(replacement);
                         }

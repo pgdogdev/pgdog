@@ -18,7 +18,7 @@ use crate::{
             rewrite::statement::{
                 Error,
                 non_deterministic_funcs::{time::TimeFunctionType, uuid::UUIDFunctionType},
-                plan::{GeneratedId, GeneratedParam},
+                plan::GeneratedParam,
             },
         },
     },
@@ -526,10 +526,9 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
             *self.next_param += 1;
 
             // TODO: add a method to plan() for this...
-            self.plan.generated_params.push(GeneratedParam {
-                param_num: (*self.next_param - 1) as u16,
-                generated_id: GeneratedId::NDFunction(nd_function.clone()),
-            });
+            self.plan
+                .generated_params
+                .push(GeneratedParam::NDFunction(nd_function.clone()));
 
             // Example: CAST($1::pg_catalog.text AS timetz)
             // This is 30x less code at the expense of query verbosity;

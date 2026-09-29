@@ -1,5 +1,5 @@
 use super::super::nextval::SequenceCall;
-use super::super::plan::RewriteResult;
+use super::super::plan::{RewritePlan, RewriteResult};
 use super::tests::make_schema_with_bigint_pk;
 use super::*;
 use crate::backend::ShardingSchema;

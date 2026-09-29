@@ -10,16 +10,9 @@ use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query, parameter::ParameterValue};
 use crate::unique_id::UniqueId;
 
-/// TODO: Docs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GeneratedParam {
-    pub(crate) generated_id: GeneratedId,
-    pub(crate) param_num: u16,
-}
-
 /// TODO: Document that this is also stored in PreparedStatement cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GeneratedId {
+pub(crate) enum GeneratedParam {
     UniqueId,
     Sequence(SequenceCall),
     /// This represents a function (such as date/time, UUID) that was re-written to a constant
@@ -38,9 +31,6 @@ pub(crate) struct RewritePlan {
     /// and $params+n parameters are added to the statement to
     /// substitute values we are rewriting.
     pub(crate) params: u16,
-
-    /// Number of auto-injected primary key columns with pgdog.unique_id().
-    pub(crate) auto_id_injected: u16,
 
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
@@ -96,8 +86,7 @@ impl RewritePlan {
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
     pub(crate) fn is_empty(&self) -> bool {
-        self.auto_id_injected == 0
-            && self.generated_params.is_empty()
+        self.generated_params.is_empty()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
@@ -127,19 +116,15 @@ impl RewritePlan {
         mut execute: impl AsyncFnMut(&SequenceCall) -> Result<i64, ee::Error>,
     ) -> Result<(), Error> {
         let format = bind.default_param_format();
-        for generated_param in &self.generated_params {
-            let source = &generated_param.generated_id;
-            let num = generated_param.param_num;
-            assert_eq!(bind.params_raw().len() + 1, num as usize);
-
+        for source in &self.generated_params {
             let param = match source {
-                GeneratedId::UniqueId => {
+                GeneratedParam::UniqueId => {
                     Self::convert_int_to_param(UniqueId::generator()?.next_id(), format)
                 }
-                GeneratedId::Sequence(call) => {
+                GeneratedParam::Sequence(call) => {
                     Self::convert_int_to_param(execute(call).await?, format)
                 }
-                GeneratedId::NDFunction(nd_func) => {
+                GeneratedParam::NDFunction(nd_func) => {
                     let (text, binary) = nd_func.write_as_constant(&timestamps, timezone)?;
                     match format {
                         Format::Binary => Parameter::new(binary.as_slice()),
@@ -186,7 +171,7 @@ impl RewritePlan {
         if self
             .generated_params
             .iter()
-            .any(|source| matches!(source.generated_id, GeneratedId::Sequence(_)))
+            .any(|source| matches!(source, GeneratedParam::Sequence(_)))
         {
             if let Some(stmt) = self.rewrite_sequence_simple().await? {
                 query.set_query(&stmt);
@@ -259,7 +244,7 @@ impl RewritePlan {
             if self
                 .generated_params
                 .iter()
-                .any(|source| matches!(source.generated_id, GeneratedId::Sequence(_)))
+                .any(|source| matches!(source, GeneratedParam::Sequence(_)))
                 && let Some(query) = request.messages.iter().find_map(|message| match message {
                     ProtocolMessage::Query(query) => Some(query),
                     _ => None,
@@ -322,10 +307,7 @@ mod tests {
     async fn test_apply_bind_text_format() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![GeneratedParam {
-                generated_id: GeneratedId::UniqueId,
-                param_num: 1,
-            }],
+            generated_params: vec![GeneratedParam::UniqueId],
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -348,10 +330,7 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 1,
-            generated_params: vec![GeneratedParam {
-                param_num: 2,
-                generated_id: GeneratedId::UniqueId,
-            }],
+            generated_params: vec![GeneratedParam::UniqueId],
             ..Default::default()
         };
         // Create bind with uniform binary format (1 code applies to all)
@@ -378,10 +357,7 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
-            generated_params: vec![GeneratedParam {
-                param_num: 3,
-                generated_id: GeneratedId::UniqueId,
-            }],
+            generated_params: vec![GeneratedParam::UniqueId],
             ..Default::default()
         };
         // Create bind with one-to-one format codes
@@ -409,20 +385,7 @@ mod tests {
     async fn test_apply_bind_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![
-                GeneratedParam {
-                    param_num: 1,
-                    generated_id: GeneratedId::UniqueId,
-                },
-                GeneratedParam {
-                    param_num: 2,
-                    generated_id: GeneratedId::UniqueId,
-                },
-                GeneratedParam {
-                    param_num: 3,
-                    generated_id: GeneratedId::UniqueId,
-                },
-            ],
+            generated_params: vec![GeneratedParam::UniqueId; 3],
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -445,16 +408,7 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
-            generated_params: vec![
-                GeneratedParam {
-                    param_num: 3,
-                    generated_id: GeneratedId::UniqueId,
-                },
-                GeneratedParam {
-                    param_num: 4,
-                    generated_id: GeneratedId::UniqueId,
-                },
-            ],
+            generated_params: vec![GeneratedParam::UniqueId; 2],
             ..Default::default()
         };
         let mut bind = Bind::new_params(

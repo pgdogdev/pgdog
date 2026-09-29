@@ -10,10 +10,7 @@ use crate::{
         prepared_statements::PreparedPlan,
         router::parser::{
             Limit,
-            rewrite::statement::{
-                offset::OffsetPlan,
-                plan::{GeneratedId, GeneratedParam},
-            },
+            rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
         },
     },
     net::{PREPARE_TEMPLATE_NAME, Prepare, parameter::ParameterValue},
@@ -184,13 +181,13 @@ impl StatementRewrite<'_> {
         timezone: Option<&ParameterValue>,
     ) -> Result<(), Error> {
         for param in generated_params {
-            let param = match &param.generated_id {
-                GeneratedId::UniqueId => {
+            let param = match param {
+                GeneratedParam::UniqueId => {
                     let unique_id = UniqueId::generator()?.next_id();
                     mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
                         .uncast()
                 }
-                GeneratedId::NDFunction(nd_func) if timestamp_rewrite => {
+                GeneratedParam::NDFunction(nd_func) if timestamp_rewrite => {
                     let (text, _) = nd_func.write_as_constant(&self.query_timestamps, timezone)?;
 
                     mem.make_a_const(ConstValue::String(text.as_str())).uncast()
@@ -509,20 +506,7 @@ mod tests {
     fn test_apply_prepare_rewrite_plan_appends_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![
-                GeneratedParam {
-                    generated_id: GeneratedId::UniqueId,
-                    param_num: 1,
-                },
-                GeneratedParam {
-                    generated_id: GeneratedId::UniqueId,
-                    param_num: 2,
-                },
-                GeneratedParam {
-                    generated_id: GeneratedId::UniqueId,
-                    param_num: 3,
-                },
-            ],
+            generated_params: vec![GeneratedParam::UniqueId; 3],
             ..Default::default()
         };
         let sql = TestContext::new()
