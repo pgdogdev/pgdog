@@ -12,17 +12,23 @@ FROM
     information_schema.columns c
 LEFT JOIN (
     SELECT
-        kcu.table_schema,
-        kcu.table_name,
-        kcu.column_name
+        n.nspname AS table_schema,
+        cl.relname AS table_name,
+        a.attname AS column_name
     FROM
-        information_schema.table_constraints tc
+        pg_catalog.pg_constraint con
     JOIN
-        information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
+        pg_catalog.pg_class cl ON cl.oid = con.conrelid
+    JOIN
+        pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+    JOIN
+        pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
     WHERE
-        tc.constraint_type = 'PRIMARY KEY'
+        con.contype = 'p'
+        -- Same visibility rule as information_schema.table_constraints.
+        AND (pg_catalog.pg_has_role(cl.relowner, 'USAGE')
+             OR pg_catalog.has_table_privilege(cl.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+             OR pg_catalog.has_any_column_privilege(cl.oid, 'INSERT, UPDATE, REFERENCES'))
 ) pk ON c.table_schema = pk.table_schema
     AND c.table_name = pk.table_name
     AND c.column_name = pk.column_name
