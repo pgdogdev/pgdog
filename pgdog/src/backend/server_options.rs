@@ -63,6 +63,26 @@ impl ServerOptions {
             name: "statement_timeout".into(),
             value: "0".into(),
         });
+
+        // This reduces write latency as we don't have to wait for disk I/O.
+        // If it was 'on', every commit would fsync after, making execution serial,
+        // capping throughput. With no bottlenecks on our side, on the first WAL checkpoint,
+        // throughput was observed in benchmarking to be significantly reduced.
+        //
+        // This is what CREATE SUBSCRIPTION does by default.
+        //
+        // Why is it safe? We query the database for pg_current_wal_insert_lsn and pg_current_wal_flush_lsn
+        // for each shard to maintain an accurate view of Postgres's state, so that we know
+        // when it's okay for the source to discard WAL; we won't go past the corresponding transaction LSN unless we
+        // see that every destination shard's flush_lsn is at or has gone past it.
+        // Thus, if the shard crashes, it's fine as the data is still on source db, and can be re-sent.
+        //
+        // See `StreamSubscriber::check_for_committed_transaction`
+        options.add(Parameter {
+            name: "synchronous_commit".into(),
+            value: "off".into(),
+        });
+
         // Enforce some lock_timeout during resharding to prevent possible deadlocks.
         // This should be mostly avoided by pgdog, but in case some invariants are not met,
         // the resharding could deadlock and with timeout we'll probably retry the update
