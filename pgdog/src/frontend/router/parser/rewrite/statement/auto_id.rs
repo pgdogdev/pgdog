@@ -356,7 +356,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.auto_id_injected, 1);
-        assert_eq!(plan.unique_ids, 1); // confirms unique_id was processed
+        assert_eq!(plan.generated_params.len(), 1); // confirms unique_id was processed
         assert!(sql.contains("id"));
         // pgdog.unique_id() should be replaced with actual bigint value
         assert!(!sql.contains("pgdog.unique_id"));
@@ -475,7 +475,7 @@ mod tests {
         // DEFAULT should be replaced with unique_id
         assert!(!sql.to_uppercase().contains("DEFAULT"));
         assert!(sql.contains("::bigint")); // value is cast to bigint
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params.len(), 1);
     }
 
     #[test]
@@ -490,7 +490,7 @@ mod tests {
 
         // Both DEFAULT values should be replaced
         assert!(!sql.to_uppercase().contains("DEFAULT"));
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.generated_params.len(), 2);
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
 
         assert_eq!(prepare_plan.params, 1);
         assert_eq!(prepare_plan.auto_id_injected, 1);
-        assert_eq!(prepare_plan.unique_ids, 1);
+        assert_eq!(prepare_plan.generated_params.len(), 1);
         assert!(prepare_sql.contains("(name, id)"));
         assert!(prepare_sql.contains("$2::bigint"));
 
@@ -695,7 +695,12 @@ mod tests {
                     format!("INSERT INTO {table} (name, id) VALUES {expected_values}")
                 );
                 assert_eq!(plan.auto_id_injected, injected);
-                assert_eq!(plan.unique_ids, 0);
+                let unique_ids = plan
+                    .generated_params
+                    .iter()
+                    .filter(|param| matches!(param.generated_id, GeneratedId::UniqueId))
+                    .count();
+                assert_eq!(unique_ids, 0);
                 assert_eq!(
                     plan.generated_params,
                     vec![

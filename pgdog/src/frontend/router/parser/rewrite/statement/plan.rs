@@ -39,9 +39,6 @@ pub(crate) struct RewritePlan {
     /// substitute values we are rewriting.
     pub(crate) params: u16,
 
-    /// Number of unique IDs, also used by SQL PREPARE/EXECUTE rewriting.
-    pub(crate) unique_ids: u16,
-
     /// Number of auto-injected primary key columns with pgdog.unique_id().
     pub(crate) auto_id_injected: u16,
 
@@ -99,8 +96,7 @@ impl RewritePlan {
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
     pub(crate) fn is_empty(&self) -> bool {
-        self.unique_ids == 0
-            && self.auto_id_injected == 0
+        self.auto_id_injected == 0
             && self.generated_params.is_empty()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
@@ -326,7 +322,6 @@ mod tests {
     async fn test_apply_bind_text_format() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            unique_ids: 1,
             generated_params: vec![GeneratedParam {
                 generated_id: GeneratedId::UniqueId,
                 param_num: 1,
@@ -353,7 +348,6 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 1,
-            unique_ids: 1,
             generated_params: vec![GeneratedParam {
                 param_num: 2,
                 generated_id: GeneratedId::UniqueId,
@@ -384,7 +378,6 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
-            unique_ids: 1,
             generated_params: vec![GeneratedParam {
                 param_num: 3,
                 generated_id: GeneratedId::UniqueId,
@@ -416,7 +409,6 @@ mod tests {
     async fn test_apply_bind_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            unique_ids: 3,
             generated_params: vec![
                 GeneratedParam {
                     param_num: 1,
@@ -453,7 +445,6 @@ mod tests {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
             params: 2,
-            unique_ids: 2,
             generated_params: vec![
                 GeneratedParam {
                     param_num: 3,

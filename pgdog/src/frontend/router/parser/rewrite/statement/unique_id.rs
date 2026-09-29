@@ -47,6 +47,7 @@ impl StatementRewrite<'_> {
 mod tests {
     use pgdog_config::Rewrite;
 
+    use super::super::plan::{GeneratedId, GeneratedParam};
     use super::*;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
@@ -115,7 +116,7 @@ mod tests {
 
         assert_eq!(sql, "SELECT $1::bigint");
         assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -124,7 +125,13 @@ mod tests {
 
         assert_eq!(sql, "SELECT $3::bigint, $1, $2");
         assert_eq!(plan.params, 2);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(
+            plan.generated_params,
+            vec![GeneratedParam {
+                param_num: 3,
+                generated_id: GeneratedId::UniqueId
+            }]
+        );
     }
 
     #[test]
@@ -133,7 +140,7 @@ mod tests {
 
         assert_eq!(sql, "SELECT $1::bigint, $2::bigint");
         assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.generated_params, unique_ids(2));
     }
 
     #[test]
@@ -146,7 +153,7 @@ mod tests {
             "Function should be replaced: {sql}"
         );
         assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -159,7 +166,7 @@ mod tests {
             !sql.contains("pgdog.unique_id"),
             "Functions should be replaced: {sql}"
         );
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.generated_params, unique_ids(2));
     }
 
     #[test]
@@ -167,7 +174,7 @@ mod tests {
         let (sql, plan) = run_test("SELECT 1, 2, 3", true);
 
         assert_eq!(sql, "SELECT 1, 2, 3");
-        assert_eq!(plan.unique_ids, 0);
+        assert_eq!(plan.generated_params, unique_ids(0));
     }
 
     #[test]
@@ -178,7 +185,7 @@ mod tests {
         );
 
         assert_eq!(sql, "INSERT INTO t (id, name) VALUES ($1::bigint, 'test')");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -189,7 +196,7 @@ mod tests {
         );
 
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.generated_params, unique_ids(2));
     }
 
     #[test]
@@ -197,7 +204,7 @@ mod tests {
         let (sql, plan) = run_test("INSERT INTO t (id) SELECT pgdog.unique_id() FROM s", true);
 
         assert_eq!(sql, "INSERT INTO t (id) SELECT $1::bigint FROM s");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -208,7 +215,7 @@ mod tests {
         );
 
         assert_eq!(sql, "UPDATE t SET id = $1::bigint WHERE name = 'test'");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -219,7 +226,7 @@ mod tests {
         );
 
         assert_eq!(sql, "UPDATE t SET name = 'new' WHERE id = $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -227,7 +234,7 @@ mod tests {
         let (sql, plan) = run_test("DELETE FROM t WHERE id = pgdog.unique_id()", true);
 
         assert_eq!(sql, "DELETE FROM t WHERE id = $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -241,7 +248,7 @@ mod tests {
             sql,
             "INSERT INTO t (id) VALUES ($1::bigint) RETURNING $2::bigint"
         );
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.generated_params, unique_ids(2));
     }
 
     #[test]
@@ -252,7 +259,7 @@ mod tests {
         );
 
         assert_eq!(sql, "EXPLAIN INSERT INTO t (id) SELECT $1::bigint FROM s");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     #[test]
@@ -260,7 +267,7 @@ mod tests {
         let (sql, plan) = run_test("EXPLAIN SELECT pgdog.unique_id()", true);
 
         assert_eq!(sql, "EXPLAIN SELECT $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.generated_params, unique_ids(1));
     }
 
     fn run_test(sql: &str, extended: bool) -> (String, RewritePlan) {
@@ -288,5 +295,14 @@ mod tests {
         });
         let sql = pg_raw_parse::deparse_stmts(&*ast).unwrap();
         (sql, plan)
+    }
+
+    fn unique_ids(num: u16) -> Vec<GeneratedParam> {
+        (1..=num)
+            .map(|param_num| GeneratedParam {
+                generated_id: GeneratedId::UniqueId,
+                param_num,
+            })
+            .collect()
     }
 }

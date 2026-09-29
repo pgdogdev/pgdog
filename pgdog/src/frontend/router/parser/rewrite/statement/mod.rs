@@ -159,13 +159,10 @@ impl<'a> StatementRewrite<'a> {
                 Node::FuncCall(func) if Self::is_unique_id(func) => {
                     match Self::unique_id_value(mem, self.extended, &mut next_param) {
                         Ok(replacement) => {
-                            plan.unique_ids += 1;
-                            if self.extended {
-                                plan.generated_params.push(GeneratedParam {
-                                    param_num: (next_param - 1) as u16,
-                                    generated_id: GeneratedId::UniqueId,
-                                });
-                            }
+                            plan.generated_params.push(GeneratedParam {
+                                param_num: plan.params + plan.generated_params.len() as u16 + 1,
+                                generated_id: GeneratedId::UniqueId,
+                            });
                             self.rewritten = true;
                             node.replace(replacement);
                         }
