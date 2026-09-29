@@ -31,7 +31,7 @@ jobs:
           RUSTFLAGS: "--cfg tokio_unstable -C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
       - name: Run documentation tests
         run: cargo test --doc
       # Requires CODECOV_TOKEN secret for upload

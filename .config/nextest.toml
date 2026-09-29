@@ -1,12 +1,35 @@
+# Tests run in parallel. Tests that mutate shared state in the local Postgres
+# databases are serialized within a group; groups still run concurrently with
+# each other and with ungrouped tests.
+[test-groups]
+# The `sharded` / `sharded_omni` tables and the `pgdog` schema.
+pgdog-sharded = { max-threads = 1 }
+# Prepared transactions and the 2PC WAL.
+pgdog-two-pc = { max-threads = 1 }
+# Publications, replication slots and per-test databases.
+pgdog-replication = { max-threads = 1 }
+
 [profile.default]
 slow-timeout = { period = "15s" }
 fail-fast = true
 # ignore integration tests since they require a running pgdog instance
 default-filter = "not package(integration_tests_rust)"
-test-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(pgdog) & test(/^frontend::client::query_engine::two_pc::/)'
+test-group = 'pgdog-two-pc'
+
+[[profile.default.overrides]]
+filter = 'package(pgdog) & (test(/^frontend::client::/) | test(/^backend::schema::/))'
+test-group = 'pgdog-sharded'
+
+[[profile.default.overrides]]
+filter = 'package(pgdog) & test(/^backend::replication::/)'
+test-group = 'pgdog-replication'
 
 [profile.dev]
 inherits = "default"
 
 [profile.integration]
 default-filter = "package(integration_tests_rust)"
+test-threads = 1
