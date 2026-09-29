@@ -8,10 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::{
-        RewritePlan,
-        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
-    },
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -130,11 +127,6 @@ impl PreparedStatements {
         name: &str,
         original_query: Bytes,
         rewritten_query: Option<Bytes>,
-        // TODO: I think we should just pass `unique_ids` in here by itself.
-        //       Otherwise, it could be easily confused to want
-        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
-        rewrite_plan: &RewritePlan,
-        // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
         offset_plan: Option<OffsetPlan>,
         generated_params: Vec<GeneratedParam>,
     ) -> Prepare {
@@ -142,7 +134,6 @@ impl PreparedStatements {
             self.global.write().insert_prepare(
                 original_query,
                 rewritten_query,
-                rewrite_plan,
                 offset_plan,
                 generated_params,
             )

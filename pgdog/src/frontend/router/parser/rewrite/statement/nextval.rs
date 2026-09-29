@@ -260,7 +260,6 @@ mod tests {
             "SELECT $2::bigint, $1, $3::bigint, $4::bigint, $5::bigint"
         );
         assert_eq!(plan.params, 1);
-        assert_eq!(plan.unique_ids, 1);
         assert_eq!(
             plan.generated_params,
             vec![
@@ -316,7 +315,6 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(plan.unique_ids, 0);
         assert_eq!(plan.stmt.as_deref(), Some(original));
         assert!(!plan.is_empty());
     }

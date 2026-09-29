@@ -17,13 +17,6 @@ pub(crate) struct Statement {
 pub(crate) struct PreparedPlan {
     pub(crate) prepare: Prepare,
 
-    /// The number of calls to `pgdog.unique_id` which were previously
-    /// rewritten. If this value is greater than zero, it is expected
-    /// that the query in the [`Parse`] message referenced by
-    /// [`Self::prepare`] was previously rewritten to replace those calls
-    /// with bind parameter placeholder numbered after all others
-    pub(crate) unique_ids: u16,
-
     /// Used to keep track of LIMIT + OFFSET queries (stemming from Prepare),
     /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
     /// modify limit/offset values before execution if it ends up being cross-shard.
