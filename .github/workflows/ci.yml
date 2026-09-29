@@ -2,7 +2,6 @@ name: ci
 on:
   push:
     branches:
-      - main
       - main-ent
   pull_request:
     types: [opened, synchronize, reopened]

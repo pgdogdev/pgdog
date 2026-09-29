@@ -40,12 +40,13 @@ impl QueryEngine {
     pub(super) async fn fake_command_response(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_messages: &[ProtocolMessage],
         command: &str,
         fake_response: Option<FakeResponse>,
     ) -> Result<(), Error> {
         let mut sent = 0;
 
-        for message in context.client_request.iter() {
+        for message in client_messages {
             sent += match message {
                 ProtocolMessage::Parse(_) => context.stream.send(&ParseComplete).await?,
                 ProtocolMessage::Bind(_) => context.stream.send(&BindComplete).await?,

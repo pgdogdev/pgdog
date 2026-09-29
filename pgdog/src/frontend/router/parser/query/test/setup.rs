@@ -196,7 +196,7 @@ impl QueryParserTest {
     pub(crate) fn try_execute(&mut self, request: Vec<ProtocolMessage>) -> Result<Command, Error> {
         let mut request: ClientRequest = request.into();
 
-        for message in request.iter_mut() {
+        for message in &mut request.messages {
             if let ProtocolMessage::Parse(parse) = message {
                 let (_, name) = PreparedStatements::global().write().insert(parse);
                 self.last_parse = Some(name);

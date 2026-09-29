@@ -66,10 +66,12 @@ impl QueryEngine {
     /// If we see a [`crate::net::Sync`]-only request, we execute it to restore servers
     /// back to normal state.
     ///
-    pub(super) fn in_extended_pipeline_error(&self, context: &QueryEngineContext<'_>) -> bool {
-        self.backend.out_of_sync()
-            && !context.client_request.is_sync_only()
-            && !context.pipeline.is_done()
+    pub(super) fn in_extended_pipeline_error(
+        &self,
+        context: &QueryEngineContext<'_>,
+        client_request: &ClientRequest,
+    ) -> bool {
+        self.backend.out_of_sync() && !client_request.is_sync_only() && !context.pipeline.is_done()
     }
 
     /// Return true if we should ignore this query because
