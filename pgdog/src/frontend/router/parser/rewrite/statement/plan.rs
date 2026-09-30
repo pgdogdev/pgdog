@@ -55,6 +55,16 @@ impl BindParams {
         params.push(param);
     }
 
+    pub(super) fn num_client_params(&self) -> u16 {
+        match self {
+            Self::Original { param_count } => *param_count,
+            Self::Modified { params } => params
+                .iter()
+                .filter(|b| matches!(b, BindParam::FromClientBind(_)))
+                .count() as u16,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn generated(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
         self.iter()
@@ -236,7 +246,7 @@ impl RewritePlan {
     /// Returns the client's parameter count for an unnamed statement
     fn apply_parse(&self, parse: &mut Parse) -> Option<u16> {
         if let Some(ref stmt) = self.stmt {
-            let client_params = (self.bind_params.len() as u16).max(parse.num_data_types());
+            let client_params = (self.bind_params.num_client_params()).max(parse.num_data_types());
 
             parse.set_query(stmt);
             if !parse.anonymous() {
