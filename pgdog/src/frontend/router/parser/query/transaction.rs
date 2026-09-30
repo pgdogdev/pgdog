@@ -23,12 +23,18 @@ impl QueryParser {
             self.write_override = true;
         }
 
+        context
+            .shards_calculator
+            .push(ShardWithPriority::new_table(Shard::All));
+
+        let route = Route::write(context.shards_calculator.shard());
+
         match stmt.kind {
             TRANS_STMT_COMMIT => {
-                return Ok(Command::CommitTransaction { extended });
+                return Ok(Command::CommitTransaction { extended, route });
             }
             TRANS_STMT_ROLLBACK => {
-                return Ok(Command::RollbackTransaction { extended });
+                return Ok(Command::RollbackTransaction { extended, route });
             }
             TRANS_STMT_BEGIN | TRANS_STMT_START => {
                 let transaction_type = Self::transaction_type(stmt.options()).unwrap_or_default();
@@ -36,8 +42,7 @@ impl QueryParser {
                     query: context.query()?.clone(),
                     transaction_type,
                     extended,
-                    route: Route::write(context.shards_calculator.shard())
-                        .with_read(transaction_type == TransactionType::ReadOnly),
+                    route: route.with_read(transaction_type == TransactionType::ReadOnly),
                 });
             }
             TRANS_STMT_ROLLBACK_TO => rollback_savepoint = true,
@@ -49,13 +54,8 @@ impl QueryParser {
             _ => (),
         }
 
-        context
-            .shards_calculator
-            .push(ShardWithPriority::new_table(Shard::All));
-
         Ok(Command::Query(
-            Route::write(context.shards_calculator.shard())
-                .with_rollback_savepoint(rollback_savepoint),
+            route.with_rollback_savepoint(rollback_savepoint),
         ))
     }
 

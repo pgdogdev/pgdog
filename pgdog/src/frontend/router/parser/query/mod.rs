@@ -101,7 +101,12 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } | Command::Copy { route, .. } => {
+            Command::Query(route)
+            | Command::Set { route, .. }
+            | Command::Copy { route, .. }
+            | Command::StartTransaction { route, .. }
+            | Command::CommitTransaction { route, .. }
+            | Command::RollbackTransaction { route, .. } => {
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator

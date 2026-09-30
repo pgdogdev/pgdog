@@ -235,7 +235,7 @@ impl QueryEngine {
                 )
                 .await?
             }
-            Command::CommitTransaction { extended } => {
+            Command::CommitTransaction { extended, .. } => {
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     // Transaction control statements should be excluded from cross-shard checks.
@@ -251,7 +251,7 @@ impl QueryEngine {
                     self.comms.update_params(context.params);
                 }
             }
-            Command::RollbackTransaction { extended } => {
+            Command::RollbackTransaction { extended, .. } => {
                 if self.backend.connected() || *extended {
                     let extended = *extended;
                     // Transaction control statements should be excluded from cross-shard checks.

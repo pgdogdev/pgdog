@@ -36,9 +36,11 @@ pub(crate) enum Command {
     },
     CommitTransaction {
         extended: bool,
+        route: Route,
     },
     RollbackTransaction {
         extended: bool,
+        route: Route,
     },
     Set {
         params: Vec<SetParam>,
@@ -81,6 +83,8 @@ impl Command {
             Self::Set { route, .. } => route,
             Self::StartTransaction { route, .. } => route,
             Self::Copy { route, .. } => route,
+            Self::CommitTransaction { route, .. } => route,
+            Self::RollbackTransaction { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }
