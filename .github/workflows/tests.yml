@@ -44,8 +44,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: frontend, args: "-p pgdog -- --test-threads=1 frontend::" }
-          - { name: rest, args: "-p pgdog -p pgdog-config -p pgdog-vector -p pgdog-stats -p pgdog-postgres-types -- --test-threads=1 --skip frontend::" }
+          - { name: 1, shard: 1/2 }
+          - { name: 2, shard: 2/2 }
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
@@ -65,7 +65,9 @@ jobs:
           RUSTFLAGS: "--cfg tokio_unstable -C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov test --lcov --output-path lcov.info --no-fail-fast ${{ matrix.args }}
+          cargo llvm-cov nextest --no-report --no-fail-fast --test-threads=1 --partition count:${{ matrix.shard }} --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+      - name: Generate coverage report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         env:

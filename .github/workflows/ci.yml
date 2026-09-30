@@ -84,7 +84,11 @@ jobs:
           - { name: complex, script: integration/complex/run.sh }
           - { name: dry-run, script: integration/dry_run/run.sh }
           - { name: copy-data, script: integration/copy_data/run.sh }
-          - { name: load-balancer, script: integration/load_balancer/run.sh }
+          - {
+              name: load-balancer,
+              script: integration/load_balancer/run.sh,
+              needs_rust_cache: true,
+            }
           - { name: tls, script: integration/tls/run.sh }
           - { name: resharding, script: integration/resharding/run.sh }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
