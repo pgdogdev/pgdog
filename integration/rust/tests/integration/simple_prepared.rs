@@ -1,4 +1,4 @@
-use crate::setup::admin_sqlx;
+use crate::setup::{admin_sqlx, connection_sqlx_direct_db};
 use sqlx::{Connection, Executor, Row};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -44,6 +44,24 @@ async fn test_simple_prepared_limit() {
         sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
             .await
             .unwrap();
+
+    // TODO: remove... some diagnostics to try to figure out why github
+    // is failing when this test is ordered differently. can't repro locally..
+    let probe = "SELECT current_database()::text, current_user::text, current_setting('search_path'), to_regclass('sharded')::text";
+    for shard in ["shard_0", "shard_1"] {
+        let direct = connection_sqlx_direct_db(shard).await;
+        let row: (String, String, String, Option<String>) =
+            sqlx::query_as(probe).fetch_one(&direct).await.unwrap();
+        eprintln!("direct {shard}: {row:?}");
+    }
+    for shard in [0, 1] {
+        let row: (String, String, String, Option<String>) =
+            sqlx::query_as(&format!("/* pgdog_shard: {shard} */ {probe}"))
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        eprintln!("pgdog shard {shard}: {row:?}");
+    }
 
     // Clear out the table first.
     sqlx::raw_sql("TRUNCATE sharded")
