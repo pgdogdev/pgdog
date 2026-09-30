@@ -92,11 +92,11 @@ impl Connection {
 
     /// Check that we are connected to all required shards to serve this route.
     pub(crate) fn required_shards_connected(&self, route: &Route) -> Result<bool, Error> {
-        let shards = self.cluster()?.shards().len();
-
         Ok(match self.binding {
             Binding::NotConnected => false,
-            Binding::MultiShard(ref servers) => servers.required_shards_connected(route, shards),
+            Binding::MultiShard(ref servers) => {
+                servers.required_shards_connected(route, self.cluster()?.shards().len())
+            }
             Binding::Direct(ref shard) => {
                 matches!(route.shard(), Shard::Direct(s) if shard.shard == *s)
             }
