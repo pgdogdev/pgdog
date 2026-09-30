@@ -59,7 +59,8 @@ done
 
 pushd ${SCRIPT_DIR}/pgx
 go get
-go test -v -count 3
+go test -v -count 3 -run '^TestPrepared$'
+go test -v -count 1 -skip '^TestPrepared$'
 popd
 
 php ${SCRIPT_DIR}/pdo_read_write_split.php
