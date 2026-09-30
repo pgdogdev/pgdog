@@ -8,7 +8,9 @@ runs:
           ~/.cargo/bin/cargo-nextest
           ~/.cargo/bin/cargo-llvm-cov
           ~/.local/cmake
-        key: ci-tools-${{ runner.os }}-${{ hashFiles('integration/ci/install-deps.sh') }}
+          integration/toxiproxy-server
+          integration/toxiproxy-cli
+        key: ci-tools-${{ runner.os }}-${{ hashFiles('integration/ci/install-deps.sh', 'integration/setup.sh') }}
     - uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
       with:
         timeout_minutes: 10
