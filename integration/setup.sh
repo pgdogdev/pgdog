@@ -107,8 +107,10 @@ done
 pushd ${SCRIPT_DIR}
 
 for bin in toxiproxy-server toxiproxy-cli; do
-    if [[ ! -f ${bin} ]]; then
-        curl -L https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/${bin}-${OS}-${ARCH} > ${bin}
+    if [[ ! -x ${bin} ]]; then
+        rm -f ${bin}
+        curl -fsSL --retry 5 --retry-all-errors -o ${bin} \
+            https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/${bin}-${OS}-${ARCH}
         chmod +x ${bin}
     fi
 done
