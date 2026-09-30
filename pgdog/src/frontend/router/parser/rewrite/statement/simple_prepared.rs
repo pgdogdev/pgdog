@@ -10,14 +10,14 @@ use crate::{
         prepared_statements::PreparedPlan,
         router::parser::{
             Limit,
-            rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
+            rewrite::statement::{offset::OffsetPlan, plan::BindParam},
         },
     },
     net::{PREPARE_TEMPLATE_NAME, Prepare, parameter::ParameterValue},
     unique_id::UniqueId,
 };
 
-use super::{Error, RewritePlan, StatementRewrite};
+use super::{BindParams, Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrepareExecute {
@@ -119,13 +119,13 @@ impl StatementRewrite<'_> {
                     })
                     .transpose()?;
 
-                let generated_params = plan.generated_params.clone();
+                let bind_params = plan.bind_params.clone();
                 let prepare = self.prepared_statements.insert_prepare(
                     &client_name,
                     original_query,
                     new_query,
                     offset_plan,
-                    generated_params,
+                    bind_params,
                 );
 
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
@@ -139,7 +139,7 @@ impl StatementRewrite<'_> {
                 if let Some(PreparedPlan {
                     prepare,
                     offset_plan,
-                    generated_params,
+                    bind_params,
                 }) = self.prepared_statements.prepared_plan(stmt_name)
                 {
                     if let Some(mut offset_plan) = offset_plan {
@@ -152,11 +152,11 @@ impl StatementRewrite<'_> {
 
                     // TODO: Should we be setting this on Plan? Pros? Cons?
                     // TODO: Double check that this only runs on omnisharded (as well as Bind/Execute, etc)
-                    plan.generated_params = generated_params;
+                    plan.bind_params = bind_params;
                     self.insert_generated_ids(
                         &mut stmt,
                         mem,
-                        &plan.generated_params,
+                        &plan.bind_params,
                         timestamp_rewrite,
                         self.timezone,
                     )?;
@@ -176,18 +176,18 @@ impl StatementRewrite<'_> {
         &self,
         stmt: &mut ExecuteStmtMut<'a, '_>,
         mem: MemoryToken<'a>,
-        generated_params: &[GeneratedParam],
+        bind_params: &BindParams,
         timestamp_rewrite: bool,
         timezone: Option<&ParameterValue>,
     ) -> Result<(), Error> {
-        for param in generated_params {
-            let param = match param {
-                GeneratedParam::UniqueId => {
+        for param in bind_params.iter() {
+            let param = match &*param {
+                BindParam::UniqueId => {
                     let unique_id = UniqueId::generator()?.next_id();
                     mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
                         .uncast()
                 }
-                GeneratedParam::NDFunction(nd_func) if timestamp_rewrite => {
+                BindParam::NDFunction(nd_func) if timestamp_rewrite => {
                     let (text, _) = nd_func.write_as_constant(&self.query_timestamps, timezone)?;
 
                     mem.make_a_const(ConstValue::String(text.as_str())).uncast()
@@ -482,7 +482,7 @@ mod tests {
                 self.statement_rewrite().insert_generated_ids(
                     &mut execute,
                     mem,
-                    &plan.generated_params,
+                    &plan.bind_params,
                     false,
                     None,
                 )?;
@@ -506,7 +506,7 @@ mod tests {
     fn test_apply_prepare_rewrite_plan_appends_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![GeneratedParam::UniqueId; 3],
+            bind_params: vec![BindParam::UniqueId; 3].into(),
             ..Default::default()
         };
         let sql = TestContext::new()

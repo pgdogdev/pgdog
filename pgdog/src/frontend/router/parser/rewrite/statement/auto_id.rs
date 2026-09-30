@@ -229,7 +229,7 @@ mod split_tests;
 mod tests {
     use super::super::{RewritePlan, nextval::SequenceCall};
     use crate::frontend::client::QueryTimestamps;
-    use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
+    use crate::frontend::router::parser::rewrite::statement::plan::BindParam;
     use crate::frontend::router::sharding::ShardedTable;
     use indexmap::IndexMap;
     use pgdog_config::{Rewrite, SystemCatalogsBehavior};
@@ -351,7 +351,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 1); // confirms unique_id was processed
+        assert_eq!(plan.bind_params.len(), 1); // confirms unique_id was processed
         assert!(sql.contains("id"));
         // pgdog.unique_id() should be replaced with actual bigint value
         assert!(!sql.contains("pgdog.unique_id"));
@@ -386,7 +386,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 0);
+        assert_eq!(plan.bind_params.len(), 0);
         assert!(!sql.contains("id,"));
     }
 
@@ -400,7 +400,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 0);
+        assert_eq!(plan.bind_params.len(), 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -414,7 +414,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 0);
+        assert_eq!(plan.bind_params.len(), 0);
         assert!(!sql.contains("pgdog.unique_id"));
     }
 
@@ -428,7 +428,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.generated_params.len(), 0);
+        assert_eq!(plan.bind_params.len(), 0);
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
         .unwrap();
 
         // One auto ID per row
-        assert_eq!(plan.generated_params.len(), 2);
+        assert_eq!(plan.bind_params.len(), 2);
         assert!(sql.contains("id"));
     }
 
@@ -471,7 +471,7 @@ mod tests {
         // DEFAULT should be replaced with unique_id
         assert!(!sql.to_uppercase().contains("DEFAULT"));
         assert!(sql.contains("::bigint")); // value is cast to bigint
-        assert_eq!(plan.generated_params.len(), 1);
+        assert_eq!(plan.bind_params.len(), 1);
     }
 
     #[test]
@@ -486,7 +486,7 @@ mod tests {
 
         // Both DEFAULT values should be replaced
         assert!(!sql.to_uppercase().contains("DEFAULT"));
-        assert_eq!(plan.generated_params.len(), 2);
+        assert_eq!(plan.bind_params.len(), 2);
     }
 
     #[test]
@@ -577,8 +577,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(prepare_plan.params, 1);
-        assert_eq!(prepare_plan.generated_params.len(), 1);
+        assert_eq!(prepare_plan.bind_params.len(), 2);
         assert!(prepare_sql.contains("(name, id)"));
         assert!(prepare_sql.contains("$2::bigint"));
 
@@ -620,7 +619,7 @@ mod tests {
         .unwrap();
 
         // users is sharded, so RewriteOmni should NOT inject auto id
-        assert_eq!(plan.generated_params.len(), 0);
+        assert_eq!(plan.bind_params.len(), 0);
         assert!(!sql.contains("::bigint"));
     }
 
@@ -644,7 +643,7 @@ mod tests {
         .unwrap();
 
         // users is NOT sharded, so RewriteOmni should inject auto id
-        assert_eq!(plan.generated_params.len(), 1);
+        assert_eq!(plan.bind_params.len(), 1);
         assert!(sql.contains("::bigint"));
     }
 
@@ -687,15 +686,9 @@ mod tests {
                     sql,
                     format!("INSERT INTO {table} (name, id) VALUES {expected_values}")
                 );
-                let unique_ids = plan
-                    .generated_params
-                    .iter()
-                    .filter(|param| matches!(param, GeneratedParam::UniqueId))
-                    .count();
-                assert_eq!(unique_ids, 0);
                 assert_eq!(
-                    plan.generated_params,
-                    vec![GeneratedParam::Sequence(SequenceCall::Nextval(sequence.to_owned())); 2]
+                    plan.bind_params,
+                    vec![BindParam::Sequence(SequenceCall::Nextval(sequence.to_owned())); 2]
                 );
             }
         }
@@ -713,7 +706,7 @@ mod tests {
                 .expect("rewrite succeeds");
 
             assert_eq!(sql, original);
-            assert!(plan.generated_params.is_empty());
+            assert_eq!(plan.bind_params.len(), 0);
         }
     }
 }

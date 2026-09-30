@@ -9,15 +9,107 @@ use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query, parameter::ParameterValue};
 use crate::unique_id::UniqueId;
+use itertools::Either;
+use std::borrow::Cow;
 
 /// TODO: Document that this is also stored in PreparedStatement cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GeneratedParam {
+pub(in crate::frontend) enum BindParam {
+    FromClientBind(u16),
     UniqueId,
     Sequence(SequenceCall),
     /// This represents a function (such as date/time, UUID) that was re-written to a constant
     /// to be consistent across shards for omni writes.
     NDFunction(NDFunction),
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::frontend) enum BindParams {
+    Original { param_count: u16 },
+    Modified { params: Vec<BindParam> },
+}
+
+impl BindParams {
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Self::Original { param_count } => *param_count as usize,
+            Self::Modified { params } => params.len(),
+        }
+    }
+
+    pub(super) fn is_original(&self) -> bool {
+        matches!(self, Self::Original { .. })
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
+        match self {
+            Self::Original { param_count } => {
+                Either::Left((0..*param_count).map(|n| Cow::Owned(BindParam::FromClientBind(n))))
+            }
+            Self::Modified { params } => Either::Right(params.iter().map(Cow::Borrowed)),
+        }
+    }
+
+    pub(super) fn push(&mut self, param: BindParam) {
+        let params = self.force_modified();
+        params.push(param);
+    }
+
+    pub(super) fn num_client_params(&self) -> u16 {
+        match self {
+            Self::Original { param_count } => *param_count,
+            Self::Modified { params } => params
+                .iter()
+                .filter(|b| matches!(b, BindParam::FromClientBind(_)))
+                .count() as u16,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn generated(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
+        self.iter()
+            .filter(|b| !matches!(b.as_ref(), BindParam::FromClientBind(_)))
+    }
+
+    /// If `self` is `Self::Original`, canoncalize it as `Modified` containing
+    /// `param_count` instances of `BindParam::FromClientBind`. Returns a
+    /// reference to the canoncalized `Vec`
+    fn force_modified(&mut self) -> &mut Vec<BindParam> {
+        if let Self::Original { .. } = self {
+            let params = self.iter().map(|p| p.into_owned()).collect();
+            *self = Self::Modified { params };
+        }
+
+        match self {
+            Self::Original { .. } => unreachable!("set to Modified above"),
+            Self::Modified { params } => params,
+        }
+    }
+}
+
+impl Default for BindParams {
+    fn default() -> Self {
+        Self::Original { param_count: 0 }
+    }
+}
+
+impl From<Vec<BindParam>> for BindParams {
+    fn from(params: Vec<BindParam>) -> Self {
+        Self::Modified { params }
+    }
+}
+
+#[cfg(test)]
+impl<T> PartialEq<T> for BindParams
+where
+    Vec<BindParam>: PartialEq<T>,
+{
+    fn eq(&self, other: &T) -> bool {
+        match self {
+            Self::Original { .. } => false,
+            Self::Modified { params } => params == other,
+        }
+    }
 }
 
 /// Statement rewrite plan.
@@ -26,16 +118,10 @@ pub(crate) enum GeneratedParam {
 ///
 #[derive(Default, Clone, Debug)]
 pub(crate) struct RewritePlan {
-    /// Number of parameters ($1, $2, etc.) in
-    /// the original statement. This is calculated first,
-    /// and $params+n parameters are added to the statement to
-    /// substitute values we are rewriting.
-    pub(crate) params: u16,
-
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
     /// TODO: Document that this is also stored in PreparedStatement cache.
-    pub(crate) generated_params: Vec<GeneratedParam>,
+    pub(super) bind_params: BindParams,
 
     /// Rewritten SQL statement.
     pub(crate) stmt: Option<String>,
@@ -86,7 +172,7 @@ impl RewritePlan {
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
     pub(crate) fn is_empty(&self) -> bool {
-        self.generated_params.is_empty()
+        self.bind_params.is_original()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
@@ -116,24 +202,31 @@ impl RewritePlan {
         mut execute: impl AsyncFnMut(&SequenceCall) -> Result<i64, ee::Error>,
     ) -> Result<(), Error> {
         let format = bind.default_param_format();
-        for source in &self.generated_params {
-            let param = match source {
-                GeneratedParam::UniqueId => {
-                    Self::convert_int_to_param(UniqueId::generator()?.next_id(), format)
+        for (idx, source) in self.bind_params.iter().enumerate() {
+            let param = match &*source {
+                BindParam::FromClientBind(n) => {
+                    debug_assert_eq!(idx, *n as usize, "mapped bind params should not appear yet");
+                    None
                 }
-                GeneratedParam::Sequence(call) => {
-                    Self::convert_int_to_param(execute(call).await?, format)
+                BindParam::UniqueId => Some(Self::convert_int_to_param(
+                    UniqueId::generator()?.next_id(),
+                    format,
+                )),
+                BindParam::Sequence(call) => {
+                    Some(Self::convert_int_to_param(execute(call).await?, format))
                 }
-                GeneratedParam::NDFunction(nd_func) => {
+                BindParam::NDFunction(nd_func) => {
                     let (text, binary) = nd_func.write_as_constant(&timestamps, timezone)?;
-                    match format {
+                    Some(match format {
                         Format::Binary => Parameter::new(binary.as_slice()),
                         Format::Text => Parameter::new(text.as_bytes()),
-                    }
+                    })
                 }
             };
 
-            bind.push_param(param, format);
+            if let Some(param) = param {
+                bind.push_param(param, format);
+            }
         }
 
         Ok(())
@@ -151,7 +244,7 @@ impl RewritePlan {
     /// Returns the client's parameter count for an unnamed statement
     fn apply_parse(&self, parse: &mut Parse) -> Option<u16> {
         if let Some(ref stmt) = self.stmt {
-            let client_params = self.params.max(parse.num_data_types());
+            let client_params = (self.bind_params.num_client_params()).max(parse.num_data_types());
 
             parse.set_query(stmt);
             if !parse.anonymous() {
@@ -169,9 +262,9 @@ impl RewritePlan {
     /// Apply the rewrite plan to a Query message by updating the SQL.
     async fn apply_query(&self, query: &mut Query) -> Result<(), Error> {
         if self
-            .generated_params
+            .bind_params
             .iter()
-            .any(|source| matches!(source, GeneratedParam::Sequence(_)))
+            .any(|source| matches!(&*source, BindParam::Sequence(_)))
         {
             if let Some(stmt) = self.rewrite_sequence_simple().await? {
                 query.set_query(&stmt);
@@ -242,9 +335,9 @@ impl RewritePlan {
         // those since insert split will return the same row(s) as multi-tuple insert.
         if !self.insert_split.is_empty() && request.is_executable() {
             if self
-                .generated_params
+                .bind_params
                 .iter()
-                .any(|source| matches!(source, GeneratedParam::Sequence(_)))
+                .any(|source| matches!(&*source, BindParam::Sequence(_)))
                 && let Some(query) = request.messages.iter().find_map(|message| match message {
                     ProtocolMessage::Query(query) => Some(query),
                     _ => None,
@@ -307,7 +400,7 @@ mod tests {
     async fn test_apply_bind_text_format() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![GeneratedParam::UniqueId],
+            bind_params: vec![BindParam::UniqueId].into(),
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -329,8 +422,7 @@ mod tests {
     async fn test_apply_bind_binary_format_uniform() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            params: 1,
-            generated_params: vec![GeneratedParam::UniqueId],
+            bind_params: vec![BindParam::FromClientBind(0), BindParam::UniqueId].into(),
             ..Default::default()
         };
         // Create bind with uniform binary format (1 code applies to all)
@@ -356,8 +448,12 @@ mod tests {
     async fn test_apply_bind_binary_format_one_to_one() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            params: 2,
-            generated_params: vec![GeneratedParam::UniqueId],
+            bind_params: vec![
+                BindParam::FromClientBind(0),
+                BindParam::FromClientBind(1),
+                BindParam::UniqueId,
+            ]
+            .into(),
             ..Default::default()
         };
         // Create bind with one-to-one format codes
@@ -385,7 +481,7 @@ mod tests {
     async fn test_apply_bind_multiple_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            generated_params: vec![GeneratedParam::UniqueId; 3],
+            bind_params: vec![BindParam::UniqueId; 3].into(),
             ..Default::default()
         };
         let mut bind = Bind::default();
@@ -407,8 +503,13 @@ mod tests {
     async fn test_apply_bind_appends_to_existing_params() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            params: 2,
-            generated_params: vec![GeneratedParam::UniqueId; 2],
+            bind_params: vec![
+                BindParam::FromClientBind(0),
+                BindParam::FromClientBind(1),
+                BindParam::UniqueId,
+                BindParam::UniqueId,
+            ]
+            .into(),
             ..Default::default()
         };
         let mut bind = Bind::new_params(
