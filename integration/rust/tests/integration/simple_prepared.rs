@@ -1,4 +1,5 @@
-use sqlx::{Connection, Row};
+use crate::setup::admin_sqlx;
+use sqlx::{Connection, Executor, Row};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -37,6 +38,8 @@ async fn test_simple_prepared_ttl() {
 /// TODO: will need to support extended-protocol `Bind`s later for the re-write
 #[tokio::test]
 async fn test_simple_prepared_limit() {
+    admin_sqlx().await.execute("RECONNECT").await.unwrap();
+
     let mut conn =
         sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
             .await
