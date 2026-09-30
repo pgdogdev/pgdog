@@ -10,6 +10,7 @@ use super::*;
 pub(crate) struct DirectBinding {
     pub(super) server: LinkedServer,
     pub(super) transaction_stmt: Option<BufferedQuery>,
+    pub(super) is_read: bool,
 }
 
 impl DirectBinding {
@@ -17,6 +18,7 @@ impl DirectBinding {
         server: Guard,
         shard: usize,
         transaction_stmt: Option<BufferedQuery>,
+        is_read: bool,
     ) -> Self {
         Self {
             server: LinkedServer {
@@ -25,6 +27,7 @@ impl DirectBinding {
                 linked: false,
             },
             transaction_stmt,
+            is_read,
         }
     }
 

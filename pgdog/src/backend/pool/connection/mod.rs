@@ -156,7 +156,12 @@ impl Connection {
                 .get_conn(request, *shard, route.is_read())
                 .await?;
 
-            self.binding = Binding::Direct(DirectBinding::new(server, *shard, transaction_stmt));
+            self.binding = Binding::Direct(DirectBinding::new(
+                server,
+                *shard,
+                transaction_stmt,
+                route.is_read(),
+            ));
         } else {
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 
@@ -165,6 +170,7 @@ impl Connection {
                 shard_indices,
                 route,
                 transaction_stmt,
+                route.is_read(),
             ));
         }
 

@@ -21,6 +21,7 @@ pub(crate) struct MultiBinding {
     pub(super) servers: Vec<LinkedServer>,
     pub(super) state: Box<MultiShard>,
     pub(super) transaction_stmt: Option<BufferedQuery>,
+    pub(super) is_read: bool,
 }
 
 impl MultiBinding {
@@ -60,6 +61,7 @@ impl MultiBinding {
         shard_indices: Vec<usize>,
         route: &Route,
         transaction_stmt: Option<BufferedQuery>,
+        is_read: bool,
     ) -> Self {
         Self {
             state: Box::new(MultiShard::new(servers.len(), route)),
@@ -73,6 +75,7 @@ impl MultiBinding {
                 })
                 .collect(),
             transaction_stmt,
+            is_read,
         }
     }
 

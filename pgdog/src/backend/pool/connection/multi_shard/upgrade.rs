@@ -23,12 +23,13 @@ impl<'a> MultiShardUpgrade<'a> {
 
     /// Change the binding by connecting to required shards to serve the request.
     pub(crate) async fn upgrade(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        if !matches!(
-            self.connection.binding,
-            Binding::Direct(_) | Binding::MultiShard(_)
-        ) {
-            return Ok(());
-        }
+        // Don't switch to a replica or to a primary
+        // between shard connection upgrades.
+        let is_read = match self.connection.binding {
+            Binding::Direct(ref server) => server.is_read,
+            Binding::MultiShard(ref servers) => servers.is_read,
+            _ => return Ok(()),
+        };
 
         let MissingShards {
             missing,
@@ -42,7 +43,7 @@ impl<'a> MultiShardUpgrade<'a> {
         let mut servers = self
             .connection
             .cluster
-            .get_conns_for_shards(request, &missing, route.is_read())
+            .get_conns_for_shards(request, &missing, is_read)
             .await?
             .into_iter()
             .zip(missing.into_iter())
@@ -68,6 +69,7 @@ impl<'a> MultiShardUpgrade<'a> {
                     servers,
                     state: MultiShard::new(total_shards, route).boxed(),
                     transaction_stmt: server.transaction_stmt,
+                    is_read: server.is_read,
                 }
             }
 

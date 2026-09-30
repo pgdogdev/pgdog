@@ -51,7 +51,7 @@ mod tests {
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
 
-        let servers = MultiBinding::new(guards, vec![0, 1, 2], &route, None);
+        let servers = MultiBinding::new(guards, vec![0, 1, 2], &route, None, false);
 
         let mut binding = Binding::MultiShard(servers);
 
@@ -76,7 +76,7 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(DirectBinding::new(guard, 0, None));
+        let mut binding = Binding::Direct(DirectBinding::new(guard, 0, None, false));
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)
