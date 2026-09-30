@@ -20,13 +20,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          command: bash integration/ci/install-deps.sh
+      - uses: ./.github/actions/ci-deps
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

@@ -9,52 +9,19 @@ on:
     types: [checks_requested]
 
 jobs:
-  # NOTE: This is REDUNDANT with 'coverage'. This is here right now
-  # as a test, becasue I'm curious how codecov interacts with
-  # 'cargo test' vs 'cargo nextest' as there's less binaries to merge.
-  # Will likely change something here before merge
-  tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          command: bash integration/ci/install-deps.sh
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "unit-v1"
-      - name: Setup PostgreSQL
-        run: bash integration/ci/setup.sh --with-toxi
-      - name: Run tests
-        run: cargo nextest run --profile dev --no-fail-fast -E "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
-      - name: Run documentation tests
-        run: cargo test --doc
-
   coverage:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
-    continue-on-error: true
-    if: ${{ github.event_name != 'merge_group' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: 1, shard: 1/2 }
-          - { name: 2, shard: 2/2 }
+          - { name: 1, shard: 1/3 }
+          - { name: 2, shard: 2/3 }
+          - { name: 3, shard: 3/3 }
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          command: bash integration/ci/install-deps.sh
+      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v1" # Change this when updating tooling
@@ -66,14 +33,26 @@ jobs:
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest --no-report --no-fail-fast --test-threads=1 --partition count:${{ matrix.shard }} --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+      - name: Run documentation tests
+        if: matrix.name == 1
+        run: cargo test --doc
       - name: Generate coverage report
+        if: ${{ github.event_name != 'merge_group' }}
         run: cargo llvm-cov report --lcov --output-path lcov.info
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
+        if: ${{ github.event_name != 'merge_group' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: lcov.info
           flags: unit
           name: coverage-${{ matrix.name }}
-          fail_ci_if_error: true
+          fail_ci_if_error: false
+
+  tests:
+    needs: coverage
+    if: always()
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - run: test "${{ needs.coverage.result }}" = "success"

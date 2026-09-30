@@ -36,11 +36,15 @@ fi
 
 # Kitware prebuilt cmake pinned to the version pgdog expects. Much faster
 # than `pip install cmake` which compiles from source.
-if ! cmake --version 2>/dev/null | head -1 | grep -q "$CMAKE_VERSION"; then
+CMAKE_DIR="$HOME/.local/cmake/cmake-${CMAKE_VERSION}-linux-x86_64"
+if [[ ! -x "$CMAKE_DIR/bin/cmake" ]]; then
+    mkdir -p "$HOME/.local/cmake"
     curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
-        | sudo tar xzf - -C /opt
-    sudo ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake" /usr/local/bin/cmake
-    sudo ln -sf "/opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/ctest" /usr/local/bin/ctest
+        | tar xzf - -C "$HOME/.local/cmake"
+fi
+if ! cmake --version 2>/dev/null | head -1 | grep -q "$CMAKE_VERSION"; then
+    sudo ln -sf "$CMAKE_DIR/bin/cmake" /usr/local/bin/cmake
+    sudo ln -sf "$CMAKE_DIR/bin/ctest" /usr/local/bin/ctest
 fi
 
 CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
