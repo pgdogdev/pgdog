@@ -383,11 +383,6 @@ impl Route {
         &self.advisory_locks
     }
 
-    /// Returns true when this statement has an advisory lock function that acquires a lock.
-    pub(crate) fn is_lock_session(&self) -> bool {
-        self.advisory_locks.has_lock()
-    }
-
     /// True when the statement only releases advisory locks — safe to unpin.
     #[cfg(test)]
     pub(crate) fn is_unlock_session(&self) -> bool {
@@ -426,12 +421,6 @@ pub(crate) enum ShardSource {
     Comment,
     Plugin,
     Override(OverrideReason),
-}
-
-impl ShardSource {
-    pub(crate) fn is_round_robin(&self) -> bool {
-        matches!(self, Self::RoundRobin(_))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]

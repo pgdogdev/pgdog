@@ -16,10 +16,12 @@ struct MissingShards {
 }
 
 impl<'a> MultiShardUpgrade<'a> {
+    /// Create new cross-shard connection upgrade handler.
     pub(crate) fn new(connection: &'a mut Connection) -> Self {
         Self { connection }
     }
 
+    /// Change the binding by connecting to required shards to serve the request.
     pub(crate) async fn upgrade(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if !matches!(
             self.connection.binding,
@@ -52,7 +54,14 @@ impl<'a> MultiShardUpgrade<'a> {
             .collect::<Vec<_>>();
 
         let mut binding = match mem::take(&mut self.connection.binding) {
-            Binding::Direct(server) => {
+            Binding::Direct(mut server) => {
+                // In-transaction extended protocol that prepares statements via
+                // Parse, Describe, Flush leaves servers out-of-sync since we treat
+                // those as direct-to-shard queries.
+                if !server.in_sync() {
+                    server.synchronize().await?;
+                }
+
                 servers.push(server.server);
 
                 MultiBinding {

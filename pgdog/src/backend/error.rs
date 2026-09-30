@@ -119,6 +119,9 @@ pub(crate) enum Error {
 
     #[error("missing canonical oid for type {0}")]
     MissingCanonicalOid(String),
+
+    #[error("cannot switch shards in a direct-to-shard transaction")]
+    DirectShardMismatch,
 }
 
 impl From<crate::frontend::Error> for Error {

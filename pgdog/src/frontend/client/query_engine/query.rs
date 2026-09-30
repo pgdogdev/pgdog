@@ -3,7 +3,9 @@ use tracing::{info, trace};
 use crate::{
     frontend::{
         client::{TransactionType, transaction_type::Transaction},
-        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
+        router::parser::{
+            ShardWithPriority, explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult,
+        },
     },
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
@@ -46,7 +48,19 @@ impl QueryEngine {
         // for single-statement writes.
         self.two_pc_check(context, client_request);
 
-        if !self.connect(context, client_request.route()).await? {
+        let connect_route = match query_planner.as_ref() {
+            Some(RewriteResult::InsertSplit(_) | RewriteResult::ShardingKeyUpdate(_)) => {
+                lazy_static::lazy_static! {
+                    static ref ROUTE: Route = Route::write(ShardWithPriority::new_override_transaction(Shard::All));
+                }
+
+                &ROUTE
+            }
+
+            _ => client_request.route(),
+        };
+
+        if !self.connect(context, connect_route).await? {
             return Ok(());
         }
 

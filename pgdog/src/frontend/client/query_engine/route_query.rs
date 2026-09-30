@@ -1,6 +1,7 @@
 use pgdog_config::PoolerMode;
 use tracing::trace;
 
+use crate::backend::Error as BackendError;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
@@ -181,6 +182,16 @@ impl QueryEngine {
                     ErrorResponse::unmapped_sharding_key_in_cross_shard_disabled(
                         shard_key.as_str(),
                     ),
+                )
+                .await?;
+
+                return Ok(false);
+            }
+            Err(RouterError::Backend(BackendError::DirectShardMismatch)) => {
+                self.error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::direct_shard_mismatch(),
                 )
                 .await?;
 

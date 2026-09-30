@@ -16,6 +16,8 @@ pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
 pub(crate) use parser::{ClientQuery, Command, DiscardTarget, QueryParser, Route, SetParam};
 
+use crate::frontend::router::parser::{Shard, route::ShardSource};
+
 use super::ClientRequest;
 pub(crate) use context::RouterContext;
 pub(crate) use parameter_hints::ParameterHints;
@@ -27,6 +29,7 @@ pub(crate) struct Router {
     query_parser: QueryParser,
     latest_command: Command,
     schema_changed: bool,
+    pinned_shard: Option<Shard>,
 }
 
 impl Default for Router {
@@ -42,6 +45,7 @@ impl Router {
             query_parser: QueryParser::default(),
             latest_command: Command::default(),
             schema_changed: false,
+            pinned_shard: None,
         }
     }
 
@@ -58,12 +62,33 @@ impl Router {
         }
 
         let command = self.query_parser.parse(context)?;
+
         self.latest_command = command;
 
         if let Command::Query(ref route) = self.latest_command
             && route.is_schema_changed()
         {
             self.schema_changed = true;
+        }
+
+        // Check for shard pinning, e.g.,
+        // SET pgdog.shard TO x;
+        // The expectation here is the client cannot quietly change shards mid-transaction
+        // without explicitely unpining, e.g., removing pgdog.shard or setting a different value.
+        let pinned = self.latest_command.route().is_search_path_driven()
+            || self.latest_command.route().shard_with_priority().source() == &ShardSource::Set;
+
+        if pinned {
+            self.pinned_shard = Some(self.latest_command.route().shard().clone());
+        }
+
+        if let Some(ref shard) = self.pinned_shard {
+            if let Command::Query(ref route) = self.latest_command {
+                use crate::backend::Error as BackendError;
+                if shard != route.shard() {
+                    return Err(Error::Backend(BackendError::DirectShardMismatch));
+                }
+            }
         }
 
         Ok(&self.latest_command)
@@ -88,6 +113,7 @@ impl Router {
     pub(crate) fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
+        self.pinned_shard = None;
         self.schema_changed = false;
     }
 

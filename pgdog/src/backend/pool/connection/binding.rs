@@ -345,15 +345,6 @@ impl Binding {
         }
     }
 
-    /// If connected to one shard only, get that shard number.
-    pub(crate) fn direct_shard_number(&self) -> Option<usize> {
-        if let Self::Direct(server) = self {
-            Some(server.shard)
-        } else {
-            None
-        }
-    }
-
     pub(crate) fn in_copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
