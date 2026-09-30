@@ -25,6 +25,12 @@ pub(crate) struct LinkedServer {
     linked: bool,
 }
 
+impl LinkedServer {
+    pub(crate) fn shard(&self) -> usize {
+        self.shard
+    }
+}
+
 impl Deref for LinkedServer {
     type Target = Guard;
 
@@ -83,13 +89,27 @@ impl MultiBinding {
         }
     }
 
+    pub(crate) fn required_shards_connected(&self, route: &Route, shards: usize) -> bool {
+        match route.shard() {
+            Shard::Direct(shard) => self
+                .servers
+                .iter()
+                .find(|server| server.shard == *shard)
+                .is_some(),
+            Shard::All => self.servers.len() == shards,
+            Shard::Multi(shards) => shards
+                .iter()
+                .all(|shard| self.servers.iter().any(|server| server.shard == *shard)),
+        }
+    }
+
     #[allow(unused)]
     pub(crate) async fn ensure_connected(
-        &mut self,
+        self,
         request: &Request,
         route: &Route,
-    ) -> Result<(), super::Error> {
-        Ok(())
+    ) -> Result<Self, super::Error> {
+        Ok(self)
     }
 
     pub(crate) async fn link_client(

@@ -22,7 +22,10 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         connect_route: &Route,
     ) -> Result<bool, Error> {
-        if self.backend.connected() {
+        if self
+            .backend
+            .required_shards_connected(connect_route, self.backend.cluster()?.shards().len())
+        {
             self.debug_connected(connect_route, true);
             return Ok(true);
         }

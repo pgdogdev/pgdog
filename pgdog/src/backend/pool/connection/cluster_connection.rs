@@ -5,6 +5,7 @@ use crate::{
         pool::{
             Error as PoolError, Guard, Request,
             connection::mirror::{Mirror, MirrorHandler},
+            shard,
         },
         reload_notify,
     },
@@ -76,16 +77,74 @@ impl ClusterConnection {
         Ok(())
     }
 
+    pub(super) async fn get_missing_conns_for_route(
+        &mut self,
+        request: &Request,
+        route: &Route,
+        binding: &super::Binding,
+    ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
+        let mut shards = match route.shard() {
+            Shard::Direct(shard) => vec![*shard],
+            Shard::Multi(shards) => shards.clone(),
+            Shard::All => (0..self.cluster()?.shards().len()).collect(),
+        };
+
+        // Remove shards we already have.
+        match binding {
+            super::Binding::Direct(_, shard) => {
+                if let Some(pos) = shards.iter().position(|s| s == shard) {
+                    shards.remove(pos);
+                }
+            }
+
+            super::Binding::MultiShard(servers) => {
+                let connected_shards = servers.iter().map(|server| server.shard());
+
+                for connected_shard in connected_shards {
+                    if let Some(pos) = shards.iter().position(|s| *s == connected_shard) {
+                        shards.remove(pos);
+                    }
+                }
+            }
+
+            _ => (),
+        };
+
+        Ok((
+            self.get_conns_for_shards(request, &shards, route.is_read())
+                .await?,
+            shards,
+        ))
+    }
+
+    async fn get_conns_for_shards(
+        &mut self,
+        request: &Request,
+        shards: &[usize],
+        is_read: bool,
+    ) -> Result<Vec<Guard>, Error> {
+        let mut conns = vec![];
+        let shards_before = self.cluster()?.shards().len();
+
+        for shard in shards {
+            conns.push(self.get_conn(request, *shard, is_read).await?);
+        }
+
+        // TODO(lev): this doesn't protect against address changes for shards.
+        if shards_before != self.cluster()?.shards().len() {
+            return Err(Error::Pool(PoolError::Offline));
+        }
+
+        Ok(conns)
+    }
+
     /// Get all connections necessary to serve the route.
     pub(super) async fn get_conns(
         &mut self,
         request: &Request,
         route: &Route,
     ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
-        let mut conns = vec![];
-        let shards = self.cluster()?.shards().len();
-
-        let indices = (0..shards)
+        let shards = (0..self.cluster()?.shards().len())
             .filter(|shard_number| {
                 if let Shard::Multi(numbers) = route.shard()
                     && !numbers.contains(shard_number)
@@ -97,16 +156,11 @@ impl ClusterConnection {
             })
             .collect::<Vec<_>>();
 
-        for index in &indices {
-            conns.push(self.get_conn(request, *index, route.is_read()).await?);
-        }
-
-        // TODO(lev): this doesn't protect against address changes for shards.
-        if shards != self.cluster()?.shards().len() {
-            return Err(Error::Pool(PoolError::Offline));
-        }
-
-        Ok((conns, indices))
+        Ok((
+            self.get_conns_for_shards(request, &shards, route.is_read())
+                .await?,
+            shards,
+        ))
     }
 
     /// Get a connection from the cluster.

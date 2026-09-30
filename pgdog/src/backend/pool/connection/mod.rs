@@ -88,19 +88,43 @@ impl Connection {
         Ok(())
     }
 
-    #[allow(unused)]
+    /// Check that we are connected to all required shards to serve this route.
+    pub(crate) fn required_shards_connected(&self, route: &Route, shards: usize) -> bool {
+        match self.binding {
+            Binding::NotConnected => false,
+            Binding::MultiShard(ref servers) => servers.required_shards_connected(route, shards),
+            Binding::Direct(_, shard) => matches!(route.shard(), Shard::Direct(s) if shard == *s),
+            Binding::Admin(_) => true,
+        }
+    }
+
     pub(crate) async fn ensure_connected(
-        &mut self,
+        mut self,
         request: &Request,
         route: &Route,
     ) -> Result<(), Error> {
         match self.binding {
-            Binding::Direct(_, _) => Ok(()),
-            Binding::NotConnected => Err(Error::NotConnected),
-            Binding::MultiShard(ref mut servers) => {
-                Ok(servers.ensure_connected(request, route).await?)
+            Binding::Direct(server, shard) => {
+                if !matches!(route.shard(), Shard::Direct(s) if shard == *s) {
+                    self.binding =
+                        Binding::MultiShard(MultiBinding::new(vec![server], vec![shard], route));
+                    Ok(())
+                } else {
+                    self.binding = Binding::Direct(server, shard);
+                    Ok(())
+                }
             }
-            Binding::Admin(_) => Ok(()),
+            Binding::NotConnected => {
+                todo!()
+            }
+            Binding::MultiShard(servers) => {
+                self.binding = Binding::MultiShard(servers.ensure_connected(request, route).await?);
+                Ok(())
+            }
+            Binding::Admin(admin) => {
+                self.binding = Binding::Admin(admin);
+                Ok(())
+            }
         }
     }
 
