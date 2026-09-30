@@ -783,7 +783,7 @@ mod tests {
         ] {
             for extended in [false, true] {
                 let (_, plan) = rewrite(&format!("SELECT {call}"), extended);
-                assert!(plan.bind_params.is_empty(), "{call}");
+                assert_eq!(plan.bind_params.len(), 0, "{call}");
                 assert!(plan.is_empty(), "{call}");
             }
         }
@@ -834,7 +834,7 @@ mod tests {
                 "{call}"
             );
             let (_, plan) = rewrite(&format!("SELECT {call}"), true);
-            assert!(plan.bind_params.is_empty(), "{call}");
+            assert_eq!(plan.bind_params.len(), 0, "{call}");
             assert!(plan.is_empty(), "{call}");
         }
     }

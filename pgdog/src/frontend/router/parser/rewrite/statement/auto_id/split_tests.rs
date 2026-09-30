@@ -194,14 +194,15 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                         assert_eq!(generated.bigint(), Some(id));
                         assert_eq!(generated.format(), format);
                         assert_eq!(bind.anonymous(), !prepared);
-                        assert!(
+                        assert_eq!(
                             split
                                 .ast
                                 .as_ref()
                                 .expect("AST")
                                 .rewrite_plan
                                 .bind_params
-                                .is_empty()
+                                .len(),
+                            0
                         );
                     }
                 }

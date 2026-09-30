@@ -706,7 +706,7 @@ mod tests {
                 .expect("rewrite succeeds");
 
             assert_eq!(sql, original);
-            assert!(plan.bind_params.is_empty());
+            assert_eq!(plan.bind_params.len(), 0);
         }
     }
 }
