@@ -74,6 +74,13 @@ impl<'a> MultiShardUpgrade<'a> {
             }
 
             Binding::MultiShard(mut binding) => {
+                // Same story as the direct handling above.
+                for server in binding.servers.iter_mut() {
+                    if !server.in_sync() {
+                        server.synchronize().await?;
+                    }
+                }
+
                 binding.servers.extend(servers);
                 binding.state.update(total_shards, route);
 
