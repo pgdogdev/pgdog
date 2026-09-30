@@ -67,7 +67,7 @@ impl MultiBinding {
             state: Box::new(MultiShard::new(servers.len(), route)),
             servers: servers
                 .into_iter()
-                .zip(shard_indices.into_iter())
+                .zip(shard_indices)
                 .map(|(server, shard)| LinkedServer {
                     server,
                     shard,

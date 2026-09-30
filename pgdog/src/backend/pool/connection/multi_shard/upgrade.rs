@@ -46,7 +46,7 @@ impl<'a> MultiShardUpgrade<'a> {
             .get_conns_for_shards(request, &missing, is_read)
             .await?
             .into_iter()
-            .zip(missing.into_iter())
+            .zip(missing)
             .map(|(server, shard)| LinkedServer {
                 server,
                 shard,

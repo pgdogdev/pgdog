@@ -82,12 +82,12 @@ impl Router {
             self.pinned_shard = Some(self.latest_command.route().shard().clone());
         }
 
-        if let Some(ref shard) = self.pinned_shard {
-            if let Command::Query(ref route) = self.latest_command {
-                use crate::backend::Error as BackendError;
-                if shard != route.shard() {
-                    return Err(Error::Backend(BackendError::DirectShardMismatch));
-                }
+        if let Some(ref shard) = self.pinned_shard
+            && let Command::Query(ref route) = self.latest_command
+        {
+            use crate::backend::Error as BackendError;
+            if shard != route.shard() {
+                return Err(Error::Backend(BackendError::DirectShardMismatch));
             }
         }
 

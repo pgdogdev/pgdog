@@ -42,10 +42,7 @@ impl DirectBinding {
 
         let start_transaction = self.transaction_stmt.as_ref().map(|q| q.query());
 
-        Ok(self
-            .server
-            .link_client(id, params, start_transaction)
-            .await?)
+        self.server.link_client(id, params, start_transaction).await
     }
 }
 
