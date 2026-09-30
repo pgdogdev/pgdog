@@ -1131,7 +1131,7 @@ FROM public.s;"#,
         assert_eq!(statements.len(), 1);
         assert_eq!(
             statements[0].sql,
-            "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE ((summary -> 'stop'::text) ->> 'tz'::text))::date AS d FROM public.s"
+            "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE (summary -> 'stop'::text ->> 'tz'::text))::date AS d FROM public.s"
         );
     }
 
