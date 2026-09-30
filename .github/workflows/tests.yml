@@ -2,25 +2,26 @@ name: tests
 on:
   push:
     branches:
-      - main
       - main-ent
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "**/*.rs"
-      - "**/Cargo.toml"
+  merge_group:
+    types: [checks_requested]
 
 jobs:
-  tests:
+  coverage:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 1, shard: 1/3 }
+          - { name: 2, shard: 2/3 }
+          - { name: 3, shard: 3/3 }
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v1" # Change this when updating tooling
@@ -31,14 +32,35 @@ jobs:
           RUSTFLAGS: "--cfg tokio_unstable -C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
-      - name: Run documentation tests
-        run: cargo test --doc
+          cargo llvm-cov nextest --no-report --no-fail-fast --test-threads=1 --partition count:${{ matrix.shard }} --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+      - name: Generate coverage report
+        if: ${{ github.event_name != 'merge_group' }}
+        run: cargo llvm-cov report --lcov --output-path lcov.info
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
+        if: ${{ github.event_name != 'merge_group' }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: lcov.info
           flags: unit
-          fail_ci_if_error: true
+          name: coverage-${{ matrix.name }}
+          fail_ci_if_error: false
+
+  doc-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ci-deps
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "unit-v1"
+      - run: cargo test --doc
+
+  tests:
+    needs: [coverage, doc-tests]
+    if: always()
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - run: test "${{ needs.coverage.result }}" = "success" && test "${{ needs.doc-tests.result }}" = "success"

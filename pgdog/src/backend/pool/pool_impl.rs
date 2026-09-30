@@ -22,7 +22,7 @@ use crate::net::{Liveness, Parameter, Parameters};
 use super::inner::CheckInResult;
 use super::{
     Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Waiting,
+    State, Stats, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -307,7 +307,6 @@ impl Pool {
     }
 
     /// Connection pool unique identifier.
-    #[inline]
     pub(crate) fn id(&self) -> u64 {
         self.inner.id
     }
@@ -327,6 +326,13 @@ impl Pool {
 
             // Propagate pause state so a paused database stays paused after reload.
             to_guard.paused = from_guard.paused;
+
+            // Preserve cumulative pool metrics reported by SHOW STATS and SHOW POOLS.
+            to_guard.stats = from_guard.stats;
+            to_guard.errors = from_guard.errors;
+            to_guard.out_of_sync = from_guard.out_of_sync;
+            to_guard.re_synced = from_guard.re_synced;
+            to_guard.force_close = from_guard.force_close;
             from_guard.online = false;
 
             let (idle, taken) = from_guard.move_conns_to(destination);
@@ -339,6 +345,16 @@ impl Pool {
         self.shutdown();
 
         Ok(())
+    }
+
+    /// Reset cumulative statistics for this pool.
+    pub(crate) fn reset_stats(&self) {
+        let mut guard = self.lock();
+        guard.stats = Stats::default();
+        guard.errors = 0;
+        guard.out_of_sync = 0;
+        guard.re_synced = 0;
+        guard.force_close = 0;
     }
 
     /// The two pools refer to the same database.
@@ -414,7 +430,6 @@ impl Pool {
     }
 
     /// Pool exclusive lock.
-    #[inline]
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
         self.inner.inner.lock()
     }
@@ -425,25 +440,21 @@ impl Pool {
     /// advisory lock / manual pin, so `sv_locked` reflects reality per-pool.
     /// On checkin the `Taken` entry is removed entirely, so no explicit
     /// cleanup is needed on drop.
-    #[inline]
     pub(crate) fn set_locked(&self, backend: BackendPid, locked: bool) {
         self.lock().set_locked(backend, locked);
     }
 
     /// Internal notifications.
-    #[inline]
     pub(super) fn comms(&self) -> &Comms {
         &self.inner.comms
     }
 
     /// Pool address.
-    #[inline]
     pub(crate) fn addr(&self) -> &Address {
         &self.inner.addr
     }
 
     /// Get pool configuration.
-    #[inline]
     pub(crate) fn config(&self) -> &Config {
         &self.inner.config
     }

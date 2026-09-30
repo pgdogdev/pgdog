@@ -1,6 +1,7 @@
 //! Query router.
 
 pub(crate) mod cli;
+mod comment;
 pub(crate) mod context;
 pub(crate) mod copy;
 pub(crate) mod error;
@@ -10,9 +11,10 @@ pub(crate) mod round_robin;
 pub(crate) mod search_path;
 pub(crate) mod sharding;
 
+pub(in crate::frontend) use comment::RoutingComment;
 pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
-pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, RewritePlan, Route, SetParam};
+pub(crate) use parser::{ClientQuery, Command, DiscardTarget, QueryParser, Route, SetParam};
 
 use super::ClientRequest;
 pub(crate) use context::RouterContext;

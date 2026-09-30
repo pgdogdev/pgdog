@@ -1,12 +1,13 @@
 pub(crate) mod non_identity_columns_presence;
 pub(crate) use non_identity_columns_presence::*;
 
-pub(crate) mod slot;
-pub(crate) use slot::*;
+pub(crate) mod replication_slot;
+pub(crate) use replication_slot::*;
 pub(crate) mod copy;
-pub(crate) mod progress;
-pub(crate) mod publisher_impl;
+pub(crate) mod cutover_policy;
 pub(crate) mod queries;
+pub(crate) mod replication_progress;
+pub(crate) mod replication_stream;
 pub(crate) mod resharding_replicas;
 pub(crate) mod table;
 pub(crate) use copy::*;

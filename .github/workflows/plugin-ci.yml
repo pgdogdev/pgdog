@@ -5,10 +5,14 @@ on:
       - main
       - main-ent
     paths:
+      - ".github/workflows/plugin-ci.yml"
+      - "integration/ci/**"
       - "**/*.rs"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/plugin-ci.yml"
+      - "integration/ci/**"
       - "**/*.rs"
 
 jobs:
@@ -18,8 +22,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "plugin-unit-v1"

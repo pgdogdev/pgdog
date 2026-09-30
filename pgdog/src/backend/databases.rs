@@ -118,6 +118,17 @@ pub(crate) fn shutdown() {
     databases().shutdown();
 }
 
+/// Reset cumulative statistics for all connection pools.
+pub(crate) fn reset_stats() {
+    for cluster in databases().all().values() {
+        for shard in cluster.shards() {
+            for pool in shard.pool_iter() {
+                pool.reset_stats();
+            }
+        }
+    }
+}
+
 /// Cancel all queries running on a database.
 pub(crate) async fn cancel_all(database: &str) -> Result<(), Error> {
     let clusters: Vec<_> = databases()
@@ -246,6 +257,7 @@ pub(crate) async fn cutover(source: &str, destination: &str) -> Result<(), Error
         config.config.cutover(source, destination);
         config.users.cutover(source, destination);
 
+        let config = crate::config::set(config)?;
         let databases = from_config(&config);
 
         replace_databases(databases, true)?;
@@ -2009,5 +2021,43 @@ password = "testpass"
         assert_eq!(resolved.name.as_deref(), Some("Orders"));
         assert_eq!(resolved.schema.as_deref(), Some("Public"));
         assert_eq!(resolved.column, "Tenant_Id");
+    }
+
+    #[tokio::test]
+    async fn test_cutover_swaps_back_on_the_second_call() {
+        let mut config = ConfigAndUsers::default();
+        config.config.databases.push(Database {
+            name: "single".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            ..Default::default()
+        });
+        for shard in 0..2 {
+            config.config.databases.push(Database {
+                name: "sharded".into(),
+                host: "127.0.0.1".into(),
+                port: 5432,
+                database_name: Some(format!("shard_{shard}")),
+                shard,
+                ..Default::default()
+            });
+        }
+        for database in ["single", "sharded"] {
+            let mut user = ConfigUser::new("pgdog", "pgdog", database);
+            user.schema_admin = true;
+            config.users.users.push(user);
+        }
+        crate::config::set(config).unwrap();
+        init().unwrap();
+
+        let shards = |database: &str| databases().schema_owner(database).unwrap().shards().len();
+
+        assert_eq!((shards("single"), shards("sharded")), (1, 2));
+
+        cutover("single", "sharded").await.unwrap();
+        assert_eq!((shards("single"), shards("sharded")), (2, 1));
+
+        cutover("single", "sharded").await.unwrap();
+        assert_eq!((shards("single"), shards("sharded")), (1, 2));
     }
 }

@@ -17,10 +17,14 @@ async fn extended_unlisten_flush_does_not_emit_ready_for_query() {
         Flush.into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
     client
         .engine
-        .unlisten(&mut context, "pgdog_pipeline_listen")
+        .unlisten(
+            &mut context,
+            &client_request.messages,
+            "pgdog_pipeline_listen",
+        )
         .await
         .unwrap();
 

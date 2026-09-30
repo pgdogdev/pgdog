@@ -4,7 +4,6 @@ use pg_raw_parse::nodes;
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
-        cached_ast: &Ast,
         stmt: &nodes::ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -19,7 +18,7 @@ impl QueryParser {
         }
 
         let result = match query {
-            Node::SelectStmt(stmt) => self.select(cached_ast, stmt, context),
+            Node::SelectStmt(stmt) => self.select(stmt, context),
             Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
             Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
             Node::DeleteStmt(stmt) => self.delete(stmt.into(), context),

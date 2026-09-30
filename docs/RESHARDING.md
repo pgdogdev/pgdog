@@ -16,8 +16,9 @@ RESHARD <source> <destination> <publication>;
 ```
 
 Issued against the admin database. Parsed in [`pgdog/src/admin/reshard.rs`](../pgdog/src/admin/reshard.rs), which calls
-`Orchestrator::new(source, destination, publication, slot_name)` and then
-`orchestrator.replicate_and_cutover().await`.
+`Orchestrator::new(source, destination, publication, slot_name)` and then starts a `ReshardTask`
+([`api/resharding.rs`](../pgdog/src/api/resharding.rs)) in the background. The command replies with
+the task id. `SHOW TASKS` reports the progress.
 
 > **Multi-node deployments:** Traffic cutover via `RESHARD` is supported on single-node PgDog only.
 > The [Enterprise Edition control plane](https://docs.pgdog.dev/enterprise_edition/control_plane/)
@@ -32,7 +33,7 @@ Issued against the admin database. Parsed in [`pgdog/src/admin/reshard.rs`](../p
 - `publisher: Arc<Mutex<Publisher>>` — manages replication slots, table list, and lag tracking
 - `replication_slot: String` — auto-generated as `__pgdog_repl_<random19>` unless overridden
 
-`replicate_and_cutover()` is the top-level method and calls the five steps below in sequence:
+`ReshardTask::run` drives the five steps below in sequence:
 
 ```mermaid
 flowchart LR
@@ -40,7 +41,7 @@ flowchart LR
     B["2. schema_sync_pre<br>pre-data to dest<br>reload schema cache"]
     C["3. data_sync<br>ParallelSyncManager<br>binary COPY"]
     D["4. schema_sync_post<br>secondary indexes"]
-    E["5. replicate().cutover()<br>WAL drain<br>traffic swap"]
+    E["5. ReplicationTask<br>WAL drain<br>traffic swap"]
 
     A --> B --> C --> D --> E
 ```
@@ -52,7 +53,7 @@ flowchart LR
 `Orchestrator::load_schema()` creates a `PgDump` ([`pgdog/src/backend/schema/sync/pg_dump.rs`](../pgdog/src/backend/schema/sync/pg_dump.rs))
 with the source cluster and publication name, calls `pg_dump.dump().await`, and stores the
 `PgDumpOutput` on the orchestrator. This output carries pre-data (tables, types, extensions,
-primary key constraints), secondary index DDL, post-cutover operations, and sequences — split
+primary key constraints), secondary index DDL, validation operations, and sequences — split
 into `SyncState` phases so they can be applied in the right order later.
 
 ---
@@ -121,16 +122,17 @@ The recorded LSN becomes the replay watermark for that table's WAL stream in Ste
 
 ## Step 4 — Post-data schema sync
 
-`schema_sync_post()` restores `SyncState::PostData` — secondary indexes, non-PK constraints,
-and any other DDL that was deferred. Deferring index creation until after the bulk copy avoids
-index maintenance overhead during the high-throughput copy phase.
+`schema_sync_post()` restores `SyncState::PostData` for secondary indexes and non-PK constraints.
+It creates eligible foreign keys as `NOT VALID`, which avoids a blocking data scan.
+Deferring index creation also avoids index maintenance during the bulk copy.
 
 ---
 
 ## Step 5 — Replication and cutover
 
-`replicate()` creates a `ReplicationWaiter` that wraps a `Waiter` from `Publisher::replicate()`.
-`ReplicationWaiter::cutover()` then runs two serial wait phases followed by the atomic swap.
+`ReplicationTask` builds a `Migration` and calls `Migration::run`
+([`api/replication.rs`](../pgdog/src/api/replication.rs)). `run` streams until a cutover signal,
+cuts over, flips direction, and then streams in reverse so a rollback stays possible.
 
 ### Publisher and StreamSubscriber
 
@@ -158,37 +160,50 @@ Two behaviours are specific to the resharding context:
 
 ### Cutover phases
 
-**Phase 1 — `wait_for_replication()`**: polls lag every 1 second. When
-`lag ≤ cutover_traffic_stop_threshold`:
-1. Calls `maintenance_mode::start()` — new queries queue behind a barrier.
+**Phase 1 — `CutoverPolicy::wait_for_stop_threshold()`**: polls lag every 1 second. It returns
+when `lag ≤ cutover_traffic_stop_threshold`. `Migration::prepare_cutover` then:
+1. Calls `MaintenanceMode::stop_traffic()`, which calls `maintenance_mode::start(None)` — new
+   queries queue behind a barrier.
 2. Calls `cancel_all(source_db)` — cancels any queries already in flight.
 
-**Phase 2 — `wait_for_cutover()`**: polls at 50 ms intervals. Three independent triggers can fire
-cutover (whichever comes first):
+**Phase 2 — `CutoverPolicy::wait_for_catchup()`**: polls at 50 ms intervals. Three independent
+triggers can fire cutover (whichever comes first):
 
 | Trigger | Config key | Action |
 |---|---|---|
 | `lag ≤ threshold` | `cutover_replication_lag_threshold` | `CutoverReason::Lag` → proceed |
 | elapsed ≥ timeout | `cutover_timeout` | `CutoverReason::Timeout` → proceed or abort (see `cutover_timeout_action`) |
-| no transactions for N ms | `cutover_last_transaction_delay` | `CutoverReason::LastTransaction` → proceed |
+| no transaction applied for N ms | `cutover_last_transaction_delay` | `CutoverReason::LastTransaction` → proceed |
 
-**Point of no return** — the `ok_or_abort!` macro wraps every subsequent call. Any failure resumes
-traffic immediately via `maintenance_mode::stop()` and returns an error. Steps in order:
+The `LastTransaction` trigger needs a measured transaction. A stream that has applied nothing
+reports no value, so the trigger stays silent and only the timeout can fire.
 
-1. `publisher.request_stop()` + `waiter.wait()` — stops the replication stream; drains remaining WAL.
-2. `schema_sync_cutover()` — applies `SyncState::Cutover` operations (e.g. drops sequences that
-   won't be used in the sharded cluster).
-3. `cutover(source_db, dest_db)` in [`pgdog/src/backend/databases.rs`](../pgdog/src/backend/databases.rs) —
+**Phase 3 — drain**: `replicate_until_cutover()` stops the cluster task and waits for every
+stream to drain. The budget is `ReplicationClusterTask::drain_timeout()` (300 s) for the cluster
+and `stream_drain_timeout()` (120 s) for the streams. A stream that does not drain in time is
+aborted, and its `SlotGuard` drops the replication slot on a detached task. A failed drain
+returns `Error::DrainTimeout`.
+
+**Point of no return** — `Migration::cutover()` runs these steps in order:
+
+1. `Publisher::create_slots(destination)` — creates the reverse replication slots.
+2. `cutover(source_db, dest_db)` in [`pgdog/src/backend/databases.rs`](../pgdog/src/backend/databases.rs) —
    atomically swaps the two clusters' logical identity in the routing table (and config refs via
    `Config::cutover`/`Users::cutover`); no data moves. Persisted to disk when
    `cutover_save_config = true`.
-4. `orchestrator.refresh()` — re-fetches both clusters from `databases()` so the orchestrator now
-   treats the new cluster as source for reverse replication.
-5. `schema_sync_post_cutover()` — applies `SyncState::PostCutover` (removes blockers that would
-   prevent reverse replication, such as unique constraints on sequence columns).
-6. `orchestrator.replicate()` — starts reverse replication (new cluster → old cluster) as a
-   background `crate::api` task. This enables rollback without data loss.
-7. `maintenance_mode::stop()` — releases the barrier; queued and new queries flow to the new cluster.
+3. `Orchestrator::refresh()` — re-fetches both clusters from `databases()`.
+4. `MaintenanceMode::resume_traffic()` — releases the barrier; queued and new queries flow to the
+   new cluster.
+
+`Migration::run` then flips direction and streams in reverse, from the new cluster to the old one.
+The reverse phase runs in the same task, not in a separate one. A `STOP_TASK` during the reverse
+phase ends the rollback window, and the task reports the migration as finished.
+
+`SyncState::Cutover` runs as an awaited `SchemaSyncTask` before the traffic swap.
+`SyncState::PostDataValidation` is not part of cutover.
+Run it manually against the destination during replication or at another time.
+It validates each deferred foreign key with `ALTER TABLE ... VALIDATE CONSTRAINT`.
+Validation failures remain visible through `SHOW TASKS`.
 
 ---
 
@@ -197,17 +212,15 @@ traffic immediately via `maintenance_mode::stop()` and returns an error. Steps i
 ### Pre-cutover failures — plain propagation
 
 Steps 1–4 (`load_schema`, `schema_sync_pre`, `data_sync`, `schema_sync_post`) propagate errors
-with `?` directly from `replicate_and_cutover()`. Maintenance mode is never entered during these
+with `?` directly from `Migration::run()`. Maintenance mode is never entered during these
 steps. A failure here leaves traffic unaffected and the source untouched, making a full restart safe.
 
 ### Schema DDL — intentional error tolerance
 
-`schema_sync_pre`, `schema_sync_post`, `schema_sync_cutover`, and `schema_sync_post_cutover` are
-all called with `ignore_errors = true`. The `PgDumpOutput::restore()` method logs errors and
-continues when this flag is set. The intent is to tolerate pre-existing objects on the destination
-— a common condition when a previous reshard attempt failed mid-schema-sync and left partial DDL
-behind. Re-running `RESHARD` after such a failure will not abort on `table already exists` or
-similar conflicts.
+The pre-data, post-data, and cutover stages use `ignore_errors = true`.
+This setting tolerates objects left by an earlier failed schema sync.
+The validation stage uses `ignore_errors = false`.
+A foreign key violation therefore marks the validation task as failed.
 
 ### Data sync — abort propagation and cooperative cancellation
 
@@ -240,38 +253,26 @@ Per-table slots created in [`Table::data_sync()`](../pgdog/src/backend/replicati
 automatically when the replication connection closes, including on error or panic. A failed copy
 task leaves no orphaned per-table slot.
 
-### The `ok_or_abort!` macro — guaranteed traffic resumption after cutover starts
+### `MaintenanceMode` — guaranteed traffic resumption
 
-```rust
-macro_rules! ok_or_abort {
-    ($expr:expr) => {
-        match $expr {
-            Ok(res) => res,
-            Err(err) => {
-                maintenance_mode::stop();
-                cutover_state(CutoverState::Abort { error: err.to_string() });
-                return Err(err.into());
-            }
-        }
-    };
-}
-```
+`Migration` owns a `MaintenanceMode` guard ([`api/replication.rs`](../pgdog/src/api/replication.rs)).
+`stop_traffic()` calls `maintenance_mode::start(None)` and records that it did.
+`resume_traffic()` calls `maintenance_mode::stop(None)` only when the barrier is on, so every
+caller can call it safely. Three paths release the barrier:
 
-Once `maintenance_mode::start()` is called in `wait_for_replication()`, traffic is paused.
-`ok_or_abort!` is the only place that calls `maintenance_mode::stop()` for the remaining steps.
-Every call after the point of no return — `waiter.wait()`, `schema_sync_cutover()`, `cutover()`,
-`orchestrator.refresh()`, `schema_sync_post_cutover()`, `orchestrator.replicate()` — is wrapped
-in it. This guarantees traffic always resumes, regardless of which step fails.
+1. `Migration::cutover()` releases it after the swap.
+2. `prepare_cutover()` releases it when the catch-up wait fails.
+3. `replicate_until_cutover()` releases it when the phase ends with an error, including a
+   `STOP_TASK`, so the barrier does not survive the drain.
 
-The macro also transitions the global `CutoverState` to `Abort`, which is visible via
-`SHOW REPLICATION_SLOTS` in the admin database.
+`ReplicationTask::run` calls `resume_traffic()` again after `Migration::run` returns. The `Drop`
+impl is the last backstop, for a panic or for an aborted task future.
 
-### AbortTimeout — the one pre-point-of-no-return stop
+### AbortTimeout
 
-When `cutover_timeout_action = "abort"` and the timeout fires in `wait_for_cutover()`, the code
-explicitly calls `maintenance_mode::stop()` before returning `Err(Error::AbortTimeout)`. This is
-the only code path that stops maintenance mode without being inside `ok_or_abort!` — it is the
-case where the cutover was never attempted, so no data was moved and no swap occurred.
+When `cutover_timeout_action = "abort"` and the timeout fires in `wait_for_catchup()`, the policy
+returns `Err(Error::AbortTimeout)`. `prepare_cutover()` then resumes traffic. The cutover was
+never attempted, so no data moved and no swap occurred.
 
 ### Idempotency guarantees
 
@@ -280,7 +281,8 @@ Several mechanisms make it safe to replay data across a restart:
 | Mechanism | Where | Effect |
 |---|---|---|
 | Temporary replication slots | `Table::data_sync()` | Auto-dropped on connection close; no orphaned per-table slots |
-| `ignore_errors = true` | All schema sync steps | Pre-existing DDL on destination does not abort the run |
+| `ignore_errors = true` | Pre-data, post-data, and cutover schema sync | Pre-existing DDL does not abort the run |
+| FK validation | Manual validation schema sync | Validates deferred foreign keys in a reported task |
 | LSN watermark guard | `StreamSubscriber::lsn_applied()` | Rows bulk-copied in Step 3 are skipped during WAL replay in Step 5 |
 | Upsert on INSERT messages | `Table::insert(upsert=true)` | `ON CONFLICT (pk) DO UPDATE SET` prevents duplicates on WAL re-delivery |
 | PK validation | `Table::valid()` | Fails before any data moves; restart is clean |

@@ -40,7 +40,6 @@ impl CommandComplete {
         self.command().split(" ").next().unwrap()
     }
 
-    #[inline]
     pub(crate) fn command(&self) -> &str {
         unsafe { from_utf8_unchecked(&self.payload[5..self.payload.len() - 1]) }
     }

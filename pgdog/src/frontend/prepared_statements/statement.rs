@@ -1,5 +1,5 @@
 use crate::{
-    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::BindParams},
     net::Prepare,
     stats::memory::MemoryUsage,
 };
@@ -17,19 +17,12 @@ pub(crate) struct Statement {
 pub(crate) struct PreparedPlan {
     pub(crate) prepare: Prepare,
 
-    /// The number of calls to `pgdog.unique_id` which were previously
-    /// rewritten. If this value is greater than zero, it is expected
-    /// that the query in the [`Parse`] message referenced by
-    /// [`Self::prepare`] was previously rewritten to replace those calls
-    /// with bind parameter placeholder numbered after all others
-    pub(crate) unique_ids: u16,
-
     /// Used to keep track of LIMIT + OFFSET queries (stemming from Prepare),
     /// where we have to re-write `A_Const` nodes with `ParamRefs`, so that we can dynamically
     /// modify limit/offset values before execution if it ends up being cross-shard.
     pub(crate) offset_plan: Option<OffsetPlan>,
 
-    pub(crate) generated_params: Vec<GeneratedParam>,
+    pub(in crate::frontend) bind_params: BindParams,
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +52,6 @@ impl MemoryUsage for StatementType {
 }
 
 impl MemoryUsage for Statement {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.stmt.memory_usage()
             + if let Some(row_description) = &self.row_description {

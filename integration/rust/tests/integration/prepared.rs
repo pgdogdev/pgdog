@@ -95,7 +95,12 @@ async fn test_prepared_cache_respects_limit() {
     for _ in 0..3 {
         let pools = connections_sqlx().await;
         for pool in &pools {
-            sqlx::query("/* test_prepared_cache_rust */ SELECT $1")
+            sqlx::query("/* test_prepared_cache_limit_rust */ SELECT $1")
+                .bind(5)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            sqlx::query("/* test_prepared_cache_limit_rust */ SELECT $1, 1")
                 .bind(5)
                 .fetch_one(pool)
                 .await
@@ -110,7 +115,7 @@ async fn test_prepared_cache_respects_limit() {
     let mut prepared = admin.fetch_all("SHOW PREPARED").await.unwrap();
     prepared.retain(|row| {
         row.get::<String, &str>("statement")
-            .contains("/* test_prepared_cache_rust")
+            .contains("/* test_prepared_cache_limit_rust")
     });
     assert_eq!(
         prepared.len(),
@@ -127,7 +132,7 @@ async fn test_prepared_cache_respects_limit() {
     let mut prepared = admin.fetch_all("SHOW PREPARED").await.unwrap();
     prepared.retain(|row| {
         row.get::<String, &str>("statement")
-            .contains("/* test_prepared_cache_rust")
+            .contains("/* test_prepared_cache_limit_rust")
     });
     assert!(
         prepared.len() <= 1,

@@ -6,12 +6,9 @@ impl QueryParser {
         stmt: pg_raw_parse::Node<'_>,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let mut parser = StatementParser::new(
-            stmt,
-            context.router_context.bind,
-            &context.sharding_schema,
-            self.recorder_mut(),
-        );
+        let mut parser =
+            StatementParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+                .with_explain(self.recorder_mut().is_some());
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
@@ -20,6 +17,9 @@ impl QueryParser {
             context.router_context.parameter_hints.search_path,
         );
         let shard = parser.shard()?;
+        if let Some(recorder) = self.recorder_mut() {
+            recorder.extend(parser.take_explain());
+        }
         let pending_lookups = parser.take_pending_lookups();
         context.pending_lookups.extend(pending_lookups);
         let omnisharded = !is_sharded && shard.is_none();

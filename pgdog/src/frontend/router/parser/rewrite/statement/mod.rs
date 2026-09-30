@@ -3,8 +3,7 @@
 use crate::backend::schema::Schema;
 use crate::config::config;
 use crate::frontend::PreparedStatements;
-use crate::frontend::router::parser::AstContext;
-use crate::frontend::router::parser::rewrite::statement::plan::GeneratedParam;
+use crate::frontend::router::parser::rewrite::statement::plan::{BindParam, BindParams};
 use crate::net::parameter::ParameterValue;
 use crate::{backend::ShardingSchema, frontend::client::QueryTimestamps};
 use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
@@ -16,7 +15,9 @@ pub(crate) mod insert;
 pub(crate) mod nextval;
 pub(crate) mod non_deterministic_funcs;
 pub(crate) mod offset;
+pub(crate) mod order_by;
 pub(crate) mod plan;
+pub(crate) mod projection;
 pub(crate) mod simple_prepared;
 pub(crate) mod unique_id;
 pub(crate) mod update;
@@ -25,7 +26,6 @@ pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
 use pgdog_config::RewriteMode;
 //use pgdog_config::RewriteMode;
-use plan::GeneratedId;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
@@ -101,18 +101,6 @@ impl<'a> StatementRewrite<'a> {
         }
     }
 
-    /// Create an AstContext from this rewriter's fields.
-    fn ast_context(&self) -> AstContext<'a> {
-        AstContext {
-            sharding_schema: self.schema.clone(),
-            db_schema: self.db_schema.clone(),
-            user: self.user,
-            search_path: self.search_path,
-            timezone: self.timezone,
-            query_timestamps: self.query_timestamps,
-        }
-    }
-
     /// Maybe rewrite the statement and produce a rewrite plan
     /// we can apply to Bind messages.
     pub(crate) fn maybe_rewrite<'mem>(
@@ -138,71 +126,63 @@ impl<'a> StatementRewrite<'a> {
             _ => return Ok(plan),
         };
 
+        let mut param_count = 0;
         if let Some(parameterized_stmt) = parameterized_stmt {
             walk::walk(parameterized_stmt, |node| {
                 if let Node::ParamRef(param) = node {
-                    plan.params = plan.params.max(param.number as u16)
+                    param_count = param_count.max(param.number as u16)
                 }
             });
         }
+        plan.bind_params = BindParams::Original { param_count };
 
         // Inject pgdog.unique_id() for missing BIGINT primary keys.
         // This must run BEFORE the unique_id rewriter so the injected
         // function calls get processed.
         match stmt.stmt_mut() {
             NodeMut::InsertStmt(insert) => {
-                self.inject_auto_id(insert, mem, &mut plan)?;
+                self.inject_auto_id(insert, mem)?;
             }
             NodeMut::PrepareStmt(mut prepare) => {
                 if let NodeMut::InsertStmt(insert) = prepare.query_mut() {
-                    self.inject_auto_id(insert, mem, &mut plan)?;
+                    self.inject_auto_id(insert, mem)?;
                 }
             }
             _ => {}
         }
 
         // Track the next parameter number to use
-        let mut next_param = plan.params as i32 + 1;
         let mut err = None;
         transform::transform_node(
             stmt.stmt_mut(),
-            &mut transform::TransformClosure::new(|node| {
-                match Self::rewrite_unique_id(node.as_ref(), mem, self.extended, &mut next_param) {
-                    Ok(Some(replacement)) => {
-                        plan.unique_ids += 1;
-                        if self.extended {
-                            plan.generated_params.push(GeneratedParam {
-                                param_num: (next_param - 1) as u16,
-                                generated_id: GeneratedId::UniqueId,
-                            });
-                        }
-                        self.rewritten = true;
-                        node.replace(replacement);
-                        None
-                    }
-                    Err(e) => {
-                        err = Some(e);
-                        None
-                    }
-                    Ok(None) => {
-                        if let Some(replacement) =
-                            self.rewrite_sequence(node.as_ref(), mem, &mut next_param, &mut plan)
-                        {
+            &mut transform::TransformClosure::new(|node| match node.as_ref() {
+                Node::FuncCall(func) if Self::is_unique_id(func) => {
+                    match Self::unique_id_value(mem, self.extended, &mut plan.bind_params) {
+                        Ok(replacement) => {
+                            self.rewritten = true;
                             node.replace(replacement);
-                            None
-                        } else {
-                            Some(node)
+                        }
+                        Err(e) => {
+                            err = Some(e);
                         }
                     }
+                    None
                 }
+                node_ref
+                    if let Some(replacement) =
+                        self.rewrite_sequence(node_ref, mem, &mut plan.bind_params) =>
+                {
+                    node.replace(replacement);
+                    None
+                }
+                _ => Some(node),
             }),
         );
         if let Some(err) = err {
             return Err(err);
         }
 
-        if let NodeMut::SelectStmt(mut select) = stmt.stmt_mut() {
-            self.rewrite_aggregates(&mut select, mem, &mut plan, self.db_schema)?;
+        if let NodeMut::SelectStmt(select) = stmt.stmt_mut() {
             self.limit_offset(&select, &mut plan);
         }
 
@@ -214,16 +194,11 @@ impl<'a> StatementRewrite<'a> {
         if nd_function_rewrite {
             match stmt.stmt_mut() {
                 NodeMut::InsertStmt(_) => {
-                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut next_param, &mut plan)?;
+                    self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
-                        self.rewrite_nd_functions(
-                            prepare.query_mut(),
-                            mem,
-                            &mut next_param,
-                            &mut plan,
-                        )?;
+                        self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
                 }
                 _ => {}

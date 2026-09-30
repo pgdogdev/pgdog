@@ -1,4 +1,3 @@
-use itertools::*;
 use pg_raw_parse::{Node, nodes};
 
 #[derive(Debug, PartialEq, Clone)]
@@ -38,14 +37,11 @@ impl<'a> Distinct<'a> {
                 Node::A_Const(c) => Some(DistinctColumn::Index(
                     c.val()?.numeric_value::<i32>()? as usize - 1,
                 )),
+                // org_id -> [*org_id*]
+                // t.org_id -> [t, *org_id*]
+                // public.t.org_id -> [public, t, *org_id*]
                 Node::ColumnRef(c) => Some(DistinctColumn::Name(
-                    c.fields()
-                        .iter()
-                        .exactly_one()
-                        .ok()?
-                        .as_str()
-                        .expect("DISTINCT ON (*) is a parse error")
-                        .to_owned(),
+                    c.fields().into_iter().next_back()?.as_str()?.to_owned(),
                 )),
                 // FIXME: We should return an error to the client name if they
                 // sent a form we don't support and the query is routed

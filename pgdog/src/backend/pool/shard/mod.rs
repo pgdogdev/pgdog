@@ -330,7 +330,6 @@ impl Shard {
 
 impl Deref for Shard {
     type Target = ShardInner;
-    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.inner
     }

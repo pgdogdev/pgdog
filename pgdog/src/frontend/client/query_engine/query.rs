@@ -23,10 +23,16 @@ impl QueryEngine {
     pub(super) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        // FIXME(sage): `mut` only used to set the route on same shard insert split. Should be done
+        // earlier
+        client_request: &mut ClientRequest,
         query_planner: Option<RewriteResult>,
     ) -> Result<(), Error> {
         // Check that we're not in a transaction error state.
-        if !self.transaction_error_check(context).await? {
+        if !self
+            .transaction_error_check(context, client_request)
+            .await?
+        {
             return Ok(());
         }
 
@@ -38,28 +44,36 @@ impl QueryEngine {
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context);
+        self.two_pc_check(context, client_request);
 
         // We need to run a query now.
-        if context.in_transaction() {
+        if context.in_transaction() || client_request.route().is_lock_session() {
             // Connect to one shard if not sharded or to all shards
-            // for a cross-shard tranasction.
-            if !self.connect_transaction(context).await? {
+            // for a cross-shard transaction.
+            //
+            // We also do this for advisory locks. Otherwise, we'd be pinned to one shard,
+            // and if we get a hash for a different one next query around, we'd be stuck
+            // at a point where we would have to refuse it (thus, maintaining all
+            // connections gives us freedom to fix that)
+            if !self
+                .connect_transaction(context, client_request.route())
+                .await?
+            {
                 return Ok(());
             }
-        } else if !self.connect(context, None).await? {
+        } else if !self.connect(context, client_request.route()).await? {
             return Ok(());
         }
 
         // Check we can run this query.
-        if !self.cross_shard_check(context).await? {
+        if !self.cross_shard_check(context, client_request).await? {
             return Ok(());
         }
 
         self.hooks.after_connected(context, &self.backend)?;
 
         // Set response format.
-        for msg in context.client_request.messages.iter() {
+        for msg in &client_request.messages {
             if let ProtocolMessage::Bind(bind) = msg {
                 self.backend.bind(bind)?
             }
@@ -72,7 +86,7 @@ impl QueryEngine {
         let result = tokio::select! {
             result = safe_timeout(
                 query_timeout,
-                self.client_server_exchange(context, query_planner),
+                self.client_server_exchange(context, client_request, query_planner),
             ) => {
                 result
             }
@@ -106,17 +120,21 @@ impl QueryEngine {
     async fn client_server_exchange(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
         rewrite_result: Option<RewriteResult>,
     ) -> Result<(), Error> {
         match rewrite_result {
             Some(RewriteResult::InsertSplit(requests)) => {
-                Box::pin(multi_step::InsertMulti::from_engine(self, requests).execute(context))
-                    .await?;
+                Box::pin(
+                    multi_step::InsertMulti::from_engine(self, requests)
+                        .execute(context, client_request),
+                )
+                .await?;
             }
 
             Some(RewriteResult::InPlace { .. }) | None => {
                 self.backend
-                    .handle_client_request(context.client_request, &mut self.router, self.streaming)
+                    .handle_client_request(client_request, &mut self.router, self.streaming)
                     .await?;
 
                 while self.backend.has_more_messages()
@@ -129,8 +147,11 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::ShardingKeyUpdate(sharding_key_update)) => {
-                Box::pin(multi_step::UpdateMulti::new(self, &sharding_key_update).execute(context))
-                    .await?;
+                Box::pin(
+                    multi_step::UpdateMulti::new(self, &sharding_key_update)
+                        .execute(context, client_request),
+                )
+                .await?;
             }
         }
 
@@ -381,6 +402,7 @@ impl QueryEngine {
     async fn cross_shard_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<bool, Error> {
         // Admin database queries are not checked.
         if context.admin {
@@ -405,7 +427,7 @@ impl QueryEngine {
         if !cross_shard_disabled {
             return Ok(true);
         }
-        let query_is_cross_shard = context.client_request.route().is_cross_shard();
+        let query_is_cross_shard = client_request.route().is_cross_shard();
 
         // The query is direct-to-shard, we're good.
         if !query_is_cross_shard {
@@ -413,7 +435,7 @@ impl QueryEngine {
         }
 
         let connected_shards = self.backend.connected_servers();
-        let is_executable = context.client_request.is_executable();
+        let is_executable = client_request.is_executable();
 
         // This is a Parse-only request, so it's safe
         // to route it to any shard - it won't do any damage
@@ -429,9 +451,10 @@ impl QueryEngine {
         // until client disconnects. We don't want this check to trigger on queries that we think
         // should be cross-shard (e.g. BEGIN, COMMIT) but aren't really.
         if connected_shards == 0 || connected_shards > 1 {
-            let query = context.client_request.query()?;
+            let query = client_request.query()?;
             self.error_response(
                 context,
+                client_request,
                 ErrorResponse::cross_shard_disabled(query.as_ref().map(|q| q.query())),
             )
             .await?;
@@ -446,7 +469,11 @@ impl QueryEngine {
         Ok(true)
     }
 
-    fn two_pc_check(&mut self, context: &mut QueryEngineContext<'_>) {
+    fn two_pc_check(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
+    ) {
         let enabled = self
             .backend
             .cluster()
@@ -454,9 +481,9 @@ impl QueryEngine {
             .unwrap_or_default();
 
         if enabled
-            && context.client_request.route().should_2pc()
+            && client_request.route().should_2pc()
             && self.begin_stmt.is_none()
-            && context.client_request.is_executable()
+            && client_request.is_executable()
             && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
@@ -468,6 +495,7 @@ impl QueryEngine {
     async fn transaction_error_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<bool, Error> {
         let shards = match self.backend.shards() {
             Ok(shards) => shards,
@@ -478,12 +506,12 @@ impl QueryEngine {
         if shards > 1 // This check only matters for cross-shard queries
             && context.in_error()
             && !context.rollback
-            && context.client_request.is_executable()
-            && !context.client_request.route().rollback_savepoint()
+            && client_request.is_executable()
+            && !client_request.route().rollback_savepoint()
         {
             let error = ErrorResponse::in_failed_transaction();
 
-            self.error_response(context, error).await?;
+            self.error_response(context, client_request, error).await?;
 
             Ok(false)
         } else {
@@ -494,16 +522,14 @@ impl QueryEngine {
     pub(super) async fn error_response(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
         mut error: ErrorResponse,
     ) -> Result<(), Error> {
         error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
         // Attach query context.
         if error.detail.is_none() {
-            let query = context
-                .client_request
-                .query()?
-                .map(|q| q.query().to_owned());
+            let query = client_request.query()?.map(|q| q.query().to_owned());
             error.detail = Some(query.unwrap_or_default());
         }
 

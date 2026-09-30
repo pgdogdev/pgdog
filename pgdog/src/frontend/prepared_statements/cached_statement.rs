@@ -13,7 +13,6 @@ pub(crate) struct CachedStmt {
 }
 
 impl MemoryUsage for CachedStmt {
-    #[inline]
     fn memory_usage(&self) -> usize {
         self.counter.memory_usage() + self.used.memory_usage()
     }

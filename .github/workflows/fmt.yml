@@ -5,11 +5,13 @@ on:
       - main
       - main-ent
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
 
@@ -18,8 +20,9 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+      - name: Test dependency downloads
+        run: python3 integration/ci/test_download.py
+      - uses: ./.github/actions/ci-deps
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod admin_reload;
 pub mod admin_termination;
+pub mod advisory_locks;
 pub mod auth;
 pub mod auto_id;
 pub mod avg;
@@ -24,6 +25,7 @@ pub mod max;
 pub mod multi_set;
 pub mod non_deterministic_funcs;
 pub mod notify;
+mod numeric_infinity;
 pub mod offset;
 pub mod partial_req;
 pub mod per_stmt_routing;

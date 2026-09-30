@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use dashmap::DashMap;
 use derive_more::Debug;
@@ -16,6 +16,7 @@ use pgdog_stats::{TaskDefinition, TaskStatus, TaskUpdate};
 pub(crate) use pgdog_stats::{TaskId, TaskProgress};
 use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 
@@ -185,18 +186,12 @@ impl TaskEntry {
 
     /// Transition the task to the specified progress state.
     /// No-op if the task is already in terminal state.
-    fn transition(&self, mut progress: TaskProgress) {
+    fn transition(&self, progress: TaskProgress) {
         let _enter = self.tracing_span.enter();
 
         let mut state = self.state.write();
         if state.progress.is_terminal() {
             return;
-        }
-
-        let panicked = matches!(progress, TaskProgress::Panic { .. });
-        if progress.is_terminal() && !panicked && self.cancellation_token.is_cancelled() {
-            info!("task is cancelled, ignoring current progress ({progress})");
-            progress = TaskProgress::Cancelled;
         }
 
         debug!("task state transition to {progress}");
@@ -420,6 +415,12 @@ impl<T: Task> TaskContext<T> {
 
                     Ok(output)
                 }
+                Err(err) if ctx.task.cancellation_token.is_cancelled() => {
+                    info!("task cancelled: {err}");
+                    ctx.transition(TaskProgress::Cancelled);
+
+                    Err(err)
+                }
                 Err(err) => {
                     ctx.transition(TaskProgress::error(err.to_string()));
 
@@ -427,6 +428,10 @@ impl<T: Task> TaskContext<T> {
                 }
             }
         }
+    }
+
+    pub(crate) fn id(&self) -> TaskId {
+        self.task.id
     }
 
     pub(crate) fn root_id(&self) -> TaskId {
@@ -510,6 +515,11 @@ impl TaskStorage {
                     ctx.transition(TaskProgress::Finished);
                     let _ = sender.send(Ok(res));
                 }
+                Ok(Err(err)) if cancellation_token.is_cancelled() => {
+                    info!("task cancelled: {err}");
+                    ctx.transition(TaskProgress::Cancelled);
+                    let _ = sender.send(Err(TaskError::Failed(err)));
+                }
                 Ok(Err(err)) => {
                     ctx.transition(TaskProgress::error(err.to_string()));
                     let _ = sender.send(Err(TaskError::Failed(err)));
@@ -556,11 +566,35 @@ impl TaskStorage {
         Some(state)
     }
 
-    pub(crate) fn cancel_all(&self) {
+    fn cancel_all(&self) {
         info!("cancelling all current api tasks");
 
         for task in &self.tasks.map {
             task.value().cancel();
+        }
+    }
+
+    fn has_running_tasks(&self) -> bool {
+        let mut running = false;
+
+        self.try_for_each(|entry| {
+            if entry.state().is_terminal() {
+                ControlFlow::Continue(())
+            } else {
+                running = true;
+                ControlFlow::Break(())
+            }
+        });
+
+        running
+    }
+
+    pub(crate) async fn shutdown(&self, limit: Duration) {
+        self.cancel_all();
+
+        let deadline = Instant::now() + limit;
+        while self.has_running_tasks() && Instant::now() < deadline {
+            sleep(Duration::from_millis(50)).await;
         }
     }
 
@@ -1123,7 +1157,7 @@ mod tests {
         assert_eq!(*state.lock(), "cancelled");
 
         let entry = storage.task(task_id).unwrap();
-        assert!(matches!(entry.state().progress, TaskProgress::Cancelled));
+        assert!(matches!(entry.state().progress, TaskProgress::Finished));
     }
 
     #[test(start_paused = true)]
@@ -1189,7 +1223,7 @@ mod tests {
         let res = task.await;
         assert!(res.unwrap());
         let entry = storage.task(task_id).unwrap();
-        assert!(matches!(entry.state().progress, TaskProgress::Cancelled));
+        assert!(matches!(entry.state().progress, TaskProgress::Finished));
     }
 
     #[test(start_paused = true)]

@@ -101,6 +101,19 @@ CREATE INDEX idx_users_roles ON core.users USING GIN(roles);
 CREATE INDEX idx_users_preferences ON core.users USING GIN(preferences);
 CREATE INDEX idx_users_created_at ON core.users(created_at);
 
+CREATE FUNCTION core.user_count()
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COUNT(*) FROM core.users
+$$;
+
+CREATE TABLE core.timezone_source (
+  id BIGINT PRIMARY KEY,
+  summary JSONB
+);
+
 CREATE TABLE core.countries (
   country_code CHAR(2) PRIMARY KEY,
   country_name VARCHAR(100) NOT NULL,
@@ -823,6 +836,12 @@ LEFT JOIN inventory.categories c ON p.category_id = c.category_id
 WHERE o.status NOT IN ('cancelled', 'refunded')
   AND o.created_at >= CURRENT_DATE - INTERVAL '24 months'
 GROUP BY DATE_TRUNC('month', o.created_at), c.category_id, c.category_name;
+
+CREATE VIEW analytics.timezone_dates AS
+SELECT
+  id,
+  ((summary ->> 'ts')::timestamptz AT TIME ZONE ((summary -> 'stop') ->> 'tz'))::date AS d
+FROM core.timezone_source;
 
 -- ============================================================================
 -- FUNCTIONS AND PROCEDURES

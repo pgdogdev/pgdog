@@ -1,0 +1,26 @@
+# This is just the workflow Bencher has in its docs; haven't customized it yet
+# <https://bencher.dev/docs/how-to/github-actions/#pull-requests-on-bare-metal>
+on:
+  repository_dispatch:
+    types: [bencher_run]
+
+jobs:
+  attach_pr_benchmarks:
+    name: Post PR Benchmark Results from Bencher Bare Metal
+    permissions:
+      checks: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
+      - name: Post PR Benchmark Results with Bencher
+        env:
+          JOB_UUID: ${{ github.event.client_payload.bencher.job }}
+        run: |
+          bencher run \
+          --project pgdog \
+          --key '${{ secrets.BENCHER_API_KEY }}' \
+          --job "$JOB_UUID" \
+          --error-on-alert \
+          --ci-only-on-alert \
+          --github-actions '${{ secrets.GITHUB_TOKEN }}'

@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/jsonschema.yml"
       - 'pgdog-config/src/**/*.rs'
       - 'pgdog-config/Cargo.toml'
       - 'scripts/jsonschema/src/**/*.rs'

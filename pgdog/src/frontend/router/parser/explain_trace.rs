@@ -84,6 +84,10 @@ impl ExplainRecorder {
         self.entries.push(ExplainEntry::new(shard, description));
     }
 
+    pub(crate) fn extend(&mut self, entries: impl IntoIterator<Item = ExplainEntry>) {
+        self.entries.extend(entries);
+    }
+
     pub(crate) fn record_comment_override(&mut self, shard: Shard, role: Option<Role>) {
         let mut description = match shard {
             Shard::Direct(_) | Shard::Multi(_) | Shard::All => {

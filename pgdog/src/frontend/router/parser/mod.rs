@@ -32,7 +32,7 @@ mod where_clause;
 
 pub(crate) use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub(crate) use binary::BinaryStream;
-pub(crate) use cache::{Ast, AstContext, Cache};
+pub(crate) use cache::{AstContext, Cache, ClientQuery};
 pub(crate) use column::Column;
 pub(crate) use command::{Command, DiscardTarget, SetParam};
 pub(crate) use comment::parse_edge_comment;
@@ -48,7 +48,7 @@ pub(crate) use limit::{Limit, LimitClause};
 pub(crate) use order_by::OrderBy;
 pub(crate) use params::*;
 pub(crate) use query::QueryParser;
-pub(crate) use rewrite::{StatementRewrite, StatementRewriteContext, statement::RewritePlan};
+pub(crate) use rewrite::{StatementRewrite, StatementRewriteContext};
 pub(crate) use route::{Route, Shard, ShardWithPriority, ShardsWithPriority};
 pub(crate) use schema::Schema;
 pub(crate) use sequence::Sequence;
