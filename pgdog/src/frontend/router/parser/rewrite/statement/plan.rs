@@ -44,7 +44,7 @@ impl BindParams {
     pub(super) fn iter(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
         match self {
             Self::Original { param_count } => {
-                Either::Left((0..=*param_count).map(|n| Cow::Owned(BindParam::FromClientBind(n))))
+                Either::Left((0..*param_count).map(|n| Cow::Owned(BindParam::FromClientBind(n))))
             }
             Self::Modified { params } => Either::Right(params.iter().map(Cow::Borrowed)),
         }
@@ -75,10 +75,8 @@ impl BindParams {
     /// `param_count` instances of `BindParam::FromClientBind`. Returns a
     /// reference to the canoncalized `Vec`
     fn force_modified(&mut self) -> &mut Vec<BindParam> {
-        if let Self::Original { param_count } = self {
-            let params = (0..*param_count)
-                .map(BindParam::FromClientBind)
-                .collect::<Vec<_>>();
+        if let Self::Original { .. } = self {
+            let params = self.iter().map(|p| p.into_owned()).collect();
             *self = Self::Modified { params };
         }
 
