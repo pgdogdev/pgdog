@@ -10,11 +10,10 @@ use crate::{
     backend::{PubSubClient, pool},
     config::PoolerMode,
     frontend::{
-        ClientRequest, Router,
+        BufferedQuery, ClientRequest, Router,
         router::{CopyRow, Route, parser::Shard},
     },
     net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
-    state::State,
 };
 
 use super::{
@@ -41,7 +40,9 @@ pub(crate) mod multi_shard;
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
+pub(crate) use direct::DirectBinding;
 pub(crate) use linked_server::LinkedServer;
+
 use multi_shard::MultiBinding;
 
 /// Wrapper around a server connection.
@@ -73,43 +74,51 @@ impl Connection {
     }
 
     /// Create a server connection if one doesn't exist already.
-    pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        let connect = match &self.binding {
-            Binding::NotConnected => true,
-            Binding::MultiShard(shards) => shards.is_empty(),
-            _ => false,
-        };
+    pub(crate) async fn connect(
+        &mut self,
+        request: &Request,
+        route: &Route,
+        transaction_stmt: Option<BufferedQuery>,
+    ) -> Result<(), Error> {
+        self.ensure_connected(request, route, transaction_stmt)
+            .await?;
 
-        if connect {
-            self.connect_internal(request, route).await?;
-
-            if !self.binding.state_check(State::Idle) {
-                return Err(Error::NotInSync);
-            }
+        if !self.binding.state_check() {
+            return Err(Error::NotInSync);
         }
 
         Ok(())
     }
 
     /// Check that we are connected to all required shards to serve this route.
-    pub(crate) fn required_shards_connected(&self, route: &Route, shards: usize) -> bool {
-        match self.binding {
+    pub(crate) fn required_shards_connected(&self, route: &Route) -> Result<bool, Error> {
+        let shards = self.cluster()?.shards().len();
+
+        Ok(match self.binding {
             Binding::NotConnected => false,
             Binding::MultiShard(ref servers) => servers.required_shards_connected(route, shards),
             Binding::Direct(ref shard) => {
                 matches!(route.shard(), Shard::Direct(s) if shard.shard == *s)
             }
             Binding::Admin(_) => true,
-        }
+        })
     }
 
-    pub(crate) async fn ensure_connected(
+    /// Make sure we have all required shard connections to serve the request.
+    async fn ensure_connected(
         &mut self,
         request: &Request,
         route: &Route,
+        transaction_stmt: Option<BufferedQuery>,
     ) -> Result<(), Error> {
-        use multi_shard::MultiShardUpgrade;
-        MultiShardUpgrade::new(self).upgrade(request, route).await?;
+        if matches!(self.binding, Binding::NotConnected) {
+            self.connect_internal(request, route, transaction_stmt)
+                .await?;
+        } else {
+            use multi_shard::MultiShardUpgrade;
+            MultiShardUpgrade::new(self).upgrade(request, route).await?;
+        }
+
         Ok(())
     }
 
@@ -135,22 +144,28 @@ impl Connection {
     }
 
     /// Try to get a connection for the given route.
-    async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+    async fn connect_internal(
+        &mut self,
+        request: &Request,
+        route: &Route,
+        transaction_stmt: Option<BufferedQuery>,
+    ) -> Result<(), Error> {
         if let Shard::Direct(shard) = route.shard() {
             let server = self
                 .cluster
                 .get_conn(request, *shard, route.is_read())
                 .await?;
 
-            self.binding = Binding::Direct(LinkedServer {
-                server,
-                shard: *shard,
-                linked: false,
-            });
+            self.binding = Binding::Direct(DirectBinding::new(server, *shard, transaction_stmt));
         } else {
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 
-            self.binding = Binding::MultiShard(MultiBinding::new(shards, shard_indices, route));
+            self.binding = Binding::MultiShard(MultiBinding::new(
+                shards,
+                shard_indices,
+                route,
+                transaction_stmt,
+            ));
         }
 
         Ok(())

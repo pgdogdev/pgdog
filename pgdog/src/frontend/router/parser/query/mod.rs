@@ -184,7 +184,7 @@ impl QueryParser {
             }
         }
 
-        debug!("query router decision: {:#?}", command);
+        debug!("query router decision: {:?}", command);
 
         self.attach_explain(&mut command);
 

@@ -238,8 +238,7 @@ impl QueryEngine {
             Command::CommitTransaction { extended } => {
                 if self.backend.connected() || *extended {
                     let extended = *extended;
-                    let transaction_route = self.transaction_route(client_request.route())?;
-                    client_request.route = Some(transaction_route.clone());
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
                     self.end_connected(context, client_request, false, extended)
                         .await?;
@@ -255,8 +254,7 @@ impl QueryEngine {
             Command::RollbackTransaction { extended } => {
                 if self.backend.connected() || *extended {
                     let extended = *extended;
-                    let transaction_route = self.transaction_route(client_request.route())?;
-                    client_request.route = Some(transaction_route.clone());
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
                     self.end_connected(context, client_request, true, extended)
                         .await?;

@@ -388,6 +388,7 @@ impl Manager {
             .connect(
                 &Request::default(),
                 &Route::write(ShardWithPriority::new_override_transaction(Shard::All)),
+                None,
             )
             .await?;
         connection.two_pc(transaction, phase, true).await?;

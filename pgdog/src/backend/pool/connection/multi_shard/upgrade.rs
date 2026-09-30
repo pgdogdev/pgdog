@@ -1,5 +1,5 @@
 //! Upgrade from [`Binding::Direct`] to [`Binding::MultiShard`].
-use std::collections::{BTreeSet, HashSet};
+use std::{collections::BTreeSet, mem};
 
 use itertools::Either;
 
@@ -51,13 +51,14 @@ impl<'a> MultiShardUpgrade<'a> {
             })
             .collect::<Vec<_>>();
 
-        let mut binding = match self.connection.binding {
+        let mut binding = match mem::take(&mut self.connection.binding) {
             Binding::Direct(server) => {
-                servers.push(server);
+                servers.push(server.server);
 
                 MultiBinding {
                     servers,
                     state: MultiShard::new(total_shards, route).boxed(),
+                    transaction_stmt: server.transaction_stmt,
                 }
             }
 

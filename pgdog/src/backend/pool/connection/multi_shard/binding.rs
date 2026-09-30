@@ -1,16 +1,15 @@
-use std::ops::{Deref, DerefMut};
 use std::slice::{Iter, IterMut};
 
 use futures::future::join_all;
 
 use crate::backend::Error;
 use crate::backend::pool::Request;
-use crate::frontend::ClientRequest;
 use crate::frontend::client::query_engine::{
     TwoPcPhase, TwoPcTransaction, statement::phase_control,
 };
 use crate::frontend::router::parser::Shard;
 use crate::frontend::router::{CopyRow, Route};
+use crate::frontend::{BufferedQuery, ClientRequest};
 use crate::net::{FrontendPid, Message, Parameters, ProtocolMessage};
 
 use super::super::{Guard, LinkedServer};
@@ -21,6 +20,7 @@ use super::MultiShard;
 pub(crate) struct MultiBinding {
     pub(super) servers: Vec<LinkedServer>,
     pub(super) state: Box<MultiShard>,
+    pub(super) transaction_stmt: Option<BufferedQuery>,
 }
 
 impl MultiBinding {
@@ -55,7 +55,12 @@ impl MultiBinding {
     }
 
     /// Create new multi-shard binding.
-    pub(crate) fn new(servers: Vec<Guard>, shard_indices: Vec<usize>, route: &Route) -> Self {
+    pub(crate) fn new(
+        servers: Vec<Guard>,
+        shard_indices: Vec<usize>,
+        route: &Route,
+        transaction_stmt: Option<BufferedQuery>,
+    ) -> Self {
         Self {
             state: Box::new(MultiShard::new(servers.len(), route)),
             servers: servers
@@ -67,6 +72,7 @@ impl MultiBinding {
                     linked: false,
                 })
                 .collect(),
+            transaction_stmt,
         }
     }
 
@@ -97,8 +103,9 @@ impl MultiBinding {
         &mut self,
         client_id: FrontendPid,
         params: &Parameters,
-        transaction_start_stmt: Option<&str>,
     ) -> Result<usize, Error> {
+        let transaction_start_stmt = self.transaction_stmt.as_ref().map(|q| q.query());
+
         let futures = self
             .servers
             .iter_mut()

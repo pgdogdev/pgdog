@@ -11,7 +11,6 @@ use crate::{
 
 use futures::future::join_all;
 
-use super::linked_server::LinkedServer;
 use super::*;
 use crate::util::safe_sleep;
 use multi_shard::MultiBinding;
@@ -20,7 +19,7 @@ use multi_shard::MultiBinding;
 #[derive(Debug, Default)]
 pub(crate) enum Binding {
     /// Direct-to-shard transaction.
-    Direct(LinkedServer),
+    Direct(DirectBinding),
     /// Admin database connection.
     Admin(AdminServer),
     /// Multi-shard transaction.
@@ -187,7 +186,7 @@ impl Binding {
         }
     }
 
-    pub(super) fn state_check(&self, state: State) -> bool {
+    pub(super) fn state_check(&self) -> bool {
         match self {
             Binding::Direct(server) => {
                 debug!(
@@ -195,15 +194,21 @@ impl Binding {
                     server.stats().get_state(),
                     server.addr()
                 );
-                server.stats().get_state() == state
+                matches!(
+                    server.stats().get_state(),
+                    State::Idle | State::IdleInTransaction
+                )
             }
-            Binding::MultiShard(servers) => servers.iter().all(|s| {
+            Binding::MultiShard(servers) => servers.iter().all(|server| {
                 debug!(
                     "server is in \"{}\" state [{}]",
-                    s.stats().get_state(),
-                    s.addr()
+                    server.stats().get_state(),
+                    server.addr()
                 );
-                s.stats().get_state() == state
+                matches!(
+                    server.stats().get_state(),
+                    State::Idle | State::IdleInTransaction
+                )
             }),
             _ => true,
         }
@@ -259,17 +264,10 @@ impl Binding {
         &mut self,
         id: FrontendPid,
         params: &Parameters,
-        transaction_start_stmt: Option<&str>,
     ) -> Result<usize, Error> {
         match self {
-            Binding::Direct(server, ..) => {
-                server.link_client(id, params, transaction_start_stmt).await
-            }
-
-            Binding::MultiShard(servers) => Ok(servers
-                .link_client(id, params, transaction_start_stmt)
-                .await?),
-
+            Binding::Direct(server, ..) => server.link_client(id, params).await,
+            Binding::MultiShard(servers) => Ok(servers.link_client(id, params).await?),
             _ => Ok(0),
         }
     }
