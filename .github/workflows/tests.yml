@@ -33,9 +33,6 @@ jobs:
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest --no-report --no-fail-fast --test-threads=1 --partition count:${{ matrix.shard }} --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
-      - name: Run documentation tests
-        if: matrix.name == 1
-        run: cargo test --doc
       - name: Generate coverage report
         if: ${{ github.event_name != 'merge_group' }}
         run: cargo llvm-cov report --lcov --output-path lcov.info
@@ -50,9 +47,20 @@ jobs:
           name: coverage-${{ matrix.name }}
           fail_ci_if_error: false
 
+  doc-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/ci-deps
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "unit-v1"
+      - run: cargo test --doc
+
   tests:
-    needs: coverage
+    needs: [coverage, doc-tests]
     if: always()
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - run: test "${{ needs.coverage.result }}" = "success"
+      - run: test "${{ needs.coverage.result }}" = "success" && test "${{ needs.doc-tests.result }}" = "success"
