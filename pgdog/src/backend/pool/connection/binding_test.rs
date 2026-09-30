@@ -16,6 +16,7 @@ mod tests {
         },
     };
 
+    use super::super::LinkedServer;
     use super::super::multi_shard::MultiBinding;
     use tokio::time::Instant;
 
@@ -75,7 +76,11 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(guard, 0);
+        let mut binding = Binding::Direct(LinkedServer {
+            server: guard,
+            shard: 0,
+            linked: false,
+        });
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)

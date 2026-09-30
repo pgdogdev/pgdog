@@ -13,43 +13,14 @@ use crate::frontend::router::parser::Shard;
 use crate::frontend::router::{CopyRow, Route};
 use crate::net::{FrontendPid, Message, Parameters, ProtocolMessage};
 
-use super::super::Guard;
+use super::super::{Guard, LinkedServer};
 use super::MultiShard;
-
-#[derive(Debug)]
-pub(crate) struct LinkedServer {
-    server: Guard,
-    // Shard number.
-    shard: usize,
-    // Parameters were sync'ed.
-    linked: bool,
-}
-
-impl LinkedServer {
-    pub(crate) fn shard(&self) -> usize {
-        self.shard
-    }
-}
-
-impl Deref for LinkedServer {
-    type Target = Guard;
-
-    fn deref(&self) -> &Self::Target {
-        &self.server
-    }
-}
-
-impl DerefMut for LinkedServer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.server
-    }
-}
 
 /// Handle talking to multiple servers for cross-shard queries.
 #[derive(Debug)]
 pub(crate) struct MultiBinding {
-    servers: Vec<LinkedServer>,
-    state: Box<MultiShard>,
+    pub(super) servers: Vec<LinkedServer>,
+    pub(super) state: Box<MultiShard>,
 }
 
 impl MultiBinding {
@@ -71,6 +42,16 @@ impl MultiBinding {
     /// Number of connected servers.
     pub(crate) fn len(&self) -> usize {
         self.servers.len()
+    }
+
+    /// Sort servers in shard number order.
+    pub(super) fn sort(&mut self) {
+        self.servers.sort_by_key(|server| server.shard);
+    }
+
+    /// Get currently connected shard numbers for this multi-shard binding.
+    pub(crate) fn connected_shards(&self) -> impl Iterator<Item = usize> + Clone {
+        self.servers.iter().map(|server| server.shard)
     }
 
     /// Create new multi-shard binding.

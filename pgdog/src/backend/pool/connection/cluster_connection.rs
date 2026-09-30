@@ -5,7 +5,6 @@ use crate::{
         pool::{
             Error as PoolError, Guard, Request,
             connection::mirror::{Mirror, MirrorHandler},
-            shard,
         },
         reload_notify,
     },
@@ -17,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 #[derive(Default, Debug)]
-pub(super) struct ClusterConnection {
+pub(crate) struct ClusterConnection {
     user: String,
     database: String,
     /// Cluster smart pointer.
@@ -77,47 +76,7 @@ impl ClusterConnection {
         Ok(())
     }
 
-    pub(super) async fn get_missing_conns_for_route(
-        &mut self,
-        request: &Request,
-        route: &Route,
-        binding: &super::Binding,
-    ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
-        let mut shards = match route.shard() {
-            Shard::Direct(shard) => vec![*shard],
-            Shard::Multi(shards) => shards.clone(),
-            Shard::All => (0..self.cluster()?.shards().len()).collect(),
-        };
-
-        // Remove shards we already have.
-        match binding {
-            super::Binding::Direct(_, shard) => {
-                if let Some(pos) = shards.iter().position(|s| s == shard) {
-                    shards.remove(pos);
-                }
-            }
-
-            super::Binding::MultiShard(servers) => {
-                let connected_shards = servers.iter().map(|server| server.shard());
-
-                for connected_shard in connected_shards {
-                    if let Some(pos) = shards.iter().position(|s| *s == connected_shard) {
-                        shards.remove(pos);
-                    }
-                }
-            }
-
-            _ => (),
-        };
-
-        Ok((
-            self.get_conns_for_shards(request, &shards, route.is_read())
-                .await?,
-            shards,
-        ))
-    }
-
-    async fn get_conns_for_shards(
+    pub(crate) async fn get_conns_for_shards(
         &mut self,
         request: &Request,
         shards: &[usize],

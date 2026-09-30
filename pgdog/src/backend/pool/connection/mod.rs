@@ -33,19 +33,22 @@ pub(crate) mod binding;
 pub(crate) mod binding_test;
 pub(crate) mod buffer;
 pub(crate) mod cluster_connection;
+pub(crate) mod direct;
+pub(crate) mod linked_server;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
 
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
+pub(crate) use linked_server::LinkedServer;
 use multi_shard::MultiBinding;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
 pub(crate) struct Connection {
-    binding: Binding,
-    cluster: ClusterConnection,
+    pub(super) binding: Binding,
+    pub(super) cluster: ClusterConnection,
     pub_sub: PubSubClient,
 }
 
@@ -93,39 +96,21 @@ impl Connection {
         match self.binding {
             Binding::NotConnected => false,
             Binding::MultiShard(ref servers) => servers.required_shards_connected(route, shards),
-            Binding::Direct(_, shard) => matches!(route.shard(), Shard::Direct(s) if shard == *s),
+            Binding::Direct(ref shard) => {
+                matches!(route.shard(), Shard::Direct(s) if shard.shard == *s)
+            }
             Binding::Admin(_) => true,
         }
     }
 
     pub(crate) async fn ensure_connected(
-        mut self,
+        &mut self,
         request: &Request,
         route: &Route,
     ) -> Result<(), Error> {
-        match self.binding {
-            Binding::Direct(server, shard) => {
-                if !matches!(route.shard(), Shard::Direct(s) if shard == *s) {
-                    self.binding =
-                        Binding::MultiShard(MultiBinding::new(vec![server], vec![shard], route));
-                    Ok(())
-                } else {
-                    self.binding = Binding::Direct(server, shard);
-                    Ok(())
-                }
-            }
-            Binding::NotConnected => {
-                todo!()
-            }
-            Binding::MultiShard(servers) => {
-                self.binding = Binding::MultiShard(servers.ensure_connected(request, route).await?);
-                Ok(())
-            }
-            Binding::Admin(admin) => {
-                self.binding = Binding::Admin(admin);
-                Ok(())
-            }
-        }
+        use multi_shard::MultiShardUpgrade;
+        MultiShardUpgrade::new(self).upgrade(request, route).await?;
+        Ok(())
     }
 
     /// Send client request to mirrors.
@@ -157,7 +142,11 @@ impl Connection {
                 .get_conn(request, *shard, route.is_read())
                 .await?;
 
-            self.binding = Binding::Direct(server, *shard);
+            self.binding = Binding::Direct(LinkedServer {
+                server,
+                shard: *shard,
+                linked: false,
+            });
         } else {
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 

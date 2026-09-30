@@ -19,10 +19,12 @@ mod binding;
 mod error;
 #[cfg(test)]
 mod test;
+mod upgrade;
 mod validator;
 
 pub(crate) use binding::MultiBinding;
 pub(crate) use error::Error;
+pub(crate) use upgrade::MultiShardUpgrade;
 use validator::Validator;
 
 #[derive(Default, Debug)]
@@ -402,5 +404,9 @@ impl MultiShard {
         // 3. The route does not concern omnisharded tables which have the same data on all shards
         //    anyway.
         self.shards > 1 && self.route.requires_post_processing() && !self.route.is_omnisharded()
+    }
+
+    pub(super) fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 }

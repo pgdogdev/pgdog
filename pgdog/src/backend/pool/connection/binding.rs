@@ -11,6 +11,7 @@ use crate::{
 
 use futures::future::join_all;
 
+use super::linked_server::LinkedServer;
 use super::*;
 use crate::util::safe_sleep;
 use multi_shard::MultiBinding;
@@ -19,7 +20,7 @@ use multi_shard::MultiBinding;
 #[derive(Debug, Default)]
 pub(crate) enum Binding {
     /// Direct-to-shard transaction.
-    Direct(Guard, usize),
+    Direct(LinkedServer),
     /// Admin database connection.
     Admin(AdminServer),
     /// Multi-shard transaction.
@@ -44,7 +45,7 @@ impl Binding {
     /// they are probably broken and should not be re-used.
     pub(crate) fn force_close(&mut self) {
         match self {
-            Binding::Direct(guard, _) => guard.stats_mut().state(State::ForceClose),
+            Binding::Direct(guard) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(servers) => {
                 for guard in servers.iter_mut() {
                     guard.stats_mut().state(State::ForceClose);
@@ -59,7 +60,7 @@ impl Binding {
     /// Are we connected to a backend?
     pub(crate) fn connected(&self) -> bool {
         match self {
-            Binding::Direct(_, _) => true,
+            Binding::Direct(_) => true,
             Binding::MultiShard(servers) => !servers.is_empty(),
             Binding::Admin(_) => true,
             Binding::NotConnected => false,
@@ -76,7 +77,7 @@ impl Binding {
     ///
     pub(crate) fn connected_servers(&self) -> usize {
         match self {
-            Binding::Direct(_, _) => 1,
+            Binding::Direct(_) => 1,
             Binding::MultiShard(servers) => servers.len(),
             Binding::Admin(_) => 1,
             _ => 0,
@@ -85,7 +86,7 @@ impl Binding {
 
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
-            Binding::Direct(guard, _) => guard.read().await,
+            Binding::Direct(guard) => guard.read().await,
 
             Binding::NotConnected => loop {
                 safe_sleep(Duration::MAX).await
@@ -115,7 +116,7 @@ impl Binding {
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
-            Binding::Direct(server, _) => server.send(client_request).await,
+            Binding::Direct(server) => server.send(client_request).await,
             Binding::NotConnected => Err(Error::NotConnected),
             Binding::MultiShard(servers) => servers.send(client_request).await,
         }
@@ -134,7 +135,7 @@ impl Binding {
         route: &Route,
     ) -> Result<(), Error> {
         match self {
-            Binding::Direct(server, ..) => server.send_ignore(message).await,
+            Binding::Direct(server) => server.send_ignore(message).await,
             Binding::MultiShard(servers) => servers.send_ignore(message, route).await,
             _ => Err(Error::NotConnected),
         }
@@ -160,7 +161,7 @@ impl Binding {
     pub(super) fn done(&self) -> bool {
         match self {
             Binding::Admin(admin) => admin.done(),
-            Binding::Direct(server, ..) => server.done(),
+            Binding::Direct(server) => server.done(),
             Binding::MultiShard(servers) => servers.iter().all(|s| s.done()),
             _ => true,
         }
@@ -169,7 +170,7 @@ impl Binding {
     pub(crate) fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
-            Binding::Direct(server, ..) => server.has_more_messages(),
+            Binding::Direct(server) => server.has_more_messages(),
             Binding::MultiShard(servers) => {
                 servers.state().has_more_messages() || servers.iter().any(|s| s.has_more_messages())
             }
@@ -180,7 +181,7 @@ impl Binding {
     /// Protocol is out of sync due to an error in extended protocol.
     pub(crate) fn out_of_sync(&self) -> bool {
         match self {
-            Binding::Direct(server, ..) => server.out_of_sync(),
+            Binding::Direct(server) => server.out_of_sync(),
             Binding::MultiShard(servers) => servers.iter().any(|s| s.out_of_sync()),
             _ => false,
         }
@@ -188,7 +189,7 @@ impl Binding {
 
     pub(super) fn state_check(&self, state: State) -> bool {
         match self {
-            Binding::Direct(server, ..) => {
+            Binding::Direct(server) => {
                 debug!(
                     "server is in \"{}\" state [{}]",
                     server.stats().get_state(),
@@ -216,7 +217,7 @@ impl Binding {
         let query: Query = query.into();
         let mut result = vec![];
         match self {
-            Binding::Direct(server, ..) => {
+            Binding::Direct(server) => {
                 result.extend(server.execute(query).await?);
             }
 
@@ -348,8 +349,8 @@ impl Binding {
 
     /// If connected to one shard only, get that shard number.
     pub(crate) fn direct_shard_number(&self) -> Option<usize> {
-        if let Self::Direct(_, shard) = self {
-            Some(*shard)
+        if let Self::Direct(server) = self {
+            Some(server.shard)
         } else {
             None
         }
@@ -359,7 +360,7 @@ impl Binding {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(servers) => servers.iter().all(|s| s.in_copy_mode()),
-            Binding::Direct(server, ..) => server.in_copy_mode(),
+            Binding::Direct(server) => server.in_copy_mode(),
             _ => false,
         }
     }
@@ -368,7 +369,7 @@ impl Binding {
     pub(crate) fn shards(&self) -> Result<usize, Error> {
         Ok(match self {
             Binding::Admin(_) => 1,
-            Binding::Direct(_, _) => 1,
+            Binding::Direct(_) => 1,
             Binding::MultiShard(servers) => {
                 if servers.is_empty() {
                     return Err(Error::MultiShardNotConnected);
