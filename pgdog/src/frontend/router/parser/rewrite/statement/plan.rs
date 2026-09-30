@@ -55,6 +55,12 @@ impl BindParams {
         params.push(param);
     }
 
+    #[cfg(test)]
+    pub(crate) fn generated(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
+        self.iter()
+            .filter(|b| !matches!(b.as_ref(), BindParam::FromClientBind(_)))
+    }
+
     /// If `self` is `Self::Original`, canoncalize it as `Modified` containing
     /// `param_count` instances of `BindParam::FromClientBind`. Returns a
     /// reference to the canoncalized `Vec`

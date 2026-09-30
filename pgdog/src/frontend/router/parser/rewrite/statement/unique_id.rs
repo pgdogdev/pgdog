@@ -171,7 +171,7 @@ mod tests {
         let (sql, plan) = run_test("SELECT 1, 2, 3", true);
 
         assert_eq!(sql, "SELECT 1, 2, 3");
-        assert_eq!(plan.bind_params, [BindParam::UniqueId; 0]);
+        assert_eq!(plan.bind_params.len(), 0);
     }
 
     #[test]
