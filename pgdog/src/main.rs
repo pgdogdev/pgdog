@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("🐕 PgDog {}", pgdog_version());
-    info!("open file descriptor limit is {}", nofile);
+    info!("open file descriptor limit: {}", nofile);
 
     // Get databases from environment or from --database-url args.
     let config = if let Some(database_urls) = args.database_url {
