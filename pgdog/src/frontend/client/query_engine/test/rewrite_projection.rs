@@ -1,5 +1,5 @@
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::cache::ast::Ast;
+use crate::frontend::router::parser::cache::ast::ClientQuery;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::parser::route::{Route, Shard, ShardWithPriority};
@@ -263,7 +263,7 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
 #[test]
 fn cached_projection_does_not_depend_on_first_route_order() {
     let sql = "SELECT id FROM products ORDER BY embedding <-> $1, price";
-    let ast = Ast::new_record(sql).unwrap();
+    let ast = ClientQuery::new_record(sql).unwrap();
     let mut first = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
     first.ast = Some(ast.clone());
     first.route = Some(Route::select(
@@ -313,7 +313,7 @@ fn cached_projection_does_not_depend_on_first_route_order() {
 fn aliased_projected_sort_column_remaps_route() {
     let sql = "SELECT price AS item_price FROM products ORDER BY price";
     let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
-    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.ast = Some(ClientQuery::new_record(sql).unwrap());
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![OrderBy::AscColumn("price".into())],
@@ -340,7 +340,7 @@ fn aliased_projected_sort_column_remaps_route() {
 fn duplicate_sort_column_names_use_injected_helper() {
     let sql = "SELECT a.price, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price";
     let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
-    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.ast = Some(ClientQuery::new_record(sql).unwrap());
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![OrderBy::AscColumn("price".into())],
@@ -366,7 +366,7 @@ fn duplicate_sort_column_names_use_injected_helper() {
 fn helper_replaces_the_matching_duplicate_order_by_position() {
     let sql = "SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY a.price, b.price";
     let mut request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
-    request.ast = Some(Ast::new_record(sql).unwrap());
+    request.ast = Some(ClientQuery::new_record(sql).unwrap());
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
         vec![

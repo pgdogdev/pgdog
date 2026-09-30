@@ -100,7 +100,7 @@ pub(crate) fn finalize_after_route(
     let rewrite_offset = offset_plan.is_some_and(|plan| !plan.prepare_execute);
     let Some(rewrite) = ast
         .post_route_rewrite
-        .get_or_try_init(|| build(&ast.ast, schema, rewrite_offset))?
+        .get_or_try_init(|| build(&ast.ast.ast, schema, rewrite_offset))?
     else {
         return Ok(());
     };

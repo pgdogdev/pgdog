@@ -11,31 +11,22 @@ use tracing::warn;
 
 use super::super::{Error, Route, StatementRewrite, StatementRewriteContext};
 use super::Stats;
-use crate::config::Role;
-use crate::frontend::PreparedStatements;
 use crate::frontend::router::parser::cache::AstQuery;
 use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::parser::rewrite::statement::projection::PostRouteRewrite;
-use crate::frontend::router::sharding::ShardOrLookup;
+use crate::frontend::{PreparedStatements, RoutingComment};
 
 /// Abstract syntax tree (query) cache entry,
 /// with statistics.
 #[derive(Debug, Clone)]
-pub(crate) struct Ast {
-    /// Was this entry cached?
+pub(crate) struct ClientQuery {
     pub(crate) cached: bool,
-    /// Shard.
-    pub(crate) comment_shard: Option<ShardOrLookup>,
-    /// Role.
-    pub(crate) comment_role: Option<Role>,
-    /// Sharding Key.
-    pub(crate) comment_sharding_key: Option<String>,
-    /// Inner sync.
-    inner: Arc<AstInner>,
+    pub(in crate::frontend) comment: Arc<RoutingComment>,
+    pub(in crate::frontend) ast: Arc<Ast>,
 }
 
 #[derive(Debug)]
-pub(crate) struct AstInner {
+pub(crate) struct Ast {
     /// Cached AST.
     pub(crate) ast: Owned<StmtList>,
     /// AST stats.
@@ -49,7 +40,7 @@ pub(crate) struct AstInner {
     pub(crate) query_without_comment: Arc<str>,
 }
 
-impl AstInner {
+impl Ast {
     /// Create new AST record, with no rewrite or comment routing.
     pub(crate) fn new(ast: Owned<StmtList>) -> Self {
         Self {
@@ -60,19 +51,9 @@ impl AstInner {
             query_without_comment: "".into(),
         }
     }
-}
 
-impl Deref for Ast {
-    type Target = AstInner;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl Ast {
     /// Parse statement and run the rewrite engine, if necessary.
-    pub(super) fn new(
+    pub(super) fn parse_and_rewrite(
         query: &AstQuery,
         ctx: &super::AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
@@ -119,42 +100,17 @@ impl Ast {
         }
 
         Ok(Self {
-            cached: true,
-            comment_shard: None,
-            comment_role: None,
-            comment_sharding_key: None,
-            inner: Arc::new(AstInner {
-                stats: Mutex::new(stats),
-                ast,
-                rewrite_plan,
-                post_route_rewrite: OnceCell::new(),
-                query_without_comment: query.query_without_comment.into(),
-            }),
+            stats: Mutex::new(stats),
+            ast,
+            rewrite_plan,
+            post_route_rewrite: OnceCell::new(),
+            query_without_comment: query.query_without_comment.into(),
         })
     }
 
-    /// Record new AST entry, without rewriting or comment-routing.
-    pub(crate) fn new_record(query: &str) -> Result<Self, ParseError> {
-        let ast = pg_raw_parse::parse(query)?;
-
-        Ok(Self {
-            cached: true,
-            comment_role: None,
-            comment_shard: None,
-            comment_sharding_key: None,
-            inner: Arc::new(AstInner::new(ast.into_inner())),
-        })
-    }
-
-    /// Create new AST from a parse result.
-    pub(crate) fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
-        Self {
-            cached: true,
-            comment_role: None,
-            comment_shard: None,
-            comment_sharding_key: None,
-            inner: Arc::new(AstInner::new(stmts)),
-        }
+    /// Parse the query without rewriting it
+    pub(super) fn parse(query: &str) -> Result<Self, ParseError> {
+        Ok(Self::new(pg_raw_parse::parse(query)?.into_inner()))
     }
 
     /// Update stats for this statement, given the route
@@ -168,10 +124,38 @@ impl Ast {
             guard.direct += 1;
         }
     }
+}
+
+impl Deref for ClientQuery {
+    type Target = Ast;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ast
+    }
+}
+
+impl ClientQuery {
+    #[cfg(test)]
+    pub(crate) fn new_record(query: &str) -> Result<Self, ParseError> {
+        Ok(Self {
+            cached: false,
+            comment: Default::default(),
+            ast: Arc::new(Ast::parse(query)?),
+        })
+    }
+
+    /// Create new AST from a parse result.
+    pub(crate) fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
+        Self {
+            cached: true,
+            comment: Default::default(),
+            ast: Arc::new(Ast::new(stmts)),
+        }
+    }
 
     /// Get statement type.
     pub(crate) fn statement_type(&self) -> StatementType {
-        let root = self.ast.stmts().next();
+        let root = self.ast.ast.stmts().next();
 
         match root {
             Some(Node::SelectStmt(_))

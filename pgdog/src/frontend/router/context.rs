@@ -5,7 +5,7 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
         client::Sticky,
-        router::{Ast, parser::StatementParameters, sharding::ResolvedLookups},
+        router::{ClientQuery, parser::StatementParameters, sharding::ResolvedLookups},
     },
     net::Parameters,
 };
@@ -31,7 +31,7 @@ pub(crate) struct RouterContext<'a> {
     /// Sticky omnisharded index.
     pub(super) sticky: Sticky,
     /// AST.
-    pub(super) ast: Option<&'a Ast>,
+    pub(super) ast: Option<&'a ClientQuery>,
     /// Schema.
     pub(super) schema: Schema,
     /// Sharding key translations resolved for this statement. Routing
