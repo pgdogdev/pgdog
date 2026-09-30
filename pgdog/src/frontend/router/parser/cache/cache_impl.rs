@@ -112,7 +112,7 @@ impl Cache {
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
         let ast = {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get(query.query()).map(|entry| {
+            let ast = guard.queries.get(query_and_comment.query).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
                 Ok::<_, Error>(Arc::clone(entry))
             });
