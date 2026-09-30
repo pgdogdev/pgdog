@@ -32,7 +32,7 @@ mod where_clause;
 
 pub(crate) use aggregate::{Aggregate, AggregateFunction, AggregateTarget};
 pub(crate) use binary::BinaryStream;
-pub(crate) use cache::{Ast, AstContext, Cache};
+pub(crate) use cache::{AstContext, Cache, ClientQuery};
 pub(crate) use column::Column;
 pub(crate) use command::{Command, DiscardTarget, SetParam};
 pub(crate) use comment::parse_edge_comment;

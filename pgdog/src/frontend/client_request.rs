@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{
-    frontend::router::Ast,
+    frontend::router::ClientQuery,
     net::{
         Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
@@ -28,7 +28,7 @@ pub(crate) struct ClientRequest {
     /// The QueryEngine will set the route once it handles the request.
     pub(crate) route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
-    pub(crate) ast: Option<Ast>,
+    pub(crate) ast: Option<ClientQuery>,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
@@ -39,7 +39,7 @@ impl MemoryUsage for ClientRequest {
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
         self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()
-            + std::mem::size_of::<Option<Ast>>()
+            + std::mem::size_of::<Option<ClientQuery>>()
     }
 }
 

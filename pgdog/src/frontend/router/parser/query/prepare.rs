@@ -62,7 +62,7 @@ impl QueryParser {
 
         let query = BufferedQuery::Query(Query::new(prepare.query()));
         let ast = Cache::get().record(&query)?;
-        let stmt = match ast.ast.stmts().next() {
+        let stmt = match ast.ast.ast.stmts().next() {
             Some(Node::PrepareStmt(stmt)) => Some(stmt.query()),
             stmt => stmt,
         };
