@@ -383,12 +383,6 @@ impl Route {
         &self.advisory_locks
     }
 
-    /// True when the statement only releases advisory locks — safe to unpin.
-    #[cfg(test)]
-    pub(crate) fn is_unlock_session(&self) -> bool {
-        !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
-    }
-
     pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
