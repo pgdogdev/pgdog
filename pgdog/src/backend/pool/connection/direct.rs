@@ -31,18 +31,20 @@ impl DirectBinding {
         }
     }
 
+    /// Link client to server.
     pub(super) async fn link_client(
         &mut self,
         id: FrontendPid,
         params: &Parameters,
     ) -> Result<usize, Error> {
-        if self.linked {
-            return Ok(0);
-        }
-
         let start_transaction = self.transaction_stmt.as_ref().map(|q| q.query());
 
-        self.server.link_client(id, params, start_transaction).await
+        let params = self
+            .server
+            .link_client(id, params, start_transaction)
+            .await?;
+
+        Ok(params)
     }
 }
 

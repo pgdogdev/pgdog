@@ -434,6 +434,7 @@ pub(crate) enum OverrideReason {
     OnlyOneShard,
     CrossShardFunction,
     CanonicalSchemaInfo,
+    Copy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -519,6 +520,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::CanonicalSchemaInfo),
+        }
+    }
+
+    pub(crate) fn new_override_copy() -> Self {
+        Self {
+            shard: Shard::All,
+            source: ShardSource::Override(OverrideReason::Copy),
         }
     }
 

@@ -312,7 +312,7 @@ impl QueryEngine {
             Command::ResetAll => {
                 self.reset_all(context, client_request).await?;
             }
-            Command::Copy(_) => {
+            Command::Copy { .. } => {
                 self.execute(context, client_request, rewrite_result)
                     .await?
             }

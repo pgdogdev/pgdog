@@ -100,7 +100,7 @@ impl Router {
         buffer: &ClientRequest,
     ) -> Result<Vec<CopyRow>, Error> {
         match self.latest_command {
-            Command::Copy(ref mut copy) => Ok(copy.shard(&buffer.copy_data()?).await?),
+            Command::Copy { ref mut copy, .. } => Ok(copy.shard(&buffer.copy_data()?).await?),
             _ => Ok(buffer
                 .copy_data()?
                 .into_iter()

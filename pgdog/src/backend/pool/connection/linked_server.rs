@@ -1,3 +1,5 @@
+use crate::net::{FrontendPid, Parameters};
+
 use super::Guard;
 use std::ops::{Deref, DerefMut};
 
@@ -10,6 +12,28 @@ pub(crate) struct LinkedServer {
     pub(super) linked: bool,
 }
 
+impl LinkedServer {
+    /// Link server to client. This is idempotent.
+    pub(super) async fn link_client(
+        &mut self,
+        id: FrontendPid,
+        params: &Parameters,
+        transaction_stmt: Option<&str>,
+    ) -> Result<usize, super::Error> {
+        if self.linked {
+            return Ok(0);
+        }
+
+        let params = self
+            .server
+            .link_client(id, params, transaction_stmt)
+            .await?;
+
+        self.linked = true;
+
+        Ok(params)
+    }
+}
 impl Deref for LinkedServer {
     type Target = Guard;
 

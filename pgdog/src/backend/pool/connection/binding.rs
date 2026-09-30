@@ -196,7 +196,7 @@ impl Binding {
                 );
                 matches!(
                     server.stats().get_state(),
-                    State::Idle | State::IdleInTransaction
+                    State::Idle | State::IdleInTransaction | State::CopyMode
                 )
             }
             Binding::MultiShard(servers) => servers.iter().all(|server| {
@@ -207,7 +207,7 @@ impl Binding {
                 );
                 matches!(
                     server.stats().get_state(),
-                    State::Idle | State::IdleInTransaction
+                    State::Idle | State::IdleInTransaction | State::CopyMode
                 )
             }),
             _ => true,
