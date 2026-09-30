@@ -60,7 +60,7 @@ impl BindParams {
     /// reference to the canoncalized `Vec`
     fn force_modified(&mut self) -> &mut Vec<BindParam> {
         if let Self::Original { param_count } = self {
-            let params = (0..=*param_count)
+            let params = (0..*param_count)
                 .map(BindParam::FromClientBind)
                 .collect::<Vec<_>>();
             *self = Self::Modified { params };
