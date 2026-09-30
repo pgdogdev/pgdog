@@ -374,11 +374,8 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                schema_changed(
-                    self.backend.cluster()?.name(),
-                    self.router.schema_changed_shards(),
-                )
-                .await?;
+                schema_changed(self.backend.cluster()?, self.router.schema_changed_shards())
+                    .await?;
             }
 
             self.router.reset();

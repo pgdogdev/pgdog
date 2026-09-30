@@ -100,10 +100,13 @@ pub(crate) fn reload_from_existing() -> Result<(), Error> {
 }
 
 /// Reload DDL targets while preserving other shards' cached schema and type information.
-pub(crate) fn reload_schema(database: &str, shards: &HashSet<usize>) -> Result<(), Error> {
+pub(crate) fn reload_schema(source: &Cluster, shards: &HashSet<usize>) -> Result<(), Error> {
     let _lock = lock();
     let current = databases();
-    let targets = current.schema_reload_targets(database, shards);
+    let targets = current.schema_reload_targets(source, shards);
+    if targets.is_empty() {
+        return Ok(());
+    }
     let cache = current.schema_cache.with_invalidated_shards(&targets);
     let new_databases = from_config_with_schema_cache(&config(), cache);
     replace_databases(new_databases, true)
@@ -358,14 +361,14 @@ impl Databases {
     /// Include other configured names for the same PostgreSQL database.
     fn schema_reload_targets(
         &self,
-        database: &str,
+        source: &Cluster,
         shards: &HashSet<usize>,
     ) -> HashMap<String, HashSet<usize>> {
-        let addresses: HashSet<_> = self
-            .databases
-            .values()
-            .filter(|cluster| cluster.name() == database)
-            .flat_map(|cluster| cluster.shards())
+        // The transaction can finish after a config reload changed its logical database.
+        // Use the endpoints that received the DDL, not the replacement configuration.
+        let addresses: HashSet<_> = source
+            .shards()
+            .iter()
             .filter(|shard| shards.contains(&shard.number()))
             .flat_map(|shard| shard.pool_iter())
             .map(|pool| {
@@ -870,9 +873,12 @@ mod tests {
             }
         }
         let databases = from_config(&config);
+        let source = databases
+            .cluster(("first", "source"))
+            .expect("source cluster");
 
         assert_eq!(
-            databases.schema_reload_targets("source", &HashSet::from([1])),
+            databases.schema_reload_targets(&source, &HashSet::from([1])),
             HashMap::from([
                 ("source".to_owned(), HashSet::from([1])),
                 ("alias".to_owned(), HashSet::from([0])),
@@ -880,8 +886,22 @@ mod tests {
         );
         assert!(
             databases
-                .schema_reload_targets("source", &HashSet::new())
+                .schema_reload_targets(&source, &HashSet::new())
                 .is_empty()
+        );
+
+        config
+            .config
+            .databases
+            .iter_mut()
+            .find(|database| database.name == "source" && database.shard == 1)
+            .expect("source shard")
+            .database_name = Some("tenant_2".to_owned());
+        let reconfigured = from_config(&config);
+        assert_eq!(
+            reconfigured.schema_reload_targets(&source, &HashSet::from([1])),
+            HashMap::from([("alias".to_owned(), HashSet::from([0]))]),
+            "DDL finishing on the old endpoint must refresh its remaining alias",
         );
     }
 
