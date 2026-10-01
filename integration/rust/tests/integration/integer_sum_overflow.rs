@@ -46,7 +46,7 @@ async fn integer_sum_bounds_across_shards() -> Result<(), Box<dyn std::error::Er
                     format!("SELECT SUM(amount)::{sql_type} FROM integer_sum_overflow_test");
                 let reference = format!(
                     "SELECT SUM(amount)::{sql_type}
-                     FROM (VALUES ({left}::bigint), ({right}::bigint)) AS sample(amount)"
+                     FROM (VALUES ('{left}'::bigint), ('{right}'::bigint)) AS sample(amount)"
                 );
                 for binary in [false, true] {
                     let actual = if binary {
