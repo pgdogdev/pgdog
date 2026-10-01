@@ -190,40 +190,6 @@ impl Binding {
         }
     }
 
-    pub(super) fn state_check(&self) -> bool {
-        match self {
-            Binding::Direct(server) => {
-                debug!(
-                    "server is in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-                matches!(
-                    server.stats().get_state(),
-                    State::Idle
-                        | State::IdleInTransaction
-                        | State::CopyMode
-                        | State::TransactionError
-                )
-            }
-            Binding::MultiShard(servers) => servers.iter().all(|server| {
-                debug!(
-                    "server is in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-                matches!(
-                    server.stats().get_state(),
-                    State::Idle
-                        | State::IdleInTransaction
-                        | State::CopyMode
-                        | State::TransactionError
-                )
-            }),
-            _ => true,
-        }
-    }
-
     /// Execute a query on all servers.
     pub(crate) async fn execute(
         &mut self,

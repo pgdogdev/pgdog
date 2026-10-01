@@ -27,7 +27,7 @@ impl QueryParser {
             .shards_calculator
             .push(ShardWithPriority::new_table(Shard::All));
 
-        let route = Route::write(context.shards_calculator.shard()).ddl();
+        let route = Route::write(context.shards_calculator.shard()).transaction_control();
 
         match stmt.kind {
             TRANS_STMT_COMMIT => {

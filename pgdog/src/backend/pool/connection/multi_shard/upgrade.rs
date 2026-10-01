@@ -55,14 +55,10 @@ impl<'a> MultiShardUpgrade<'a> {
             .collect::<Vec<_>>();
 
         let mut binding = match mem::take(&mut self.connection.binding) {
-            Binding::Direct(mut server) => {
-                // In-transaction extended protocol that prepares statements via
-                // Parse, Describe, Flush leaves servers out-of-sync since we treat
-                // those as direct-to-shard queries.
-                if !server.in_sync() {
-                    server.synchronize().await?;
-                }
-
+            Binding::Direct(server) => {
+                // NOTE: the server can be in a partially comitted state, e.g.,
+                // implicit transaction. We expect the client to send a final `Sync`
+                // in this case.
                 servers.push(server.server);
 
                 MultiBinding {
@@ -74,13 +70,7 @@ impl<'a> MultiShardUpgrade<'a> {
             }
 
             Binding::MultiShard(mut binding) => {
-                // Same story as the direct handling above.
-                for server in binding.servers.iter_mut() {
-                    if !server.in_sync() {
-                        server.synchronize().await?;
-                    }
-                }
-
+                // NOTE: same note on partial state as above.
                 binding.servers.extend(servers);
                 binding.state.update(total_shards, route);
 

@@ -3,7 +3,6 @@
 use futures::future::try_join_all;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
 use crate::{
     admin::server::AdminServer,
@@ -111,10 +110,6 @@ impl Connection {
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         self.ensure_connected(request, route).await?;
-
-        if !self.binding.state_check() {
-            return Err(Error::NotInSync);
-        }
 
         Ok(())
     }
