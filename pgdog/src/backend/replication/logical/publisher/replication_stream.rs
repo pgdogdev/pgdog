@@ -108,12 +108,8 @@ impl ReplicationStream {
                 missed
             );
         }
-        let measured_at = Instant::now();
         let lag = slot.replication_lag().await?;
-        self.updater.update(|p| {
-            p.replication_lag = Some(lag.lag);
-            p.source_measured_at = Some(measured_at);
-        });
+        self.updater.update(|p| p.replication_lag = Some(lag.lag()));
         Ok(())
     }
 

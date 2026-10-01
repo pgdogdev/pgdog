@@ -12,7 +12,6 @@ use pgdog_stats::MissedRows;
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ReplicationShardProgress {
     pub(crate) replication_lag: Option<i64>,
-    pub(crate) source_measured_at: Option<Instant>,
     pub(crate) last_transaction: Option<Instant>,
     pub(crate) applied_lsn: Option<Lsn>,
     pub(crate) missed_rows: MissedRows,
@@ -88,13 +87,10 @@ impl ReplicationProgress {
 
     /// The combined progress of every shard, as reported to `SHOW TASKS` and
     /// read by the cutover policy. `lag_bytes` stays `None` until every shard
-    /// has reported one. `lag_age_ms` is the age of the oldest lag measurement,
-    /// `None` until every shard has measured one.
+    /// has reported one.
     pub(crate) fn snapshot(&self) -> pgdog_stats::ReplicationProgress {
         let mut lag: Option<u64> = None;
         let mut every_shard_reported = true;
-        let mut oldest_lag_measurement: Option<Instant> = None;
-        let mut every_lag_measured = true;
         let mut last_transaction: Option<Instant> = None;
         let mut rows = 0;
         let mut bytes = 0;
@@ -106,13 +102,6 @@ impl ReplicationProgress {
             match shard.lag_bytes() {
                 Some(shard_lag) => lag = Some(lag.map_or(shard_lag, |max| max.max(shard_lag))),
                 None => every_shard_reported = false,
-            }
-            match shard.source_measured_at {
-                Some(measured_at) => {
-                    oldest_lag_measurement =
-                        Some(oldest_lag_measurement.map_or(measured_at, |min| min.min(measured_at)))
-                }
-                None => every_lag_measured = false,
             }
             if let Some(applied) = shard.last_transaction {
                 last_transaction = Some(last_transaction.map_or(applied, |max| max.max(applied)));
@@ -127,10 +116,6 @@ impl ReplicationProgress {
 
         pgdog_stats::ReplicationProgress {
             lag_bytes: every_shard_reported.then_some(lag).flatten(),
-            lag_age_ms: every_lag_measured
-                .then_some(oldest_lag_measurement)
-                .flatten()
-                .map(|measured_at| measured_at.elapsed().as_millis() as u64),
             last_transaction_ms: last_transaction
                 .map(|applied| applied.elapsed().as_millis() as u64),
             rows,
@@ -243,22 +228,5 @@ mod tests {
             .update(|p| p.last_transaction = Some(recent));
 
         assert_eq!(progress.snapshot().last_transaction_ms, Some(0));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn lag_age_is_oldest_measurement_once_every_shard_measured() {
-        let progress = ReplicationProgress::new(2);
-
-        progress
-            .updater_for_shard(0)
-            .update(|p| p.source_measured_at = Some(tokio::time::Instant::now()));
-        assert_eq!(progress.snapshot().lag_age_ms, None);
-
-        tokio::time::advance(Duration::from_millis(300)).await;
-        progress
-            .updater_for_shard(1)
-            .update(|p| p.source_measured_at = Some(tokio::time::Instant::now()));
-
-        assert_eq!(progress.snapshot().lag_age_ms, Some(300));
     }
 }

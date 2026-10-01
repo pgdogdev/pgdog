@@ -675,7 +675,6 @@ mod test {
                 direction: ReplicationDirection::Reverse,
                 progress: ReplicationProgress {
                     lag_bytes: Some(2048),
-                    lag_age_ms: Some(300),
                     last_transaction_ms: Some(150),
                     rows: 10,
                     bytes: 4096,

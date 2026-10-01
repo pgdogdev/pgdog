@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::api::Task;
-use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::schema_sync::{SchemaSyncBuilder, SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::{TaskContext, TaskId};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
@@ -45,8 +45,8 @@ pub(crate) struct ReplicationTask {
     /// of waiting for an operator `CUTOVER`.
     #[builder(default)]
     pub(crate) auto_cutover: bool,
-    pub(crate) schema_sync: SchemaSyncTask,
-    pub(crate) validation: Option<SchemaSyncTask>,
+    pub(crate) schema_sync: SchemaSyncBuilder,
+    pub(crate) validate: bool,
 }
 
 /// Executes the whole replication process. It runs a replication until a cutover,
@@ -80,14 +80,14 @@ impl Task for ReplicationTask {
         let Self {
             state,
             schema_sync,
-            validation,
+            validate,
             auto_cutover,
         } = self;
 
-        let mut replication = Replication::new(&ctx, state.clone());
+        let mut replication = Replication::new(&ctx, state.clone(), schema_sync, validate);
         // run the replication until it's stopped - it can cutover multiple times but
         // it's stopped eventually only by the cancellation process.
-        let result = replication.run(schema_sync, validation, auto_cutover).await;
+        let result = replication.run(auto_cutover).await;
         replication.resume_traffic();
 
         let stopped_in_rollback_window = replication.cancelled()
@@ -146,57 +146,60 @@ impl ReplicationTask {
 struct Replication<'a> {
     ctx: &'a TaskContext<ReplicationTask>,
     state: ReshardingState,
+    schema_sync: SchemaSyncBuilder,
+    validation_stage: PostDataValidationStage,
     direction: ReplicationDirection,
     maintenance: MaintenanceMode,
 }
 
 impl<'a> Replication<'a> {
-    fn new(ctx: &'a TaskContext<ReplicationTask>, state: ReshardingState) -> Self {
+    fn new(
+        ctx: &'a TaskContext<ReplicationTask>,
+        state: ReshardingState,
+        schema_sync: SchemaSyncBuilder,
+        validate: bool,
+    ) -> Self {
+        let validation_stage = if validate {
+            config().config.resharding.post_data_validation
+        } else {
+            PostDataValidationStage::Off
+        };
+
         Self {
             ctx,
             state,
+            schema_sync,
+            validation_stage,
             direction: ReplicationDirection::Forward,
             maintenance: MaintenanceMode::new(),
         }
     }
 
-    async fn run(
-        &mut self,
-        schema_sync: SchemaSyncTask,
-        validation: Option<SchemaSyncTask>,
-        auto_cutover: bool,
-    ) -> Result<(), Error> {
-        let stage = config().config.resharding.post_data_validation;
-        let validation_at = |point| validation.as_ref().filter(|_| stage == point);
-
+    async fn run(&mut self, auto_cutover: bool) -> Result<(), Error> {
         info!(
-            "[replication] starting {}, auto_cutover={auto_cutover}, post_data_validation={stage}",
-            self.state.databases()
+            "[replication] starting {}, auto_cutover={auto_cutover}, post_data_validation={}",
+            self.state.databases(),
+            self.validation_stage
         );
-        self.replicate_until_cutover(
-            auto_cutover,
-            PostDataValidationStage::DuringReplication,
-            validation_at(PostDataValidationStage::DuringReplication),
+        self.replicate_until_cutover(auto_cutover, PostDataValidationStage::DuringReplication)
+            .await?;
+        self.sync_schema(
+            self.schema_sync
+                .clone()
+                .phase(SchemaSyncPhase::Cutover)
+                .ignore_errors(true)
+                .build(),
         )
         .await?;
-        self.sync_schema(schema_sync).await?;
-        Self::validate_post_data(
-            self.ctx,
-            &self.state,
-            PostDataValidationStage::BeforeCutover,
-            validation_at(PostDataValidationStage::BeforeCutover),
-        )
-        .await?;
+        self.post_data_validation(PostDataValidationStage::BeforeCutover)
+            .await?;
 
         loop {
             self.cutover().await?;
             self.flip_direction();
-            self.replicate_until_cutover(
-                false,
-                PostDataValidationStage::AfterCutover,
-                validation_at(PostDataValidationStage::AfterCutover),
-            )
-            .await?;
+            self.replicate_until_cutover(false, PostDataValidationStage::AfterCutover)
+                .await?;
+            self.validation_stage = PostDataValidationStage::Off;
             self.sync_schema(
                 SchemaSyncTask::builder()
                     .databases(self.state.databases())
@@ -209,65 +212,6 @@ impl<'a> Replication<'a> {
         }
     }
 
-    async fn validate_post_data(
-        ctx: &TaskContext<ReplicationTask>,
-        state: &ReshardingState,
-        stage: PostDataValidationStage,
-        validation: Option<&SchemaSyncTask>,
-    ) -> Result<(), Error> {
-        let Some(validation) = validation else {
-            return Ok(());
-        };
-        let validation = if stage == PostDataValidationStage::AfterCutover {
-            let databases = state.databases();
-            SchemaSyncTask::builder()
-                .databases(Databases {
-                    source: databases.destination,
-                    destination: databases.source,
-                })
-                .publication(state.publication.clone())
-                .phase(SchemaSyncPhase::PostDataValidation)
-                .build()
-        } else {
-            validation.clone()
-        };
-        match ctx.run(validation).await {
-            Ok(()) => {
-                info!("[replication] post-data validation finished at {stage}");
-                Ok(())
-            }
-            Err(SchemaSyncError::Aborted) if ctx.cancellation_token().is_cancelled() => {
-                Err(Error::ReplicationAborted)
-            }
-            Err(err) => {
-                warn!("[replication] post-data validation failed at {stage}: {err}");
-                Err(err.into())
-            }
-        }
-    }
-
-    fn resume_traffic(&mut self) {
-        self.maintenance.resume_traffic();
-    }
-
-    fn cancelled(&self) -> bool {
-        self.ctx.cancellation_token().is_cancelled()
-    }
-
-    async fn sync_schema(&self, schema_sync: SchemaSyncTask) -> Result<(), Error> {
-        info!("Run schema sync in {} direction", self.direction);
-        self.ctx.set_status(ReplicationStatus::SyncingSchema);
-        self.ctx.run(schema_sync).await?;
-        Ok(())
-    }
-
-    fn flip_direction(&mut self) {
-        self.direction = match self.direction {
-            ReplicationDirection::Reverse => ReplicationDirection::Forward,
-            ReplicationDirection::Forward => ReplicationDirection::Reverse,
-        };
-    }
-
     /// Run the replication until we get the cutover signal and [`CutoverPolicy`]
     /// waited for the stop_traffic conditions. When the streams do not drain
     /// the source WAL in time, resume the traffic and start the replication again.
@@ -275,21 +219,13 @@ impl<'a> Replication<'a> {
         &mut self,
         auto_cutover: bool,
         stage: PostDataValidationStage,
-        validation: Option<&SchemaSyncTask>,
     ) -> Result<(), Error> {
-        let validation_gates_cutover = stage != PostDataValidationStage::AfterCutover;
+        let wait_for_validation = stage != PostDataValidationStage::AfterCutover;
         let ctx = self.ctx;
         let direction = self.direction;
         let task_cancel = ctx.cancellation_token();
         let mut cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
-        let mut validation_run = pin!(Self::validate_post_data(
-            ctx,
-            &self.state,
-            stage,
-            validation,
-        ));
-        let mut validation_done = false;
-        orchestrator_state(OrchestratorState::Replication);
+        let mut validation = pin!(self.post_data_validation(stage).fuse());
 
         loop {
             let progress = ReplicationProgress::new(self.state.source.shards().len());
@@ -324,13 +260,8 @@ impl<'a> Replication<'a> {
                         result = &mut cluster_run => {
                             break result.and(Err(Error::ReplicationStreamStopped));
                         },
-                        result = &mut validation_run, if !validation_done => {
-                            validation_done = true;
-                            if validation_gates_cutover {
-                                result?;
-                            }
-                        },
-                        result = &mut cutover_run, if validation_done || !validation_gates_cutover => {
+                        result = &mut validation => result?,
+                        result = &mut cutover_run, if !wait_for_validation || validation.is_terminated() => {
                             break result.map(|reason| cutover_reason = Some(reason));
                         },
                     }
@@ -381,6 +312,79 @@ impl<'a> Replication<'a> {
             }
             return result;
         }
+    }
+
+    fn post_data_validation(
+        &self,
+        stage: PostDataValidationStage,
+    ) -> impl Future<Output = Result<(), Error>> + use<'a> {
+        let ctx = self.ctx;
+        let task = (self.validation_stage == stage).then(|| match stage {
+            PostDataValidationStage::AfterCutover => self.reverse_validation(),
+            _ => self
+                .schema_sync
+                .clone()
+                .phase(SchemaSyncPhase::PostDataValidation)
+                .build(),
+        });
+        async move {
+            let Some(task) = task else {
+                return Ok(());
+            };
+            match ctx.run(task).await {
+                Ok(()) => {
+                    info!("[replication] post-data validation finished at {stage}");
+                    Ok(())
+                }
+                Err(SchemaSyncError::Aborted) if ctx.cancellation_token().is_cancelled() => {
+                    Err(Error::ReplicationAborted)
+                }
+                Err(err) if stage == PostDataValidationStage::AfterCutover => {
+                    warn!(
+                        "[replication] post-data validation failed at {stage}, replication continues: {err}"
+                    );
+                    Ok(())
+                }
+                Err(err) => {
+                    warn!("[replication] post-data validation failed at {stage}: {err}");
+                    Err(err.into())
+                }
+            }
+        }
+    }
+
+    fn reverse_validation(&self) -> SchemaSyncTask {
+        let databases = self.state.databases();
+        SchemaSyncTask::builder()
+            .databases(Databases {
+                source: databases.destination,
+                destination: databases.source,
+            })
+            .publication(self.state.publication.clone())
+            .phase(SchemaSyncPhase::PostDataValidation)
+            .build()
+    }
+
+    fn resume_traffic(&mut self) {
+        self.maintenance.resume_traffic();
+    }
+
+    fn cancelled(&self) -> bool {
+        self.ctx.cancellation_token().is_cancelled()
+    }
+
+    async fn sync_schema(&self, schema_sync: SchemaSyncTask) -> Result<(), Error> {
+        info!("Run schema sync in {} direction", self.direction);
+        self.ctx.set_status(ReplicationStatus::SyncingSchema);
+        self.ctx.run(schema_sync).await?;
+        Ok(())
+    }
+
+    fn flip_direction(&mut self) {
+        self.direction = match self.direction {
+            ReplicationDirection::Reverse => ReplicationDirection::Forward,
+            ReplicationDirection::Forward => ReplicationDirection::Reverse,
+        };
     }
 
     /// Wait for cutover initial conditions, stop the traffic
