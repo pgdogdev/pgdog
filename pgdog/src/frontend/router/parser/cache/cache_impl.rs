@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 use super::super::{Error, Route};
-use super::{super::parse_edge_comment, Ast, AstContext, AstQuery};
+use super::{super::parse_edge_comment, Ast, AstContext, AstQuery, ClientQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
@@ -30,6 +30,7 @@ pub(crate) struct Stats {
     pub(crate) parse_time: Duration,
     /// Fingerprints calculated.
     pub(crate) fingerprints: usize,
+    pub(crate) memory_allocated: usize,
 }
 
 impl Stats {
@@ -46,7 +47,7 @@ impl Stats {
 #[derive(Debug)]
 pub(super) struct Inner {
     /// Least-recently-used cache.
-    queries: LruCache<Arc<str>, Ast>,
+    queries: LruCache<Arc<str>, Arc<Ast>>,
     /// Cache global stats.
     pub(super) stats: Stats,
 }
@@ -89,7 +90,7 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-    ) -> Result<Ast, Error> {
+    ) -> Result<ClientQuery, Error> {
         match query {
             BufferedQuery::Prepared(_) => self.parse(query, ctx, prepared_statements),
             BufferedQuery::Query(_) => self.simple(query, ctx, prepared_statements),
@@ -107,56 +108,55 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-    ) -> Result<Ast, Error> {
+    ) -> Result<ClientQuery, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-        {
+        let ast = {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
+            let ast = guard.queries.get(query_and_comment.query).map(|entry| {
                 entry.stats.lock().hits += 1; // No contention on this.
-                entry.clone()
+                Ok::<_, Error>(Arc::clone(entry))
             });
-            if let Some(mut ast) = ast {
+            if ast.is_some() {
                 guard.stats.hits += 1;
-                ast.comment_role = query_and_comment.role;
-                ast.comment_shard = query_and_comment.shard;
-                ast.comment_sharding_key = query_and_comment.sharding_key;
-
-                return Ok(ast);
             }
+            ast
         }
+        .unwrap_or_else(|| {
+            // Parse query without holding lock.
+            let ast = Arc::new(Ast::parse_and_rewrite(
+                &AstQuery {
+                    original_query: query,
+                    query_without_comment: query_and_comment.query,
+                },
+                ctx,
+                prepared_statements,
+            )?);
+            let parse_time = ast.stats.lock().parse_time;
 
-        // Parse query without holding lock.
-        let mut entry = Ast::new(
-            &AstQuery {
-                original_query: query,
-                query_without_comment: query_and_comment.query,
-            },
-            ctx,
-            prepared_statements,
-        )?;
-        entry.comment_role = query_and_comment.role;
-        entry.comment_shard = query_and_comment.shard;
-        entry.comment_sharding_key = query_and_comment.sharding_key;
+            let mut guard = self.inner.lock();
+            // Don't cache when a shard comment routed the query AND a rewrite
+            // was applied: the cache key is the comment-stripped body, so a
+            // subsequent uncommented lookup would hit this entry and receive an
+            // already-rewritten plan that was built against the commented
+            // (direct-shard) variant.
+            let cacheable =
+                query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty();
+            if cacheable {
+                guard
+                    .queries
+                    .put(ast.query_without_comment.clone(), Arc::clone(&ast));
+            }
+            guard.stats.misses += 1;
+            guard.stats.parse_time += parse_time;
+            Ok(ast)
+        })?;
 
-        let parse_time = entry.stats.lock().parse_time;
-
-        let mut guard = self.inner.lock();
-        // Don't cache when a shard comment routed the query AND a rewrite
-        // was applied: the cache key is the comment-stripped body, so a
-        // subsequent uncommented lookup would hit this entry and receive an
-        // already-rewritten plan that was built against the commented
-        // (direct-shard) variant.
-        let cacheable = entry.comment_shard.is_none() || entry.rewrite_plan.is_empty();
-        if cacheable {
-            guard
-                .queries
-                .put(entry.query_without_comment.clone(), entry.clone());
-        }
-        guard.stats.misses += 1;
-        guard.stats.parse_time += parse_time;
-
-        Ok(entry)
+        Ok(ClientQuery {
+            cached: true,
+            comment: Arc::new(query_and_comment.comment),
+            ast,
+        })
     }
 
     /// Parse and rewrite a statement but do not store it in the cache,
@@ -166,46 +166,50 @@ impl Cache {
         query: &BufferedQuery,
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
-    ) -> Result<Ast, Error> {
+    ) -> Result<ClientQuery, Error> {
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
 
-        let mut entry = Ast::new(
+        let ast = Arc::new(Ast::parse_and_rewrite(
             &AstQuery {
                 original_query: query,
                 query_without_comment: query_and_comment.query,
             },
             ctx,
             prepared_statements,
-        )?;
-        entry.cached = false;
-        entry.comment_role = query_and_comment.role;
-        entry.comment_shard = query_and_comment.shard;
-        entry.comment_sharding_key = query_and_comment.sharding_key;
-
-        let parse_time = entry.stats.lock().parse_time;
+        )?);
 
         let mut guard = self.inner.lock();
         guard.stats.misses += 1;
-        guard.stats.parse_time += parse_time;
-        Ok(entry)
+        guard.stats.parse_time += ast.stats.lock().parse_time;
+
+        Ok(ClientQuery {
+            cached: false,
+            comment: Arc::new(query_and_comment.comment),
+            ast,
+        })
     }
 
-    pub(crate) fn record(&self, query: &str) -> Result<Ast, ParseError> {
-        {
+    pub(crate) fn record(&self, query: &str) -> Result<ClientQuery, ParseError> {
+        let ast = {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get_mut(query) {
-                entry.stats.lock().hits += 1;
-                return Ok(entry.clone());
-            }
+            guard.queries.get(query).map(|ast| {
+                ast.stats.lock().hits += 1;
+                Ok::<_, ParseError>(Arc::clone(ast))
+            })
         }
+        .unwrap_or_else(|| {
+            let ast = Arc::new(Ast::parse(query)?);
+            let mut guard = self.inner.lock();
+            guard.queries.put(query.into(), Arc::clone(&ast));
+            guard.stats.misses += 1;
+            Ok(ast)
+        })?;
 
-        let entry = Ast::new_record(query)?;
-
-        let mut guard = self.inner.lock();
-        guard.queries.put(query.into(), entry.clone());
-        guard.stats.misses += 1;
-
-        Ok(entry)
+        Ok(ClientQuery {
+            cached: true,
+            comment: Default::default(),
+            ast,
+        })
     }
 
     /// Record a query sent over the simple protocol, while removing parameters.
@@ -231,11 +235,11 @@ impl Cache {
             }
         }
 
-        let entry = Ast::new_record(normalized)?;
+        let entry = Ast::parse(normalized)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized.into(), entry);
+        guard.queries.put(normalized.into(), Arc::new(entry));
         guard.stats.misses += 1;
 
         Ok(())
@@ -264,12 +268,13 @@ impl Cache {
         for stat in query_stats {
             stats.direct += stat.direct;
             stats.multi += stat.multi;
+            stats.memory_allocated += stat.memory_allocated;
         }
         (stats, len)
     }
 
     /// Get a copy of all queries stored in the cache.
-    pub(crate) fn queries() -> HashMap<Arc<str>, Ast> {
+    pub(crate) fn queries() -> HashMap<Arc<str>, Arc<Ast>> {
         Self::get()
             .inner
             .lock()

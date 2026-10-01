@@ -1,5 +1,8 @@
 use crate::{
-    frontend::router::parser::{DistinctBy, Shard, ShardWithPriority},
+    frontend::router::parser::{
+        DistinctBy, OrderBy, Shard, ShardWithPriority,
+        rewrite::statement::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan},
+    },
     net::{BindComplete, DataRow, Field, Format},
 };
 
@@ -57,6 +60,80 @@ fn test_inconsistent_data_rows() {
         let error_str = format!("{}", error);
         assert!(error_str.contains("inconsistent column count in data rows"));
         assert!(error_str.contains("expected 2 columns, got 1 columns"));
+    }
+}
+
+#[test]
+fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
+    let mut plan = ProjectionRewritePlan::default();
+    plan.order_by_helpers.push(OrderByHelper {
+        sort_position: 0,
+        source: OrderBySource::Column("price".into()),
+        alias: "__pgdog_order_col0".into(),
+        injected: true,
+    });
+    let mut route = Route::select(
+        ShardWithPriority::new_default_unset(Shard::All),
+        vec![OrderBy::AscColumn("__pgdog_order_col0".into())],
+        Default::default(),
+        Default::default(),
+        None,
+    );
+    route.projection_rewrite_plan = plan;
+    let mut multi_shard = MultiShard::new(vec![0, 1], &route);
+
+    let row_description = RowDescription::new(&[
+        Field::bigint("id"),
+        Field::text("value"),
+        Field::timestamp("created_at"),
+        Field::bigint("__pgdog_order_col0"),
+    ]);
+    assert!(
+        multi_shard
+            .handle_server_message(row_description.message())
+            .unwrap()
+            .is_none()
+    );
+    let client_description = multi_shard
+        .handle_server_message(row_description.message())
+        .unwrap()
+        .unwrap();
+    let client_description = RowDescription::from_bytes(client_description.to_bytes()).unwrap();
+    assert_eq!(
+        client_description
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["id", "value", "created_at"]
+    );
+
+    let mut first = DataRow::new();
+    first
+        .add(1_i64)
+        .add("first")
+        .add("2026-01-01 00:00:00")
+        .add(20_i64);
+    let mut second = DataRow::new();
+    second
+        .add(2_i64)
+        .add("second")
+        .add("2026-01-02 00:00:00")
+        .add(10_i64);
+    multi_shard.handle_server_message(first.message()).unwrap();
+    multi_shard.handle_server_message(second.message()).unwrap();
+
+    for _ in 0..2 {
+        multi_shard
+            .handle_server_message(CommandComplete::from_str("SELECT 1").message())
+            .unwrap();
+    }
+
+    for expected in [2_i64, 1_i64] {
+        let message = multi_shard.get_server_message().unwrap();
+        let row = DataRow::from_bytes(message.to_bytes()).unwrap();
+        assert_eq!(row.len(), 3);
+        assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), expected);
     }
 }
 

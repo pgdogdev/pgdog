@@ -5,10 +5,9 @@ mod strip;
 mod tests;
 
 use crate::backend::ShardingSchema;
-use crate::config::database::Role;
-use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::Error;
+use crate::frontend::RoutingComment;
 use crate::frontend::router::parser::comment::directive::Directive;
 use strip::{leading_block_comment, trailing_block_comment};
 
@@ -16,10 +15,8 @@ use strip::{leading_block_comment, trailing_block_comment};
 pub(crate) struct QueryAndComment<'a> {
     pub(crate) query: &'a str,
     #[cfg(test)]
-    pub(crate) comment: String,
-    pub(crate) role: Option<Role>,
-    pub(crate) shard: Option<ShardOrLookup>,
-    pub(crate) sharding_key: Option<String>,
+    pub(crate) raw_comment: String,
+    pub(in crate::frontend) comment: RoutingComment,
 }
 
 /// Extract SQL C-style block comments from both the beginning and the end
@@ -46,8 +43,6 @@ pub(crate) fn parse_edge_comment<'a>(
     if leading.is_none() && trailing.is_none() {
         return Ok(QueryAndComment {
             query,
-            #[cfg(test)]
-            comment: String::new(),
             ..Default::default()
         });
     }
@@ -78,14 +73,16 @@ pub(crate) fn parse_edge_comment<'a>(
     Ok(QueryAndComment {
         query: stripped,
         #[cfg(test)]
-        comment: match (leading, trailing) {
+        raw_comment: match (leading, trailing) {
             (Some(l), Some(t)) => format!("{} {}", l, t),
             (Some(l), None) => l.to_string(),
             (None, Some(t)) => t.to_string(),
             (None, None) => String::new(),
         },
-        sharding_key: directive.sharding_key,
-        shard: directive.shard_or_lookup,
-        role: directive.role,
+        comment: RoutingComment {
+            sharding_key: directive.sharding_key,
+            shard: directive.shard_or_lookup,
+            role: directive.role,
+        },
     })
 }

@@ -192,100 +192,80 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         stats_logger.spawn();
     }
 
-    match command {
-        None | Some(Commands::Run { .. }) => {
-            if config().config.general.dry_run {
-                info!("dry run mode enabled");
-            }
-
-            if general.two_phase_commit {
-                if let Some(ref path) = general.two_phase_commit_wal_dir {
-                    let checkpoint_interval =
-                        Duration::from_millis(general.two_phase_commit_wal_checkpoint_interval);
-                    let fsync_interval =
-                        Duration::from_millis(general.two_phase_commit_wal_fsync_interval);
-                    Manager::get()
-                        .enable_wal(
-                            path,
-                            Some(checkpoint_interval),
-                            general.two_phase_commit_wal_segment_size as usize,
-                            fsync_interval,
-                        )
-                        .await?;
-                } else {
-                    warn!("[2pc] wal disabled, 2pc will run without crash recovery")
+    let outcome = async {
+        match command {
+            None | Some(Commands::Run { .. }) => {
+                if config().config.general.dry_run {
+                    info!("dry run mode enabled");
                 }
-            }
 
-            let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
-            listener.listen().await?;
-        }
-
-        Some(ref command) => {
-            if let Commands::DataSync { .. } = command {
-                info!("🔄 entering data sync mode");
-                let result = cli::data_sync(command.clone()).await;
-                // Wait for the 2PC monitor to drain any in-flight cleanup
-                // before the process exits, even on error.
-                Manager::get().shutdown().await;
-                databases::shutdown();
-
-                if let Err(err) = result {
-                    error!("{}", err);
-                    return Err(err);
+                if general.two_phase_commit {
+                    if let Some(ref path) = general.two_phase_commit_wal_dir {
+                        let checkpoint_interval =
+                            Duration::from_millis(general.two_phase_commit_wal_checkpoint_interval);
+                        let fsync_interval =
+                            Duration::from_millis(general.two_phase_commit_wal_fsync_interval);
+                        Manager::get()
+                            .enable_wal(
+                                path,
+                                Some(checkpoint_interval),
+                                general.two_phase_commit_wal_segment_size as usize,
+                                fsync_interval,
+                            )
+                            .await?;
+                    } else {
+                        warn!("[2pc] wal disabled, 2pc will run without crash recovery")
+                    }
                 }
+
+                let mut listener = Listener::new(format!("{}:{}", general.host, general.port));
+                listener.listen().await?;
             }
 
-            if let Commands::SchemaSync { .. } = command {
-                info!("🔄 entering schema sync mode");
-                let result = cli::schema_sync(command.clone()).await;
-
-                // Wait for the 2PC monitor to drain any in-flight cleanup
-                // before the process exits, even on error.
-                Manager::get().shutdown().await;
-                databases::shutdown();
-
-                if let Err(err) = result {
-                    error!("{}", err);
-                    return Err(err);
+            Some(ref command) => {
+                if let Commands::DataSync { .. } = command {
+                    info!("🔄 entering data sync mode");
+                    cli::data_sync(command.clone()).await.inspect_err(|err| {
+                        error!("{}", err);
+                    })?;
                 }
-            }
 
-            if let Commands::Setup { database } = command {
-                info!("🔄 entering setup mode");
-                let result = cli::setup(database).await;
+                if let Commands::SchemaSync { .. } = command {
+                    info!("🔄 entering schema sync mode");
+                    cli::schema_sync(command.clone()).await.inspect_err(|err| {
+                        error!("{}", err);
+                    })?;
+                }
 
-                Manager::get().shutdown().await;
-                databases::shutdown();
+                if let Commands::Setup { database } = command {
+                    info!("🔄 entering setup mode");
+                    cli::setup(database).await?;
+                }
 
-                result?;
-            }
+                if let Commands::ReplicateAndCutover { .. } = command {
+                    info!("🔄 entering test mode");
+                    cli::replicate_and_cutover(command.clone()).await?;
+                }
 
-            if let Commands::ReplicateAndCutover { .. } = command {
-                info!("🔄 entering test mode");
-                let result = cli::replicate_and_cutover(command.clone()).await;
-
-                Manager::get().shutdown().await;
-                databases::shutdown();
-
-                result?;
-            }
-
-            if let Commands::Route { .. } = command {
-                let result = cli::route(command.clone()).await;
-
-                Manager::get().shutdown().await;
-                databases::shutdown();
-
-                if let Err(err) = result {
-                    error!("{}", err);
-                    return Err(err);
+                if let Commands::Route { .. } = command {
+                    cli::route(command.clone()).await.inspect_err(|err| {
+                        error!("{}", err);
+                    })?;
                 }
             }
         }
+
+        Ok(())
     }
+    .await;
 
-    api::tasks_storage().cancel_all();
+    frontend::comms::comms().shutdown();
+    api::tasks_storage()
+        .shutdown(general.shutdown_timeout())
+        .await;
+
+    Manager::get().shutdown().await;
+    databases::shutdown();
     tasks::shutdown().await;
 
     // Any shutdown routines go below.
@@ -293,7 +273,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     info!("🐕 PgDog is shutting down");
 
-    Ok(())
+    outcome
 }
 
 /// Install a SIGTERM handler that exits the process via [`exit`], running

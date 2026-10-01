@@ -9,4 +9,9 @@ if [[ -z "${CI:-}" ]] || ! command -v apt-get &>/dev/null; then
     exit 0
 fi
 
+if dpkg -s "$@" &>/dev/null; then
+    exit 0
+fi
+
+sudo apt-get update
 sudo apt-get install -y --no-install-recommends "$@"
