@@ -16,11 +16,13 @@ pub mod copy_data;
 pub mod replication;
 pub mod reshard;
 pub mod schema_sync;
+pub mod synchronize_tables;
 
 pub use copy_data::*;
 pub use replication::*;
 pub use reshard::*;
 pub use schema_sync::*;
+pub use synchronize_tables::*;
 
 /// Identity of a task in the registry. Ids are unique per registry.
 #[derive(

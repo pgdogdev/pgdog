@@ -1001,8 +1001,8 @@ async fn copy_data_cancelled_during_replication_removes_its_slots()
 }
 
 #[tokio::test]
-async fn copy_data_fails_when_post_data_index_rejects_copied_rows()
--> Result<(), Box<dyn std::error::Error>> {
+async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn std::error::Error>>
+{
     let schema = "copy_data_index_error";
     let destination = "copy_data_index_error_dest";
     let original_config = config();
@@ -1044,38 +1044,34 @@ async fn copy_data_fails_when_post_data_index_rejects_copied_rows()
 
         let mut state = state;
         state.reload()?;
-        let copied = run_task(
+        run_task(
             CopyDataTask::builder()
                 .state(state.clone())
                 .format(config().config.general.resharding_copy_format)
-                .schema_sync(schema_sync.phase(SchemaSyncPhase::Post).build())
                 .build(),
         )
-        .await;
+        .await?;
+        let post_data = run_task(schema_sync.phase(SchemaSyncPhase::Post).build()).await;
         state.drop_slots().await?;
 
         let mut server = state.destination.primary(0, &Request::default()).await?;
         let rows: Vec<i64> = server
             .fetch_all(format!("SELECT id FROM {schema}.items ORDER BY id"))
             .await?;
-        Ok::<_, Box<dyn std::error::Error>>((rows, copied))
+        Ok::<_, Box<dyn std::error::Error>>((rows, post_data))
     }
     .await;
 
     cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
-    let (rows, copied) = result?;
+    let (rows, post_data) = result?;
     assert_eq!(rows, [1, 2]);
     assert!(
         matches!(
-            &copied,
-            Err(TaskError::Failed(Error::SchemaSync(error)))
-                if matches!(
-                    error.as_ref(),
-                    SchemaSyncError::Backend(BackendError::ExecutionError(error))
-                        if error.code == "23505"
-                )
+            &post_data,
+            Err(TaskError::Failed(SchemaSyncError::Backend(BackendError::ExecutionError(error))))
+                if error.code == "23505"
         ),
-        "copy data did not report the unique index error: {copied:?}"
+        "post-data did not report the unique index error: {post_data:?}"
     );
     Ok(())
 }

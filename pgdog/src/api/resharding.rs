@@ -12,6 +12,7 @@ use tracing::warn;
 use crate::api::copy_data::CopyDataTask;
 use crate::api::replication::ReplicationTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
@@ -24,7 +25,7 @@ use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReshardTask {
     pub(crate) state: ReshardingState,
-    /// Skip pre-data schema sync, and skip post-data schema sync without a copy.
+    /// Skip the pre- and post-data schema sync.
     #[builder(default)]
     pub(crate) skip_schema_sync: bool,
     /// Only replicate; skip the initial data copy.
@@ -92,25 +93,32 @@ impl Task for ReshardTask {
                     CopyDataTask::builder()
                         .state(state.clone())
                         .format(config().config.general.resharding_copy_format)
-                        .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Post).build())
                         .build(),
                 )
                 .await?;
             }
 
-            // Post-data schema sync runs during the copy task.
-            // Replicate-only has no copy task, so restore its schema here.
-            // It reuses the schema dump from earlier schema sync calls,
-            // if they ran.
-            if self.replicate_only && !self.skip_schema_sync {
+            // Post-data schema sync (secondary indexes, constraints): the
+            // second half of schema sync, after the bulk load.
+            // It reuses dump schema from the earlier schema_sync
+            // calls if they were executed.
+            if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::FinalizingSchema);
                 ctx.run(
                     schema_sync
                         .clone()
                         .phase(SchemaSyncPhase::Post)
-                        .ignore_errors(true)
+                        .ignore_errors(self.replicate_only)
                         .build(),
                 )
+                .await?;
+            }
+
+            if !self.replicate_only {
+                ctx.set_status(ReshardStatus::SynchronizingTables);
+                ctx.run(SynchronizeTablesTask {
+                    state: state.clone(),
+                })
                 .await?;
             }
 
