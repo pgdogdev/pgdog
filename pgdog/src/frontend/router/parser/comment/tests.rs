@@ -85,7 +85,7 @@ fn test_primary_role_detection() {
     let schema = test_schema();
     let query = "SELECT * FROM users /* pgdog_role: primary */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.role, Some(Role::Primary));
+    assert_eq!(result.comment.role, Some(Role::Primary));
 }
 
 #[test]
@@ -98,8 +98,11 @@ fn test_role_and_shard_detection() {
 
     let query = "SELECT * FROM users /* pgdog_role: replica pgdog_shard: 2 */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.shard, Some(ShardOrLookup::Shard(Shard::Direct(2))));
-    assert_eq!(result.role, Some(Role::Replica));
+    assert_eq!(
+        result.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(2)))
+    );
+    assert_eq!(result.comment.role, Some(Role::Replica));
 }
 
 #[test]
@@ -107,7 +110,7 @@ fn test_replica_role_detection() {
     let schema = test_schema();
     let query = "SELECT * FROM users /* pgdog_role: replica */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.role, Some(Role::Replica));
+    assert_eq!(result.comment.role, Some(Role::Replica));
 }
 
 #[test]
@@ -115,7 +118,7 @@ fn test_invalid_role_detection() {
     let schema = test_schema();
     let query = "SELECT * FROM users /* pgdog_role: invalid */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.role, None);
+    assert_eq!(result.comment.role, None);
 }
 
 #[test]
@@ -123,7 +126,7 @@ fn test_no_role_comment() {
     let schema = test_schema();
     let query = "SELECT * FROM users";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.role, None);
+    assert_eq!(result.comment.role, None);
 }
 
 #[test]
@@ -131,7 +134,7 @@ fn test_remove_comment_leading() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* hello */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* hello */");
+    assert_eq!(qac.raw_comment, "/* hello */");
 }
 
 #[test]
@@ -139,7 +142,7 @@ fn test_remove_comment_trailing() {
     let schema = test_schema();
     let qac = parse_edge_comment("SELECT 1 /* hello */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* hello */");
+    assert_eq!(qac.raw_comment, "/* hello */");
 }
 
 #[test]
@@ -147,19 +150,22 @@ fn test_remove_comment_no_surrounding_whitespace() {
     let schema = test_schema();
     let qac = parse_edge_comment("/*a*/SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/*a*/");
+    assert_eq!(qac.raw_comment, "/*a*/");
 
     let qac = parse_edge_comment("SELECT 1/*b*/", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/*b*/");
+    assert_eq!(qac.raw_comment, "/*b*/");
 }
 
 #[test]
 fn test_remove_comment_none() {
     let schema = test_schema();
-    assert_eq!(parse_edge_comment("SELECT 1", &schema).unwrap().comment, "");
-    assert_eq!(parse_edge_comment("", &schema).unwrap().comment, "");
-    assert_eq!(parse_edge_comment("   ", &schema).unwrap().comment, "");
+    assert_eq!(
+        parse_edge_comment("SELECT 1", &schema).unwrap().raw_comment,
+        ""
+    );
+    assert_eq!(parse_edge_comment("", &schema).unwrap().raw_comment, "");
+    assert_eq!(parse_edge_comment("   ", &schema).unwrap().raw_comment, "");
 }
 
 #[test]
@@ -170,13 +176,13 @@ fn test_remove_comment_in_middle_not_matched() {
     assert_eq!(
         parse_edge_comment("SELECT /* inline */ 1", &schema)
             .unwrap()
-            .comment,
+            .raw_comment,
         ""
     );
     assert_eq!(
         parse_edge_comment("SELECT 1 /* a */ FROM t", &schema)
             .unwrap()
-            .comment,
+            .raw_comment,
         ""
     );
 }
@@ -187,7 +193,7 @@ fn test_remove_comment_multiline_block() {
     let query = "/* line1\n line2\n line3 */ SELECT 1";
     let qac = parse_edge_comment(query, &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* line1\n line2\n line3 */");
+    assert_eq!(qac.raw_comment, "/* line1\n line2\n line3 */");
 }
 
 #[test]
@@ -195,11 +201,11 @@ fn test_remove_comment_with_surrounding_newlines() {
     let schema = test_schema();
     let qac = parse_edge_comment("\n\t/* hi */\n SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* hi */");
+    assert_eq!(qac.raw_comment, "/* hi */");
 
     let qac = parse_edge_comment("SELECT 1\n /* hi */\n\t", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* hi */");
+    assert_eq!(qac.raw_comment, "/* hi */");
 }
 
 #[test]
@@ -207,7 +213,7 @@ fn test_remove_comment_only_comment() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* only */", &schema).unwrap();
     assert_eq!(qac.query, "");
-    assert_eq!(qac.comment, "/* only */");
+    assert_eq!(qac.raw_comment, "/* only */");
 }
 
 #[test]
@@ -215,8 +221,11 @@ fn test_remove_comment_preserves_inner_content() {
     let schema = test_schema();
     let qac = parse_edge_comment("SELECT 'a/*b*/c' /* pgdog_shard: 1 */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 'a/*b*/c'");
-    assert_eq!(qac.comment, "/* pgdog_shard: 1 */");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(qac.raw_comment, "/* pgdog_shard: 1 */");
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -225,11 +234,11 @@ fn test_remove_comment_non_greedy() {
     // Ensure the regex doesn't greedily span across two separate comments.
     let qac = parse_edge_comment("/* first */ SELECT /* mid */ 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT /* mid */ 1");
-    assert_eq!(qac.comment, "/* first */");
+    assert_eq!(qac.raw_comment, "/* first */");
 
     let qac = parse_edge_comment("SELECT /* mid */ 1 /* last */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT /* mid */ 1");
-    assert_eq!(qac.comment, "/* last */");
+    assert_eq!(qac.raw_comment, "/* last */");
 }
 
 #[test]
@@ -237,7 +246,7 @@ fn test_remove_comment_empty_body() {
     let schema = test_schema();
     let qac = parse_edge_comment("/**/ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/**/");
+    assert_eq!(qac.raw_comment, "/**/");
 }
 
 #[test]
@@ -245,16 +254,19 @@ fn test_remove_comment_multiple_leading() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* a */ /* b */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* b */");
+    assert_eq!(qac.raw_comment, "/* a */ /* b */");
 
     let qac = parse_edge_comment("/* a *//* b */SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a *//* b */");
+    assert_eq!(qac.raw_comment, "/* a *//* b */");
 
     let qac = parse_edge_comment("/* a */ /* pgdog_shard: 1 */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* pgdog_shard: 1 */");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(qac.raw_comment, "/* a */ /* pgdog_shard: 1 */");
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -262,7 +274,7 @@ fn test_remove_comment_multiple_trailing() {
     let schema = test_schema();
     let qac = parse_edge_comment("SELECT 1 /* a */ /* b */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* b */");
+    assert_eq!(qac.raw_comment, "/* a */ /* b */");
 
     let qac = parse_edge_comment(
         "SELECT 1 /* pgdog_role: primary *//* pgdog_shard: 1 */",
@@ -270,9 +282,15 @@ fn test_remove_comment_multiple_trailing() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* pgdog_role: primary *//* pgdog_shard: 1 */");
-    assert_eq!(qac.role, Some(Role::Primary));
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(
+        qac.raw_comment,
+        "/* pgdog_role: primary *//* pgdog_shard: 1 */"
+    );
+    assert_eq!(qac.comment.role, Some(Role::Primary));
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -280,7 +298,7 @@ fn test_remove_comment_unterminated_leading() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* no end here SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "/* no end here SELECT 1");
-    assert_eq!(qac.comment, "");
+    assert_eq!(qac.raw_comment, "");
 }
 
 #[test]
@@ -288,7 +306,7 @@ fn test_remove_comment_valid_then_unterminated() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* ok */ /* oops SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "/* oops SELECT 1");
-    assert_eq!(qac.comment, "/* ok */");
+    assert_eq!(qac.raw_comment, "/* ok */");
 }
 
 #[test]
@@ -298,7 +316,7 @@ fn test_remove_comment_trailing_interior_poison() {
     // comment already contains a `*/`, so nothing is extracted.
     let qac = parse_edge_comment("SELECT /* a */ b */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT /* a */ b */");
-    assert_eq!(qac.comment, "");
+    assert_eq!(qac.raw_comment, "");
 }
 
 #[test]
@@ -308,7 +326,7 @@ fn test_remove_comment_trailing_clean_after_poison() {
     // part of the query looks poisoned.
     let qac = parse_edge_comment("SELECT /* a */ b */ /* c */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT /* a */ b */");
-    assert_eq!(qac.comment, "/* c */");
+    assert_eq!(qac.raw_comment, "/* c */");
 }
 
 #[test]
@@ -316,7 +334,7 @@ fn test_remove_comment_three_leading() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* a */ /* b */ /* c */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* b */ /* c */");
+    assert_eq!(qac.raw_comment, "/* a */ /* b */ /* c */");
 }
 
 #[test]
@@ -324,7 +342,7 @@ fn test_remove_comment_three_trailing() {
     let schema = test_schema();
     let qac = parse_edge_comment("SELECT 1 /* a */ /* b */ /* c */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* b */ /* c */");
+    assert_eq!(qac.raw_comment, "/* a */ /* b */ /* c */");
 }
 
 #[test]
@@ -332,7 +350,7 @@ fn test_strips_both_leading_and_trailing() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* lead */ SELECT 1 /* trail */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* lead */ /* trail */");
+    assert_eq!(qac.raw_comment, "/* lead */ /* trail */");
 }
 
 #[test]
@@ -344,7 +362,10 @@ fn test_strips_datadog_trailing_with_pgdog_leading() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(0))));
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(0)))
+    );
 }
 
 #[test]
@@ -356,7 +377,10 @@ fn test_strips_directive_in_trailing_with_leading_noise() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -368,7 +392,10 @@ fn test_leading_wins_on_conflicting_shard() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(0))));
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(0)))
+    );
 }
 
 #[test]
@@ -380,8 +407,11 @@ fn test_role_and_shard_split_across_sides() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.role, Some(Role::Primary));
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(qac.comment.role, Some(Role::Primary));
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -389,7 +419,7 @@ fn test_strips_stacked_comments_on_both_sides() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* a */ /* b */ SELECT 1 /* c */ /* d */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* a */ /* b */ /* c */ /* d */");
+    assert_eq!(qac.raw_comment, "/* a */ /* b */ /* c */ /* d */");
 }
 
 #[test]
@@ -397,11 +427,11 @@ fn test_remove_comment_delimiter_only_input() {
     let schema = test_schema();
     let qac = parse_edge_comment("/*", &schema).unwrap();
     assert_eq!(qac.query, "/*");
-    assert_eq!(qac.comment, "");
+    assert_eq!(qac.raw_comment, "");
 
     let qac = parse_edge_comment("*/", &schema).unwrap();
     assert_eq!(qac.query, "*/");
-    assert_eq!(qac.comment, "");
+    assert_eq!(qac.raw_comment, "");
 }
 
 #[test]
@@ -409,8 +439,11 @@ fn test_remove_comment_directive_in_first_of_stack() {
     let schema = test_schema();
     let qac = parse_edge_comment("/* pgdog_shard: 1 */ /* noise */ SELECT 1", &schema).unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment, "/* pgdog_shard: 1 */ /* noise */");
-    assert_eq!(qac.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(qac.raw_comment, "/* pgdog_shard: 1 */ /* noise */");
+    assert_eq!(
+        qac.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 #[test]
@@ -418,8 +451,8 @@ fn test_remove_comment_pgdog_directive() {
     let schema = test_schema();
     let qac = parse_edge_comment("SELECT * FROM users /* pgdog_role: primary */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT * FROM users");
-    assert_eq!(qac.comment, "/* pgdog_role: primary */");
-    assert_eq!(qac.role, Some(Role::Primary));
+    assert_eq!(qac.raw_comment, "/* pgdog_role: primary */");
+    assert_eq!(qac.comment.role, Some(Role::Primary));
 }
 
 #[test]
@@ -443,7 +476,10 @@ fn test_sharding_key_with_schema_name() {
 
     let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.shard, Some(ShardOrLookup::Shard(Shard::Direct(1))));
+    assert_eq!(
+        result.comment.shard,
+        Some(ShardOrLookup::Shard(Shard::Direct(1)))
+    );
 }
 
 fn lookup_schema() -> ShardingSchema {
@@ -478,7 +514,7 @@ fn test_sharding_key_comment_misses_lookup_cache() {
     let result =
         parse_edge_comment("/* pgdog_sharding_key: 'org_child' */ SELECT 1", &schema).unwrap();
 
-    match result.shard {
+    match result.comment.shard {
         Some(ShardOrLookup::Lookup(pending)) => {
             assert_eq!(pending.value, "org_child");
             assert_eq!(pending.table.column, "organization_id");
@@ -508,5 +544,5 @@ fn test_sharding_key_comment_translates_through_lookup() {
         parse_edge_comment("/* pgdog_sharding_key: 'org_child' */ SELECT 1", &schema).unwrap();
 
     let expected = shard_value("org_root", &DataType::Varchar, 3, &vec![], 0);
-    assert_eq!(result.shard, Some(ShardOrLookup::Shard(expected)));
+    assert_eq!(result.comment.shard, Some(ShardOrLookup::Shard(expected)));
 }

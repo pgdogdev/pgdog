@@ -1,0 +1,85 @@
+# Handles running Bencher perf tests to detect regressions.
+# Runs only when PRs are made from an internal branch (NOT A FORK) to main.
+# Forks are processed via 2 steps [bencher_fork_run.yml, bencher_fork_track.yml]
+# TODO: I have some big plans for this file. Please contact @jkaczman before planning to modify with new tests.
+
+name: bencher
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+env:
+  IMAGE: registry.bencher.dev/pgdog:${{ github.sha }}
+
+jobs:
+  image:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
+    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install CI deps
+        run: bash integration/ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: build-v1
+      - name: Build
+        run: cargo build --release --bin pgdog
+
+      - name: Build image
+        run: docker build --build-context bin=target/release -f benches/perf/Dockerfile -t $IMAGE .
+      - name: Push image
+        run: |
+          echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
+          docker push $IMAGE
+
+  bench:
+    needs: image
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [pooler, lb, sharding]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
+      - name: Run ${{ matrix.suite }} on Bencher bare metal
+        env:
+          START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
+        # This will run one test per job (all in parallel).
+        # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
+        #
+        # After testing 5x back-to-back, variance was <1%. This should be enough
+        # of a difference, unless something goes on with their servers in the future.
+        # 
+        # TODO: we can re-evaluate a proper variance later
+        #
+        # Why --github-actions? This allows it to comment on the PR with the result.
+        # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
+        # Why --detach & --ci-callback-token? This allows us to exit early, and defer posting a comment until repository_dispatch is fired on
+        # a separate workflow (bencher_followup.yml)
+        run: |
+          bencher run \
+            --project pgdog \
+            --key '${{ secrets.BENCHER_API_KEY }}' \
+            --branch '${{ github.head_ref || github.ref_name }}' \
+            $START_POINT \
+            --spec intel-v1 \
+            --threshold-measure throughput \
+            --threshold-test percentage \
+            --threshold-lower-boundary 0.03 \
+            --thresholds-reset \
+            --error-on-alert \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            --ci-id ${{ matrix.suite }} \
+            --ci-only-on-alert \
+            --adapter json \
+            --image $IMAGE \
+            --detach \
+            --ci-callback-token '${{ secrets.BENCHER_GITHUB_TOKEN }}' \
+            "bash benches/perf/bencher.sh ${{ matrix.suite }}"

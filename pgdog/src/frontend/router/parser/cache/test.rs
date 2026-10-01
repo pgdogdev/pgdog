@@ -117,7 +117,7 @@ async fn bench_ast_cache() {
 // concurrently without clobbering each other.
 static CACHE_STATS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
-fn run_prepared(query: &str) -> Ast {
+fn run_prepared(query: &str) -> ClientQuery {
     let ctx = test_context();
     let mut prepared_statements = PreparedStatements::default();
     Cache::get()
@@ -202,7 +202,7 @@ fn test_cache_hit_overrides_role_hint() {
     // Seed with a primary role hint; cache stores an entry keyed by the
     // stripped body.
     let first = run_prepared("/* pgdog_role: primary */ SELECT 1 FROM cache_role_override");
-    assert_eq!(first.comment_role, Some(Role::Primary));
+    assert_eq!(first.comment.role, Some(Role::Primary));
 
     // Second query, same body, replica hint. Must hit cache AND return
     // an Ast whose role reflects the new hint, not the cached one.
@@ -210,7 +210,7 @@ fn test_cache_hit_overrides_role_hint() {
     let (stats, _) = Cache::stats();
     assert_eq!(stats.hits, 1, "second query should hit cache");
     assert_eq!(
-        second.comment_role,
+        second.comment.role,
         Some(Role::Replica),
         "cached Ast must be overridden with the incoming role hint"
     );
@@ -230,7 +230,7 @@ fn test_cache_hit_clears_role_hint_when_absent() {
     let (stats, _) = Cache::stats();
     assert_eq!(stats.hits, 1);
     assert_eq!(
-        second.comment_role, None,
+        second.comment.role, None,
         "incoming query has no role hint — cached role must be cleared"
     );
 }
@@ -242,7 +242,7 @@ fn test_cache_hit_overrides_shard_hint() {
 
     let first = run_prepared("/* pgdog_shard: 0 */ SELECT 1 FROM cache_shard_override");
     assert_eq!(
-        first.comment_shard,
+        first.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(0)))
     );
 
@@ -250,7 +250,7 @@ fn test_cache_hit_overrides_shard_hint() {
     let (stats, _) = Cache::stats();
     assert_eq!(stats.hits, 1, "second query should hit cache");
     assert_eq!(
-        second.comment_shard,
+        second.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(1))),
         "cached Ast must be overridden with the incoming shard hint"
     );
@@ -278,7 +278,7 @@ fn test_cache_key_strips_leading_comment() {
 
     let ast = run_prepared("/* trace_id=abc */ SELECT 1 FROM cache_key_leading");
     assert_eq!(
-        &*ast.query_without_comment, "SELECT 1 FROM cache_key_leading",
+        &*ast.ast.query_without_comment, "SELECT 1 FROM cache_key_leading",
         "cache key must be the query without the leading comment"
     );
 
@@ -297,7 +297,7 @@ fn test_cache_key_strips_trailing_comment() {
 
     let ast = run_prepared("SELECT 1 FROM cache_key_trailing /* trace_id=xyz */");
     assert_eq!(
-        &*ast.query_without_comment, "SELECT 1 FROM cache_key_trailing",
+        &*ast.ast.query_without_comment, "SELECT 1 FROM cache_key_trailing",
         "cache key must be the query without the trailing comment"
     );
 }
@@ -310,7 +310,7 @@ fn test_cache_key_no_comment_unchanged() {
     let q = "SELECT 1 FROM cache_key_plain";
     let ast = run_prepared(q);
     assert_eq!(
-        &*ast.query_without_comment, q,
+        &*ast.ast.query_without_comment, q,
         "cache key must equal the original query when there is no comment"
     );
 }

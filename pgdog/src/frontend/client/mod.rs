@@ -574,7 +574,7 @@ impl Client {
     ) -> Result<(), Error> {
         use query_engine::QueryEngineContext;
 
-        let mut context = QueryEngineContext::new(self);
+        let (mut context, _) = QueryEngineContext::new(self);
         query_engine
             .process_server_message(&mut context, message)
             .await?;
@@ -607,10 +607,8 @@ impl Client {
         use query_engine::{Pipeline, QueryEngineContext, QueryEngineResult};
         self.check_maintenance_mode(query_engine).await;
 
-        match query_engine
-            .handle(&mut QueryEngineContext::new(self))
-            .await?
-        {
+        let (mut context, client_request) = QueryEngineContext::new(self);
+        match query_engine.handle(&mut context, client_request).await? {
             QueryEngineResult::Done(transaction) => self.transaction = transaction,
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
@@ -620,10 +618,11 @@ impl Client {
                 }
 
                 while let Some(mut request) = requests.next() {
+                    let (context, _) = QueryEngineContext::new(self);
                     match query_engine
                         .handle(
-                            &mut QueryEngineContext::new(self)
-                                .pipelined(&mut request, Pipeline::new(requests.len(), extended)),
+                            &mut context.pipelined(Pipeline::new(requests.len(), extended)),
+                            &mut request,
                         )
                         .await?
                     {

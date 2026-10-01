@@ -1,4 +1,4 @@
-use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
+use crate::net::{CommandComplete, NoticeResponse, Protocol, ProtocolMessage, ReadyForQuery};
 
 use super::*;
 
@@ -6,11 +6,12 @@ impl QueryEngine {
     pub(super) async fn end_not_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_messages: &[ProtocolMessage],
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
         let bytes_sent = if extended {
-            self.extended_transaction_reply(context, false, rollback)
+            self.extended_transaction_reply(context, client_messages, false, rollback)
                 .await?
         } else {
             let cmd = if rollback {
@@ -46,6 +47,8 @@ impl QueryEngine {
     pub(super) async fn end_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        // FIXME(sage): Remove mut
+        client_request: &mut ClientRequest,
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
@@ -67,14 +70,15 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, true, extended).await?;
+            self.end_not_connected(context, &client_request.messages, true, extended)
+                .await?;
 
             return Ok(());
         }
 
         // 2pc is used for cross-shard writes and is not needed for rollbacks.
         let two_pc = cluster.two_pc_enabled()
-            && context.client_request.route().is_write()
+            && client_request.route().is_write()
             && !rollback
             && context.transaction().map(|t| t.write()).unwrap_or(false)
             && self.backend.connected_servers() > 1;
@@ -92,13 +96,14 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, false, extended).await?;
+            self.end_not_connected(context, &client_request.messages, false, extended)
+                .await?;
         } else {
             if rollback {
                 self.notify_buffer.clear();
             }
             context.rollback = rollback;
-            self.execute(context, None).await?;
+            self.execute(context, client_request, None).await?;
         }
 
         Ok(())
@@ -157,8 +162,10 @@ mod tests {
         // Create a default query engine (avoids backend connection)
         let mut engine = QueryEngine::from_client(&client).unwrap();
         // state copied from client
-        let mut context = QueryEngineContext::new(&mut client);
-        let result = engine.end_not_connected(&mut context, false, false).await;
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
+        let result = engine
+            .end_not_connected(&mut context, &client_request.messages, false, false)
+            .await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
         assert_eq!(

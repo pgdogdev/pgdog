@@ -62,13 +62,13 @@ impl QueryParser {
 
         let query = BufferedQuery::Query(Query::new(prepare.query()));
         let ast = Cache::get().record(&query)?;
-        let stmt = match ast.ast.stmts().next() {
+        let stmt = match ast.ast.ast.stmts().next() {
             Some(Node::PrepareStmt(stmt)) => Some(stmt.query()),
             stmt => stmt,
         };
 
         match stmt {
-            Some(Node::SelectStmt(stmt)) => self.select(&ast, stmt, &mut context),
+            Some(Node::SelectStmt(stmt)) => self.select(stmt, &mut context),
             Some(Node::InsertStmt(stmt)) => self.insert(stmt.into(), &mut context),
             Some(Node::UpdateStmt(stmt)) => self.update(stmt.into(), &mut context),
             Some(Node::DeleteStmt(stmt)) => self.delete(stmt.into(), &mut context),

@@ -1,5 +1,5 @@
 use super::super::nextval::SequenceCall;
-use super::super::plan::RewriteResult;
+use super::super::plan::{RewritePlan, RewriteResult};
 use super::tests::make_schema_with_bigint_pk;
 use super::*;
 use crate::backend::ShardingSchema;
@@ -194,14 +194,15 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                         assert_eq!(generated.bigint(), Some(id));
                         assert_eq!(generated.format(), format);
                         assert_eq!(bind.anonymous(), !prepared);
-                        assert!(
+                        assert_eq!(
                             split
                                 .ast
                                 .as_ref()
                                 .expect("AST")
                                 .rewrite_plan
-                                .generated_params
-                                .is_empty()
+                                .bind_params
+                                .len(),
+                            0
                         );
                     }
                 }
