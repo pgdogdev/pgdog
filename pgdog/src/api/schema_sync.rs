@@ -58,6 +58,10 @@ pub(crate) struct SchemaSyncTask {
     dry_run: bool,
 }
 
+pub(crate) type SchemaSyncBuilder = SchemaSyncTaskBuilder<
+    schema_sync_task_builder::SetPublication<schema_sync_task_builder::SetDatabases>,
+>;
+
 impl Task for SchemaSyncTask {
     type Status = SchemaSyncStatus;
     type Output = ();

@@ -140,21 +140,8 @@ impl Task for ReshardTask {
                         ReplicationTask::builder()
                             .state(state.clone())
                             .auto_cutover(self.auto_cutover)
-                            .maybe_validation(
-                                (!self.skip_schema_sync && !self.replicate_only).then(|| {
-                                    schema_sync
-                                        .clone()
-                                        .phase(SchemaSyncPhase::PostDataValidation)
-                                        .build()
-                                }),
-                            )
-                            .schema_sync(
-                                schema_sync
-                                    .clone()
-                                    .phase(SchemaSyncPhase::Cutover)
-                                    .ignore_errors(true)
-                                    .build(),
-                            )
+                            .schema_sync(schema_sync.clone())
+                            .validate(!self.skip_schema_sync && !self.replicate_only)
                             .build(),
                     ),
                 )

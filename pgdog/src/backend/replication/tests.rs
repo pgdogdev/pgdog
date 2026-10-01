@@ -14,7 +14,7 @@ use crate::{
     api::{
         MigrationError,
         copy_data::{CopyDataTask, TableDataSyncTask},
-        replication::{ReplicationClusterStop, ReplicationClusterTask, ReplicationTask},
+        replication::{ReplicationClusterStop, ReplicationClusterTask},
         resharding::ReshardTask,
         run_task,
         schema_sync::{SchemaSyncPhase, SchemaSyncTask},
@@ -31,6 +31,8 @@ use crate::{
     util::sync::WorkerPool,
 };
 use pgdog_stats::{ReplicationDirection, ReshardStatus, TaskStatus};
+
+mod validation;
 
 async fn setup_replication_test(
     admin: &mut Server,
@@ -637,143 +639,6 @@ async fn test_replication_copy_custom_parent_trigger() -> Result<(), Box<dyn std
     let (parents, children) = validation?;
     assert_eq!(parents, [1, 2]);
     assert_eq!(children, [1, 2]);
-    Ok(())
-}
-
-// Verify that we catch some data inconsistencies after resharding
-// in case we created one. It's created artificially during copy,
-// since we don't know for cases when we do this wrong for now.
-#[tokio::test]
-async fn test_replication_fk_inconsistent_validation() -> Result<(), Box<dyn std::error::Error>> {
-    let schema = "fk_post_copy_test";
-    let destination = "fk_post_copy_test_dest";
-    let original_config = config();
-    let mut admin = test_server().await;
-    let result = async {
-        setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.parents (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL); \
-                 CREATE TABLE {schema}.children (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL, \
-                 parent_id BIGINT, CONSTRAINT children_parent_fk \
-                 FOREIGN KEY (parent_id) REFERENCES {schema}.parents(id)); \
-                 INSERT INTO {schema}.parents VALUES (1, 1); \
-                 INSERT INTO {schema}.children VALUES (1, 1, 1); \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.parents, {schema}.children"
-            ))
-            .await?;
-
-        // copy the tables without their foreign key
-        let schema_sync = SchemaSyncTask::builder()
-            .databases(pgdog_stats::Databases {
-                source: schema.into(),
-                destination: destination.into(),
-            })
-            .publication(schema.to_owned());
-        run_task(schema_sync.clone().phase(SchemaSyncPhase::Pre).build()).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let cancel = CancellationToken::new();
-        let state = ReshardingState::builder()
-            .source(schema)
-            .destination(destination)
-            .publication(schema)
-            .maybe_replication_slot(Some(schema.into()))
-            .build()?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let (child, parent) = {
-            state.sync_tables().await?;
-            state.create_slots(&cancel).await?;
-            let tables = state.tables();
-            let tables = tables.get(&0).ok_or(Error::MissingData)?;
-            let child = tables
-                .iter()
-                .find(|table| table.table.name == "children")
-                .ok_or(Error::MissingData)?
-                .clone();
-            let parent = tables
-                .iter()
-                .find(|table| table.table.name == "parents")
-                .ok_or(Error::MissingData)?
-                .clone();
-
-            (child, parent)
-        };
-        let child = copy_table(&source, &dest, &child, server.addr()).await?;
-        let mut destination_server = dest.primary(0, &Request::default()).await?;
-        // leave an orphan that replication cannot repair
-        destination_server
-            .execute_checked(format!("INSERT INTO {schema}.children VALUES (42, 1, 999)"))
-            .await?;
-        drop(destination_server);
-        let parent = copy_table(&source, &dest, &parent, server.addr()).await?;
-        state.set_tables([(0, vec![child, parent])].into());
-
-        // add valid rows that must arrive through replication
-        server
-            .execute_checked(format!(
-                "BEGIN; \
-                 INSERT INTO {schema}.parents VALUES (2, 1); \
-                 INSERT INTO {schema}.children VALUES (2, 1, 2); \
-                 COMMIT"
-            ))
-            .await?;
-        drop(server);
-
-        // wait for the valid source rows to arrive without repairing the orphan
-        replicate_until_caught_up(&state, schema).await?;
-        run_task(schema_sync.clone().phase(SchemaSyncPhase::Post).build()).await?;
-        // validation should reject the orphan while forward replication is running
-        let validation = schema_sync
-            .clone()
-            .phase(SchemaSyncPhase::PostDataValidation)
-            .build();
-        let cutover = schema_sync.phase(SchemaSyncPhase::Cutover).build();
-        let replication = run_task(
-            ReplicationTask::builder()
-                .state(state)
-                .validation(validation)
-                .schema_sync(cutover)
-                .build(),
-        )
-        .await;
-        Ok::<_, Box<dyn std::error::Error>>((dest, replication))
-    }
-    .await;
-
-    let validation = async {
-        let (dest, validation) = result?;
-        let mut server = dest.primary(0, &Request::default()).await?;
-        let parents: Vec<i64> = server
-            .fetch_all(format!("SELECT id FROM {schema}.parents ORDER BY id"))
-            .await?;
-        let children: Vec<i64> = server
-            .fetch_all(format!(
-                "SELECT parent_id FROM {schema}.children ORDER BY id"
-            ))
-            .await?;
-        Ok::<_, Box<dyn std::error::Error>>((parents, children, validation))
-    }
-    .await;
-
-    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
-    let (parents, children, validation) = validation?;
-    assert_eq!(parents, [1, 2]);
-    assert_eq!(children, [1, 2, 999]);
-    assert!(
-        matches!(
-            &validation,
-            Err(TaskError::Failed(Error::SchemaSync(error)))
-                if matches!(
-                    error.as_ref(),
-                    SchemaSyncError::Backend(BackendError::ExecutionError(error))
-                        if error.code == "23503"
-                )
-        ),
-        "validation did not reject the orphan with a foreign key error: {validation:?}"
-    );
     Ok(())
 }
 

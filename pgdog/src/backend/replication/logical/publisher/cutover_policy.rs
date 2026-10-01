@@ -95,20 +95,13 @@ impl CutoverPolicy {
         }
     }
 
-    fn should_cutover(&self, start: Instant) -> CutoverAction {
+    fn should_cutover(&self, elapsed: Duration) -> CutoverAction {
         let cutover_timeout = self.config.timeout;
         let cutover_threshold = self.config.replication_lag_threshold;
         let last_transaction_delay = self.config.last_transaction_delay;
 
-        // Read elapsed before the snapshot and compare strictly: both values are
-        // floored to milliseconds, so a measurement older than `start` never passes.
-        let elapsed = start.elapsed();
         let progress = self.progress.snapshot();
-        let lag = progress.lag_bytes.filter(|_| {
-            progress
-                .lag_age_ms
-                .is_some_and(|age| u128::from(age) < elapsed.as_millis())
-        });
+        let lag = progress.lag_bytes;
         let last_transaction = progress.last_transaction_ms.map(Duration::from_millis);
         let cutover_timeout_exceeded = elapsed >= cutover_timeout;
 
@@ -145,7 +138,7 @@ impl CutoverPolicy {
 
         let mut cutover_data = None;
 
-        let reason = loop {
+        loop {
             select! {
                 _ = check.tick() => {}
                 _ = log.tick() => {
@@ -164,21 +157,32 @@ impl CutoverPolicy {
                 }
             }
 
-            match self.should_cutover(start) {
+            let elapsed = start.elapsed();
+
+            match self.should_cutover(elapsed) {
                 CutoverAction::Go(CutoverReason::Timeout) => match cutover_timeout_action {
                     CutoverTimeoutAction::Abort => {
                         warn!("[cutover] abort timeout reached, resuming traffic");
                         return Err(Error::AbortTimeout);
                     }
-                    CutoverTimeoutAction::Cutover => break CutoverReason::Timeout,
+                    CutoverTimeoutAction::Cutover => {
+                        info!(
+                            "[cutover] performing cutover now, reason: {}",
+                            CutoverReason::Timeout
+                        );
+                        return Ok(CutoverReason::Timeout);
+                    }
                 },
-                CutoverAction::Go(reason) => break reason,
-                CutoverAction::NoGo(data) => cutover_data = Some(data),
+                CutoverAction::Go(reason) => {
+                    info!("[cutover] performing cutover now, reason: {reason}");
+                    return Ok(reason);
+                }
+                CutoverAction::NoGo(data) => {
+                    cutover_data = Some(data);
+                    continue;
+                }
             }
-        };
-
-        info!("[cutover] {reason} reached");
-        Ok(reason)
+        }
     }
 }
 
@@ -219,65 +223,26 @@ mod tests {
             .expect("the wait must exit once every shard is below the threshold");
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_should_cutover_ignores_lag_measured_before_start() {
+    #[tokio::test]
+    async fn test_wait_for_cutover_exits_when_lag_below_threshold() {
         let config = cutover_config();
-        let start = Instant::now();
-        tokio::time::advance(Duration::from_millis(10)).await;
 
         let progress = ReplicationProgress::new(2);
-        for shard in 0..2 {
-            progress.updater_for_shard(shard).update(|s| {
-                s.replication_lag = Some(50);
-                s.source_measured_at = Some(Instant::now());
-            });
-        }
-        tokio::time::advance(Duration::from_millis(10)).await;
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(50));
+        progress
+            .updater_for_shard(1)
+            .update(|s| s.replication_lag = Some(50));
 
         let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
-            waiter.should_cutover(start),
+            waiter.should_cutover(Duration::from_millis(100)),
             CutoverAction::Go(CutoverReason::Lag)
         );
-        assert_matches!(
-            waiter.should_cutover(Instant::now()),
-            CutoverAction::NoGo { .. }
-        );
-    }
 
-    #[tokio::test(start_paused = true)]
-    async fn test_wait_for_cutover_waits_for_lag_measured_after_start() {
-        let config = cutover_config();
-        let stale = Instant::now();
-
-        let progress = ReplicationProgress::new(2);
-        for shard in 0..2 {
-            progress.updater_for_shard(shard).update(|s| {
-                s.replication_lag = Some(50);
-                s.source_measured_at = Some(stale);
-            });
-        }
-        tokio::time::advance(Duration::from_millis(10)).await;
-
-        let waiter = CutoverPolicy::new(config, progress.clone());
-        let refresh = Duration::from_millis(300);
-
-        let ((reason, returned_at), ()) = tokio::join!(
-            async { (waiter.wait_for_catchup().await, Instant::now()) },
-            async {
-                tokio::time::sleep(refresh).await;
-                for shard in 0..2 {
-                    progress.updater_for_shard(shard).update(|s| {
-                        s.replication_lag = Some(50);
-                        s.source_measured_at = Some(Instant::now());
-                    });
-                }
-            }
-        );
-
-        assert_eq!(reason.unwrap(), CutoverReason::Lag);
-        assert!(returned_at - stale >= refresh);
+        assert_eq!(waiter.wait_for_catchup().await.unwrap(), CutoverReason::Lag);
     }
 
     #[tokio::test]
@@ -297,7 +262,7 @@ mod tests {
         let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
-            waiter.should_cutover(Instant::now()),
+            waiter.should_cutover(Duration::from_millis(100)),
             CutoverAction::Go(CutoverReason::LastTransaction)
         );
 
@@ -323,7 +288,7 @@ mod tests {
         let waiter = CutoverPolicy::new(config, progress);
 
         assert_eq!(
-            waiter.should_cutover(Instant::now()),
+            waiter.should_cutover(Duration::ZERO),
             CutoverAction::Go(CutoverReason::Timeout)
         );
         assert_matches!(waiter.wait_for_catchup().await, Err(Error::AbortTimeout));
@@ -358,17 +323,15 @@ mod tests {
             ..cutover_config()
         };
 
-        let since = Instant::now() - Duration::from_millis(100);
         let progress = ReplicationProgress::new(1);
-        progress.updater_for_shard(0).update(|s| {
-            s.replication_lag = Some(1000);
-            s.source_measured_at = Some(Instant::now());
-        });
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(1000));
 
         let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
-            waiter.should_cutover(since),
+            waiter.should_cutover(Duration::from_millis(100)),
             CutoverAction::NoGo(_)
         ));
     }
@@ -377,23 +340,21 @@ mod tests {
     async fn test_should_not_cutover_when_lag_above_threshold_and_recent_transaction() {
         let config = cutover_config();
 
-        let since = Instant::now() - Duration::from_millis(100);
         let progress = ReplicationProgress::new(1);
         progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(1000);
-            s.source_measured_at = Some(Instant::now());
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
         let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
-            waiter.should_cutover(since),
+            waiter.should_cutover(Duration::from_millis(100)),
             CutoverAction::NoGo { .. }
         ));
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_should_not_cutover_when_timeout_not_reached() {
         let config = CutoverConfig {
             timeout: Duration::from_secs(1),
@@ -401,18 +362,16 @@ mod tests {
             ..cutover_config()
         };
 
-        let since = Instant::now() - Duration::from_millis(999);
         let progress = ReplicationProgress::new(1);
         progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(1000);
-            s.source_measured_at = Some(Instant::now());
             s.last_transaction = Some(Instant::now() - Duration::from_millis(100));
         });
 
         let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
-            waiter.should_cutover(since),
+            waiter.should_cutover(Duration::from_millis(999)),
             CutoverAction::NoGo { .. }
         ));
     }
@@ -421,18 +380,16 @@ mod tests {
     async fn test_should_not_cutover_when_lag_just_above_threshold() {
         let config = cutover_config();
 
-        let since = Instant::now() - Duration::from_millis(100);
         let progress = ReplicationProgress::new(1);
         progress.updater_for_shard(0).update(|s| {
             s.replication_lag = Some(101);
-            s.source_measured_at = Some(Instant::now());
             s.last_transaction = Some(Instant::now() - Duration::from_millis(50));
         });
 
         let waiter = CutoverPolicy::new(config, progress);
 
         assert!(matches!(
-            waiter.should_cutover(since),
+            waiter.should_cutover(Duration::from_millis(100)),
             CutoverAction::NoGo { .. }
         ));
     }
@@ -444,30 +401,28 @@ mod tests {
             ..cutover_config()
         };
 
-        let since = Instant::now() - Duration::from_millis(100);
         let progress = ReplicationProgress::new(2);
         progress
             .updater_for_shard(0)
             .update(|s| s.last_transaction = Some(Instant::now()));
 
         let waiter = CutoverPolicy::new(config, progress.clone());
+        let elapsed = Duration::from_millis(100);
 
         assert_eq!(progress.snapshot().lag_bytes, None);
-        assert_matches!(waiter.should_cutover(since), CutoverAction::NoGo { .. });
+        assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
-        progress.updater_for_shard(0).update(|s| {
-            s.replication_lag = Some(500);
-            s.source_measured_at = Some(Instant::now());
-        });
+        progress
+            .updater_for_shard(0)
+            .update(|s| s.replication_lag = Some(500));
         assert_eq!(progress.snapshot().lag_bytes, None);
-        assert_matches!(waiter.should_cutover(since), CutoverAction::NoGo { .. });
+        assert_matches!(waiter.should_cutover(elapsed), CutoverAction::NoGo { .. });
 
-        progress.updater_for_shard(1).update(|s| {
-            s.replication_lag = Some(400);
-            s.source_measured_at = Some(Instant::now());
-        });
+        progress
+            .updater_for_shard(1)
+            .update(|s| s.replication_lag = Some(400));
         assert_eq!(
-            waiter.should_cutover(since),
+            waiter.should_cutover(elapsed),
             CutoverAction::Go(CutoverReason::Lag)
         );
     }

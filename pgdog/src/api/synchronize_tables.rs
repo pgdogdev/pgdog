@@ -33,6 +33,8 @@ impl Task for SynchronizeTablesTask {
         let mut state = self.state;
         state.reload()?;
         let mut tables = state.tables();
+
+        // collect the max lsn for the tables grouping by shard
         let mut targets = tables
             .iter()
             .filter_map(|(shard, tables)| {
@@ -49,6 +51,8 @@ impl Task for SynchronizeTablesTask {
         }
 
         let progress = ReplicationProgress::new(state.source.shards().len());
+
+        // start the replication to make sure all the tables reach the same lsn on the shards
         let (task, stop) = ReplicationClusterTask::new(
             state.clone(),
             ReplicationDirection::Forward,
@@ -67,6 +71,7 @@ impl Task for SynchronizeTablesTask {
                     ctx.set_status(SynchronizeTablesStatus::SynchronizingTables {
                         progress: progress.snapshot(),
                     });
+
                     targets.retain(|shard, target| {
                         let reached = progress
                             .applied_lsn(*shard)
@@ -79,19 +84,25 @@ impl Task for SynchronizeTablesTask {
 
                     if targets.is_empty() {
                         stop.stop(None);
-                        replication.await?;
-                        for (shard, tables) in &mut tables {
-                            if let Some(applied) = progress.applied_lsn(*shard) {
-                                for table in tables {
-                                    table.lsn = table.lsn.max(applied);
-                                }
-                            }
-                        }
-                        state.set_tables(tables);
-                        return Ok(());
+                        break;
                     }
                 }
             }
         }
+
+        replication.await?;
+
+        // update the tables lsn - now they should be the same on the tables
+        // on source shard.
+        for (shard, tables) in &mut tables {
+            if let Some(applied) = progress.applied_lsn(*shard) {
+                for table in tables {
+                    table.lsn = table.lsn.max(applied);
+                }
+            }
+        }
+        state.set_tables(tables);
+
+        Ok(())
     }
 }

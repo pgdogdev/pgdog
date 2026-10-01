@@ -179,7 +179,7 @@ The `[resharding] post_data_validation` setting selects when validation runs.
 |---|---|
 | `during_replication` (default) | Together with forward replication. Cutover cannot start before validation succeeds. |
 | `before_cutover` | After forward replication catches up, while source traffic is paused. Traffic stays paused until validation finishes. |
-| `after_cutover` | On the new source, together with reverse replication after each cutover. A failure marks the validation task as failed, but reverse replication continues and a rollback stays possible. A rollback does not wait for validation. |
+| `after_cutover` | On the new source, together with reverse replication after the first cutover only. A failure marks the validation task as failed, but reverse replication continues and a rollback stays possible. A rollback does not wait for validation. |
 | `off` | Never. The foreign keys stay `NOT VALID`. |
 
 Validation never runs for `data-sync --skip-schema-sync`, `--replicate-only`, or `--sync-only`.
@@ -235,9 +235,9 @@ triggers can fire cutover (whichever comes first):
 The `LastTransaction` trigger needs a measured transaction. A stream that has applied nothing
 reports no value, so the trigger stays silent and only the timeout can fire.
 
-The `Lag` trigger uses only lag values that each stream measured after `wait_for_catchup()` started.
-Each stream measures lag once per second, so this trigger can wait up to 1 second.
-An older value can hide a commit that arrived just before the traffic stop.
+The `Lag` trigger uses the last lag value of each stream. Each stream measures lag once per second,
+so the value can be older than the traffic stop. The drain below still applies the source WAL written
+before the stop, so an older value can only start the drain earlier.
 
 **Phase 3 — drain and stop**: after a trigger fires, `replicate_until_cutover()` stops the cluster task
 with the cutover reason. The cluster task then calls `ReplicationStream::stop(true)` on every stream.
