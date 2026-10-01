@@ -3,24 +3,30 @@ use std::slice::{Iter, IterMut};
 use futures::future::join_all;
 
 use crate::backend::Error;
-use crate::backend::pool::Request;
 use crate::frontend::client::query_engine::{
     TwoPcPhase, TwoPcTransaction, statement::phase_control,
 };
-use crate::frontend::router::parser::Shard;
-use crate::frontend::router::{CopyRow, Route};
-use crate::frontend::{BufferedQuery, ClientRequest};
-use crate::net::{FrontendPid, Message, Parameters, ProtocolMessage};
+use crate::frontend::{
+    BufferedQuery, ClientRequest,
+    router::{CopyRow, Route, parser::Shard},
+};
+use crate::net::{Bind, FrontendPid, Message, Parameters, ProtocolMessage};
 
-use super::super::{Guard, LinkedServer};
-use super::MultiShard;
+use super::{
+    super::{Guard, LinkedServer},
+    MultiShard,
+};
 
 /// Handle talking to multiple servers for cross-shard queries.
 #[derive(Debug)]
 pub(crate) struct MultiBinding {
+    // Actual server connections.
     pub(super) servers: Vec<LinkedServer>,
+    // Handle all the cross-shard complexity: aggregates, sorting, deduping server messages, etc.
     pub(super) state: Box<MultiShard>,
+    // Transaction statement, e.g., `BEGIN`, `BEGIN READ ONLY`, etc.
     pub(in crate::backend::pool::connection) transaction_stmt: Option<BufferedQuery>,
+    // Is the transaction read-only (replicas) or write (primary)?
     pub(super) is_read: bool,
 }
 
@@ -56,6 +62,15 @@ impl MultiBinding {
     }
 
     /// Create new multi-shard binding.
+    ///
+    /// # Arguments
+    ///
+    /// - `servers`: Postgres connections.
+    /// - `shard_indices: Which server is which shard.
+    /// - `route`: Statement execution plan.
+    /// - `transaction_stmt`: `BEGIN`, `BEGIN READ ONLY`, etc.
+    /// - `is_read`: Are we reading from a replica or writing to a primary?
+    ///
     pub(crate) fn new(
         servers: Vec<Guard>,
         shard_indices: Vec<usize>,
@@ -63,6 +78,8 @@ impl MultiBinding {
         transaction_stmt: Option<BufferedQuery>,
         is_read: bool,
     ) -> Self {
+        debug_assert_eq!(servers.len(), shard_indices.len());
+
         Self {
             state: Box::new(MultiShard::new(servers.len(), route)),
             servers: servers
@@ -79,6 +96,8 @@ impl MultiBinding {
         }
     }
 
+    /// Given the execution plan in `route` and the total number of configured `shards`,
+    /// do we have all the necessary connections to serve this request?
     pub(crate) fn required_shards_connected(&self, route: &Route, shards: usize) -> bool {
         match route.shard() {
             Shard::Direct(shard) => self
@@ -93,15 +112,11 @@ impl MultiBinding {
         }
     }
 
-    #[allow(unused)]
-    pub(crate) async fn ensure_connected(
-        self,
-        request: &Request,
-        route: &Route,
-    ) -> Result<Self, super::Error> {
-        Ok(self)
-    }
-
+    /// Idempotently link the client to the connected servers. This sycnrhonizes parameters and
+    /// starts a transaction on each server, if necessary.
+    ///
+    /// Each server is handled in parallel, so this is quick.
+    ///
     pub(crate) async fn link_client(
         &mut self,
         client_id: FrontendPid,
@@ -127,19 +142,28 @@ impl MultiBinding {
         Ok(max)
     }
 
-    /// Read-only handle to internal state.
-    pub(crate) fn state(&self) -> &MultiShard {
-        &self.state
+    /// Reset cross-shard state after a query finished executing.
+    pub(in crate::backend::pool::connection) fn query_complete(&mut self) {
+        self.state.query_complete();
     }
 
-    /// Write-handle to internal state.
+    /// Handle a [`Bind`] message received from the client. In cross-shard
+    /// pipelines, we need to make sure we track these to know which parameters
+    /// to decode for a given statement.
+    pub(in crate::backend::pool::connection) fn bind(&mut self, bind: &Bind) {
+        self.state.push_bind(bind);
+    }
+
+    /// Indicates that the backend(s) have more messages for the client
+    /// so it should continue to pull them from the connection (until this returns false).
+    pub(in crate::backend::pool::connection) fn has_more_messages(&self) -> bool {
+        self.state.has_more_messages()
+            || self.servers.iter().any(|server| server.has_more_messages())
+    }
+
+    /// Read 1 message from one of the shards, in the right order.
     ///
-    /// BUG: This should not exist.
-    pub(crate) fn state_mut(&mut self) -> &mut MultiShard {
-        &mut self.state
-    }
-
-    /// Read 1 message from one of the shards.
+    /// This handles everything, incl. sorting, aggregation, etc.
     pub(crate) async fn read(&mut self) -> Result<Option<Message>, Error> {
         loop {
             // Return all sorted data rows if any.
@@ -169,7 +193,7 @@ impl MultiBinding {
         Ok(None)
     }
 
-    /// Send client request to the shards it should go to.
+    /// Send client request to the shard(s) it should go to.
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         let mut shards_sent = self.servers.len();
         let mut futures = Vec::new();

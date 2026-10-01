@@ -60,10 +60,8 @@ impl QueryEngine {
             _ => client_request.route(),
         };
 
-        if connect_route.needs_backend() {
-            if !self.connect(context, connect_route).await? {
-                return Ok(());
-            }
+        if connect_route.needs_backend() && !self.connect(context, connect_route).await? {
+            return Ok(());
         }
 
         // Check we can run this query.
@@ -76,7 +74,7 @@ impl QueryEngine {
         // Set response format.
         for msg in &client_request.messages {
             if let ProtocolMessage::Bind(bind) = msg {
-                self.backend.bind(bind)?
+                self.backend.bind(bind);
             }
         }
 

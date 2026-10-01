@@ -396,14 +396,9 @@ impl Connection {
         self.cluster.safe_reload().await
     }
 
-    pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
-        match self.binding {
-            Binding::MultiShard(ref mut servers) => {
-                servers.state_mut().push_bind(bind);
-                Ok(())
-            }
-
-            _ => Ok(()),
+    pub(crate) fn bind(&mut self, bind: &Bind) {
+        if let Binding::MultiShard(ref mut servers) = self.binding {
+            servers.bind(bind)
         }
     }
 

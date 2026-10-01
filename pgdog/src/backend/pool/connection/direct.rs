@@ -6,14 +6,20 @@ use std::ops::{Deref, DerefMut};
 
 use super::*;
 
+/// Direct-to-shard (single server) connection binding.
 #[derive(Debug)]
 pub(crate) struct DirectBinding {
+    // Postgres server connection.
     pub(super) server: LinkedServer,
+    // Transaction start statement. Used for upgrades to `MultiShard` binding,
+    // making it start a transaction on newly connected servers.
     pub(super) transaction_stmt: Option<BufferedQuery>,
+    // Read/write intent.
     pub(super) is_read: bool,
 }
 
 impl DirectBinding {
+    /// Create new direct-to-shard binding.
     pub(super) fn new(
         server: Guard,
         shard: usize,
@@ -31,7 +37,7 @@ impl DirectBinding {
         }
     }
 
-    /// Link client to server.
+    /// Link client to server. This is idempotent.
     pub(super) async fn link_client(
         &mut self,
         id: FrontendPid,

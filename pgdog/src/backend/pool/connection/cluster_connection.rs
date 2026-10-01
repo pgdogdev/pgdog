@@ -15,16 +15,19 @@ use pgdog_config::{PoolerMode, User, users::PasswordKind};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+/// Manage cluster connection creation.
 #[derive(Default, Debug)]
 pub(crate) struct ClusterConnection {
+    // User name.
     user: String,
+    // Database name.
     database: String,
-    /// Cluster smart pointer.
-    /// Swapped at reload time, hence optional.
+    // Cluster smart pointer.
+    // Swapped at reload time, hence optional.
     cluster: Option<Cluster>,
-    /// Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
+    // Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
     query_cancellation: CancellationToken,
-    /// Traffic mirrors.
+    // Traffic mirrors.
     mirrors: Vec<MirrorHandler>,
 }
 
@@ -76,6 +79,8 @@ impl ClusterConnection {
         Ok(())
     }
 
+    /// Get connections for all `shards`. If `is_read` is true,
+    /// connect to replicas.
     pub(crate) async fn get_conns_for_shards(
         &mut self,
         request: &Request,
@@ -93,6 +98,8 @@ impl ClusterConnection {
         if shards_before != self.cluster()?.shards().len() {
             return Err(Error::Pool(PoolError::Offline));
         }
+
+        debug_assert_eq!(shards.len(), conns.len());
 
         Ok(conns)
     }
@@ -122,7 +129,7 @@ impl ClusterConnection {
         ))
     }
 
-    /// Get a connection from the cluster.
+    /// Get a connection from the cluster for the given `shard`.
     pub(super) async fn get_conn(
         &mut self,
         request: &Request,

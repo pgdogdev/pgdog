@@ -6,6 +6,8 @@ use itertools::Either;
 use super::super::*;
 use super::MultiShard;
 
+/// Handle adding one or more connections to the binding,
+/// as needed by a direct-to-shard or a cross-shard query.
 pub(crate) struct MultiShardUpgrade<'a> {
     connection: &'a mut Connection,
 }
@@ -40,11 +42,15 @@ impl<'a> MultiShardUpgrade<'a> {
             return Ok(());
         }
 
-        let mut servers = self
+        let servers = self
             .connection
             .cluster
             .get_conns_for_shards(request, &missing, is_read)
-            .await?
+            .await?;
+
+        debug_assert_eq!(servers.len(), missing.len());
+
+        let mut servers = servers
             .into_iter()
             .zip(missing)
             .map(|(server, shard)| LinkedServer {

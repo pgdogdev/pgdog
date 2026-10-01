@@ -106,7 +106,7 @@ impl Binding {
                     }
 
                     loop {
-                        servers.state_mut().query_complete();
+                        servers.query_complete();
                         safe_sleep(Duration::MAX).await;
                     }
                 }
@@ -174,9 +174,7 @@ impl Binding {
         match self {
             Binding::Admin(admin) => !admin.done(),
             Binding::Direct(server) => server.has_more_messages(),
-            Binding::MultiShard(servers) => {
-                servers.state().has_more_messages() || servers.iter().any(|s| s.has_more_messages())
-            }
+            Binding::MultiShard(servers) => servers.has_more_messages(),
             _ => false,
         }
     }

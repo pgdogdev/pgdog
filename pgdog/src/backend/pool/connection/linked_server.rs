@@ -3,8 +3,11 @@ use crate::net::{FrontendPid, Parameters};
 use super::Guard;
 use std::ops::{Deref, DerefMut};
 
+/// Postgres connection with link state,
+/// allowing the calls to [`Self::link_client`] to be idempotent.
 #[derive(Debug)]
 pub(crate) struct LinkedServer {
+    // Postgres connection.
     pub(super) server: Guard,
     // Shard number.
     pub(super) shard: usize,
@@ -34,6 +37,7 @@ impl LinkedServer {
         Ok(params)
     }
 }
+
 impl Deref for LinkedServer {
     type Target = Guard;
 

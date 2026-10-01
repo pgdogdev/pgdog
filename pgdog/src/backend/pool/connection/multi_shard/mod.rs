@@ -406,6 +406,7 @@ impl MultiShard {
         self.shards > 1 && self.route.requires_post_processing() && !self.route.is_omnisharded()
     }
 
+    /// Box me up, Scotty.
     pub(super) fn boxed(self) -> Box<Self> {
         Box::new(self)
     }
