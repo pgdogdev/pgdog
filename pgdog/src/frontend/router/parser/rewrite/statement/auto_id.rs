@@ -719,8 +719,10 @@ mod tests {
                     });
                     assert_eq!(plan.bind_params.len(), 1);
                     assert_eq!(
-                        plan.bind_params[0],
-                        BindParam::Sequence(SequenceCall::Nextval(expected.to_owned())),
+                        plan.bind_params,
+                        vec![BindParam::Sequence(SequenceCall::Nextval(
+                            expected.to_owned()
+                        ))],
                         "{sql}",
                     );
                 }
