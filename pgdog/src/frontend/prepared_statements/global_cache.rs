@@ -1,5 +1,5 @@
 use crate::{
-    frontend::{RewritePlan, router::parser::rewrite::statement::plan::GeneratedParam},
+    frontend::router::parser::rewrite::statement::plan::BindParams,
     net::{
         Prepare,
         messages::{Parse, RowDescription},
@@ -102,12 +102,8 @@ impl GlobalCache {
         &mut self,
         original_query: Bytes,
         rewritten_query: Option<Bytes>,
-        // TODO: I think we should just pass `unique_ids` in here by itself.
-        //       Otherwise, it could be easily confused to want
-        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
-        rewrite_plan: &RewritePlan,
         offset_plan: Option<OffsetPlan>,
-        generated_params: Vec<GeneratedParam>,
+        bind_params: BindParams,
     ) -> (bool, Prepare) {
         let cache_key = CacheKey::Simple {
             query: original_query.clone(),
@@ -130,12 +126,11 @@ impl GlobalCache {
         let statement = Statement {
             stmt: StatementType::Prepare(PreparedPlan {
                 prepare: prepare.clone(),
-                unique_ids: rewrite_plan.unique_ids,
                 // The reason this isn't using [`rewrite_plan.offset`] is that in `rewrite_single_prepared`,
                 // for `PrepareStmt`, we don't set `offset` on`RewritePlan` yet. We only attach `offset`
                 // to the plan for `ExecuteStmt`, and we need access to `OffsetPlan` for both here.
                 offset_plan,
-                generated_params,
+                bind_params,
             }),
             row_description: None,
             cache_key: cache_key.clone(),
@@ -535,9 +530,8 @@ mod test {
         let query = Bytes::from("PREPARE __pgdog_template_name AS SELECT $1");
         let parse = Parse::named("client_stmt", "SELECT $1");
 
-        let (_, first) =
-            cache.insert_prepare(query.clone(), None, &RewritePlan::default(), None, vec![]);
-        let (_, second) = cache.insert_prepare(query, None, &RewritePlan::default(), None, vec![]);
+        let (_, first) = cache.insert_prepare(query.clone(), None, None, vec![].into());
+        let (_, second) = cache.insert_prepare(query, None, None, vec![].into());
 
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);

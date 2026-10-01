@@ -15,11 +15,13 @@ use crate::{
 
 use super::buffer::Buffer;
 
+mod binding;
 mod error;
 #[cfg(test)]
 mod test;
 mod validator;
 
+pub(crate) use binding::MultiBinding;
 pub(crate) use error::Error;
 use validator::Validator;
 
