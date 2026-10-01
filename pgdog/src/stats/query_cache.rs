@@ -73,6 +73,12 @@ impl QueryCache {
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {
+                name: "query_cache_memory".into(),
+                help: "Amount of memory consumed by cached query ASTs".into(),
+                value: self.stats.memory_allocated,
+                gauge: true,
+            }),
+            Metric::new(QueryCacheMetric {
                 name: "query_cache_parse_time".into(),
                 help: "Time spent parsing queries due to cache misses".into(),
                 value: self.stats.parse_time.as_millis() as usize,

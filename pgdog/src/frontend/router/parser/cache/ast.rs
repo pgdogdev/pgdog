@@ -43,9 +43,11 @@ pub(crate) struct Ast {
 impl Ast {
     /// Create new AST record, with no rewrite or comment routing.
     pub(crate) fn new(ast: Owned<StmtList>) -> Self {
+        let mut stats = Stats::new();
+        stats.memory_allocated = ast.memory_allocated();
         Self {
             ast,
-            stats: Mutex::new(Stats::new()),
+            stats: Mutex::new(stats),
             rewrite_plan: RewritePlan::default(),
             post_route_rewrite: OnceCell::new(),
             query_without_comment: "".into(),
@@ -88,6 +90,7 @@ impl Ast {
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
+        stats.memory_allocated = ast.memory_allocated();
 
         if let Some(threshold) = ctx.sharding_schema.log_min_duration_parse
             && elapsed >= threshold
