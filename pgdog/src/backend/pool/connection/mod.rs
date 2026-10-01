@@ -76,13 +76,30 @@ impl Connection {
     }
 
     /// Start a transaction on this connection, if the connection is idle.
-    pub(crate) fn start_transaction(&mut self, is_read: bool, transaction_stmt: BufferedQuery) {
+    pub(crate) fn start_transaction(
+        &mut self,
+        read_only: bool,
+        transaction_stmt: BufferedQuery,
+    ) -> Result<(), Error> {
+        let rw_aggressive = self.cluster()?.read_write_strategy().is_aggressive();
+
         if matches!(self.binding, Binding::NotConnected) {
             self.binding = Binding::Transaction(TransactionBinding {
-                is_read,
+                is_read: if read_only {
+                    // BEGIN READ ONLY
+                    Some(true)
+                } else if rw_aggressive {
+                    // Let the first statement decide.
+                    None
+                } else {
+                    // BEGIN = write
+                    Some(false)
+                },
                 transaction_stmt: Some(transaction_stmt),
             });
         }
+
+        Ok(())
     }
 
     /// The connection is inside a buffered transaction, i.e.,
@@ -93,14 +110,7 @@ impl Connection {
 
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        let transaction_stmt = if let Binding::Transaction(ref mut transaction) = self.binding {
-            transaction.transaction_stmt.take()
-        } else {
-            None
-        };
-
-        self.ensure_connected(request, route, transaction_stmt)
-            .await?;
+        self.ensure_connected(request, route).await?;
 
         if !self.binding.state_check() {
             return Err(Error::NotInSync);
@@ -124,18 +134,12 @@ impl Connection {
     }
 
     /// Make sure we have all required shard connections to serve the request.
-    async fn ensure_connected(
-        &mut self,
-        request: &Request,
-        route: &Route,
-        transaction_stmt: Option<BufferedQuery>,
-    ) -> Result<(), Error> {
+    async fn ensure_connected(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         if matches!(
             self.binding,
             Binding::NotConnected | Binding::Transaction(_)
         ) {
-            self.connect_internal(request, route, transaction_stmt)
-                .await?;
+            self.connect_internal(request, route).await?;
         } else {
             use multi_shard::MultiShardUpgrade;
             MultiShardUpgrade::new(self).upgrade(request, route).await?;
@@ -166,18 +170,17 @@ impl Connection {
     }
 
     /// Try to get a connection for the given route.
-    async fn connect_internal(
-        &mut self,
-        request: &Request,
-        route: &Route,
-        transaction_stmt: Option<BufferedQuery>,
-    ) -> Result<(), Error> {
+    async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         // `BEGIN` -> write
         // `BEGIN READ ONLY` -> read
-        let is_read = match self.binding {
-            Binding::Transaction(ref transaction) => transaction.is_read,
-            _ => route.is_read(),
+        let (is_read, transaction_stmt) = match self.binding {
+            Binding::Transaction(ref mut transaction) => {
+                (transaction.is_read, transaction.transaction_stmt.take())
+            }
+            _ => (Some(route.is_read()), None),
         };
+
+        let is_read = is_read.unwrap_or(route.is_read());
 
         if let Shard::Direct(shard) = route.shard() {
             let server = self.cluster.get_conn(request, *shard, is_read).await?;
@@ -186,12 +189,15 @@ impl Connection {
                 server,
                 *shard,
                 transaction_stmt,
-                route.is_read(),
+                is_read,
             ));
         } else {
             // TODO(lev): Shard::Multi intentionally ignored because it's stupid
             // and we should remove it.
-            let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
+            let (shards, shard_indices) = self
+                .cluster
+                .get_conns(request, route.shard(), is_read)
+                .await?;
 
             self.binding = Binding::MultiShard(MultiBinding::new(
                 shards,

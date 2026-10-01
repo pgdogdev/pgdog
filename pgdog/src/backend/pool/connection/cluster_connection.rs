@@ -9,7 +9,7 @@ use crate::{
         reload_notify,
     },
     config::config,
-    frontend::router::{Route, parser::Shard},
+    frontend::router::parser::Shard,
 };
 use pgdog_config::{PoolerMode, User, users::PasswordKind};
 use tokio_util::sync::CancellationToken;
@@ -97,15 +97,16 @@ impl ClusterConnection {
         Ok(conns)
     }
 
-    /// Get all connections necessary to serve the route.
+    /// Get all connections necessary to serve the request.
     pub(super) async fn get_conns(
         &mut self,
         request: &Request,
-        route: &Route,
+        shard: &Shard,
+        is_read: bool,
     ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
         let shards = (0..self.cluster()?.shards().len())
             .filter(|shard_number| {
-                if let Shard::Multi(numbers) = route.shard()
+                if let Shard::Multi(numbers) = shard
                     && !numbers.contains(shard_number)
                 {
                     false
@@ -116,8 +117,7 @@ impl ClusterConnection {
             .collect::<Vec<_>>();
 
         Ok((
-            self.get_conns_for_shards(request, &shards, route.is_read())
-                .await?,
+            self.get_conns_for_shards(request, &shards, is_read).await?,
             shards,
         ))
     }

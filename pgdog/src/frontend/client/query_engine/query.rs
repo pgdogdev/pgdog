@@ -46,7 +46,7 @@ impl QueryEngine {
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context, client_request);
+        self.two_pc_check(context, client_request)?;
 
         let connect_route = match query_planner.as_ref() {
             Some(RewriteResult::InsertSplit(_) | RewriteResult::ShardingKeyUpdate(_)) => {
@@ -474,7 +474,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
-    ) {
+    ) -> Result<(), Error> {
         let enabled = self
             .backend
             .cluster()
@@ -490,8 +490,10 @@ impl QueryEngine {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
             self.backend
-                .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")));
+                .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")))?;
         }
+
+        Ok(())
     }
 
     async fn transaction_error_check(
