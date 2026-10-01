@@ -20,11 +20,19 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "plugin-unit-v1"
+          prefix-key: "plugin-unit-v2"
+          shared-key: plugin-unit
       - name: Run plugin unit tests
         run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-fail-fast

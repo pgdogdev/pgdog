@@ -18,9 +18,20 @@ on:
 jobs:
   fmt:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "clippy-v1"
+          shared-key: clippy
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

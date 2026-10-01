@@ -12,6 +12,14 @@ jobs:
   coverage:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -21,10 +29,10 @@ jobs:
           - { name: 3, shard: 3/3 }
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v1" # Change this when updating tooling
+          prefix-key: "v2" # Change this when updating tooling
+          shared-key: coverage
       - name: Setup PostgreSQL
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run tests with coverage
@@ -50,12 +58,20 @@ jobs:
   doc-tests:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "unit-v1"
+          prefix-key: "unit-v2"
+          shared-key: doc-tests
       - run: cargo test --doc
 
   tests:
