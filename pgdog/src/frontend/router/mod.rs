@@ -16,7 +16,7 @@ pub(crate) mod sharding;
 pub(in crate::frontend) use comment::RoutingComment;
 pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
-pub(crate) use parser::{ClientQuery, Command, DiscardTarget, QueryParser, Route, SetParam};
+pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, Route, SetParam};
 
 use super::ClientRequest;
 pub(crate) use context::RouterContext;

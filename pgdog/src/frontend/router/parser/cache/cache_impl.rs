@@ -30,6 +30,7 @@ pub(crate) struct Stats {
     pub(crate) parse_time: Duration,
     /// Fingerprints calculated.
     pub(crate) fingerprints: usize,
+    pub(crate) memory_allocated: usize,
 }
 
 impl Stats {
@@ -267,6 +268,7 @@ impl Cache {
         for stat in query_stats {
             stats.direct += stat.direct;
             stats.multi += stat.multi;
+            stats.memory_allocated += stat.memory_allocated;
         }
         (stats, len)
     }
