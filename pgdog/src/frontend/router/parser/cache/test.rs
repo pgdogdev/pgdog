@@ -278,7 +278,7 @@ fn test_cache_key_strips_leading_comment() {
 
     let ast = run_prepared("/* trace_id=abc */ SELECT 1 FROM cache_key_leading");
     assert_eq!(
-        &*ast.query_without_comment, "SELECT 1 FROM cache_key_leading",
+        &*ast.ast.query_without_comment, "SELECT 1 FROM cache_key_leading",
         "cache key must be the query without the leading comment"
     );
 
@@ -297,7 +297,7 @@ fn test_cache_key_strips_trailing_comment() {
 
     let ast = run_prepared("SELECT 1 FROM cache_key_trailing /* trace_id=xyz */");
     assert_eq!(
-        &*ast.query_without_comment, "SELECT 1 FROM cache_key_trailing",
+        &*ast.ast.query_without_comment, "SELECT 1 FROM cache_key_trailing",
         "cache key must be the query without the trailing comment"
     );
 }
@@ -310,7 +310,7 @@ fn test_cache_key_no_comment_unchanged() {
     let q = "SELECT 1 FROM cache_key_plain";
     let ast = run_prepared(q);
     assert_eq!(
-        &*ast.query_without_comment, q,
+        &*ast.ast.query_without_comment, q,
         "cache key must equal the original query when there is no comment"
     );
 }
