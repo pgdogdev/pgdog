@@ -1,0 +1,109 @@
+# Instead of running downloads in every single one of our 30 jobs, this builds an image
+# we can re-use across all of our jobs, saving us roughly 60 secs end-to-end (and 10-15 mins of runner mins in aggregate)
+
+FROM ubuntu:24.04
+
+ARG GO_VERSION=1.26.8
+ARG NODE_VERSION=24.21.0
+ARG OTP_VERSION=28.5.0.7
+ARG ELIXIR_VERSION=1.20.3
+ARG GHC_VERSION=9.12.4
+ARG CABAL_VERSION=3.18.1.0
+ARG TOXIPROXY_VERSION=2.12.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV MIX_HOME=/usr/local/mix
+ENV GHCUP_INSTALL_BASE_PREFIX=/usr/local
+ENV CABAL_DIR=/usr/local/cabal
+ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/node/bin:/usr/local/otp/bin:/usr/local/elixir/bin:/usr/local/.ghcup/bin:$PATH
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN <<EOF
+packages=(
+    ca-certificates curl sudo git gnupg zstd unzip xz-utils
+    build-essential clang pkg-config libssl-dev libpq-dev libyaml-dev
+    libgmp-dev libffi-dev libncurses-dev zlib1g-dev
+    lsof psmisc procps iproute2 openssl
+    python3 python3-dev python3-pip python3-venv python3-virtualenv
+    ruby-full ruby-dev
+    php-cli php-pgsql
+    default-jdk-headless
+)
+apt-get update
+apt-get install -y --no-install-recommends "${packages[@]}"
+gem install bundler --no-document
+rm -rf /var/lib/apt/lists/*
+EOF
+
+RUN <<EOF
+install -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin
+rm -rf /var/lib/apt/lists/*
+EOF
+VOLUME /var/lib/docker
+
+COPY rust-toolchain.toml /tmp/ci/rust-toolchain.toml
+RUN <<EOF
+curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+cd /tmp/ci
+rustup toolchain install
+rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
+EOF
+
+COPY integration/ci/install-deps.sh /tmp/ci/install-deps.sh
+RUN <<EOF
+cd /tmp/ci
+bash install-deps.sh
+apt-get install -y --no-install-recommends postgresql-18
+rm -rf /var/lib/apt/lists/*
+EOF
+
+RUN <<EOF
+arch="$(dpkg --print-architecture)"
+curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" | tar xzf - -C /usr/local
+mkdir /usr/local/node
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch/amd64/x64}.tar.xz" | tar xJf - -C /usr/local/node --strip-components=1
+for bin in toxiproxy-server toxiproxy-cli; do
+    curl -fsSL --retry 5 --retry-all-errors -o "/usr/local/bin/${bin}" "https://github.com/Shopify/toxiproxy/releases/download/v${TOXIPROXY_VERSION}/${bin}-linux-${arch}"
+    chmod +x "/usr/local/bin/${bin}"
+done
+EOF
+
+RUN <<EOF
+otp_path="ubuntu-24.04"
+if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
+    otp_path="arm64/ubuntu-24.04"
+fi
+mkdir -p /usr/local/otp
+curl -fsSL "https://builds.hex.pm/builds/otp/${otp_path}/OTP-${OTP_VERSION}.tar.gz" | tar xzf - -C /usr/local/otp --strip-components=1
+/usr/local/otp/Install -minimal /usr/local/otp
+curl -fsSL -o /tmp/elixir.zip "https://builds.hex.pm/builds/elixir/v${ELIXIR_VERSION}-otp-${OTP_VERSION%%.*}.zip"
+unzip -q /tmp/elixir.zip -d /usr/local/elixir
+rm /tmp/elixir.zip
+mix local.hex --force
+mix local.rebar --force
+EOF
+
+RUN <<EOF
+curl -fsSL -o /usr/local/bin/ghcup "https://downloads.haskell.org/~ghcup/$(uname -m)-linux-ghcup"
+chmod +x /usr/local/bin/ghcup
+ghcup install ghc "${GHC_VERSION}" --set
+ghcup install cabal "${CABAL_VERSION}" --set
+ghcup gc --cache --tmpdirs --profiling-libs --share-dir
+EOF
+
+COPY integration/haskell/cabal.project integration/haskell/pgdog-haskell-integration.cabal /tmp/ci/haskell/
+RUN <<EOF
+cd /tmp/ci/haskell
+cabal update
+cabal build --only-dependencies --enable-tests
+rm -rf dist-newstyle
+EOF

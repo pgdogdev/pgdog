@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod advisory_lock;
+mod advisory_unlock;
 mod close_parse;
 mod close_parse_global_cache;
 mod cross_shard_disabled;
@@ -32,6 +33,7 @@ mod replicas;
 mod rewrite_extended;
 mod rewrite_insert_split;
 mod rewrite_offset;
+mod rewrite_projection;
 mod rewrite_simple_prepared;
 mod schema_changed;
 mod set;

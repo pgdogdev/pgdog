@@ -69,7 +69,6 @@ impl DataRow {
     }
 
     /// Get data for column at index.
-    #[inline]
     pub(crate) fn column(&self, index: usize) -> Option<Bytes> {
         self.columns.get(index).cloned().map(|d| d.data)
     }

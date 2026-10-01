@@ -37,6 +37,23 @@ fn schema_name(relation: &nodes::RangeVar) -> &str {
     relation.schemaname().unwrap_or("public")
 }
 
+fn validate_constraint(
+    relation: &nodes::RangeVar,
+    constraint: &str,
+) -> Result<Statement, SchemaSyncError> {
+    // TODO: multiple times we create schema.table identifier,
+    // make it reusable
+    let schema = crate::util::escape_identifier(schema_name(relation));
+    let table =
+        crate::util::escape_identifier(relation.relname().ok_or(SchemaSyncError::MissingEntity)?);
+    let constraint = crate::util::escape_identifier(constraint);
+    let only = if relation.inh { "" } else { "ONLY " };
+
+    Ok(Statement::new(format!(
+        "ALTER TABLE {only}\"{schema}\".\"{table}\" VALIDATE CONSTRAINT \"{constraint}\""
+    )))
+}
+
 fn is_integer_type(type_name: &str) -> bool {
     matches!(
         type_name,
@@ -700,24 +717,37 @@ impl PgDumpOutput {
                                             }
                                         } else if cons.contype == nodes::ConstrType::CONSTR_FOREIGN
                                         {
-                                            // FK columns referencing integer PKs are
-                                            // computed from fk_columns at the end
-                                            if state == SyncState::PostData {
-                                                let sql = if cons.skip_validation
-                                                    || stmt.relation().is_some_and(|relation| {
-                                                        partitioned_tables
-                                                            .contains(&Table::from(relation))
-                                                    }) {
-                                                    original.to_owned()
-                                                } else {
-                                                    format!(
+                                            let partitioned =
+                                                stmt.relation().is_some_and(|relation| {
+                                                    partitioned_tables
+                                                        .contains(&Table::from(relation))
+                                                });
+                                            let defer_validation =
+                                                !cons.skip_validation && !partitioned;
+
+                                            let statement = match (state, defer_validation) {
+                                                (SyncState::PostData, true) => {
+                                                    Statement::new(format!(
                                                         "{} NOT VALID",
                                                         original.trim_end().trim_end_matches(';')
-                                                    )
-                                                };
-                                                result
-                                                    .push(Statement::new(sql).set_skip_if_exists());
-                                            }
+                                                    ))
+                                                    .set_skip_if_exists()
+                                                }
+                                                (SyncState::PostData, false) => {
+                                                    Statement::new(original).set_skip_if_exists()
+                                                }
+                                                (SyncState::PostDataValidation, true) => {
+                                                    let relation = stmt
+                                                        .relation()
+                                                        .ok_or(SchemaSyncError::MissingEntity)?;
+                                                    let constraint = cons
+                                                        .conname()
+                                                        .ok_or(SchemaSyncError::MissingEntity)?;
+                                                    validate_constraint(relation, constraint)?
+                                                }
+                                                _ => continue,
+                                            };
+                                            result.push(statement);
                                         } else if state == SyncState::PostData {
                                             result.push(
                                                 Statement::new(original).set_skip_if_exists(),
@@ -921,7 +951,11 @@ impl PgDumpOutput {
                     }
                 }
 
-                Node::VariableSetStmt(_) => continue,
+                Node::VariableSetStmt(stmt) => {
+                    if state == SyncState::PreData && stmt.name() == Some("check_function_bodies") {
+                        result.push(Statement::new(original));
+                    }
+                }
                 Node::SelectStmt(_) => continue,
                 _ => {
                     if state == SyncState::PreData {
@@ -1055,6 +1089,50 @@ ALTER TABLE ONLY public.users
 \unrestrict nu6jB5ogH2xGMn2dB3dMyMbSZ2PsVDqB2IaWK6zZVjngeba0UrnmxMy6s63SwzR
 "#;
         let _parse = pg_raw_parse::parse(&PgDump::clean(dump)).unwrap();
+    }
+
+    #[test]
+    fn test_check_function_bodies_is_restored_before_functions() {
+        let output = parse(
+            r#"
+SET statement_timeout = 0;
+SET check_function_bodies = false;
+CREATE FUNCTION t_count() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM t $$;
+CREATE TABLE t (id bigint PRIMARY KEY);"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 3);
+        assert_eq!(statements[0].sql, "SET check_function_bodies = false");
+        assert!(
+            statements[1]
+                .sql
+                .starts_with("CREATE OR REPLACE FUNCTION t_count()")
+        );
+        assert!(
+            statements[2]
+                .sql
+                .starts_with("CREATE TABLE IF NOT EXISTS t")
+        );
+    }
+
+    #[test]
+    fn test_view_time_zone_json_path_keeps_parentheses() {
+        let output = parse(
+            r#"
+CREATE VIEW public.v AS
+SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE ((summary -> 'stop'::text) ->> 'tz'::text))::date AS d
+FROM public.s;"#,
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            statements[0].sql,
+            "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE (summary -> 'stop'::text ->> 'tz'::text))::date AS d FROM public.s"
+        );
     }
 
     #[test]
@@ -1215,7 +1293,7 @@ ALTER TABLE test ADD CONSTRAINT id_pkey PRIMARY KEY (id);"#,
 CREATE TABLE parent (id INTEGER, name TEXT);
 CREATE TABLE child (id INTEGER, parent_id INTEGER);
 ALTER TABLE parent ADD CONSTRAINT parent_pkey PRIMARY KEY (id);
-ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#,
+ALTER TABLE ONLY child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);"#,
         );
 
         let statements = output.statements(SyncState::PreData).unwrap();
@@ -1237,9 +1315,13 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
         );
         assert_eq!(
             output.statements(SyncState::PostData).unwrap()[0].sql,
-            "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID"
+            "ALTER TABLE ONLY child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID"
         );
         assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+        assert_eq!(
+            output.statements(SyncState::PostDataValidation).unwrap()[0].sql,
+            "ALTER TABLE ONLY \"public\".\"child\" VALIDATE CONSTRAINT \"child_parent_fk\""
+        );
     }
 
     #[test]
@@ -1254,6 +1336,12 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
         assert_eq!(statements[0].sql, sql.trim_end_matches(';'));
         assert!(output.statements(SyncState::PreData).unwrap().is_empty());
         assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+        assert!(
+            output
+                .statements(SyncState::PostDataValidation)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1287,14 +1375,16 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
              CREATE TABLE child_0 PARTITION OF child FOR VALUES FROM (0) TO (100);
              ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id);",
         );
-        for (version, expected) in [
+        for (version, expected, validation) in [
             (
                 170_009,
                 "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id)",
+                None,
             ),
             (
                 180_000,
                 "ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFERENCES parent(id) NOT VALID",
+                Some("ALTER TABLE \"public\".\"child\" VALIDATE CONSTRAINT \"child_parent_fk\""),
             ),
         ] {
             output.destination_version = version;
@@ -1302,6 +1392,14 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
             assert_eq!(statements.len(), 1);
             assert_eq!(statements[0].sql.trim(), expected);
             assert!(output.statements(SyncState::Cutover).unwrap().is_empty());
+            assert_eq!(
+                output
+                    .statements(SyncState::PostDataValidation)
+                    .unwrap()
+                    .first()
+                    .map(|statement| statement.sql.as_str()),
+                validation
+            );
         }
     }
 
@@ -1324,6 +1422,10 @@ ALTER TABLE child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) REFEREN
         assert_eq!(
             statements[1].sql.trim(),
             "ALTER TABLE other.child ADD CONSTRAINT partitioned_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED"
+        );
+        assert_eq!(
+            output.statements(SyncState::PostDataValidation).unwrap()[0].sql,
+            "ALTER TABLE \"public\".\"child\" VALIDATE CONSTRAINT \"ordinary_fk\""
         );
     }
 

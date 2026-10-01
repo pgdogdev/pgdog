@@ -5,21 +5,27 @@ on:
       - main
       - main-ent
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - ".github/workflows/fmt.yml"
       - "**/*.rs"
       - "integration/**"
 
 jobs:
   fmt:
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        run: bash integration/ci/install-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "clippy-v1"
+          shared-key: clippy
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy

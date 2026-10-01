@@ -10,17 +10,14 @@ use crate::{
         prepared_statements::PreparedPlan,
         router::parser::{
             Limit,
-            rewrite::statement::{
-                offset::OffsetPlan,
-                plan::{GeneratedId, GeneratedParam},
-            },
+            rewrite::statement::{offset::OffsetPlan, plan::BindParam},
         },
     },
     net::{PREPARE_TEMPLATE_NAME, Prepare, parameter::ParameterValue},
     unique_id::UniqueId,
 };
 
-use super::{Error, RewritePlan, StatementRewrite};
+use super::{BindParams, Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PrepareExecute {
@@ -122,14 +119,13 @@ impl StatementRewrite<'_> {
                     })
                     .transpose()?;
 
-                let generated_params = plan.generated_params.clone();
+                let bind_params = plan.bind_params.clone();
                 let prepare = self.prepared_statements.insert_prepare(
                     &client_name,
                     original_query,
                     new_query,
-                    plan,
                     offset_plan,
-                    generated_params,
+                    bind_params,
                 );
 
                 stmt.set_name(Some(mem.copy_string(prepare.name())));
@@ -142,9 +138,8 @@ impl StatementRewrite<'_> {
 
                 if let Some(PreparedPlan {
                     prepare,
-                    unique_ids,
                     offset_plan,
-                    generated_params,
+                    bind_params,
                 }) = self.prepared_statements.prepared_plan(stmt_name)
                 {
                     if let Some(mut offset_plan) = offset_plan {
@@ -157,19 +152,14 @@ impl StatementRewrite<'_> {
 
                     // TODO: Should we be setting this on Plan? Pros? Cons?
                     // TODO: Double check that this only runs on omnisharded (as well as Bind/Execute, etc)
-                    if timestamp_rewrite {
-                        plan.generated_params = generated_params;
-                        self.insert_generated_ids(
-                            &mut stmt,
-                            mem,
-                            &plan.generated_params,
-                            self.timezone,
-                        )?;
-                    }
-
-                    // Rewrite EXECUTE statement to match the rewrite
-                    // we did on the PREPARE statement.
-                    insert_unique_ids(&mut stmt, mem, unique_ids)?;
+                    plan.bind_params = bind_params;
+                    self.insert_generated_ids(
+                        &mut stmt,
+                        mem,
+                        &plan.bind_params,
+                        timestamp_rewrite,
+                        self.timezone,
+                    )?;
 
                     stmt.set_name(Some(mem.copy_string(prepare.name())));
                     Ok(SimplePreparedRewrite::Executed { prepare })
@@ -186,22 +176,26 @@ impl StatementRewrite<'_> {
         &self,
         stmt: &mut ExecuteStmtMut<'a, '_>,
         mem: MemoryToken<'a>,
-        generated_params: &Vec<GeneratedParam>,
+        bind_params: &BindParams,
+        timestamp_rewrite: bool,
         timezone: Option<&ParameterValue>,
     ) -> Result<(), Error> {
-        for param in generated_params {
-            let (text, _) = match &param.generated_id {
-                GeneratedId::NDFunction(nd_func) => {
-                    nd_func.write_as_constant(&self.query_timestamps, timezone)?
+        for param in bind_params.iter() {
+            let param = match &*param {
+                BindParam::UniqueId => {
+                    let unique_id = UniqueId::generator()?.next_id();
+                    mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
+                        .uncast()
+                }
+                BindParam::NDFunction(nd_func) if timestamp_rewrite => {
+                    let (text, _) = nd_func.write_as_constant(&self.query_timestamps, timezone)?;
+
+                    mem.make_a_const(ConstValue::String(text.as_str())).uncast()
                 }
                 // TODO: It seems very straightforward to support the rest (if we want to support them for PREPARE)
                 _ => continue,
             };
-
-            stmt.params_mut().push(
-                mem,
-                mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
-            );
+            stmt.params_mut().push(mem, param);
         }
 
         Ok(())
@@ -407,23 +401,6 @@ fn insert_offset_params<'a>(
     }
 }
 
-fn insert_unique_ids<'a>(
-    stmt: &mut ExecuteStmtMut<'a, '_>,
-    mem: MemoryToken<'a>,
-    num_unique_ids: u16,
-) -> Result<(), Error> {
-    for _ in 0..num_unique_ids {
-        let unique_id = UniqueId::generator()?.next_id();
-        stmt.params_mut().push(
-            mem,
-            mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
-                .uncast(),
-        );
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{RewritePlan, StatementRewrite, StatementRewriteContext};
@@ -462,9 +439,8 @@ mod tests {
             }
         }
 
-        fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
-            let stmt = pg_raw_parse::parse(sql)?;
-            let mut rewrite = StatementRewrite::new(StatementRewriteContext {
+        fn statement_rewrite(&mut self) -> StatementRewrite<'_> {
+            StatementRewrite::new(StatementRewriteContext {
                 extended: false,
                 prepared: false,
                 prepared_statements: &mut self.ps,
@@ -474,7 +450,12 @@ mod tests {
                 search_path: None,
                 timezone: None,
                 query_timestamps: QueryTimestamps::default(),
-            });
+            })
+        }
+
+        fn rewrite(&mut self, sql: &str) -> Result<(String, RewritePlan), Error> {
+            let stmt = pg_raw_parse::parse(sql)?;
+            let mut rewrite = self.statement_rewrite();
             let mut plan = Default::default();
             let ast = pg_raw_parse::make::try_owned(|mem| {
                 let mut copy = mem.make_unique(&*stmt.into_inner());
@@ -484,31 +465,39 @@ mod tests {
             let sql = pg_raw_parse::deparse_stmts(&*ast)?;
             Ok((sql, plan))
         }
-    }
 
-    fn apply_plan(sql: &str, plan: &RewritePlan) -> Result<String, Error> {
-        let stmt = pg_raw_parse::parse(sql)?;
-        let ast = pg_raw_parse::make::try_owned(|mem| {
-            let mut copy = mem.make_unique(&*stmt.into_inner());
-            let mut raw_stmt = copy
-                .as_mut()
-                .into_iter()
-                .next()
-                .expect("query must contain a statement");
-            let NodeMut::ExecuteStmt(mut execute) = raw_stmt.stmt_mut() else {
-                panic!("expected EXECUTE statement");
-            };
+        fn apply_plan(&mut self, sql: &str, plan: &RewritePlan) -> Result<String, Error> {
+            let stmt = pg_raw_parse::parse(sql)?;
+            let ast = pg_raw_parse::make::try_owned(|mem| {
+                let mut copy = mem.make_unique(&*stmt.into_inner());
+                let mut raw_stmt = copy
+                    .as_mut()
+                    .into_iter()
+                    .next()
+                    .expect("query must contain a statement");
+                let NodeMut::ExecuteStmt(mut execute) = raw_stmt.stmt_mut() else {
+                    panic!("expected EXECUTE statement");
+                };
 
-            insert_unique_ids(&mut execute, mem, plan.unique_ids)?;
-            Ok::<_, Error>(copy)
-        })?;
+                self.statement_rewrite().insert_generated_ids(
+                    &mut execute,
+                    mem,
+                    &plan.bind_params,
+                    false,
+                    None,
+                )?;
+                Ok::<_, Error>(copy)
+            })?;
 
-        Ok(pg_raw_parse::deparse_stmts(&*ast)?)
+            Ok(pg_raw_parse::deparse_stmts(&*ast)?)
+        }
     }
 
     #[test]
     fn test_apply_prepare_rewrite_plan_no_unique_ids() {
-        let sql = apply_plan("EXECUTE stmt(1, 'hello')", &RewritePlan::default()).unwrap();
+        let sql = TestContext::new()
+            .apply_plan("EXECUTE stmt(1, 'hello')", &RewritePlan::default())
+            .unwrap();
 
         assert_eq!(sql, "EXECUTE stmt(1, 'hello')");
     }
@@ -517,10 +506,12 @@ mod tests {
     fn test_apply_prepare_rewrite_plan_appends_unique_ids() {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let plan = RewritePlan {
-            unique_ids: 3,
+            bind_params: vec![BindParam::UniqueId; 3].into(),
             ..Default::default()
         };
-        let sql = apply_plan("EXECUTE stmt(42)", &plan).unwrap();
+        let sql = TestContext::new()
+            .apply_plan("EXECUTE stmt(42)", &plan)
+            .unwrap();
         let ast = pg_raw_parse::parse(&sql).unwrap();
         let Node::ExecuteStmt(execute) = ast.stmts().next().unwrap() else {
             panic!("expected EXECUTE statement");

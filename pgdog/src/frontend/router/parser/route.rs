@@ -2,7 +2,7 @@ use std::{fmt::Display, ops::Deref};
 
 use super::{
     Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
-    rewrite::statement::aggregate::AggregateRewritePlan, statement::AdvisoryLocks,
+    rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
@@ -110,10 +110,8 @@ pub(crate) struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    /// Rewrites performed by the aggregate rewriter; adds
-    /// helper columns to this query so we can compute things
-    /// like avg() or variance().
-    rewrite_plan: AggregateRewritePlan,
+    /// Temporary columns projected for cross-shard result processing.
+    pub(crate) projection_rewrite_plan: ProjectionRewritePlan,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
     explain: Option<ExplainTrace>,
@@ -255,6 +253,10 @@ impl Route {
         &self.order_by
     }
 
+    pub(crate) fn set_order_by(&mut self, order_by: Vec<OrderBy>) {
+        self.order_by = order_by;
+    }
+
     pub(crate) fn aggregate(&self) -> &Aggregate {
         &self.aggregate
     }
@@ -381,9 +383,7 @@ impl Route {
         &self.advisory_locks
     }
 
-    /// True when the statement acquires an advisory lock whose lifetime outlives
-    /// a single transaction — the client must stay pinned to the same backend.
-    #[cfg(test)]
+    /// Returns true when this statement has an advisory lock function that acquires a lock.
     pub(crate) fn is_lock_session(&self) -> bool {
         self.advisory_locks.has_lock()
     }
@@ -400,14 +400,6 @@ impl Route {
 
     pub(crate) fn should_2pc(&self) -> bool {
         self.is_cross_shard() && self.is_write()
-    }
-
-    pub(crate) fn aggregate_rewrite_plan(&self) -> &AggregateRewritePlan {
-        &self.rewrite_plan
-    }
-
-    pub(crate) fn set_rewrite_plan(&mut self, plan: AggregateRewritePlan) {
-        self.rewrite_plan = plan;
     }
 
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
@@ -452,6 +444,7 @@ pub(crate) enum RoundRobinReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub(crate) enum OverrideReason {
+    AdvisoryLock,
     DryRun,
     ParserDisabled,
     Transaction,
@@ -594,6 +587,14 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::SearchPath(schema.to_string()),
+        }
+    }
+
+    /// An advisory lock is used in the query whose id hashes to `shard`
+    pub(crate) fn new_override_advisory_lock(shard: Shard) -> Self {
+        Self {
+            shard,
+            source: ShardSource::Override(OverrideReason::AdvisoryLock),
         }
     }
 

@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod admin_reload;
 pub mod admin_termination;
+pub mod advisory_locks;
 pub mod auth;
 pub mod auto_id;
 pub mod avg;

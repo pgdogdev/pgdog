@@ -8,10 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::{
-        RewritePlan,
-        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
-    },
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::BindParams},
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -70,6 +67,17 @@ impl PreparedStatements {
         Self::new().global.clone()
     }
 
+    pub(crate) fn cross_shard_variant(name: &str, query: &str) -> Option<String> {
+        let cache = Self::global();
+        // Existing variants are the hot path; only creation needs the global
+        // write lock.
+        if let Some(variant) = cache.read().existing_cross_shard_variant_name(name) {
+            return Some(variant);
+        }
+
+        cache.write().cross_shard_variant(name, query)
+    }
+
     /// Rewrite extended protocol messages to use global names. This allows multiple
     /// clients to re-use the same statement prepared on a Postgres server.
     ///
@@ -114,32 +122,31 @@ impl PreparedStatements {
     }
 
     /// Insert PREPARE statement into the cache.
-    pub(crate) fn insert_prepare(
+    pub(in crate::frontend) fn insert_prepare(
         &mut self,
         name: &str,
         original_query: Bytes,
         rewritten_query: Option<Bytes>,
-        // TODO: I think we should just pass `unique_ids` in here by itself.
-        //       Otherwise, it could be easily confused to want
-        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
-        rewrite_plan: &RewritePlan,
-        // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
         offset_plan: Option<OffsetPlan>,
-        generated_params: Vec<GeneratedParam>,
+        bind_params: BindParams,
     ) -> Prepare {
         let (_new, prepare) = {
             self.global.write().insert_prepare(
                 original_query,
                 rewritten_query,
-                rewrite_plan,
                 offset_plan,
-                generated_params,
+                bind_params,
             )
         };
 
         self.insert_internal(name, prepare.name());
 
         prepare
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test(&mut self, name: &str, original_query: Bytes) -> Prepare {
+        self.insert_prepare(name, original_query, None, None, Default::default())
     }
 
     /// Get the global unique name for a prepared statement
@@ -205,7 +212,6 @@ impl PreparedStatements {
 }
 
 /// Approximate memory used by a String.
-#[inline]
 fn str_mem(s: &str) -> usize {
     s.len() + std::mem::size_of::<String>()
 }

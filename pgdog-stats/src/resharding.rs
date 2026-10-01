@@ -12,7 +12,8 @@ pub struct ReplicationSlot {
     pub name: String,
     pub lsn: Lsn,
     pub lag: i64,
-    pub copy_data: bool,
+    pub temporary: bool,
+    pub existing: bool,
     pub address: Address,
     pub last_transaction: Option<SystemTime>,
     pub task_id: Option<TaskId>,
@@ -79,6 +80,9 @@ pub enum SyncState {
     PreData,
     PostData,
     Cutover,
+    PostDataValidation,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

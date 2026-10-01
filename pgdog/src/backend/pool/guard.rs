@@ -62,7 +62,6 @@ impl Guard {
     }
 
     /// Whether this guard is currently pinned to its client.
-    #[inline]
     pub(crate) fn is_locked(&self) -> bool {
         self.locked
     }

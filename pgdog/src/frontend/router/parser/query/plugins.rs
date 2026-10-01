@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::cache::Ast;
+use crate::frontend::router::parser::cache::ClientQuery;
 use pgdog_plugin::{
     Context as PdRouterContext, ReadWrite, Shard as PdShard,
     parameters::{Parameter, Parameters},
@@ -26,7 +26,7 @@ impl QueryParser {
     pub(super) fn plugins(
         &mut self,
         context: &QueryParserContext,
-        statement: &Ast,
+        statement: &ClientQuery,
         read: bool,
     ) -> Result<(), Error> {
         // Don't run plugins on Parse only.
@@ -76,7 +76,7 @@ impl QueryParser {
             has_primary: !context.write_only,
             in_transaction: context.router_context.in_transaction(),
             write_override: self.write_override || !read, // This is set inside `QueryParser::plugins`.
-            query: &statement.ast,
+            query: &statement.ast.ast,
             params,
         };
 

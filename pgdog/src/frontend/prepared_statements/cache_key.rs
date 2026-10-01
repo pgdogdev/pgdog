@@ -19,7 +19,6 @@ pub(crate) enum CacheKey {
 }
 
 impl MemoryUsage for CacheKey {
-    #[inline]
     fn memory_usage(&self) -> usize {
         // The Bytes alias the Parse in Statement, which counts them via Parse::len.
         std::mem::size_of::<Self>()

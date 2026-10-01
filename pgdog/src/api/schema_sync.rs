@@ -1,5 +1,3 @@
-//! Schema-sync background task (pre-data, post-data, or cutover).
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,14 +21,14 @@ use crate::backend::schema::sync::pg_dump::{Collapsed, PgDumpOutput, Statement, 
 /// The source dump, taken once and shared by every phase of one migration.
 pub(crate) type SchemaDump = Arc<OnceCell<Arc<PgDumpOutput>>>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Display, FromStr, clap::ValueEnum)]
+#[display(rename_all = "kebab-case")]
+#[from_str(rename_all = "kebab-case")]
 pub(crate) enum SchemaSyncPhase {
-    #[display("pre")]
     Pre,
-    #[display("post")]
     Post,
-    #[display("cutover")]
     Cutover,
+    PostDataValidation,
 }
 
 impl From<SchemaSyncPhase> for SyncState {
@@ -39,6 +37,7 @@ impl From<SchemaSyncPhase> for SyncState {
             SchemaSyncPhase::Pre => SyncState::PreData,
             SchemaSyncPhase::Post => SyncState::PostData,
             SchemaSyncPhase::Cutover => SyncState::Cutover,
+            SchemaSyncPhase::PostDataValidation => SyncState::PostDataValidation,
         }
     }
 }
@@ -268,15 +267,12 @@ mod tests {
             ("pre", SchemaSyncPhase::Pre),
             ("post", SchemaSyncPhase::Post),
             ("cutover", SchemaSyncPhase::Cutover),
+            ("post-data-validation", SchemaSyncPhase::PostDataValidation),
         ] {
             assert_eq!(text.parse::<SchemaSyncPhase>().unwrap(), phase);
             assert_eq!(phase.to_string(), text);
         }
-        // Parsing is case-insensitive; unknown phases are rejected.
-        assert_eq!(
-            "CUTOVER".parse::<SchemaSyncPhase>().unwrap(),
-            SchemaSyncPhase::Cutover
-        );
+        assert!("CUTOVER".parse::<SchemaSyncPhase>().is_err());
         assert!("bogus".parse::<SchemaSyncPhase>().is_err());
     }
 
@@ -289,6 +285,7 @@ mod tests {
             (SchemaSyncPhase::Pre, "pre_data"),
             (SchemaSyncPhase::Post, "post_data"),
             (SchemaSyncPhase::Cutover, "cutover"),
+            (SchemaSyncPhase::PostDataValidation, "post_data_validation"),
         ] {
             let definition = TaskDefinition::from(SchemaSyncDefinition {
                 databases: Databases {

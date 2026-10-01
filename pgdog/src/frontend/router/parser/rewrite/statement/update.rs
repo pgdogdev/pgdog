@@ -10,7 +10,7 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
         router::{
-            Ast,
+            ClientQuery,
             parser::{Column, Table, Value},
             sharding::ShardedTable,
         },
@@ -25,7 +25,7 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Statement {
-    pub(crate) ast: Ast,
+    pub(crate) ast: ClientQuery,
     pub(crate) stmt: String,
     pub(crate) params: IndexSet<u16>,
 }
@@ -203,7 +203,7 @@ impl Inner {
 
         //// Build the AST to be used with the router.
         //// It's identical to the string-generated statement above.
-        let ast = Ast::from_raw_stmts(insert);
+        let ast = ClientQuery::from_raw_stmts(insert);
 
         let mut req = ClientRequest::from(vec![
             ProtocolMessage::from(Parse::new_anonymous(stmt.as_str())),
@@ -368,7 +368,7 @@ fn create_stmts<'a>(
 
     let delete = Statement {
         stmt: deparse(delete.first().unwrap())?.as_str().to_owned(),
-        ast: Ast::from_raw_stmts(delete),
+        ast: ClientQuery::from_raw_stmts(delete),
         params,
     };
 
@@ -391,7 +391,7 @@ fn create_stmts<'a>(
 
     let check = Statement {
         stmt: deparse(check.first().unwrap())?.as_str().to_owned(),
-        ast: Ast::from_raw_stmts(check),
+        ast: ClientQuery::from_raw_stmts(check),
         params,
     };
 

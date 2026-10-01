@@ -177,7 +177,7 @@ impl QueryParser {
                 // SET sharding key
                 return Err(Error::UnmappedShardKey(sharding_key_value.to_string()));
             } else if let Some(statement) = context.router_context.ast
-                && let Some(sharding_key) = &statement.comment_sharding_key
+                && let Some(sharding_key) = &statement.comment.sharding_key
             {
                 // Comment directive sharding key
                 return Err(Error::UnmappedShardKey(sharding_key.to_string()));
@@ -269,14 +269,14 @@ impl QueryParser {
 
         let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
 
-        if let Some(stmt) = statement.ast.stmts().next() {
+        if let Some(stmt) = statement.ast.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
         }
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
-            match &statement.comment_shard {
+            match &statement.comment.shard {
                 Some(ShardOrLookup::Shard(comment_shard)) => {
                     context
                         .shards_calculator
@@ -306,7 +306,7 @@ impl QueryParser {
                 None => {}
             }
 
-            let role_override = statement.comment_role;
+            let role_override = statement.comment.role;
             if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
             }
@@ -323,7 +323,7 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        let stmts = &statement.ast;
+        let stmts = &statement.ast.ast;
 
         if let Some(multi_tenant) = context.multi_tenant()
             && let Some(stmt) = stmts.stmts().next()
@@ -386,7 +386,7 @@ impl QueryParser {
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
                     )));
                 } else {
-                    self.select(statement, stmt, context)
+                    self.select(stmt, context)
                 }
             }
 
@@ -442,7 +442,7 @@ impl QueryParser {
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
-            Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(stmt, context),
 
             Node::DiscardStmt(stmt) => {
                 let target = match stmt.target {
@@ -466,7 +466,6 @@ impl QueryParser {
         if !context.router_context.executable
             && let Command::Query(ref query) = command
             && query.is_cross_shard()
-            && statement.rewrite_plan.insert_split.is_empty()
         {
             context
                 .shards_calculator
@@ -540,7 +539,12 @@ impl QueryParser {
             // Record statement in cache with normalized parameters.
             if !statement.cached {
                 Cache::get().record_normalized(
-                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
+                    statement
+                        .ast
+                        .ast
+                        .into_iter()
+                        .next()
+                        .ok_or(Error::EmptyQuery)?,
                     command.route(),
                 )?;
             }
@@ -612,13 +616,10 @@ impl QueryParser {
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
-        let mut parser = StatementParser::new(
-            stmt,
-            context.router_context.bind,
-            &context.sharding_schema,
-            self.recorder_mut(),
-        )
-        .with_schema_lookup(schema_lookup);
+        let mut parser =
+            StatementParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+                .with_schema_lookup(schema_lookup)
+                .with_explain(self.recorder_mut().is_some());
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
@@ -627,6 +628,9 @@ impl QueryParser {
             context.router_context.parameter_hints.search_path,
         );
         let shard = parser.shard()?;
+        if let Some(recorder) = self.recorder_mut() {
+            recorder.extend(parser.take_explain());
+        }
         let omnisharded = !is_sharded && shard.is_none();
         let shard = shard.unwrap_or(Shard::All);
         let pending_lookups = parser.take_pending_lookups();

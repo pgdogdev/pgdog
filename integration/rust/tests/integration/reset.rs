@@ -224,3 +224,50 @@ async fn test_reset_in_transaction_rollback() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_reset_all_startup_parameters() -> Result<(), tokio_postgres::Error> {
+    for port in [5432, 6432] {
+        for extended in [false, true] {
+            let mut config = tokio_postgres::Config::new();
+            config
+                .host("127.0.0.1")
+                .port(port)
+                .user("pgdog")
+                .password("pgdog")
+                .dbname("pgdog")
+                .options("-c search_path=s1 -c timezone=Asia/Tokyo");
+            let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
+            let task = tokio::spawn(connection);
+
+            for changed in [false, true] {
+                if changed {
+                    client.batch_execute(
+                        "SET search_path TO runtime; SET timezone TO 'Europe/Paris'; SET statement_timeout TO '5s'",
+                    ).await?;
+                }
+                if extended {
+                    client.execute("RESET ALL", &[]).await?;
+                } else {
+                    client.batch_execute("RESET ALL").await?;
+                }
+                let row = client.query_one(
+                    "SELECT current_setting('search_path'), current_setting('TimeZone'), current_setting('statement_timeout')",
+                    &[],
+                ).await?;
+                assert_eq!(
+                    (
+                        row.get::<_, String>(0),
+                        row.get::<_, String>(1),
+                        row.get::<_, String>(2)
+                    ),
+                    ("s1".into(), "Asia/Tokyo".into(), "0".into()),
+                    "port={port}, extended={extended}, changed={changed}"
+                );
+            }
+            drop(client);
+            task.await.expect("connection task completed")?;
+        }
+    }
+    Ok(())
+}
