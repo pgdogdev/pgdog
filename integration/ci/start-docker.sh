@@ -14,13 +14,10 @@ done < <(docker info --format '{{range .RegistryConfig.Mirrors}}{{println .}}{{e
 
 sudo sh -c "nohup dockerd --host unix://${SOCKET} --pidfile /var/run/docker-nested.pid ${mirrors[*]} > /var/log/dockerd.log 2>&1 &"
 
-export DOCKER_HOST="unix://${SOCKET}"
-if [[ -n "${GITHUB_ENV:-}" ]]; then
-    echo "DOCKER_HOST=${DOCKER_HOST}" >> "$GITHUB_ENV"
-fi
-
 for _ in $(seq 1 60); do
-    if docker info >/dev/null 2>&1; then
+    if docker --host "unix://${SOCKET}" info >/dev/null 2>&1; then
+        docker context create nested --docker "host=unix://${SOCKET}" >/dev/null
+        docker context use nested >/dev/null
         exit 0
     fi
     sleep 0.5
