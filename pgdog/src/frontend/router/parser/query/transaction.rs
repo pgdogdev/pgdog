@@ -27,14 +27,20 @@ impl QueryParser {
             .shards_calculator
             .push(ShardWithPriority::new_table(Shard::All));
 
-        let route = Route::write(context.shards_calculator.shard()).transaction_control();
+        let route = Route::write(context.shards_calculator.shard());
 
         match stmt.kind {
             TRANS_STMT_COMMIT => {
-                return Ok(Command::CommitTransaction { extended, route });
+                return Ok(Command::CommitTransaction {
+                    extended,
+                    route: route.transaction_control(),
+                });
             }
             TRANS_STMT_ROLLBACK => {
-                return Ok(Command::RollbackTransaction { extended, route });
+                return Ok(Command::RollbackTransaction {
+                    extended,
+                    route: route.transaction_control(),
+                });
             }
             TRANS_STMT_BEGIN | TRANS_STMT_START => {
                 let transaction_type = Self::transaction_type(stmt.options()).unwrap_or_default();
@@ -42,7 +48,9 @@ impl QueryParser {
                     query: context.query()?.clone(),
                     transaction_type,
                     extended,
-                    route: route.with_read(transaction_type == TransactionType::ReadOnly),
+                    route: route
+                        .with_read(transaction_type == TransactionType::ReadOnly)
+                        .transaction_control(),
                 });
             }
             TRANS_STMT_ROLLBACK_TO => rollback_savepoint = true,
@@ -51,6 +59,9 @@ impl QueryParser {
             {
                 return Err(Error::NoTwoPc);
             }
+            // TODO(lev): SAVEPOINT and RELEASE SAVEPOINT
+            // cause us to connect to all shards. Technically, we could handle SAVEPOINT by creating it on connected shards only
+            // and RELEASE SAVEPOINT by executing it on the shards that have that savepoint only, but that's a lot of work, isn't it?
             _ => (),
         }
 

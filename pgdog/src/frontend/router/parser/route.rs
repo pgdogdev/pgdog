@@ -418,7 +418,7 @@ impl Route {
     }
 
     pub(crate) fn needs_backend(&self) -> bool {
-        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl)
+        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl) || self.rollback_savepoint
     }
 }
 
