@@ -37,24 +37,6 @@ impl DirectBinding {
         }
     }
 
-    /// Start a transaction on this binding _after_ it was created.
-    /// This can happen during a binding upgrade.
-    pub(super) async fn start_transaction(
-        &mut self,
-        transaction_stmt: BufferedQuery,
-    ) -> Result<(), Error> {
-        if self.transaction_stmt.is_none() {
-            if self.server.in_sync() {
-                self.server.execute(transaction_stmt.query()).await?;
-                self.transaction_stmt = Some(transaction_stmt);
-            } else {
-                return Err(Error::TransactionNotInSync);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Link client to server. This is idempotent.
     pub(super) async fn link_client(
         &mut self,

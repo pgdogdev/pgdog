@@ -122,9 +122,6 @@ pub(crate) enum Error {
 
     #[error("cannot switch shards in a direct-to-shard transaction")]
     DirectShardMismatch,
-
-    #[error("transaction cannot start on out-of-sync server")]
-    TransactionNotInSync,
 }
 
 impl From<crate::frontend::Error> for Error {

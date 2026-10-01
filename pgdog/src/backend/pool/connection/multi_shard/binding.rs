@@ -142,36 +142,6 @@ impl MultiBinding {
         Ok(max)
     }
 
-    /// Start transaction on all connected servers.
-    ///
-    /// This can happen during a binding upgrade.
-    pub(in crate::backend::pool::connection) async fn start_transaction(
-        &mut self,
-        transaction_stmt: BufferedQuery,
-    ) -> Result<(), Error> {
-        if self.transaction_stmt.is_some() {
-            return Ok(());
-        }
-
-        if self.servers.iter().any(|server| !server.in_sync()) {
-            return Err(Error::TransactionNotInSync);
-        }
-
-        for result in join_all(
-            self.servers
-                .iter_mut()
-                .map(|server| server.execute(transaction_stmt.query())),
-        )
-        .await
-        {
-            result?;
-        }
-
-        self.transaction_stmt = Some(transaction_stmt);
-
-        Ok(())
-    }
-
     /// Reset cross-shard state after a query finished executing.
     pub(in crate::backend::pool::connection) fn query_complete(&mut self) {
         self.state.query_complete();
