@@ -398,7 +398,9 @@ mod tests {
                 .expect("DEFAULT VALUES rewrite");
                 assert_eq!(plan.bind_params.len(), 1, "{sql}");
                 assert_eq!(
-                    matches!(&plan.bind_params[0], BindParam::UniqueId),
+                    plan.bind_params
+                        .iter()
+                        .any(|param| matches!(&*param, BindParam::UniqueId)),
                     mode != RewriteMode::RewriteOmniGlobal
                 );
                 assert!(!sql.contains("DEFAULT VALUES"), "{sql}");
