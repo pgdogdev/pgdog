@@ -22,7 +22,8 @@ impl QueryEngine {
         context.transaction = Some(Transaction::new(transaction_type));
 
         self.backend
-            .start_transaction(transaction_type.read_only(), begin.clone())?;
+            .start_transaction(transaction_type.read_only(), begin)
+            .await?;
 
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;

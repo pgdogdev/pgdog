@@ -75,7 +75,7 @@ impl Connection {
     }
 
     /// Start a transaction on this connection, if the connection is idle.
-    pub(crate) fn start_transaction(
+    pub(crate) async fn start_transaction(
         &mut self,
         read_only: bool,
         transaction_stmt: BufferedQuery,
@@ -103,11 +103,11 @@ impl Connection {
             // even though we were already connected. This is necessary for pinned connections,
             // i.e., advisory locks, so a transaction can be started on any newly added shards.
             Binding::Direct(ref mut direct) => {
-                direct.transaction_stmt = Some(transaction_stmt);
+                direct.start_transaction(transaction_stmt).await?;
             }
 
             Binding::MultiShard(ref mut multi) => {
-                multi.transaction_stmt = Some(transaction_stmt);
+                multi.start_transaction(transaction_stmt).await?;
             }
 
             _ => (),
