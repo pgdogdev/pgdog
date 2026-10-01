@@ -10,10 +10,10 @@ impl QueryParser {
     ///
     pub(super) fn check_multi_query_statement(
         &self,
-        ast: &ClientQuery,
+        ast: &Ast,
         context: &QueryParserContext<'_>,
     ) -> Result<Option<Command>, Error> {
-        let stmts = &ast.ast.ast;
+        let stmts = &ast.ast;
 
         if stmts.stmts().count() <= 1 {
             return Ok(None);
@@ -73,8 +73,8 @@ impl QueryParser {
         }
     }
 
-    fn split(ast: &ClientQuery) -> Result<Command, Error> {
-        let stmts = &ast.ast.ast;
+    fn split(ast: &Ast) -> Result<Command, Error> {
+        let stmts = &ast.ast;
 
         let queries = stmts
             .stmts()
@@ -92,12 +92,12 @@ impl QueryParser {
     //
     // TODO(lev): start implicit transaction for multi-statement queries.
     //
-    fn split_execution_no_transaction_safe(ast: &ClientQuery) -> CheckResult {
+    fn split_execution_no_transaction_safe(ast: &Ast) -> CheckResult {
         let mut check = CheckResult::default();
         let mut txn_stmts = 0;
         let mut inside_txn = false;
 
-        for stmt in ast.ast.ast.stmts() {
+        for stmt in ast.ast.stmts() {
             match stmt {
                 Node::TransactionStmt(stmt) => {
                     if matches!(stmt.kind, TRANS_STMT_BEGIN | TRANS_STMT_START) {

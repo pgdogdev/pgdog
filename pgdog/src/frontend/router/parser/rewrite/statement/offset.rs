@@ -92,7 +92,7 @@ impl OffsetPlan {
 
         let node = &mut request.ast;
         let node = node.as_mut().ok_or(Error::MissingAst)?;
-        let node = node.ast.ast.first().ok_or(Error::MissingAst)?;
+        let node = node.ast.first().ok_or(Error::MissingAst)?;
 
         let pg_raw_parse::Node::ExecuteStmt(execute) = node.stmt() else {
             unreachable!("The query must be ExecuteStmt to have reached here.");

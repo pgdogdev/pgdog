@@ -101,7 +101,7 @@ async fn test_nextval_auto_id_simple_splits_use_resolved_values() {
                 );
                 let ast = split.ast.as_ref().expect("routing AST");
                 assert_eq!(
-                    pg_raw_parse::deparse_stmts(&*ast.ast.ast).expect("SQL"),
+                    pg_raw_parse::deparse_stmts(&*ast.ast).expect("SQL"),
                     expected
                 );
                 assert!(ast.rewrite_plan.is_empty(), "IDs already resolved");
