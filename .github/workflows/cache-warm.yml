@@ -1,0 +1,98 @@
+# This is to fix the cache misses on the first run in a new PR, which are based on caches from main
+# We don't want to re-run tests in a merge group (see <https://github.com/pgdogdev/pgdog/pull/1669>),
+# but we want the first run to be cached, so this just builds and caches, but does not run tests,
+# and only runs in main.
+
+name: cache-warm
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: cache-warm
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: coverage
+            prefix: v2
+            shared: coverage
+            run: |
+              export RUSTFLAGS="--cfg tokio_unstable -C link-dead-code"
+              cargo llvm-cov nextest --no-report -E 'none()' --no-tests=pass
+          - name: doc-tests
+            prefix: unit-v2
+            shared: doc-tests
+            run: cargo test --doc --no-run
+          - name: clippy
+            prefix: clippy-v1
+            shared: clippy
+            run: cargo clippy --all-targets
+          - name: plugin-unit
+            prefix: plugin-unit-v2
+            shared: plugin-unit
+            run: cargo nextest run -E 'package(pgdog-example-plugin)' --no-run
+          - name: build
+            prefix: build-cov-debug-v2
+            shared: build
+            runner: blacksmith-8vcpu-ubuntu-2404
+            save_binary: true
+            run: bash integration/ci/prepare-instrumented-pgdog.sh debug
+          - name: integration
+            prefix: build-v2
+            shared: integration
+            run: |
+              cargo nextest run --profile integration --no-run
+              cargo build --release -p pgdog-primary-only-tables -p pgdog-example-plugin
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compute cache key
+        if: matrix.save_binary
+        id: cache-key
+        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-v2-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ matrix.prefix }}
+          shared-key: ${{ matrix.shared }}
+      - name: Build
+        run: ${{ matrix.run }}
+      - name: Save pgdog binary
+        if: matrix.save_binary
+        uses: actions/cache/save@v5
+        with:
+          path: target/llvm-cov-target/debug/pgdog
+          key: ${{ steps.cache-key.outputs.key }}
+
+  haskell:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install GHC/Cabal
+        id: setup-haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.4"
+          cabal-version: "3.18.1.0"
+      - name: Cache Cabal dependencies
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.setup-haskell.outputs.cabal-store }}
+          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-
+      - name: Build dependencies
+        working-directory: integration/haskell
+        run: cabal build --only-dependencies --enable-tests
