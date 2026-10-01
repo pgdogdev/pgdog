@@ -212,11 +212,15 @@ impl<'a> StatementRewrite<'a> {
 
         if nd_function_rewrite {
             match stmt.stmt_mut() {
-                NodeMut::InsertStmt(_) => {
+                // TODO: we could also support UPDATE / etc
+                NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) => {
                     self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut next_param, &mut plan)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
-                    if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
+                    if matches!(
+                        prepare.query_mut(),
+                        NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_)
+                    ) {
                         self.rewrite_nd_functions(
                             prepare.query_mut(),
                             mem,
