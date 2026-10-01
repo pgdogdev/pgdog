@@ -73,6 +73,12 @@ impl QueryCache {
                 gauge: true,
             }),
             Metric::new(QueryCacheMetric {
+                name: "query_cache_memory".into(),
+                help: "Amount of memory consumed by cached query ASTs".into(),
+                value: self.stats.memory_allocated,
+                gauge: true,
+            }),
+            Metric::new(QueryCacheMetric {
                 name: "query_cache_parse_time".into(),
                 help: "Time spent parsing queries due to cache misses".into(),
                 value: self.stats.parse_time.as_millis() as usize,
@@ -170,6 +176,7 @@ mod tests {
                 multi: 4,
                 parse_time: Duration::ZERO,
                 fingerprints: 8,
+                memory_allocated: 1024,
             },
             len: 5,
             prepared_statements: 6,
@@ -186,6 +193,7 @@ mod tests {
                 "query_cache_direct".to_string(),
                 "query_cache_cross".to_string(),
                 "query_cache_size".to_string(),
+                "query_cache_memory".to_string(),
                 "query_cache_parse_time".to_string(),
                 "query_cache_fingerprints".to_string(),
                 "prepared_statements".to_string(),

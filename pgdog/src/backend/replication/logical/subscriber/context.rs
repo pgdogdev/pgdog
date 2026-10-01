@@ -51,12 +51,12 @@ impl StreamContext {
         let mut request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
 
         let ast_context = AstContext::from_cluster(cluster, &PARAMS, QueryTimestamps::now());
-        let ast = Cache::get().query(
+        let entry = Cache::get().query(
             &BufferedQuery::Prepared(parse),
             &ast_context,
             &mut PreparedStatements::default(),
         )?;
-        request.ast = Some(ast);
+        request.ast = Some(entry.ast);
 
         let router_context = RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?;
         let mut router = Router::new();
