@@ -5,7 +5,7 @@ use crate::{
     frontend::{
         BufferedQuery, ClientRequest,
         client::Sticky,
-        router::{ClientQuery, parser::StatementParameters, sharding::ResolvedLookups},
+        router::{Ast, RoutingComment, parser::StatementParameters, sharding::ResolvedLookups},
     },
     net::Parameters,
 };
@@ -31,7 +31,11 @@ pub(crate) struct RouterContext<'a> {
     /// Sticky omnisharded index.
     pub(super) sticky: Sticky,
     /// AST.
-    pub(super) ast: Option<&'a ClientQuery>,
+    pub(super) ast: Option<&'a Ast>,
+    /// Was the AST loaded from the cache?
+    pub(super) cached: bool,
+    /// Routing comment on the original query
+    pub(super) comment: Option<&'a RoutingComment>,
     /// Schema.
     pub(super) schema: Schema,
     /// Sharding key translations resolved for this statement. Routing
@@ -68,7 +72,9 @@ impl<'a> RouterContext<'a> {
             two_pc: cluster.two_pc_enabled(),
             sticky,
             query,
-            ast: buffer.ast.as_ref(),
+            ast: buffer.ast.as_deref(),
+            cached: buffer.cached,
+            comment: buffer.routing_comment.as_deref(),
             schema: cluster.schema(),
             resolved_lookups: ResolvedLookups::default(),
         })

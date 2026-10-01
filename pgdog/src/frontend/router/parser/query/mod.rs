@@ -5,6 +5,7 @@ use crate::{
     backend::ShardingSchema,
     config::Role,
     frontend::router::{
+        RoutingComment,
         context::RouterContext,
         parser::{OrderBy, Shard, route::ShardSource},
         round_robin,
@@ -176,8 +177,8 @@ impl QueryParser {
             {
                 // SET sharding key
                 return Err(Error::UnmappedShardKey(sharding_key_value.to_string()));
-            } else if let Some(statement) = context.router_context.ast
-                && let Some(sharding_key) = &statement.comment.sharding_key
+            } else if let Some(comment) = context.router_context.comment
+                && let Some(sharding_key) = &comment.sharding_key
             {
                 // Comment directive sharding key
                 return Err(Error::UnmappedShardKey(sharding_key.to_string()));
@@ -268,15 +269,19 @@ impl QueryParser {
         }
 
         let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
+        let routing_comment = context
+            .router_context
+            .comment
+            .unwrap_or(const { &RoutingComment::empty() });
 
-        if let Some(stmt) = statement.ast.ast.stmts().next() {
+        if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
         }
 
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
-            match &statement.comment.shard {
+            match &routing_comment.shard {
                 Some(ShardOrLookup::Shard(comment_shard)) => {
                     context
                         .shards_calculator
@@ -306,7 +311,7 @@ impl QueryParser {
                 None => {}
             }
 
-            let role_override = statement.comment.role;
+            let role_override = routing_comment.role;
             if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
             }
@@ -323,7 +328,7 @@ impl QueryParser {
         debug!("{}", context.query()?.query());
         trace!("{:#?}", statement);
 
-        let stmts = &statement.ast.ast;
+        let stmts = &statement.ast;
 
         if let Some(multi_tenant) = context.multi_tenant()
             && let Some(stmt) = stmts.stmts().next()
@@ -483,14 +488,16 @@ impl QueryParser {
         }
 
         // Run plugins, if any.
-        self.plugins(
-            context,
-            statement,
-            match &command {
-                Command::Query(query) => query.is_read(),
-                _ => false,
-            },
-        )?;
+        if context.router_context.bind.is_some() || !context.router_context.cached {
+            self.plugins(
+                context,
+                statement,
+                match &command {
+                    Command::Query(query) => query.is_read(),
+                    _ => false,
+                },
+            )?;
+        }
 
         // Set shard on route, if we're ready.
         if let Command::Query(ref mut route) = command {
@@ -537,14 +544,9 @@ impl QueryParser {
 
         if context.dry_run {
             // Record statement in cache with normalized parameters.
-            if !statement.cached {
+            if !context.router_context.cached {
                 Cache::get().record_normalized(
-                    statement
-                        .ast
-                        .ast
-                        .into_iter()
-                        .next()
-                        .ok_or(Error::EmptyQuery)?,
+                    statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
                     command.route(),
                 )?;
             }

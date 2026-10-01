@@ -228,7 +228,9 @@ impl QueryParserTest {
                 // The engine surfaces cache-time errors (e.g. a comment
                 // directive that fails to resolve) as client errors.
                 let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared)?;
-                request.ast = Some(ast);
+                request.ast = Some(ast.ast);
+                request.cached = ast.cached;
+                request.routing_comment = Some(ast.comment);
             }
         }
 
