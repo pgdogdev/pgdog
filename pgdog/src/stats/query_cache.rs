@@ -193,7 +193,7 @@ mod tests {
                 "query_cache_direct".to_string(),
                 "query_cache_cross".to_string(),
                 "query_cache_size".to_string(),
-                "query_cache_mem".to_string(),
+                "query_cache_memory".to_string(),
                 "query_cache_parse_time".to_string(),
                 "query_cache_fingerprints".to_string(),
                 "prepared_statements".to_string(),
