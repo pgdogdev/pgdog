@@ -102,7 +102,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         replication_slot: Option<String>,
 
-        /// Don't perform pre-data schema sync.
+        /// Don't perform pre-data or post-data schema sync.
         #[arg(long)]
         skip_schema_sync: bool,
     },

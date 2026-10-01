@@ -36,10 +36,12 @@ SHOW TASKS;
 It runs pre-data schema, bulk copying, post-data schema, table synchronization, and forward replication.
 Do not start another replication task while this task runs.
 
-The copy task always restores post-data schema and synchronizes tables, including with `data-sync --skip-schema-sync`.
-That option skips pre-data schema sync and replicate-only post-data schema sync.
-A manual `schema-sync --phase post` rerun ignores statement errors by default, as does admin `SCHEMA_SYNC post`.
-Avoid a rerun while destination writes are active, because it can rebuild existing indexes.
+`data-sync --skip-schema-sync` skips pre-data and post-data schema sync.
+The task still synchronizes tables before forward replication.
+The operator can then run `schema-sync --phase post` while replication runs.
+This manual post-data run ignores statement errors by default, as does admin `SCHEMA_SYNC post`.
+Do not run it again after a post-data restore while destination writes are active.
+A second run drops and rebuilds the existing indexes.
 
 ---
 
@@ -55,12 +57,10 @@ Avoid a rerun while destination writes are active, because it can rebuild existi
 ```mermaid
 flowchart LR
     A["Pre-data schema"]
-    subgraph CopyDataTask
-        B["Bulk COPY"]
-        C["Post-data schema"]
-        D["Table synchronization"]
-        B --> C --> D
-    end
+    B["Bulk COPY (CopyDataTask)"]
+    C["Post-data schema"]
+    D["Table synchronization"]
+    B --> C --> D
     F["Validation"]
     G["Forward replication"]
     H["Cutover"]
@@ -103,16 +103,17 @@ Post-data schema sync creates these destination indexes before synchronization.
 
 ## Step 3 — Data sync
 
-`CopyDataTask` runs bulk copying, post-data schema sync, and table synchronization in order.
-Its status reports `CopyingTables` and `SynchronizingTables`.
-`ReshardTask` reports `SyncingData` until both stages finish.
+`ReshardTask` runs three child tasks in order: `CopyDataTask`, post-data schema sync, and `SynchronizeTablesTask`.
+It reports `SyncingData`, `FinalizingSchema`, and `SynchronizingTables`.
+`--skip-schema-sync` skips post-data schema sync. `--replicate-only` skips the copy and table synchronization.
+`--sync-only` runs all three child tasks and stops before replication.
 
 ### Bulk copy
 
 `CopyDataTask` creates a worker pool for each source shard from its configured source replicas.
 Each pool limits concurrent copies to `dest.resharding_parallel_copies()`.
 Each `TableDataSyncTask` uses a separate snapshot on its selected source replica.
-The copy task collects each table's result before it restores post-data schema.
+The copy task collects each table's result before it returns.
 
 > **Replica isolation:** replicas tagged `resharding_only = true` in `pgdog.toml` accept copy work but not normal application traffic.
 > Each worker pool limits concurrent copies to protect the source replicas and destination shards.
@@ -142,27 +143,28 @@ Each task performs this sequence against its assigned source replica:
 8. `COMMIT` closes the transaction on the source replica.
 
 Each table records its copy LSN.
-`CopyDataTask` stores these results before it restores post-data schema and synchronizes tables.
+`CopyDataTask` stores these results in the shared migration state.
+Each table copy uses its own snapshot, so the copied tables are not consistent with each other yet.
 
 ### Post-data schema sync
 
-`CopyDataTask` starts `SynchronizeTablesTask` after every bulk copy finishes.
-The child runs `SchemaSyncTask` with `SyncState::PostData` before it starts replication.
+`ReshardTask` runs `SchemaSyncTask` with `SyncState::PostData` after `CopyDataTask` finishes.
 The schema task shares the dump with the other migration phases.
 Post-data creates secondary indexes, unique and exclusion constraints, and index partition attachments.
 It also restores each table's `REPLICA IDENTITY` and adds foreign keys in dump order.
 Eligible foreign keys are added as `NOT VALID` to avoid a blocking data scan.
-Schema errors stop the copy task before temporary replication starts.
+Schema errors stop the migration before table synchronization starts.
 Creating indexes after `COPY` avoids index maintenance during copying.
 
 ### Table synchronization
 
-After post-data schema sync succeeds, `SynchronizeTablesTask` starts temporary forward replication through the permanent migration slots.
+After post-data schema sync, `SynchronizeTablesTask` starts temporary forward replication through the permanent migration slots.
 Each source shard must reach the largest copy LSN recorded for its tables.
 The task stops and drains temporary replication before it returns.
 The destination replication connections use `session_replication_role = replica`.
+After this step the copied tables are consistent, so foreign key validation can run.
 Table synchronization streams even with `data-sync --sync-only`.
-So `--sync-only` also needs a supported replica identity on each source table.
+So every copy needs a supported replica identity on each source table.
 
 ---
 
@@ -181,7 +183,7 @@ The `[resharding] post_data_validation` setting selects when validation runs.
 | `off` | Never. The foreign keys stay `NOT VALID`. |
 
 Validation never runs for `data-sync --skip-schema-sync`, `--replicate-only`, or `--sync-only`.
-Foreign keys that post-data restored in these runs stay `NOT VALID`.
+Foreign keys that post-data restored in `--replicate-only` or `--sync-only` runs stay `NOT VALID`.
 
 ## Step 5 — Cutover
 
@@ -306,7 +308,7 @@ The effect of a validation failure depends on `[resharding] post_data_validation
 ### Schema DDL — intentional error tolerance
 
 The pre-data and cutover stages use `ignore_errors = true`.
-The copy task runs post-data schema sync with `ignore_errors = false`.
+`ReshardTask` runs post-data schema sync after a copy with `ignore_errors = false`.
 A required index failure therefore stops the migration before table synchronization.
 Two kinds of post-data statement do not stop it. They record a failure in the shard status:
 
@@ -382,7 +384,7 @@ Several mechanisms make it safe to replay data across a restart:
 |---|---|---|
 | Temporary replication slots | `Table::data_sync()` | Auto-dropped on connection close; no orphaned per-table slots |
 | `ignore_errors = true` | Pre-data and cutover schema sync | Pre-existing DDL does not abort the run |
-| Strict post-data restore | Inside `CopyDataTask`, after bulk copying | Stops table synchronization if required schema fails |
+| Strict post-data restore | `ReshardTask`, after bulk copying | Stops table synchronization if required schema fails |
 | FK validation | Set by `[resharding] post_data_validation` (default: beside forward replication) | Validates deferred foreign keys; skipped for `off`, `--skip-schema-sync`, `--replicate-only`, and `--sync-only` |
 | LSN watermark guard | Copy synchronization and normal replication | Skips rows already included in each table copy |
 | Upsert on INSERT messages | `Table::insert(upsert=true)` | `ON CONFLICT (pk) DO UPDATE SET` prevents duplicates on WAL re-delivery |
