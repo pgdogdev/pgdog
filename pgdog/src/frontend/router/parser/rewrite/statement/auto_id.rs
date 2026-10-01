@@ -94,7 +94,6 @@ impl StatementRewrite<'_> {
                 .as_mut()
                 .set_values_lists(mem.make_list(&[mem.make_list(&values)]));
             node.set_select_stmt(select.uncast());
-            plan.auto_id_injected += missing_columns.len() as u16;
             self.rewritten = true;
             return Ok(());
         }
@@ -397,10 +396,10 @@ mod tests {
                     mode,
                 )
                 .expect("DEFAULT VALUES rewrite");
-                assert_eq!(plan.auto_id_injected, 1, "{sql}");
+                assert_eq!(plan.bind_params.len(), 1, "{sql}");
                 assert_eq!(
-                    plan.unique_ids,
-                    u16::from(mode != RewriteMode::RewriteOmniGlobal)
+                    matches!(&plan.bind_params[0], BindParam::UniqueId),
+                    mode != RewriteMode::RewriteOmniGlobal
                 );
                 assert!(!sql.contains("DEFAULT VALUES"), "{sql}");
                 assert!(sql.contains("RETURNING id"), "{sql}");
