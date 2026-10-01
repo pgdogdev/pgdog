@@ -13,7 +13,9 @@ impl QueryParser {
         ast: &Ast,
         context: &QueryParserContext<'_>,
     ) -> Result<Option<Command>, Error> {
-        if ast.ast.stmts().count() <= 1 {
+        let stmts = &ast.ast;
+
+        if stmts.stmts().count() <= 1 {
             return Ok(None);
         }
 
@@ -23,8 +25,6 @@ impl QueryParser {
                 context.shards_calculator.shard(),
             ))));
         }
-
-        let stmts = &ast.ast;
 
         match self.try_multi_set(&**stmts, context) {
             Ok(Some(set)) => Ok(Some(set)),

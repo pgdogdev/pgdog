@@ -2487,6 +2487,59 @@ async fn ban_new_targets_until_health_check() {
 }
 
 #[tokio::test]
+async fn existing_targets_not_banned_when_healthcheck_required_on_discovery() {
+    let pool_config = |host: &str, port: u16| PoolConfig {
+        address: test_addr(host, port, Default::default()),
+        config: test_config(Config {
+            require_healthcheck_on_discovery: true,
+            ..Default::default()
+        }),
+    };
+    let existing = [
+        pool_config("127.0.0.1", 5432),
+        pool_config("localhost", 5432),
+    ];
+    let discovered = pool_config("localhost", 2345);
+
+    let old = LoadBalancer::new(
+        &None,
+        &existing,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+    let new = LoadBalancer::new(
+        &None,
+        &[existing[0].clone(), existing[1].clone(), discovered],
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+    old.move_conns_to(&new).unwrap();
+
+    let banned_target = new
+        .targets
+        .iter()
+        .filter(|target| target.ban.banned())
+        .exactly_one()
+        .expect("only the discovered target should have been banned");
+    assert_eq!(2345, banned_target.pool.addr().port);
+    assert!(!banned_target.health().healthy());
+
+    for target in new
+        .targets
+        .iter()
+        .filter(|target| target.pool.addr().port == 5432)
+    {
+        assert!(!target.ban.banned(), "existing target was banned");
+        assert!(
+            target.health().healthy(),
+            "existing target became unhealthy"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_reload_preserves_only_manual_bans() {
     let configs = [
         create_test_pool_config("127.0.0.1", 5432),

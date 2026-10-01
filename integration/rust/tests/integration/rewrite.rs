@@ -371,23 +371,13 @@ async fn cleanup_table(pool: &Pool<Postgres>) {
 }
 
 async fn prepare_split_table(pool: &Pool<Postgres>) {
-    for shard in [0, 1] {
-        let drop =
-            format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {SHARDED_INSERT_TABLE}");
-        pool.execute(drop.as_str()).await.unwrap();
-        let create = format!(
-            "/* pgdog_shard: {shard} */ CREATE TABLE {SHARDED_INSERT_TABLE} (id BIGINT PRIMARY KEY, value TEXT, created_at TIMESTAMPTZ DEFAULT NOW())"
-        );
-        pool.execute(create.as_str()).await.unwrap();
-    }
+    let truncate = format!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
+    pool.execute(truncate.as_str()).await.unwrap();
 }
 
 async fn cleanup_split_table(pool: &Pool<Postgres>) {
-    for shard in [0, 1] {
-        let drop =
-            format!("/* pgdog_shard: {shard} */ DROP TABLE IF EXISTS {SHARDED_INSERT_TABLE}");
-        pool.execute(drop.as_str()).await.ok();
-    }
+    let truncate = format!("TRUNCATE TABLE {SHARDED_INSERT_TABLE}");
+    pool.execute(truncate.as_str()).await.ok();
 }
 
 async fn count_on_shard(pool: &Pool<Postgres>, shard: i32, id: i64) -> i64 {

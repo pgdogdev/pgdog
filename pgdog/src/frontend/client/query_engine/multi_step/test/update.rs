@@ -67,25 +67,35 @@ async fn cleanup_fk_child(client: &mut TestClient) {
 
 async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
-    client.client().client_request.extend(request.messages);
+    client
+        .client()
+        .client_request
+        .messages
+        .extend(request.messages);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).await?;
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
+    let rewrite_result = client
+        .engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await?;
     client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .route_query(&mut context, client_request, rewrite_result.as_ref())
         .await?;
 
     assert!(
-        context.client_request.route().shard().is_direct(),
+        client_request.route().shard().is_direct(),
         "UPDATE stmt should be using direct-to-shard routing"
     );
 
-    client.engine.connect(&mut context, None).await?;
+    client
+        .engine
+        .connect(&mut context, client_request.route())
+        .await?;
 
     std::assert_matches!(&*client.engine.backend, Binding::Direct(..));
 
-    let ast = context.client_request.ast.clone().expect("ast was set");
+    let ast = client_request.ast.clone().expect("ast was set");
     let rewrite = ast
         .rewrite_plan
         .sharding_key_update
@@ -94,13 +104,13 @@ async fn same_shard_check(request: ClientRequest) -> Result<(), Error> {
 
     let mut update = UpdateMulti::new(&mut client.engine, rewrite);
     assert!(
-        update.is_same_shard(&context).unwrap(),
+        update.is_same_shard(&context, client_request).unwrap(),
         "query should not trigger multi-shard update"
     );
 
     // Won't error out because the query goes to the same shard
     // as the old shard.
-    update.execute(&mut context).await?;
+    update.execute(&mut context, client_request).await?;
 
     Ok(())
 }
@@ -184,13 +194,16 @@ async fn test_row_same_shard_no_transaction() {
         .into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
 
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).await.unwrap();
+    let rewrite_result = client
+        .engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(
-        context
-            .client_request
+        client_request
             .ast
             .as_ref()
             .expect("ast to exist")
@@ -202,12 +215,12 @@ async fn test_row_same_shard_no_transaction() {
 
     client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .route_query(&mut context, client_request, rewrite_result.as_ref())
         .await
         .unwrap();
     client
         .engine
-        .execute(&mut context, rewrite_result)
+        .execute(&mut context, client_request, rewrite_result)
         .await
         .unwrap();
 

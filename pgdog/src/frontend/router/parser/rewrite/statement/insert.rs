@@ -60,7 +60,7 @@ impl InsertSplit {
             };
             new_request.messages.push(new_message);
             let cache = Cache::get();
-            new_request.ast = Some(cache.record(&self.stmt)?);
+            new_request.ast = Some(cache.record(&self.stmt)?.ast);
         }
 
         // When the driver prepared the statement in a separate round-trip

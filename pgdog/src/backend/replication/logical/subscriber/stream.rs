@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::future::try_join_all;
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
 use pgdog_stats::MissedRows;
@@ -21,13 +22,18 @@ use super::super::{
 };
 use super::StreamContext;
 use super::{PipelinedConnection, connect_primary};
-use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
+use crate::{
+    backend::replication::subscriber::pipeline::TransactionAwaitingCommit,
+    net::messages::replication::logical::tuple_data::{Identifier, TupleData},
+};
+use pgdog_stats::Lsn;
+
 use crate::{
     backend::{Cluster, Server},
     frontend::router::parser::Shard,
     net::{
-        Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
+        Bind, CopyData, DataRow, ErrorResponse, Format, FromBytes, Parse, Protocol, Sync, ToBytes,
         replication::{
             Commit as XLogCommit, Delete as XLogDelete, Insert as XLogInsert, Relation,
             StatusUpdate, UpdateIdentity, xlog_data::XLogPayload,
@@ -118,7 +124,13 @@ pub(crate) struct StreamSubscriber {
     // Pipelined connections to shards. DML is pushed without waiting per event;
     // a background task per connection reads responses and reconciles them.
     connections: Vec<PipelinedConnection>,
-
+    /// These connections are used to constantly query the `pg_current_wal_flush_lsn()` and
+    /// `pg_current_wal_insert_lsn()` to get an accurate, current view of each shard's WAL
+    /// and determine when it's safe for the source to discard WAL
+    wal_position_connections: Vec<Server>,
+    /// We only want to advance the LSN in keep-alive if we aren't in a transaction,
+    /// which requires knowing which ones we haven't received a response for or flushed yet,
+    in_flight: usize,
     // Last commit LSN acked to Postgres. Reported in status updates; never
     // advances mid-transaction so KeepAlive replies can't skip an open transaction.
     committed_lsn: i64,
@@ -164,7 +176,58 @@ impl StreamSubscriber {
             in_transaction: false,
             keys: HashMap::default(),
             missed_rows: MissedRows::default(),
+            wal_position_connections: vec![],
+            in_flight: 0,
         }
+    }
+
+    /// Are we currently awaiting any transactions to finished being flushed to all shards?
+    pub(crate) fn has_in_flight(&self) -> bool {
+        self.in_flight > 0
+    }
+
+    /// For each destination shard, we connect (if not already) separately from
+    /// our replication connections, and query for the current wal_insert_lsn and wal_flush_lsn,
+    /// setting those positions on each `PipelinedConnection` to have a true source
+    /// of knowledge of the current Postgres database progress.
+    ///
+    /// This is run before `check_for_committed_transaction` to compare
+    /// these numbers (for each shard)  against transactions we haven't
+    /// confirmed flushed yet. Lets us see if the wal_flush_lsn has advanced
+    /// past the transaction's insert LSN for each shard.
+    pub(crate) async fn refresh_wal_positions(&mut self) -> Result<(), Error> {
+        if self.wal_position_connections.len() != self.connections.len() {
+            self.wal_position_connections.clear();
+            for shard in self.cluster.shards() {
+                self.wal_position_connections
+                    .push(connect_primary(shard).await?);
+            }
+        }
+
+        for (server, conn) in self
+            .wal_position_connections
+            .iter_mut()
+            .zip(&self.connections)
+        {
+            let rows: Vec<DataRow> = server
+                .fetch_all("SELECT pg_current_wal_insert_lsn(), pg_current_wal_flush_lsn()")
+                .await?;
+
+            let row = rows.first().ok_or(Error::PipelineClosed)?;
+
+            let insert_lsn = row
+                .get::<Lsn>(0, Format::Text)
+                .ok_or(Error::PipelineClosed)?
+                .lsn;
+            let flush_lsn = row
+                .get::<Lsn>(1, Format::Text)
+                .ok_or(Error::PipelineClosed)?
+                .lsn;
+
+            conn.set_wal_positions(insert_lsn, flush_lsn);
+        }
+
+        Ok(())
     }
 
     // Connect to all the shards.
@@ -645,35 +708,29 @@ impl StreamSubscriber {
 
     // Handle Commit message.
     //
-    // Two-phase to preserve "all shards commit or none do":
-    //   1. Drain every shard — wait until all outstanding DML has been acked
-    //      and confirm none errored. A `?` here (an errored shard) returns before
-    //      any shard is `Sync`ed, so `handle()` drops every connection and Postgres
-    //      rolls back the open implicit transactions cluster-wide.
-    //   2. Only once every shard is drained and clean, send `Sync` to commit.
+    // This is sent asynchronously to each shard, and we add to our
+    // internal queue expecting a response, later on, for when it has Sync'd.
     //
-    // NOTE: phase 2 is not atomic across shards. If an earlier shard's `Sync`
-    // commits and a later shard's `Sync` fails (e.g. a deferred constraint that
-    // only fires at COMMIT), the earlier shard is already durable and cannot be
-    // rolled back. Phase 1 narrows this window to commit-time-only failures.
+    // After we get that response, we further wait for a separate confirmation of it
+    // being flushed, via `refresh_wal_positions` and `check_for_committed_transaction`
+    //
+    // TODO: This is not cross-shard atomic (see todo below)
     // TODO: use 2PC (see the `two_pc` path) for true cross-shard atomicity.
     async fn commit(&mut self, commit: XLogCommit) -> Result<(), Error> {
-        // Phase 1: drain outstanding DML without committing.
+        let transaction_awaiting_commit = TransactionAwaitingCommit {
+            transaction_lsn: self.lsn,
+            current_lsn: commit.end_lsn,
+            changed_tables: std::mem::take(&mut self.changed_tables),
+            durable_bound: None,
+            missed: MissedRows::default(),
+        };
+
         for server in &self.connections {
-            server.drain_acks().await?;
+            server
+                .sync(Some(transaction_awaiting_commit.clone()))
+                .await?;
         }
-
-        // Phase 2: every shard is clean — commit each one.
-        for server in &self.connections {
-            server.sync_and_drain().await?;
-        }
-
-        let transaction_lsn = self.lsn;
-        for oid in self.changed_tables.drain() {
-            self.table_lsns.insert(oid, transaction_lsn);
-        }
-
-        self.set_current_lsn(commit.end_lsn);
+        self.in_flight += 1;
 
         Ok(())
     }
@@ -795,6 +852,8 @@ impl StreamSubscriber {
     /// transaction on each shard. Caches are repopulated from Relation messages on re-delivery.
     pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
         self.connections.clear();
+        self.wal_position_connections.clear();
+        self.in_flight = 0;
         self.relations.clear();
         self.statements.clear();
         self.keys.clear();
@@ -808,12 +867,8 @@ impl StreamSubscriber {
     /// that may have buffered stale handshake responses.
     pub(crate) fn reset_connections(&mut self) {
         self.connections.clear();
-    }
-
-    fn capture_missed_rows(&mut self) {
-        for conn in &self.connections {
-            self.missed_rows.merge(conn.take_missed_rows());
-        }
+        self.wal_position_connections.clear();
+        self.in_flight = 0;
     }
 
     /// `docs/REPLICATION.md` → "Error rollback".
@@ -824,6 +879,8 @@ impl StreamSubscriber {
                 // Drop sockets → backend FATAL → implicit transaction rolled back.
                 // `Sync` would commit Rust-side errors. See docs/REPLICATION.md.
                 self.connections.clear();
+                self.wal_position_connections.clear();
+                self.in_flight = 0;
                 // Per-session state — repopulated from Relation messages on reconnect.
                 self.relations.clear();
                 self.statements.clear();
@@ -835,12 +892,76 @@ impl StreamSubscriber {
         }
     }
 
+    /// Works with `refresh_wal_positions` (ran beforehand) to check, for each
+    /// transaction we have confirmed committed (but not yet confirmed flushed), to see if
+    /// the shard's `wal_flush_lsn` has advanced past the `wal_insert_lsn` we previously
+    /// confirmed that the transaction was committed before/at. If it has,
+    /// for all shards, we know that the transaction has been flushed, and we can
+    /// discard the WAL on the source database.
+    pub(crate) async fn check_for_committed_transaction(&mut self) -> Result<bool, Error> {
+        for conn in &self.connections {
+            if let Some(err) = conn.take_error() {
+                return Err(err);
+            }
+        }
+
+        let fronts: Vec<_> = self
+            .connections
+            .iter()
+            .map(|conn| conn.peek_finished_commits_lsn())
+            .collect();
+        let current_lsns_equal = fronts
+            .iter()
+            .map(|transaction| transaction.map(|transaction| transaction.0))
+            .all_equal_value();
+
+        if let Ok(Some(_)) = current_lsns_equal {
+            let mut all_transactions_flushed = true;
+            for (conn, front) in self.connections.iter().zip(&fronts) {
+                let (last_flushed_lsn, last_insert) = conn.get_flushed_and_insert_lsn();
+                if let Some((_, dur)) = front {
+                    if !matches!(dur, Some(d) if *d <= last_flushed_lsn) {
+                        all_transactions_flushed = false;
+                    }
+
+                    conn.set_durable_bound_if_not_set(last_insert);
+                }
+            }
+
+            if all_transactions_flushed {
+                let mut finished_transaction = None;
+
+                for conn in &self.connections {
+                    if let Some(popped) = conn.pop_finished_commit() {
+                        self.missed_rows.merge(popped.missed);
+                        finished_transaction.get_or_insert(popped);
+                    }
+                }
+
+                if let Some(finished_transaction) = finished_transaction {
+                    self.in_flight = self.in_flight.saturating_sub(1);
+
+                    for oid in finished_transaction.changed_tables {
+                        self.table_lsns
+                            .insert(oid, finished_transaction.transaction_lsn);
+                    }
+                    self.set_committed_lsn(finished_transaction.current_lsn);
+
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
     async fn handle_inner(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
         // Lazily connect to all shards.
         if self.connections.is_empty() {
             self.connect().await?;
         }
 
+        self.check_for_committed_transaction().await?;
         let mut status_update = None;
 
         if let Some(xlog) = data.xlog_data()
@@ -861,7 +982,6 @@ impl StreamSubscriber {
                 }
                 XLogPayload::Commit(commit) => {
                     self.commit(commit).await?;
-                    self.capture_missed_rows();
                     status_update = Some(self.status_update());
                     self.in_transaction = false;
                 }
@@ -906,6 +1026,14 @@ impl StreamSubscriber {
         self.lsn = lsn;
         self.committed_lsn = lsn;
         self.lsn_changed
+    }
+
+    fn set_committed_lsn(&mut self, lsn: i64) {
+        self.committed_lsn = lsn;
+        if lsn > self.lsn {
+            self.lsn_changed = true;
+            self.lsn = lsn;
+        }
     }
 
     /// Advance working LSN only. Used on Begin; does not move the ack pointer.
@@ -1018,6 +1146,7 @@ mod tests {
     #[tokio::test]
     async fn table_watermarks_advance_on_commit() {
         let mut sub = make_subscriber();
+        sub.connect().await.unwrap();
         let oid = Oid(42);
 
         sub.table_lsns.insert(oid, 50);
@@ -1037,9 +1166,20 @@ mod tests {
         .await
         .unwrap();
 
+        assert!(sub.changed_tables.is_empty());
+        assert_eq!(sub.table_lsns.get(&oid), Some(&50));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut completed = false;
+        while std::time::Instant::now() < deadline && !completed {
+            sub.refresh_wal_positions().await.unwrap();
+            completed = sub.check_for_committed_transaction().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(completed);
+
         assert_eq!(sub.table_lsns.get(&oid), Some(&100));
         assert_eq!(sub.lsn(), 200);
-        assert!(sub.changed_tables.is_empty());
     }
 
     /// Begin message sets in_transaction and records the LSN.

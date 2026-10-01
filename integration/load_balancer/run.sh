@@ -59,10 +59,17 @@ done
 
 pushd ${SCRIPT_DIR}/pgx
 go get
-go test -v -count 3
+if [ "${LB_PART:-}" != "rest" ]; then
+    go test -v -count 3 -run '^TestPrepared$'
+fi
+if [ "${LB_PART:-}" != "prepared" ]; then
+    go test -v -count 1 -skip '^TestPrepared$'
+fi
 popd
 
-php ${SCRIPT_DIR}/pdo_read_write_split.php
+if [ "${LB_PART:-}" != "prepared" ]; then
+    php ${SCRIPT_DIR}/pdo_read_write_split.php
+fi
 
 stop_pgdog
 

@@ -1,4 +1,3 @@
-use crate::frontend::router::parser::cache::Ast;
 use pgdog_plugin::{
     Context as PdRouterContext, ReadWrite, Shard as PdShard,
     parameters::{Parameter, Parameters},
@@ -29,11 +28,6 @@ impl QueryParser {
         statement: &Ast,
         read: bool,
     ) -> Result<(), Error> {
-        // Don't run plugins on Parse only.
-        if context.router_context.bind.is_none() && statement.cached {
-            return Ok(());
-        }
-
         let plugins = if let Some(plugins) = plugins() {
             plugins
         } else {
