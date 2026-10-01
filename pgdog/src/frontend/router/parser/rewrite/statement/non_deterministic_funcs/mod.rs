@@ -14,7 +14,9 @@ use crate::{
             StatementParser, StatementRewrite, Table,
             rewrite::statement::{
                 Error,
-                non_deterministic_funcs::{time::TimeFunctionType, uuid::UUIDFunctionType},
+                non_deterministic_funcs::{
+                    time_function::TimeFunctionType, uuid_function::UUIDFunctionType,
+                },
                 plan::BindParam,
             },
         },
@@ -25,8 +27,8 @@ use crate::{
 /// No need to expose these outside.
 mod rewrite_insert;
 mod rewrite_transaction_time;
-mod time;
-mod uuid;
+mod time_function;
+mod uuid_function;
 
 /// A non-deterministic function that we must re-write when writing to an omnisharded table (or now() for sharded),
 /// so that we can maintain consistency instead of generating a different value (from executing the function)
@@ -308,12 +310,11 @@ impl StatementRewrite<'_> {
         bind_params: &mut BindParams,
     ) -> Result<(), Error> {
         if matches!(stmt.as_ref(), Node::InsertStmt(_)) {
-            let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema, None);
+            let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema);
 
             let mut nd_rewrite = NDRewrite {
                 rewrite: self,
-                plan,
-                next_param,
+                bind_params,
                 mem,
                 statement_type: StatementType::Insert,
             };
@@ -355,8 +356,7 @@ impl StatementRewrite<'_> {
 
             let mut nd_rewrite = NDRewrite {
                 rewrite: self,
-                plan,
-                next_param,
+                bind_params,
                 mem,
                 statement_type: StatementType::Select,
             };
