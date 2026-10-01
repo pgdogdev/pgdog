@@ -41,7 +41,9 @@ impl QueryEngine {
             let cluster = self.backend.cluster()?;
             let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
-            client_request.ast = Some(ast);
+            client_request.ast = Some(ast.ast);
+            client_request.cached = ast.cached;
+            client_request.routing_comment = Some(ast.comment);
         }
         Ok(())
     }

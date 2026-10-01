@@ -59,8 +59,8 @@ for user in pgdog pgdog1 pgdog2 pgdog3; do
 done
 
 # GitHub fix
-if [[ "$USER" == "runner" ]]; then
-    psql -c "ALTER USER runner PASSWORD 'pgdog' LOGIN;"
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    psql -c "ALTER USER \"$(id -un)\" PASSWORD 'pgdog' LOGIN;"
 fi
 
 export PGPASSWORD='pgdog'
@@ -107,6 +107,9 @@ done
 pushd ${SCRIPT_DIR}
 
 for bin in toxiproxy-server toxiproxy-cli; do
+    if [[ ! -x ${bin} ]] && command -v ${bin} > /dev/null; then
+        ln -sf "$(command -v ${bin})" ${bin}
+    fi
     if [[ ! -x ${bin} ]]; then
         rm -f ${bin}
         curl -fsSL --retry 5 --retry-all-errors -o ${bin} \

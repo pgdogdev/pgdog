@@ -492,12 +492,11 @@ mod tests {
     }
 
     fn request_with_ast(query: &str) -> ClientRequest {
-        use crate::frontend::router::ClientQuery;
-        let ast = ClientQuery::new_record(query).unwrap();
-        ClientRequest {
-            ast: Some(ast),
-            ..Default::default()
-        }
+        use crate::frontend::router::Ast;
+        let ast = Ast::parse(query).unwrap();
+        let mut client_request = ClientRequest::default();
+        client_request.ast = Some(Arc::new(ast));
+        client_request
     }
 
     #[test]

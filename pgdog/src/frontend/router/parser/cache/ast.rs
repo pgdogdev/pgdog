@@ -1,7 +1,6 @@
 use itertools::Itertools;
 use pg_raw_parse::{Error as ParseError, Node, Owned, StmtList, make};
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::time::Instant;
 
 use once_cell::sync::OnceCell;
@@ -16,16 +15,16 @@ use crate::frontend::router::parser::rewrite::statement::RewritePlan;
 use crate::frontend::router::parser::rewrite::statement::projection::PostRouteRewrite;
 use crate::frontend::{PreparedStatements, RoutingComment};
 
-/// Abstract syntax tree (query) cache entry,
-/// with statistics.
+/// A parsed query from a client, potentially containing multiple statements.
 #[derive(Debug, Clone)]
 pub(crate) struct ClientQuery {
     pub(crate) cached: bool,
     pub(in crate::frontend) comment: Arc<RoutingComment>,
-    pub(in crate::frontend) ast: Arc<Ast>,
+    pub(crate) ast: Arc<Ast>,
 }
 
 #[derive(Debug)]
+/// A parsed and rewritten query
 pub(crate) struct Ast {
     /// Cached AST.
     pub(crate) ast: Owned<StmtList>,
@@ -43,9 +42,11 @@ pub(crate) struct Ast {
 impl Ast {
     /// Create new AST record, with no rewrite or comment routing.
     pub(crate) fn new(ast: Owned<StmtList>) -> Self {
+        let mut stats = Stats::new();
+        stats.memory_allocated = ast.memory_allocated();
         Self {
             ast,
-            stats: Mutex::new(Stats::new()),
+            stats: Mutex::new(stats),
             rewrite_plan: RewritePlan::default(),
             post_route_rewrite: OnceCell::new(),
             query_without_comment: "".into(),
@@ -88,6 +89,7 @@ impl Ast {
         let elapsed = now.elapsed();
         let mut stats = Stats::new();
         stats.parse_time += elapsed;
+        stats.memory_allocated = ast.memory_allocated();
 
         if let Some(threshold) = ctx.sharding_schema.log_min_duration_parse
             && elapsed >= threshold
@@ -109,7 +111,7 @@ impl Ast {
     }
 
     /// Parse the query without rewriting it
-    pub(super) fn parse(query: &str) -> Result<Self, ParseError> {
+    pub(crate) fn parse(query: &str) -> Result<Self, ParseError> {
         Ok(Self::new(pg_raw_parse::parse(query)?.into_inner()))
     }
 
@@ -124,38 +126,10 @@ impl Ast {
             guard.direct += 1;
         }
     }
-}
-
-impl Deref for ClientQuery {
-    type Target = Ast;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ast
-    }
-}
-
-impl ClientQuery {
-    #[cfg(test)]
-    pub(crate) fn new_record(query: &str) -> Result<Self, ParseError> {
-        Ok(Self {
-            cached: false,
-            comment: Default::default(),
-            ast: Arc::new(Ast::parse(query)?),
-        })
-    }
-
-    /// Create new AST from a parse result.
-    pub(crate) fn from_raw_stmts(stmts: Owned<StmtList>) -> Self {
-        Self {
-            cached: true,
-            comment: Default::default(),
-            ast: Arc::new(Ast::new(stmts)),
-        }
-    }
 
     /// Get statement type.
     pub(crate) fn statement_type(&self) -> StatementType {
-        let root = self.ast.ast.stmts().next();
+        let root = self.ast.stmts().next();
 
         match root {
             Some(Node::SelectStmt(_))
