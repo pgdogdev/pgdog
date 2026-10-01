@@ -273,9 +273,7 @@ impl Binding {
                 let mut max = 0;
                 for result in results {
                     let synced = result?;
-                    if max < synced {
-                        max = synced;
-                    }
+                    max = max.max(synced);
                 }
                 Ok(max)
             }
@@ -291,6 +289,18 @@ impl Binding {
             Binding::MultiShard(servers) => servers
                 .iter_mut()
                 .for_each(|server| server.transaction_params_hook(rollback)),
+            _ => (),
+        }
+    }
+
+    pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
+        match self {
+            Binding::Direct(server, ..) => server.sync_client_params(params),
+            Binding::MultiShard(servers, _) => {
+                for server in servers {
+                    server.sync_client_params(params);
+                }
+            }
             _ => (),
         }
     }
