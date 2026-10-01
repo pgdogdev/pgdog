@@ -11,14 +11,8 @@ on:
 jobs:
   build:
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      packages: read
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
       # Compute the binary key before restoring rust-cache: rust-cache restores
@@ -54,14 +48,8 @@ jobs:
     runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
     needs: [build]
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
       options: ${{ matrix.needs_docker && '--privileged' || '' }}
     continue-on-error: ${{ matrix.continue_on_error == true }}
     strategy:

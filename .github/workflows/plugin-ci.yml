@@ -20,14 +20,8 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
