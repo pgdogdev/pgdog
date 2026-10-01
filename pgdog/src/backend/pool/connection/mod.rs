@@ -181,15 +181,17 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        // `BEGIN` -> write
-        // `BEGIN READ ONLY` -> read
-        let (is_read, transaction_stmt) = match self.binding {
-            Binding::Transaction(ref mut transaction) => {
+        // Start a transaction on the server(s) if client started one.
+        let (is_read, transaction_stmt) =
+            if let Binding::Transaction(ref mut transaction) = self.binding {
                 (transaction.is_read, transaction.transaction_stmt.take())
-            }
-            _ => (Some(route.is_read()), None),
-        };
+            } else {
+                (None, None)
+            };
 
+        // `read_write_split = "aggressive"` lets the first statement
+        // inside a transaction decide if it's a read or a write; we haven't
+        // connected to Postgres yet, so we can still make this call.
         let is_read = is_read.unwrap_or(route.is_read());
 
         if let Shard::Direct(shard) = route.shard() {

@@ -51,3 +51,72 @@ impl DerefMut for LinkedServer {
         &mut self.server
     }
 }
+
+pub(crate) mod test {
+    use super::*;
+    use crate::{backend::Pool, net::Parameter};
+
+    pub(crate) struct TestLinkedServer {
+        pub(crate) server: Option<LinkedServer>,
+        pool: Pool,
+    }
+
+    impl Drop for TestLinkedServer {
+        fn drop(&mut self) {
+            self.pool.shutdown();
+        }
+    }
+
+    impl Deref for TestLinkedServer {
+        type Target = LinkedServer;
+
+        fn deref(&self) -> &Self::Target {
+            self.server.as_ref().unwrap()
+        }
+    }
+
+    impl DerefMut for TestLinkedServer {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            self.server.as_mut().unwrap()
+        }
+    }
+
+    impl TestLinkedServer {
+        pub(crate) async fn new(shard: usize) -> TestLinkedServer {
+            let pool = Pool::new_test();
+            pool.launch();
+
+            let server = pool.get_test().await.unwrap();
+
+            let server = LinkedServer {
+                server,
+                shard,
+                linked: false,
+            };
+
+            TestLinkedServer {
+                pool,
+                server: Some(server),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_link_client_idempotent() {
+        let mut link = TestLinkedServer::new(0).await;
+
+        let pid = FrontendPid::new();
+        let params = Parameters::from(vec![Parameter::from((
+            "application_name".to_string(),
+            "test_link_client_idempotent".to_string(),
+        ))]);
+
+        let linked = link.link_client(pid, &params, None).await.unwrap();
+
+        assert_eq!(linked, 1);
+
+        let linked = link.link_client(pid, &params, None).await.unwrap();
+
+        assert_eq!(linked, 0);
+    }
+}

@@ -67,3 +67,53 @@ impl DerefMut for DirectBinding {
         &mut self.server
     }
 }
+
+pub(crate) mod test {
+    use super::linked_server::test::TestLinkedServer;
+    use super::*;
+
+    pub(crate) struct TestDirectBinding {
+        pub(crate) binding: Option<DirectBinding>,
+        #[allow(unused)] // For its `Drop` trait.
+        link: TestLinkedServer,
+    }
+
+    impl TestDirectBinding {
+        pub(crate) async fn new(in_transaction: bool, shard: usize) -> Self {
+            let mut link = TestLinkedServer::new(shard).await;
+            let server = link.server.take().unwrap();
+
+            let binding = DirectBinding {
+                server,
+                transaction_stmt: if in_transaction {
+                    Some(BufferedQuery::Query(Query::new("BEGIN")))
+                } else {
+                    None
+                },
+                is_read: false,
+            };
+
+            Self {
+                binding: Some(binding),
+                link,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_link() {
+        let mut binding = TestDirectBinding::new(true, 0)
+            .await
+            .binding
+            .take()
+            .unwrap();
+
+        binding
+            .link_client(FrontendPid::new(), &Parameters::default())
+            .await
+            .unwrap();
+
+        assert!(binding.server.in_transaction());
+        assert!(binding.server.in_sync());
+    }
+}
