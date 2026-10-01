@@ -34,7 +34,7 @@ impl QueryEngine {
         };
 
         self.stats.sent(bytes_sent);
-        self.begin_stmt = None;
+        self.backend.disconnect();
         context.transaction = None; // Clear transaction state
 
         if rollback {

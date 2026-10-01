@@ -455,7 +455,7 @@ pub(crate) enum OverrideReason {
     AdvisoryLock,
     DryRun,
     ParserDisabled,
-    Transaction,
+    CrossShardTransaction,
     OnlyOneShard,
     CrossShardFunction,
     CanonicalSchemaInfo,
@@ -527,10 +527,10 @@ impl ShardWithPriority {
         }
     }
 
-    pub(crate) fn new_override_transaction(shard: Shard) -> Self {
+    pub(crate) fn new_override_cross_shard(shard: Shard) -> Self {
         Self {
             shard,
-            source: ShardSource::Override(OverrideReason::Transaction),
+            source: ShardSource::Override(OverrideReason::CrossShardTransaction),
         }
     }
 

@@ -26,7 +26,6 @@ async fn test_cleanup_transaction_phase_one() {
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
-        None,
     )
     .await
     .unwrap();
@@ -63,7 +62,6 @@ async fn test_cleanup_transaction_phase_one() {
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
-        None,
     )
     .await
     .unwrap();
@@ -100,7 +98,6 @@ async fn test_cleanup_transaction_phase_two() {
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
-        None,
     )
     .await
     .unwrap();
@@ -142,7 +139,6 @@ async fn test_cleanup_transaction_phase_two() {
     conn.connect(
         &Request::default(),
         &Route::write(ShardWithPriority::new_default_unset(Shard::All)),
-        None,
     )
     .await
     .unwrap();

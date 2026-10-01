@@ -39,7 +39,8 @@ impl QueryEngine {
             };
 
             self.stats.sent(bytes_sent);
-            self.begin_stmt = Some(begin);
+            self.backend
+                .start_transaction(transaction_type.read_only(), begin.clone());
         }
 
         Ok(())

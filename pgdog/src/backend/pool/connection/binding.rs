@@ -18,6 +18,8 @@ use multi_shard::MultiBinding;
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
 pub(crate) enum Binding {
+    /// Transaction binding: BEGIN.
+    Transaction(TransactionBinding),
     /// Direct-to-shard transaction.
     Direct(DirectBinding),
     /// Admin database connection.
@@ -63,6 +65,7 @@ impl Binding {
             Binding::MultiShard(servers) => !servers.is_empty(),
             Binding::Admin(_) => true,
             Binding::NotConnected => false,
+            Binding::Transaction(_) => false,
         }
     }
 
@@ -87,7 +90,7 @@ impl Binding {
         match self {
             Binding::Direct(guard) => guard.read().await,
 
-            Binding::NotConnected => loop {
+            Binding::NotConnected | Binding::Transaction(_) => loop {
                 safe_sleep(Duration::MAX).await
             },
 
@@ -116,7 +119,7 @@ impl Binding {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
             Binding::Direct(server) => server.send(client_request).await,
-            Binding::NotConnected => Err(Error::NotConnected),
+            Binding::NotConnected | Binding::Transaction(_) => Err(Error::NotConnected),
             Binding::MultiShard(servers) => servers.send(client_request).await,
         }
     }
@@ -162,6 +165,7 @@ impl Binding {
             Binding::Admin(admin) => admin.done(),
             Binding::Direct(server) => server.done(),
             Binding::MultiShard(servers) => servers.iter().all(|s| s.done()),
+            Binding::Transaction(_) => false,
             _ => true,
         }
     }

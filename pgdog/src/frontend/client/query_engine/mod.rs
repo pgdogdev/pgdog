@@ -60,7 +60,6 @@ pub(crate) use two_pc::*;
 /// State here is preserved between requests.
 #[derive(Debug)]
 pub(crate) struct QueryEngine {
-    begin_stmt: Option<BufferedQuery>,
     router: Router,
     comms: ClientComms,
     stats: Stats,
@@ -99,7 +98,6 @@ impl QueryEngine {
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
-            begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
@@ -123,7 +121,7 @@ impl QueryEngine {
 
     /// Client can safely disconnect (no active backend connection or pending transaction).
     pub(crate) fn can_disconnect(&self) -> bool {
-        self.begin_stmt.is_none() && self.backend.done()
+        !self.backend.in_buffered_transaction() && self.backend.done()
     }
 
     /// Current state.

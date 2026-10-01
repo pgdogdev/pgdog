@@ -36,12 +36,14 @@ pub(crate) mod direct;
 pub(crate) mod linked_server;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
+pub(crate) mod transaction;
 
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
 pub(crate) use direct::DirectBinding;
 pub(crate) use linked_server::LinkedServer;
+pub(crate) use transaction::TransactionBinding;
 
 use multi_shard::MultiBinding;
 
@@ -73,13 +75,30 @@ impl Connection {
         Ok(conn)
     }
 
+    /// Start a transaction on this connection, if the connection is idle.
+    pub(crate) fn start_transaction(&mut self, is_read: bool, transaction_stmt: BufferedQuery) {
+        if matches!(self.binding, Binding::NotConnected) {
+            self.binding = Binding::Transaction(TransactionBinding {
+                is_read,
+                transaction_stmt: Some(transaction_stmt),
+            });
+        }
+    }
+
+    /// The connection is inside a buffered transaction, i.e.,
+    /// we captured a `BEGIN` but haven't connected to a shard yet.
+    pub(crate) fn in_buffered_transaction(&self) -> bool {
+        matches!(self.binding, Binding::Transaction(_))
+    }
+
     /// Create a server connection if one doesn't exist already.
-    pub(crate) async fn connect(
-        &mut self,
-        request: &Request,
-        route: &Route,
-        transaction_stmt: Option<BufferedQuery>,
-    ) -> Result<(), Error> {
+    pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+        let transaction_stmt = if let Binding::Transaction(ref mut transaction) = self.binding {
+            transaction.transaction_stmt.take()
+        } else {
+            None
+        };
+
         self.ensure_connected(request, route, transaction_stmt)
             .await?;
 
@@ -93,7 +112,7 @@ impl Connection {
     /// Check that we are connected to all required shards to serve this route.
     pub(crate) fn required_shards_connected(&self, route: &Route) -> Result<bool, Error> {
         Ok(match self.binding {
-            Binding::NotConnected => false,
+            Binding::NotConnected | Binding::Transaction(_) => false,
             Binding::MultiShard(ref servers) => {
                 servers.required_shards_connected(route, self.cluster()?.shards().len())
             }
@@ -111,7 +130,10 @@ impl Connection {
         route: &Route,
         transaction_stmt: Option<BufferedQuery>,
     ) -> Result<(), Error> {
-        if matches!(self.binding, Binding::NotConnected) {
+        if matches!(
+            self.binding,
+            Binding::NotConnected | Binding::Transaction(_)
+        ) {
             self.connect_internal(request, route, transaction_stmt)
                 .await?;
         } else {
@@ -150,11 +172,15 @@ impl Connection {
         route: &Route,
         transaction_stmt: Option<BufferedQuery>,
     ) -> Result<(), Error> {
+        // `BEGIN` -> write
+        // `BEGIN READ ONLY` -> read
+        let is_read = match self.binding {
+            Binding::Transaction(ref transaction) => transaction.is_read,
+            _ => route.is_read(),
+        };
+
         if let Shard::Direct(shard) = route.shard() {
-            let server = self
-                .cluster
-                .get_conn(request, *shard, route.is_read())
-                .await?;
+            let server = self.cluster.get_conn(request, *shard, is_read).await?;
 
             self.binding = Binding::Direct(DirectBinding::new(
                 server,
@@ -163,6 +189,8 @@ impl Connection {
                 route.is_read(),
             ));
         } else {
+            // TODO(lev): Shard::Multi intentionally ignored because it's stupid
+            // and we should remove it.
             let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
 
             self.binding = Binding::MultiShard(MultiBinding::new(
@@ -170,7 +198,7 @@ impl Connection {
                 shard_indices,
                 route,
                 transaction_stmt,
-                route.is_read(),
+                is_read,
             ));
         }
 

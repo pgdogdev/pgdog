@@ -34,11 +34,7 @@ impl QueryEngine {
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
 
-        let connected = match self
-            .backend
-            .connect(&request, connect_route, self.begin_stmt.take())
-            .await
-        {
+        let connected = match self.backend.connect(&request, connect_route).await {
             Ok(_) => {
                 self.stats.connected();
                 self.debug_connected(connect_route, false);

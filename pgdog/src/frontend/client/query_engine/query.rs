@@ -51,7 +51,7 @@ impl QueryEngine {
         let connect_route = match query_planner.as_ref() {
             Some(RewriteResult::InsertSplit(_) | RewriteResult::ShardingKeyUpdate(_)) => {
                 lazy_static::lazy_static! {
-                    static ref ROUTE: Route = Route::write(ShardWithPriority::new_override_transaction(Shard::All));
+                    static ref ROUTE: Route = Route::write(ShardWithPriority::new_override_cross_shard(Shard::All));
                 }
 
                 &ROUTE
@@ -65,25 +65,6 @@ impl QueryEngine {
                 return Ok(());
             }
         }
-
-        // // We need to run a query now.
-        // if context.in_transaction() || client_request.route().is_lock_session() {
-        //     // Connect to one shard if not sharded or to all shards
-        //     // for a cross-shard transaction.
-        //     //
-        //     // We also do this for advisory locks. Otherwise, we'd be pinned to one shard,
-        //     // and if we get a hash for a different one next query around, we'd be stuck
-        //     // at a point where we would have to refuse it (thus, maintaining all
-        //     // connections gives us freedom to fix that)
-        //     if !self
-        //         .connect_transaction(context, client_request.route())
-        //         .await?
-        //     {
-        //         return Ok(());
-        //     }
-        // } else if !self.connect(context, client_request.route()).await? {
-        //     return Ok(());
-        // }
 
         // Check we can run this query.
         if !self.cross_shard_check(context, client_request).await? {
@@ -502,13 +483,14 @@ impl QueryEngine {
 
         if enabled
             && client_request.route().should_2pc()
-            && self.begin_stmt.is_none()
+            && !self.backend.in_buffered_transaction()
             && client_request.is_executable()
             && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
-            self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
+            self.backend
+                .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")));
         }
     }
 
