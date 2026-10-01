@@ -196,7 +196,7 @@ impl QueryParserTest {
     pub(crate) fn try_execute(&mut self, request: Vec<ProtocolMessage>) -> Result<Command, Error> {
         let mut request: ClientRequest = request.into();
 
-        for message in request.iter_mut() {
+        for message in &mut request.messages {
             if let ProtocolMessage::Parse(parse) = message {
                 let (_, name) = PreparedStatements::global().write().insert(parse);
                 self.last_parse = Some(name);
@@ -228,7 +228,9 @@ impl QueryParserTest {
                 // The engine surfaces cache-time errors (e.g. a comment
                 // directive that fails to resolve) as client errors.
                 let ast = Cache::get().query(&buffered_query, &ctx, &mut self.prepared)?;
-                request.ast = Some(ast);
+                request.ast = Some(ast.ast);
+                request.cached = ast.cached;
+                request.routing_comment = Some(ast.comment);
             }
         }
 

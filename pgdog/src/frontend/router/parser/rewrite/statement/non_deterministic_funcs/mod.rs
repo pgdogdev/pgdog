@@ -9,16 +9,16 @@ use pg_raw_parse::{
 };
 use pgdog_stats::{Column, Relation};
 
+use super::BindParams;
 use crate::{
     frontend::{
-        RewritePlan,
         client::QueryTimestamps,
         router::parser::{
             StatementParser, StatementRewrite, Table,
             rewrite::statement::{
                 Error,
                 non_deterministic_funcs::{time::TimeFunctionType, uuid::UUIDFunctionType},
-                plan::{GeneratedId, GeneratedParam},
+                plan::BindParam,
             },
         },
     },
@@ -283,9 +283,7 @@ impl StatementRewrite<'_> {
         &mut self,
         mut stmt: NodeMut<'mem, 'mutref>,
         mem: MemoryToken<'mem>,
-        // TODO: Replace `next_param` with plan.param directly
-        next_param: &mut i32,
-        plan: &mut RewritePlan,
+        bind_params: &mut BindParams,
     ) -> Result<(), Error> {
         let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema);
 
@@ -299,8 +297,7 @@ impl StatementRewrite<'_> {
 
         let mut nd_rewrite = NDRewrite {
             rewrite: self,
-            plan,
-            next_param,
+            bind_params,
             mem,
             relation,
             cols,
@@ -359,10 +356,7 @@ impl StatementRewrite<'_> {
 
 struct NDRewrite<'mem, 'a, 's> {
     rewrite: &'a mut StatementRewrite<'s>,
-    plan: &'a mut RewritePlan,
-    /// TODO: Replace `next_param` with plan.param directly
-    ///       could do like a .next_param() method on `RewritePlan`
-    next_param: &'a mut i32,
+    bind_params: &'a mut BindParams,
     mem: MemoryToken<'mem>,
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
@@ -522,14 +516,11 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                 .make_a_const(ConstValue::String(text.as_str()))
                 .uncast()
         } else {
-            let param_ref = self.mem.make_param_ref(*self.next_param);
-            *self.next_param += 1;
+            let param_ref = self.mem.make_param_ref(self.bind_params.len() as i32 + 1);
 
             // TODO: add a method to plan() for this...
-            self.plan.generated_params.push(GeneratedParam {
-                param_num: (*self.next_param - 1) as u16,
-                generated_id: GeneratedId::NDFunction(nd_function.clone()),
-            });
+            self.bind_params
+                .push(BindParam::NDFunction(nd_function.clone()));
 
             // Example: CAST($1::pg_catalog.text AS timetz)
             // This is 30x less code at the expense of query verbosity;

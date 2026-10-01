@@ -21,6 +21,7 @@ pub(crate) use connected_client::ConnectedClient;
 pub(crate) use error::Error;
 pub(crate) use prepared_statements::PreparedStatements;
 pub(crate) use regex_parser::RegexParser;
-pub(crate) use router::{Command, DiscardTarget, RewritePlan, Router, SetParam};
+pub(in crate::frontend) use router::RoutingComment;
+pub(crate) use router::{Command, DiscardTarget, Router, SetParam};
 pub(crate) use router::{RouterContext, SearchPath};
 pub(crate) use stats::Stats;

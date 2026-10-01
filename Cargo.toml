@@ -22,8 +22,7 @@ edition = "2024"
 pgdog-plugin = { path = "./pgdog-plugin", version = "0.4.0", default-features = false }
 pgdog-config = { path = "./pgdog-config", version = "0.1.0" }
 pgdog-postgres-types = { path = "./pgdog-postgres-types"}
-# TODO: update after merge https://github.com/pgdogdev/pg_raw_parse/pull/56
-pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "cf9e398" }
+pg_raw_parse = { git = "https://github.com/pgdogdev/pg_raw_parse.git", rev = "89937b1" }
 bon = "3.9"
 derive_more = { version = "2", features = ["display", "from"] }
 schemars = { version = "1.2.1", features = ["uuid1", "chrono04", "indexmap2"] }
