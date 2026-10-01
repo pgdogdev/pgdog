@@ -18,14 +18,8 @@ jobs:
   warm:
     runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -82,14 +76,8 @@ jobs:
   haskell:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
       - name: Install GHC/Cabal
