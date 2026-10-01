@@ -11,9 +11,10 @@ on:
 jobs:
   build:
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
       # Compute the binary key before restoring rust-cache: rust-cache restores
       # target/ build outputs that would otherwise change the key. Use the
       # split cache actions so pgdog binaries are saved immediately after the
@@ -21,7 +22,7 @@ jobs:
       # from target/.
       - name: Compute cache key
         id: cache-key
-        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-v2-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       - name: Restore pgdog binary
         id: pgdog-bin
         uses: actions/cache/restore@v5
@@ -31,7 +32,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         with:
-          prefix-key: build-cov-debug-v1
+          prefix-key: build-cov-debug-v2
+          shared-key: build
       - name: Build (instrumented debug, for coverage)
         if: steps.pgdog-bin.outputs.cache-hit != 'true'
         run: bash integration/ci/prepare-instrumented-pgdog.sh debug
@@ -46,6 +48,9 @@ jobs:
     runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
     needs: [build]
     timeout-minutes: 30
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
+      options: ${{ matrix.needs_docker && '--privileged' || '' }}
     continue-on-error: ${{ matrix.continue_on_error == true }}
     strategy:
       fail-fast: false
@@ -61,16 +66,8 @@ jobs:
           - { name: js, script: integration/js/pg_tests/run.sh }
           - { name: ruby, script: integration/ruby/run.sh, needs_gems: true }
           - { name: java, script: integration/java/run.sh }
-          - {
-              name: elixir,
-              script: integration/elixir/run.sh,
-              needs_beam: true,
-            }
-          - {
-              name: haskell,
-              script: integration/haskell/run.sh,
-              needs_haskell: true,
-            }
+          - { name: elixir, script: integration/elixir/run.sh }
+          - { name: haskell, script: integration/haskell/run.sh }
           - { name: mirror, script: integration/mirror/run.sh }
           - { name: sql, script: integration/sql/run.sh }
           - { name: toxi, script: integration/toxi/run.sh, needs_gems: true }
@@ -102,16 +99,22 @@ jobs:
               script: integration/load_balancer/run.sh,
               lb_part: rest,
               needs_rust_cache: true,
+              needs_docker: true,
             }
           - {
               name: load-balancer-prepared,
               script: integration/load_balancer/run.sh,
               lb_part: prepared,
               needs_rust_cache: true,
+              needs_docker: true,
               runner: blacksmith-8vcpu-ubuntu-2404,
             }
-          - { name: tls, script: integration/tls/run.sh }
-          - { name: resharding, script: integration/resharding/run.sh }
+          - { name: tls, script: integration/tls/run.sh, needs_docker: true }
+          - {
+              name: resharding,
+              script: integration/resharding/run.sh,
+              needs_docker: true,
+            }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
@@ -121,19 +124,19 @@ jobs:
               needs_rust_cache: true,
               continue_on_error: true,
             }
-    env:
-      # All suites run against the llvm-cov instrumented debug binary so we
-      # get line coverage from integration tests, not just unit tests.
-      PGDOG_BIN: ${{ github.workspace }}/target/llvm-cov-target/debug/pgdog
-      # NB: cargo llvm-cov report only globs profraw files at the top of
-      # target/llvm-cov-target, so LLVM_PROFILE_FILE must point there.
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-cov-target/${{ matrix.name }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/ci-deps
+      - name: Set coverage env
+        run: |
+          # All suites run against the llvm-cov instrumented debug binary so we
+          # get line coverage from integration tests, not just unit tests.
+          echo "PGDOG_BIN=${GITHUB_WORKSPACE}/target/llvm-cov-target/debug/pgdog" >> "$GITHUB_ENV"
+          # NB: cargo llvm-cov report only globs profraw files at the top of
+          # target/llvm-cov-target, so LLVM_PROFILE_FILE must point there.
+          echo "LLVM_PROFILE_FILE=${GITHUB_WORKSPACE}/target/llvm-cov-target/${{ matrix.name }}-%p-%m.profraw" >> "$GITHUB_ENV"
       - name: Compute cache key
         id: cache-key
-        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "key=pgdog-bin-${{ runner.os }}-coverage-v2-$(bash integration/ci/cache-key.sh)" >> "$GITHUB_OUTPUT"
       # rust-cache must run before the binary restore: it lays down a
       # stale target/ that can otherwise wipe target binaries when cargo
       # reconciles fingerprints during plugin builds.
@@ -141,7 +144,8 @@ jobs:
         if: matrix.needs_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: build-v1
+          prefix-key: build-v2
+          shared-key: integration
       - name: Restore instrumented pgdog binary
         uses: actions/cache/restore@v5
         with:
@@ -154,29 +158,9 @@ jobs:
         run: |
           mkdir -p target/llvm-cov-target
           rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
-      # The runner image has no BEAM toolchain, and Ubuntu's `elixir` package
-      # is several years behind, so pull a pinned precompiled pair instead.
-      - name: Install Erlang/Elixir
-        if: matrix.needs_beam
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: "28"
-          elixir-version: "1.20.3"
-      - name: Install GHC/Cabal
-        if: matrix.needs_haskell
-        id: setup-haskell
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: "9.12.4"
-          cabal-version: "3.18.1.0"
-      - name: Cache Cabal dependencies
-        if: matrix.needs_haskell
-        uses: actions/cache@v5
-        with:
-          path: ${{ steps.setup-haskell.outputs.cabal-store }}
-          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
-          restore-keys: |
-            cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-
+      - name: Start Docker
+        if: matrix.needs_docker
+        run: bash integration/ci/start-docker.sh
       - name: Setup dependencies
         run: bash integration/ci/setup.sh --with-toxi
       - name: Cache gems
