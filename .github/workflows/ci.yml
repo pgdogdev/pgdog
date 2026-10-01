@@ -174,21 +174,14 @@ jobs:
         run: |
           mkdir -p target/llvm-cov-target
           rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
-      - name: Install GHC/Cabal
-        if: matrix.needs_haskell
-        id: setup-haskell
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: "9.12.4"
-          cabal-version: "3.18.1.0"
       - name: Cache Cabal dependencies
         if: matrix.needs_haskell
         uses: actions/cache@v5
         with:
-          path: ${{ steps.setup-haskell.outputs.cabal-store }}
-          key: cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
+          path: ~/.local/state/cabal/store
+          key: cabal-${{ runner.os }}-9.12.4-3.18.1.0-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
           restore-keys: |
-            cabal-${{ runner.os }}-${{ steps.setup-haskell.outputs.ghc-version }}-${{ steps.setup-haskell.outputs.cabal-version }}-
+            cabal-${{ runner.os }}-9.12.4-3.18.1.0-
       - name: Start Docker
         if: matrix.needs_docker
         run: bash integration/ci/start-docker.sh
