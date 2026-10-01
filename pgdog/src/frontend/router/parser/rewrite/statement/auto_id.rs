@@ -717,10 +717,10 @@ mod tests {
                             .expect("rewrite succeeds");
                         ast
                     });
-                    assert_eq!(plan.generated_params.len(), 1);
+                    assert_eq!(plan.bind_params.len(), 1);
                     assert_eq!(
-                        plan.generated_params[0].generated_id,
-                        GeneratedId::Sequence(SequenceCall::Nextval(expected.to_owned())),
+                        plan.bind_params[0],
+                        BindParam::Sequence(SequenceCall::Nextval(expected.to_owned())),
                         "{sql}",
                     );
                 }
