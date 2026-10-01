@@ -15,7 +15,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -58,7 +58,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -79,11 +79,7 @@ jobs:
           - { name: ruby, script: integration/ruby/run.sh, needs_gems: true }
           - { name: java, script: integration/java/run.sh }
           - { name: elixir, script: integration/elixir/run.sh }
-          - {
-              name: haskell,
-              script: integration/haskell/run.sh,
-              needs_haskell: true,
-            }
+          - { name: haskell, script: integration/haskell/run.sh }
           - { name: mirror, script: integration/mirror/run.sh }
           - { name: sql, script: integration/sql/run.sh }
           - { name: toxi, script: integration/toxi/run.sh, needs_gems: true }
@@ -174,14 +170,6 @@ jobs:
         run: |
           mkdir -p target/llvm-cov-target
           rm -f target/llvm-cov-target/*.profraw target/llvm-cov-target/*.profdata
-      - name: Cache Cabal dependencies
-        if: matrix.needs_haskell
-        uses: actions/cache@v5
-        with:
-          path: ~/.local/state/cabal/store
-          key: cabal-${{ runner.os }}-9.12.4-3.18.1.0-${{ hashFiles('integration/haskell/*.cabal', 'integration/haskell/cabal.project', 'integration/haskell/**/*.hs') }}
-          restore-keys: |
-            cabal-${{ runner.os }}-9.12.4-3.18.1.0-
       - name: Start Docker
         if: matrix.needs_docker
         run: bash integration/ci/start-docker.sh

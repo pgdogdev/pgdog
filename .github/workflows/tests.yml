@@ -16,7 +16,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -62,7 +62,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v1
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

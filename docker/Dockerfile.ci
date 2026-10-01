@@ -17,6 +17,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV MIX_HOME=/usr/local/mix
 ENV GHCUP_INSTALL_BASE_PREFIX=/usr/local
+ENV CABAL_DIR=/usr/local/cabal
 ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/node/bin:/usr/local/otp/bin:/usr/local/elixir/bin:/usr/local/.ghcup/bin:$PATH
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
@@ -97,4 +98,12 @@ chmod +x /usr/local/bin/ghcup
 ghcup install ghc "${GHC_VERSION}" --set
 ghcup install cabal "${CABAL_VERSION}" --set
 ghcup gc --cache --tmpdirs --profiling-libs --share-dir
+EOF
+
+COPY integration/haskell/cabal.project integration/haskell/pgdog-haskell-integration.cabal /tmp/ci/haskell/
+RUN <<EOF
+cd /tmp/ci/haskell
+cabal update
+cabal build --only-dependencies --enable-tests
+rm -rf dist-newstyle
 EOF

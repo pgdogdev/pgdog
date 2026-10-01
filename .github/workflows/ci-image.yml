@@ -17,6 +17,8 @@ on:
       - ".github/workflows/**"
       - "docker/Dockerfile.ci"
       - "integration/ci/install-deps.sh"
+      - "integration/haskell/cabal.project"
+      - "integration/haskell/*.cabal"
       - "rust-toolchain.toml"
   pull_request:
     types: [opened, synchronize, reopened]
@@ -24,6 +26,8 @@ on:
       - ".github/workflows/**"
       - "docker/Dockerfile.ci"
       - "integration/ci/install-deps.sh"
+      - "integration/haskell/cabal.project"
+      - "integration/haskell/*.cabal"
       - "rust-toolchain.toml"
 
 env:
