@@ -52,6 +52,7 @@ impl DerefMut for LinkedServer {
     }
 }
 
+#[cfg(test)]
 pub(crate) mod test {
     use super::*;
     use crate::{backend::Pool, net::Parameter};

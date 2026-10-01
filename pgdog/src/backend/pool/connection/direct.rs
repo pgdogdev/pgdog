@@ -68,6 +68,7 @@ impl DerefMut for DirectBinding {
     }
 }
 
+#[cfg(test)]
 pub(crate) mod test {
     use super::linked_server::test::TestLinkedServer;
     use super::*;
