@@ -22,21 +22,25 @@ async fn test_same_shard_insert_uses_direct_route() {
         .into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).await.unwrap();
-    client
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
+    let rewrite_result = client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .parse_and_rewrite(&mut context, client_request)
         .await
         .unwrap();
     client
         .engine
-        .execute(&mut context, rewrite_result)
+        .route_query(&mut context, client_request, rewrite_result.as_ref())
+        .await
+        .unwrap();
+    client
+        .engine
+        .execute(&mut context, client_request, rewrite_result)
         .await
         .unwrap();
 
     assert!(
-        context.client_request.route().shard().is_direct(),
+        client_request.route().shard().is_direct(),
         "same-shard INSERT should bypass the split and use direct-to-shard routing"
     );
 }
@@ -57,21 +61,25 @@ async fn test_cross_shard_insert_uses_all_shards() {
         .into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
-    let rewrite_result = client.engine.parse_and_rewrite(&mut context).await.unwrap();
-    client
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
+    let rewrite_result = client
         .engine
-        .route_query(&mut context, rewrite_result.as_ref())
+        .parse_and_rewrite(&mut context, client_request)
         .await
         .unwrap();
     client
         .engine
-        .execute(&mut context, rewrite_result)
+        .route_query(&mut context, client_request, rewrite_result.as_ref())
+        .await
+        .unwrap();
+    client
+        .engine
+        .execute(&mut context, client_request, rewrite_result)
         .await
         .unwrap();
 
     assert!(
-        !context.client_request.route().shard().is_direct(),
+        !client_request.route().shard().is_direct(),
         "cross-shard INSERT must go through the split path, not the direct route"
     );
 }

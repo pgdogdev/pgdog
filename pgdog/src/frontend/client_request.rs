@@ -2,13 +2,13 @@
 //!
 //! Contains exactly one request.
 //!
-use std::ops::{Deref, DerefMut};
-
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::mem;
+use std::sync::Arc;
 
 use crate::{
-    frontend::router::Ast,
+    frontend::router::{Ast, RoutingComment},
     net::{
         Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
@@ -30,7 +30,11 @@ pub(crate) struct ClientRequest {
     /// The QueryEngine will set the route once it handles the request.
     pub(crate) route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
-    pub(crate) ast: Option<Ast>,
+    pub(crate) ast: Option<Arc<Ast>>,
+    /// Was the statement AST loaded from the cache?
+    pub(in crate::frontend) cached: bool,
+    /// Any routing comment that was present on the client's query
+    pub(in crate::frontend) routing_comment: Option<Arc<RoutingComment>>,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
@@ -40,8 +44,9 @@ pub(crate) struct ClientRequest {
 impl MemoryUsage for ClientRequest {
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
-        self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()
-            + std::mem::size_of::<Option<Ast>>()
+        self.messages.capacity() * mem::size_of::<ProtocolMessage>()
+            - mem::size_of::<Vec<ProtocolMessage>>()
+            + mem::size_of::<Self>()
     }
 }
 
@@ -58,6 +63,8 @@ impl ClientRequest {
             messages: Vec::with_capacity(5),
             route: None,
             ast: None,
+            cached: false,
+            routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
         }
@@ -216,6 +223,8 @@ impl ClientRequest {
             messages,
             route: self.route.clone(),
             ast: self.ast.clone(),
+            cached: self.cached,
+            routing_comment: self.routing_comment.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
         }
@@ -338,7 +347,7 @@ impl ClientRequest {
                 // it if we haven't already. We also don't want to send requests
                 // that contain Flush only since they will get stuck.
                 'H' => {
-                    if let Some(last_message) = current_request.last()
+                    if let Some(last_message) = current_request.messages.last()
                         && last_message.code() != 'H'
                     {
                         current_request.push(message.clone());
@@ -359,8 +368,9 @@ impl ClientRequest {
                     // Push any accumulated messages first. Since Sync is moved
                     // to a separate request, force Postgres to deliver the
                     // responses for this request before we wait for them.
-                    if !current_request.is_empty() {
+                    if !current_request.messages.is_empty() {
                         if current_request
+                            .messages
                             .last()
                             .is_none_or(|message| message.code() != 'H')
                         {
@@ -379,7 +389,7 @@ impl ClientRequest {
 
         // Collect any remaining messages that aren't followed
         // by Flush or Sync.
-        if !current_request.is_empty() {
+        if !current_request.messages.is_empty() {
             requests.push(current_request);
         }
 
@@ -399,23 +409,11 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
             ast: None,
+            cached: false,
+            routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
         }
-    }
-}
-
-impl Deref for ClientRequest {
-    type Target = Vec<ProtocolMessage>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.messages
-    }
-}
-
-impl DerefMut for ClientRequest {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.messages
     }
 }
 
@@ -442,7 +440,7 @@ mod test {
         assert_eq!(splice.len(), 4);
 
         // First slice should contain: Parse("start"), Bind("start"), Execute, Flush
-        let first_slice = &splice[0];
+        let first_slice = &splice[0].messages;
         assert_eq!(first_slice.len(), 4);
         assert_eq!(first_slice[0].code(), 'P'); // Parse
         assert_eq!(first_slice[1].code(), 'B'); // Bind
@@ -461,7 +459,7 @@ mod test {
         }
 
         // Second slice should contain: Parse("test"), Bind("test"), Execute, Flush
-        let second_slice = &splice[1];
+        let second_slice = &splice[1].messages;
         assert_eq!(second_slice.len(), 4);
         assert_eq!(second_slice[0].code(), 'P'); // Parse
         assert_eq!(second_slice[1].code(), 'B'); // Bind
@@ -480,13 +478,13 @@ mod test {
         }
 
         // Third slice should contain: Describe portal, Flush
-        let third_slice = &splice[2];
+        let third_slice = &splice[2].messages;
         assert_eq!(third_slice.len(), 2);
         assert_eq!(third_slice[0].code(), 'D'); // Describe
         assert_eq!(third_slice[1].code(), 'H'); // Flush
 
         // Fourth slice should contain: Sync (always separate)
-        let fourth_slice = &splice[3];
+        let fourth_slice = &splice[3].messages;
         assert_eq!(fourth_slice.len(), 1);
         assert_eq!(fourth_slice[0].code(), 'S'); // Sync
 
@@ -514,7 +512,7 @@ mod test {
         assert_eq!(splice.len(), 2);
 
         // First slice: Parse("test"), Bind("test"), Execute, Flush
-        let first_slice = &splice[0];
+        let first_slice = &splice[0].messages;
         assert_eq!(first_slice.len(), 4);
         assert_eq!(first_slice[0].code(), 'P'); // Parse
         assert_eq!(first_slice[1].code(), 'B'); // Bind
@@ -533,7 +531,7 @@ mod test {
         }
 
         // Second slice: Parse("test_1"), Bind("test_1"), Execute, Flush
-        let second_slice = &splice[1];
+        let second_slice = &splice[1].messages;
         assert_eq!(second_slice.len(), 4);
         assert_eq!(second_slice[0].code(), 'P'); // Parse
         assert_eq!(second_slice[1].code(), 'B'); // Bind
@@ -576,7 +574,7 @@ mod test {
         assert_eq!(splice.len(), 3);
 
         // First slice should contain: Parse("stmt"), Describe("stmt"), Flush, Bind("stmt"), Execute, Flush
-        let first_slice = &splice[0];
+        let first_slice = &splice[0].messages;
         assert_eq!(first_slice.len(), 6);
         assert_eq!(first_slice[0].code(), 'P'); // Parse
         assert_eq!(first_slice[1].code(), 'D'); // Describe
@@ -586,14 +584,14 @@ mod test {
         assert_eq!(first_slice[5].code(), 'H'); // Flush (added by splice logic)
 
         // Second slice should contain: Bind("stmt"), Execute, Flush
-        let second_slice = &splice[1];
+        let second_slice = &splice[1].messages;
         assert_eq!(second_slice.len(), 3);
         assert_eq!(second_slice[0].code(), 'B'); // Bind
         assert_eq!(second_slice[1].code(), 'E'); // Execute
         assert_eq!(second_slice[2].code(), 'H'); // Flush
 
         // Third slice should contain: Sync (always separate)
-        let third_slice = &splice[2];
+        let third_slice = &splice[2].messages;
         assert_eq!(third_slice.len(), 1);
         assert_eq!(third_slice[0].code(), 'S'); // Sync
     }

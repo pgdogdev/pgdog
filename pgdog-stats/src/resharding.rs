@@ -80,6 +80,9 @@ pub enum SyncState {
     PreData,
     PostData,
     Cutover,
+    PostDataValidation,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

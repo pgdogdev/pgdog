@@ -543,6 +543,10 @@ mod test {
                 SyncState::Cutover,
                 "schema_sync(cutover) prod -> prod_sharded",
             ),
+            (
+                SyncState::PostDataValidation,
+                "schema_sync(post_data_validation) prod -> prod_sharded",
+            ),
         ] {
             assert_eq!(
                 TaskDefinition::from(SchemaSyncDefinition {
@@ -790,6 +794,14 @@ mod test {
             serde_json::from_str::<TaskStatus>(r#"{"kind":"replication","status":"new_stage"}"#)
                 .unwrap(),
             TaskStatus::Replication(ReplicationStatus::Other)
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskDefinition>(
+                r#"{"name":"schema_sync","kind":"schema_sync","databases":{"source":"prod","destination":"prod_sharded"},"sync_state":"new_phase","ignore_errors":false,"dry_run":false}"#
+            )
+            .unwrap()
+            .to_string(),
+            "schema_sync(unknown) prod -> prod_sharded"
         );
 
         assert_eq!(

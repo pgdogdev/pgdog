@@ -53,7 +53,7 @@ flowchart LR
 `Orchestrator::load_schema()` creates a `PgDump` ([`pgdog/src/backend/schema/sync/pg_dump.rs`](../pgdog/src/backend/schema/sync/pg_dump.rs))
 with the source cluster and publication name, calls `pg_dump.dump().await`, and stores the
 `PgDumpOutput` on the orchestrator. This output carries pre-data (tables, types, extensions,
-primary key constraints), secondary index DDL, post-cutover operations, and sequences — split
+primary key constraints), secondary index DDL, validation operations, and sequences — split
 into `SyncState` phases so they can be applied in the right order later.
 
 ---
@@ -122,9 +122,9 @@ The recorded LSN becomes the replay watermark for that table's WAL stream in Ste
 
 ## Step 4 — Post-data schema sync
 
-`schema_sync_post()` restores `SyncState::PostData` — secondary indexes, non-PK constraints,
-and any other DDL that was deferred. Deferring index creation until after the bulk copy avoids
-index maintenance overhead during the high-throughput copy phase.
+`schema_sync_post()` restores `SyncState::PostData` for secondary indexes and non-PK constraints.
+It creates eligible foreign keys as `NOT VALID`, which avoids a blocking data scan.
+Deferring index creation also avoids index maintenance during the bulk copy.
 
 ---
 
@@ -199,8 +199,11 @@ returns `Error::DrainTimeout`.
 The reverse phase runs in the same task, not in a separate one. A `STOP_TASK` during the reverse
 phase ends the rollback window, and the task reports the migration as finished.
 
-The cutover schema sync (`SyncState::Cutover`, then `SyncState::PostCutover`) runs as a
-`SchemaSyncTask` subtask after each stream phase ends.
+`SyncState::Cutover` runs as an awaited `SchemaSyncTask` before the traffic swap.
+`SyncState::PostDataValidation` is not part of cutover.
+Run it manually against the destination during replication or at another time.
+It validates each deferred foreign key with `ALTER TABLE ... VALIDATE CONSTRAINT`.
+Validation failures remain visible through `SHOW TASKS`.
 
 ---
 
@@ -214,12 +217,10 @@ steps. A failure here leaves traffic unaffected and the source untouched, making
 
 ### Schema DDL — intentional error tolerance
 
-`schema_sync_pre`, `schema_sync_post`, `schema_sync_cutover`, and `schema_sync_post_cutover` are
-all called with `ignore_errors = true`. The `PgDumpOutput::restore()` method logs errors and
-continues when this flag is set. The intent is to tolerate pre-existing objects on the destination
-— a common condition when a previous reshard attempt failed mid-schema-sync and left partial DDL
-behind. Re-running `RESHARD` after such a failure will not abort on `table already exists` or
-similar conflicts.
+The pre-data, post-data, and cutover stages use `ignore_errors = true`.
+This setting tolerates objects left by an earlier failed schema sync.
+The validation stage uses `ignore_errors = false`.
+A foreign key violation therefore marks the validation task as failed.
 
 ### Data sync — abort propagation and cooperative cancellation
 
@@ -280,7 +281,8 @@ Several mechanisms make it safe to replay data across a restart:
 | Mechanism | Where | Effect |
 |---|---|---|
 | Temporary replication slots | `Table::data_sync()` | Auto-dropped on connection close; no orphaned per-table slots |
-| `ignore_errors = true` | All schema sync steps | Pre-existing DDL on destination does not abort the run |
+| `ignore_errors = true` | Pre-data, post-data, and cutover schema sync | Pre-existing DDL does not abort the run |
+| FK validation | Manual validation schema sync | Validates deferred foreign keys in a reported task |
 | LSN watermark guard | `StreamSubscriber::lsn_applied()` | Rows bulk-copied in Step 3 are skipped during WAL replay in Step 5 |
 | Upsert on INSERT messages | `Table::insert(upsert=true)` | `ON CONFLICT (pk) DO UPDATE SET` prevents duplicates on WAL re-delivery |
 | PK validation | `Table::valid()` | Fails before any data moves; restart is clean |

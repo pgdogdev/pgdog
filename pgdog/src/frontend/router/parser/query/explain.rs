@@ -4,7 +4,6 @@ use pg_raw_parse::nodes;
 impl QueryParser {
     pub(super) fn explain(
         &mut self,
-        cached_ast: &Ast,
         stmt: &nodes::ExplainStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
@@ -19,7 +18,7 @@ impl QueryParser {
         }
 
         let result = match query {
-            Node::SelectStmt(stmt) => self.select(cached_ast, stmt, context),
+            Node::SelectStmt(stmt) => self.select(stmt, context),
             Node::InsertStmt(stmt) => self.insert(stmt.into(), context),
             Node::UpdateStmt(stmt) => self.update(stmt.into(), context),
             Node::DeleteStmt(stmt) => self.delete(stmt.into(), context),
@@ -81,7 +80,9 @@ mod tests {
         let buffered = BufferedQuery::Query(Query::new(sql));
         let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(sql).into()]);
-        buffer.ast = Some(ast);
+        buffer.ast = Some(ast.ast);
+        buffer.cached = ast.cached;
+        buffer.routing_comment = Some(ast.comment);
 
         let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 
@@ -113,7 +114,9 @@ mod tests {
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));
         let ast = Cache::get().query(&buffered, &ast_ctx, &mut stmts).unwrap();
         let mut buffer: ClientRequest = vec![parse_msg.into(), bind.into()].into();
-        buffer.ast = Some(ast);
+        buffer.ast = Some(ast.ast);
+        buffer.cached = ast.cached;
+        buffer.routing_comment = Some(ast.comment);
 
         let ctx = RouterContext::new(&buffer, &cluster, &params, None, Sticky::new()).unwrap();
 

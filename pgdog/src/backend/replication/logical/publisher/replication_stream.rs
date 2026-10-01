@@ -53,6 +53,13 @@ impl ReplicationStream {
             p.started = Some(Instant::now());
         });
         let result = self.replicate(slot, &mut stream, stop).await;
+
+        if let Err(err) = stream.refresh_wal_positions().await {
+            warn!("[replication] final wal position refresh failed: {err}");
+        }
+        if let Err(err) = stream.check_for_committed_transaction().await {
+            warn!("[replication] final completion check failed: {err}");
+        }
         let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
         let missed = stream.missed_rows();
         self.updater.update(|p| {
@@ -100,6 +107,8 @@ impl ReplicationStream {
     ) -> Result<(), Error> {
         let mut check_lag = safe_interval(Duration::from_secs(1));
         check_lag.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut check_durable = safe_interval(Duration::from_millis(100));
+        check_durable.set_missed_tick_behavior(MissedTickBehavior::Delay);
         slot.start_replication().await?;
 
         let max_attempts = self
@@ -108,15 +117,37 @@ impl ReplicationStream {
         let delay = self.dest_cluster.resharding_replication_retry_min_delay();
 
         let mut attempt = 0usize;
+        let mut last_reported = stream.status_update().last_flushed;
 
         loop {
             let stopping = slot.stopped();
 
-            select! {
+            // Each arm returns Ok(true) when the slot is drained and the loop
+            // should break; Ok(false) to continue on next loop. All errors bubble up
+            // to the single retry/abort site below.
+            let done: Result<bool, Error> = select! {
                 biased;
 
                 _ = stop.cancelled(), if !stopping => {
                     slot.stop_replication().await?;
+                    Ok(false)
+                }
+
+                _ = check_durable.tick() => {
+                    async {
+                        stream.refresh_wal_positions().await?;
+                        if stream.check_for_committed_transaction().await? {
+                            let missed = stream.missed_rows();
+                            self.updater.update(|p| p.missed_rows.merge(missed));
+                        }
+                        let su = stream.status_update();
+                        if su.last_flushed > last_reported {
+                            last_reported = su.last_flushed;
+                            slot.status_update(su).await?;
+                        }
+                        Ok(false)
+                    }
+                    .await
                 }
 
                 _ = check_lag.tick() => {
@@ -127,13 +158,11 @@ impl ReplicationStream {
                             slot.name()
                         );
                     }
+                    Ok(false)
                 }
 
                 replication_data = slot.replicate(Duration::MAX) => {
-                    // Returns Ok(true) when the slot is drained and the loop
-                    // should break; Ok(false) to continue on next loop. All errors bubble up
-                    // to the single retry/abort site below.
-                    let done: Result<bool, Error> = async {
+                    async {
                         let Some(replication_data) = replication_data? else {
                             return Ok(true);
                         };
@@ -142,6 +171,9 @@ impl ReplicationStream {
                                 if let Some(ReplicationMeta::KeepAlive(ka)) =
                                     data.replication_meta()
                                 {
+                                    let completed =
+                                        stream.check_for_committed_transaction().await?;
+
                                     // Advance the lsn if we are not in the transaction currently
                                     // (we don't use transactions actually without streaming on protocol version 4,
                                     // but let it be as a safeguard).
@@ -150,14 +182,17 @@ impl ReplicationStream {
                                     // Since it's unrelated we can advance our progress and
                                     // consider that lag replication
                                     let advanced = !stream.in_transaction()
+                                        && !stream.has_in_flight()
                                         && ka.wal_end > stream.lsn()
                                         && stream.set_current_lsn(ka.wal_end);
 
                                     // Reply to walsender if it asked for reply or
                                     // if we advanced due to the WAL progress but
                                     // the update was not related
-                                    if advanced || ka.reply() {
-                                        slot.status_update(stream.status_update()).await?;
+                                    if advanced || completed || ka.reply() {
+                                        let su = stream.status_update();
+                                        last_reported = su.last_flushed;
+                                        slot.status_update(su).await?;
                                     }
                                     debug!(
                                         "origin at lsn {} [{}]",
@@ -167,11 +202,15 @@ impl ReplicationStream {
                                 } else {
                                     if let Some(su) = stream.handle(data).await? {
                                         let applied = Lsn::from_i64(su.last_applied);
-                                        slot.status_update(su).await?;
                                         self.updater.update(|p| {
                                             p.last_transaction = Some(Instant::now());
                                             p.advance_applied_lsn(applied);
                                         });
+                                    }
+                                    let su = stream.status_update();
+                                    if su.last_flushed > last_reported {
+                                        last_reported = su.last_flushed;
+                                        slot.status_update(su).await?;
                                     }
                                     attempt = 0;
                                 }
@@ -180,42 +219,38 @@ impl ReplicationStream {
                             ReplicationData::CopyDone => Ok(false),
                         }
                     }
-                    .await;
-
-                    match done {
-                        Ok(true) => break,
-                        Ok(false) => {}
-                        Err(mut err) => loop {
-                            if stop.is_cancelled()
-                                || !err.is_retryable()
-                                || (max_attempts != 0 && attempt >= max_attempts)
-                            {
-                                return Err(err);
-                            }
-                            attempt += 1;
-                            warn!(
-                                "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
-                                delay.as_millis()
-                            );
-                            if stop
-                                .run_until_cancelled(safe_sleep(delay))
-                                .await
-                                .is_none()
-                            {
-                                return Err(err);
-                            }
-                            let missed = stream.missed_rows();
-                            self.updater.update(|p| p.missed_rows.merge(missed));
-                            match try_join!(slot.reconnect(), stream.reconnect()) {
-                                Ok(_) => break,
-                                Err(reconnect_err) => {
-                                    stream.reset_connections();
-                                    err = reconnect_err;
-                                }
-                            }
-                        },
-                    }
+                    .await
                 }
+            };
+
+            match done {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(mut err) => loop {
+                    if stop.is_cancelled()
+                        || !err.is_retryable()
+                        || (max_attempts != 0 && attempt >= max_attempts)
+                    {
+                        return Err(err);
+                    }
+                    attempt += 1;
+                    warn!(
+                        "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
+                        delay.as_millis()
+                    );
+                    if stop.run_until_cancelled(safe_sleep(delay)).await.is_none() {
+                        return Err(err);
+                    }
+                    let missed = stream.missed_rows();
+                    self.updater.update(|p| p.missed_rows.merge(missed));
+                    match try_join!(slot.reconnect(), stream.reconnect()) {
+                        Ok(_) => break,
+                        Err(reconnect_err) => {
+                            stream.reset_connections();
+                            err = reconnect_err;
+                        }
+                    }
+                },
             }
         }
 
@@ -547,14 +582,15 @@ mod tests {
                 ))
                 .await?;
             fixture
-                .wait_for(dest_query.clone(), |rows, _| rows.iter().any(|r| r == "3"))
+                .wait_for(dest_query.clone(), |rows, info| {
+                    rows.iter().any(|r| r == "3") && info.missed_rows.updates > 0
+                })
                 .await?;
 
-            if fixture.replication.progress().missed_rows.updates == 0 {
-                return Err("missed update count was lost during reconnect".into());
-            }
-
             missed_rows_cause_missed_update(fixture, 3, 4).await?;
+            fixture
+                .wait_for(dest_query.clone(), |_, info| info.missed_rows.updates >= 2)
+                .await?;
 
             fixture.stop().await?;
             if fixture.replication.progress().missed_rows.updates < 2 {

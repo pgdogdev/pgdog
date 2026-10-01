@@ -1,4 +1,4 @@
-use super::StatementRewrite;
+use super::{BindParam, BindParams, StatementRewrite};
 use pg_raw_parse::{Node, make, nodes};
 
 impl StatementRewrite<'_> {
@@ -9,11 +9,10 @@ impl StatementRewrite<'_> {
     pub(super) fn unique_id_value<'mem>(
         mem: make::MemoryToken<'mem>,
         extended: bool,
-        next_param: &mut i32,
+        bind_params: &mut BindParams,
     ) -> Result<make::Unique<'mem, Node<'mem>>, super::Error> {
         let replacement = if extended {
-            let param_ref = mem.make_param_ref(*next_param);
-            *next_param += 1;
+            let param_ref = mem.make_param_ref(bind_params.len() as i32 + 1);
             param_ref.uncast()
         } else {
             use pg_raw_parse::ConstValue;
@@ -22,6 +21,7 @@ impl StatementRewrite<'_> {
             mem.make_a_const(ConstValue::Float(&unique_id.to_string()))
                 .uncast()
         };
+        bind_params.push(BindParam::UniqueId);
 
         Ok(mem
             .make_type_cast(
@@ -47,6 +47,7 @@ impl StatementRewrite<'_> {
 mod tests {
     use pgdog_config::Rewrite;
 
+    use super::super::plan::BindParam;
     use super::*;
     use crate::backend::schema::Schema;
     use crate::frontend::PreparedStatements;
@@ -114,8 +115,7 @@ mod tests {
         let (sql, plan) = run_test("SELECT pgdog.unique_id()", true);
 
         assert_eq!(sql, "SELECT $1::bigint");
-        assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -123,8 +123,14 @@ mod tests {
         let (sql, plan) = run_test("SELECT pgdog.unique_id(), $1, $2", true);
 
         assert_eq!(sql, "SELECT $3::bigint, $1, $2");
-        assert_eq!(plan.params, 2);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(
+            plan.bind_params,
+            [
+                BindParam::FromClientBind(0),
+                BindParam::FromClientBind(1),
+                BindParam::UniqueId
+            ],
+        );
     }
 
     #[test]
@@ -132,8 +138,7 @@ mod tests {
         let (sql, plan) = run_test("SELECT pgdog.unique_id(), pgdog.unique_id()", true);
 
         assert_eq!(sql, "SELECT $1::bigint, $2::bigint");
-        assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId; 2]);
     }
 
     #[test]
@@ -145,8 +150,7 @@ mod tests {
             !sql.contains("pgdog.unique_id"),
             "Function should be replaced: {sql}"
         );
-        assert_eq!(plan.params, 0);
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -159,7 +163,7 @@ mod tests {
             !sql.contains("pgdog.unique_id"),
             "Functions should be replaced: {sql}"
         );
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId; 2]);
     }
 
     #[test]
@@ -167,7 +171,7 @@ mod tests {
         let (sql, plan) = run_test("SELECT 1, 2, 3", true);
 
         assert_eq!(sql, "SELECT 1, 2, 3");
-        assert_eq!(plan.unique_ids, 0);
+        assert_eq!(plan.bind_params.len(), 0);
     }
 
     #[test]
@@ -178,7 +182,7 @@ mod tests {
         );
 
         assert_eq!(sql, "INSERT INTO t (id, name) VALUES ($1::bigint, 'test')");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -189,7 +193,7 @@ mod tests {
         );
 
         assert_eq!(sql, "INSERT INTO t (id) VALUES ($1::bigint), ($2::bigint)");
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId; 2]);
     }
 
     #[test]
@@ -197,7 +201,7 @@ mod tests {
         let (sql, plan) = run_test("INSERT INTO t (id) SELECT pgdog.unique_id() FROM s", true);
 
         assert_eq!(sql, "INSERT INTO t (id) SELECT $1::bigint FROM s");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -208,7 +212,7 @@ mod tests {
         );
 
         assert_eq!(sql, "UPDATE t SET id = $1::bigint WHERE name = 'test'");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -219,7 +223,7 @@ mod tests {
         );
 
         assert_eq!(sql, "UPDATE t SET name = 'new' WHERE id = $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -227,7 +231,7 @@ mod tests {
         let (sql, plan) = run_test("DELETE FROM t WHERE id = pgdog.unique_id()", true);
 
         assert_eq!(sql, "DELETE FROM t WHERE id = $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -241,7 +245,7 @@ mod tests {
             sql,
             "INSERT INTO t (id) VALUES ($1::bigint) RETURNING $2::bigint"
         );
-        assert_eq!(plan.unique_ids, 2);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId; 2]);
     }
 
     #[test]
@@ -252,7 +256,7 @@ mod tests {
         );
 
         assert_eq!(sql, "EXPLAIN INSERT INTO t (id) SELECT $1::bigint FROM s");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     #[test]
@@ -260,7 +264,7 @@ mod tests {
         let (sql, plan) = run_test("EXPLAIN SELECT pgdog.unique_id()", true);
 
         assert_eq!(sql, "EXPLAIN SELECT $1::bigint");
-        assert_eq!(plan.unique_ids, 1);
+        assert_eq!(plan.bind_params, [BindParam::UniqueId]);
     }
 
     fn run_test(sql: &str, extended: bool) -> (String, RewritePlan) {
