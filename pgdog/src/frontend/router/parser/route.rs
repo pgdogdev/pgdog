@@ -1,7 +1,7 @@
 use std::{fmt::Display, ops::Deref};
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
+    Aggregate, DistinctBy, Limit, OrderBy, StatementType, explain_trace::ExplainTrace,
     rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
@@ -135,6 +135,7 @@ pub(crate) struct Route {
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
+    stmt_type: StatementType,
 }
 
 impl Display for Route {
@@ -394,6 +395,30 @@ impl Route {
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
         self.temp_table_change = temp_table;
         self
+    }
+
+    pub(super) fn ddl(mut self) -> Self {
+        self.stmt_type = StatementType::Ddl;
+        self
+    }
+
+    pub(super) fn dml(mut self) -> Self {
+        self.stmt_type = StatementType::Dml;
+        self
+    }
+
+    pub(super) fn transaction_control(mut self) -> Self {
+        self.stmt_type = StatementType::TransactionControl;
+        self
+    }
+
+    pub(super) fn session_control(mut self) -> Self {
+        self.stmt_type = StatementType::SessionControl;
+        self
+    }
+
+    pub(crate) fn needs_backend(&self) -> bool {
+        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl)
     }
 }
 

@@ -60,8 +60,10 @@ impl QueryEngine {
             _ => client_request.route(),
         };
 
-        if !self.connect(context, connect_route).await? {
-            return Ok(());
+        if connect_route.needs_backend() {
+            if !self.connect(context, connect_route).await? {
+                return Ok(());
+            }
         }
 
         // // We need to run a query now.
