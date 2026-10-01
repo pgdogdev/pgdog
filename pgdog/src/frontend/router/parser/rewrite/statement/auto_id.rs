@@ -410,7 +410,7 @@ mod tests {
                 let (rewritten, plan) =
                     rewrite_sql_with_mode(sql, &db_schema, mode).expect("valid positional INSERT");
                 assert_eq!(rewritten, sql);
-                assert!(plan.bind_params.is_empty());
+                assert_eq!(plan.bind_params.len(), 0);
             }
         }
     }
@@ -424,7 +424,7 @@ mod tests {
             RewriteMode::Rewrite,
         )
         .expect("positional defaults");
-        assert_eq!(&*plan.bind_params, &[BindParam::UniqueId; 2]);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId; 2]);
         assert!(sql.starts_with("INSERT INTO users VALUES ("), "{sql}");
         assert!(!sql.contains("DEFAULT"), "{sql}");
     }
@@ -465,7 +465,7 @@ mod tests {
             sql.starts_with("INSERT INTO users (name, id) VALUES ('test',"),
             "{sql}"
         );
-        assert_eq!(&*plan.bind_params, &[BindParam::UniqueId]);
+        assert_eq!(plan.bind_params, vec![BindParam::UniqueId]);
     }
 
     #[test]
