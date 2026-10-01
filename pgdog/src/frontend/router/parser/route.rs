@@ -402,11 +402,6 @@ impl Route {
         self
     }
 
-    pub(super) fn dml(mut self) -> Self {
-        self.stmt_type = StatementType::Dml;
-        self
-    }
-
     pub(super) fn transaction_control(mut self) -> Self {
         self.stmt_type = StatementType::TransactionControl;
         self

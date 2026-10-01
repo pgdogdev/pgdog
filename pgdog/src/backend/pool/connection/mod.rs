@@ -82,20 +82,35 @@ impl Connection {
     ) -> Result<(), Error> {
         let rw_aggressive = self.cluster()?.read_write_strategy().is_aggressive();
 
-        if matches!(self.binding, Binding::NotConnected) {
-            self.binding = Binding::Transaction(TransactionBinding {
-                is_read: if read_only {
-                    // BEGIN READ ONLY
-                    Some(true)
-                } else if rw_aggressive {
-                    // Let the first statement decide.
-                    None
-                } else {
-                    // BEGIN = write
-                    Some(false)
-                },
-                transaction_stmt: Some(transaction_stmt),
-            });
+        match self.binding {
+            Binding::NotConnected => {
+                self.binding = Binding::Transaction(TransactionBinding {
+                    is_read: if read_only {
+                        // BEGIN READ ONLY
+                        Some(true)
+                    } else if rw_aggressive {
+                        // Let the first statement decide.
+                        None
+                    } else {
+                        // BEGIN = write
+                        Some(false)
+                    },
+                    transaction_stmt: Some(transaction_stmt),
+                });
+            }
+
+            // Record that we are inside a transaction now
+            // even though we were already connected. This is necessary for pinned connections,
+            // i.e., advisory locks, so a transaction can be started on any newly added shards.
+            Binding::Direct(ref mut direct) => {
+                direct.transaction_stmt = Some(transaction_stmt);
+            }
+
+            Binding::MultiShard(ref mut multi) => {
+                multi.transaction_stmt = Some(transaction_stmt);
+            }
+
+            _ => (),
         }
 
         Ok(())

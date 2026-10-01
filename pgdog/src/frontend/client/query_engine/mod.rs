@@ -234,11 +234,10 @@ impl QueryEngine {
                 .await?
             }
             Command::CommitTransaction { extended, .. } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
+                if self.backend.connected() {
                     // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, false, extended)
+                    self.end_connected(context, client_request, false, *extended)
                         .await?;
                 } else {
                     self.end_not_connected(context, &client_request.messages, false, *extended)
@@ -250,11 +249,10 @@ impl QueryEngine {
                 }
             }
             Command::RollbackTransaction { extended, .. } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
+                if self.backend.connected() {
                     // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, true, extended)
+                    self.end_connected(context, client_request, true, *extended)
                         .await?;
                 } else {
                     self.end_not_connected(context, &client_request.messages, true, *extended)

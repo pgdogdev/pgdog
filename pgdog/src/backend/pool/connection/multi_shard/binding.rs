@@ -20,7 +20,7 @@ use super::MultiShard;
 pub(crate) struct MultiBinding {
     pub(super) servers: Vec<LinkedServer>,
     pub(super) state: Box<MultiShard>,
-    pub(super) transaction_stmt: Option<BufferedQuery>,
+    pub(in crate::backend::pool::connection) transaction_stmt: Option<BufferedQuery>,
     pub(super) is_read: bool,
 }
 

@@ -21,6 +21,9 @@ impl QueryEngine {
     ) -> Result<(), Error> {
         context.transaction = Some(Transaction::new(transaction_type));
 
+        self.backend
+            .start_transaction(transaction_type.read_only(), begin.clone())?;
+
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
@@ -39,8 +42,6 @@ impl QueryEngine {
             };
 
             self.stats.sent(bytes_sent);
-            self.backend
-                .start_transaction(transaction_type.read_only(), begin.clone())?;
         }
 
         Ok(())
