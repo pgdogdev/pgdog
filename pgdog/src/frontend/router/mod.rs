@@ -60,6 +60,7 @@ impl Router {
         if context.copy_mode {
             return Ok(&self.latest_command);
         }
+        let executable = context.executable;
 
         let command = self.query_parser.parse(context)?;
 
@@ -86,7 +87,7 @@ impl Router {
             && let Command::Query(ref route) = self.latest_command
         {
             use crate::backend::Error as BackendError;
-            if shard != route.shard() {
+            if shard != route.shard() && executable {
                 return Err(Error::Backend(BackendError::DirectShardMismatch));
             }
         }

@@ -241,7 +241,7 @@ impl QueryEngine {
                         .await?
                 }
 
-                if context.params.commit() {
+                if client_request.is_executable() && context.params.commit() {
                     self.comms.update_params(context.params);
                 }
             }
@@ -256,7 +256,9 @@ impl QueryEngine {
                         .await?
                 }
 
-                context.params.rollback();
+                if client_request.is_executable() {
+                    context.params.rollback();
+                }
             }
             Command::Query(_) => {
                 self.execute(context, client_request, rewrite_result)

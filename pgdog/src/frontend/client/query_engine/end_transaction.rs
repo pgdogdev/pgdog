@@ -16,7 +16,7 @@ impl QueryEngine {
             self.extended_transaction_reply(
                 context,
                 &client_request.messages,
-                !executable, // Only tell client we are ending transaction if we actually are.
+                !executable && context.in_transaction(), // Only tell client we are ending transaction if we actually are.
                 rollback,
             )
             .await?
