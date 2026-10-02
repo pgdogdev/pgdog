@@ -325,6 +325,15 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn transaction_already_started() -> Self {
+        Self {
+            severity: "WARNING".into(),
+            code: "25001".into(),
+            message: "there is already a transaction in progress".into(),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn in_failed_transaction() -> Self {
         Self {
             severity: "ERROR".into(),

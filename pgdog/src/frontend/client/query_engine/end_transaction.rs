@@ -1,4 +1,4 @@
-use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
+use crate::frontend::client::protocol::ProtocolResponder;
 
 use super::*;
 
@@ -8,40 +8,22 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
         rollback: bool,
-        extended: bool,
     ) -> Result<(), Error> {
-        let executable = client_request.is_executable();
+        let in_pipeline = context.pipeline.is_done() || !context.pipeline.is_simple();
 
-        let bytes_sent = if extended {
-            self.extended_transaction_reply(
-                context,
-                &client_request.messages,
-                !executable && context.in_transaction(), // Only tell client we are ending transaction if we actually are.
-                rollback,
-            )
-            .await?
+        let responder = if rollback {
+            ProtocolResponder::rollback(context.transaction(), in_pipeline)
         } else {
-            let cmd = if rollback {
-                CommandComplete::new_rollback()
-            } else {
-                CommandComplete::new_commit()
-            };
-            let mut messages = if !context.in_transaction() {
-                vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()]
-            } else {
-                vec![]
-            };
-            messages.push(cmd.message());
-
-            if context.pipeline.is_done() || !context.pipeline.is_simple() {
-                messages.push(ReadyForQuery::idle().message());
-            }
-
-            context.stream.send_many(&messages).await?
+            ProtocolResponder::commit(context.transaction(), in_pipeline)
         };
 
+        let (bytes_sent, actionable) = responder
+            .send_reply(client_request.messages.as_slice(), context.stream)
+            .await?;
+
         self.stats.sent(bytes_sent);
-        if executable {
+
+        if actionable {
             self.backend.end_transaction();
             context.transaction = None; // Clear transaction state
         }
@@ -59,7 +41,6 @@ impl QueryEngine {
         // FIXME(sage): Remove mut
         client_request: &mut ClientRequest,
         rollback: bool,
-        extended: bool,
     ) -> Result<(), Error> {
         self.backend.transaction_params_hook(rollback);
         let cluster = self.backend.cluster()?;
@@ -79,7 +60,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, client_request, true, extended)
+            self.end_not_connected(context, client_request, true)
                 .await?;
 
             return Ok(());
@@ -105,7 +86,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, client_request, false, extended)
+            self.end_not_connected(context, client_request, false)
                 .await?;
         } else {
             if rollback {

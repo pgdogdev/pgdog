@@ -4,6 +4,7 @@ use super::*;
 use crate::{frontend::ClientRequest, net::Query};
 
 /// Query engine pipeline state.
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Pipeline {
     Extended { requests_left: usize },
     Simple { requests_left: usize },
