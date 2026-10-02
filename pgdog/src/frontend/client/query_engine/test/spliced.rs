@@ -23,7 +23,7 @@ async fn test_intercept_incomplete_sync_only_not_connected() {
         let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
         let intercepted = engine
-            .intercept_incomplete(&mut context, &client_request.messages)
+            .intercept_incomplete(&mut context, &client_request)
             .await
             .unwrap();
         assert!(
@@ -56,7 +56,7 @@ async fn test_intercept_incomplete_sync_only_when_connected() {
 
     let intercepted = test_client
         .engine
-        .intercept_incomplete(&mut context, &client_request.messages)
+        .intercept_incomplete(&mut context, &client_request)
         .await
         .unwrap();
     assert!(
