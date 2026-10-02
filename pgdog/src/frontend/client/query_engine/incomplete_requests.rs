@@ -1,6 +1,6 @@
 use tokio::io::AsyncWriteExt;
 
-use crate::net::{CloseComplete, Protocol, ProtocolMessage, ReadyForQuery};
+use crate::net::{CloseComplete, Protocol, ReadyForQuery};
 
 use super::*;
 

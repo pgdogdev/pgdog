@@ -28,7 +28,7 @@ impl InsertSplitRewriteResult {
         if let Some(first) = self
             .requests
             .first()
-            .and_then(|request| request.route.as_ref().and_then(|route| Some(route.shard())))
+            .and_then(|request| request.route.as_ref().map(|route| route.shard()))
         {
             if !first.is_direct() {
                 return None;

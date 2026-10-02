@@ -173,7 +173,7 @@ impl QueryEngine {
         let rewrite_result = self.rewrite_request(context, client_request).await?;
 
         // Intercept commands we don't have to forward to a server.
-        if self.intercept_incomplete(context, &client_request).await? {
+        if self.intercept_incomplete(context, client_request).await? {
             self.update_stats(context);
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
