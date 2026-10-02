@@ -81,6 +81,7 @@ impl Connection {
         transaction_stmt: BufferedQuery,
     ) -> Result<(), Error> {
         let rw_aggressive = self.cluster()?.read_write_strategy().is_aggressive();
+        let cluster_read_only = self.cluster()?.read_only();
 
         match self.binding {
             Binding::NotConnected => {
@@ -91,9 +92,14 @@ impl Connection {
                     } else if rw_aggressive {
                         // Let the first statement decide.
                         None
-                    } else {
+                    } else if !cluster_read_only {
                         // BEGIN = write
                         Some(false)
+                    } else {
+                        // FIXME(lev): We know that the cluster is read-only, so we
+                        // can make this call here, but we don't since the parser will do this for
+                        // us once it processes the next statement. This is dumb, we should just do this here.
+                        None
                     },
                     transaction_stmt: Some(transaction_stmt),
                 });
@@ -121,6 +127,9 @@ impl Connection {
 
     /// When a transaction is finished, remove the transaction statement,
     /// so connections in session mode don't double-start a transaction again.
+    ///
+    /// TODO(lev): Refactor the binding into an enum for Session and Transaction mode,
+    /// so this doesn't leak.
     pub(crate) fn end_transaction(&mut self) {
         match self.binding {
             Binding::Transaction(_) => {

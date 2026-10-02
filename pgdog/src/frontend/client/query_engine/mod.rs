@@ -237,7 +237,7 @@ impl QueryEngine {
                     self.end_connected(context, client_request, false, *extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, &client_request.messages, false, *extended)
+                    self.end_not_connected(context, client_request, false, *extended)
                         .await?
                 }
 
@@ -252,7 +252,7 @@ impl QueryEngine {
                     self.end_connected(context, client_request, true, *extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, &client_request.messages, true, *extended)
+                    self.end_not_connected(context, client_request, true, *extended)
                         .await?
                 }
 

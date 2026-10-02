@@ -4,10 +4,7 @@ use crate::{
     frontend::{
         ClientRequest, Command, Router, RouterContext,
         client::query_engine::{QueryEngine, QueryEngineContext},
-        router::{
-            Route,
-            parser::{rewrite::statement::InsertSplitRewriteResult, route::ShardWithPriority},
-        },
+        router::parser::rewrite::statement::InsertSplitRewriteResult,
     },
     net::Protocol,
 };
@@ -84,8 +81,7 @@ impl<'a> InsertMulti<'a> {
 
         // All tuples map to the same shard: send the original multi-row INSERT
         // as a single statement, skipping the multi-step path entirely.
-        if let Some(shard) = self.requests.same_shard() {
-            client_request.route = Some(Route::write(ShardWithPriority::new_table(shard)));
+        if self.requests.same_shard().is_some() {
             self.engine
                 .backend
                 .handle_client_request(

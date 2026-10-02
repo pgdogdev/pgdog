@@ -91,6 +91,8 @@ impl ClusterConnection {
         let shards_before = self.cluster()?.shards().len();
 
         for shard in shards {
+            // TODO(lev): maybe parallelize, although pool checkout
+            // is very quick (unless things are broken, in which case it doesn't matter).
             conns.push(self.get_conn(request, *shard, is_read).await?);
         }
 

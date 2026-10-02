@@ -6,6 +6,7 @@ use super::{Error, InsertSplit, InsertSplitRewriteResult, PrepareExecute, Shardi
 use crate::frontend::client::QueryTimestamps;
 
 use crate::frontend::router::Route;
+use crate::frontend::router::parser::ShardWithPriority;
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -182,6 +183,16 @@ impl RewriteResult {
             Self::InPlace {
                 offset: Some(offset),
             } => offset.apply_after_route(request),
+            Self::InsertSplit(requests) => {
+                // Short-circuit multi-row inserts to one shard,
+                // if they only need one.
+                if let (Some(shard), Some(route)) = (requests.same_shard(), request.route.as_mut())
+                {
+                    route.set_shard(ShardWithPriority::new_table(shard));
+                }
+
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

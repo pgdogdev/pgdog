@@ -1,4 +1,4 @@
-use crate::net::{CommandComplete, NoticeResponse, Protocol, ProtocolMessage, ReadyForQuery};
+use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
 
 use super::*;
 
@@ -6,13 +6,20 @@ impl QueryEngine {
     pub(super) async fn end_not_connected(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        client_messages: &[ProtocolMessage],
+        client_request: &ClientRequest,
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
+        let executable = client_request.is_executable();
+
         let bytes_sent = if extended {
-            self.extended_transaction_reply(context, client_messages, false, rollback)
-                .await?
+            self.extended_transaction_reply(
+                context,
+                &client_request.messages,
+                !executable, // Only tell client we are ending transaction if we actually are.
+                rollback,
+            )
+            .await?
         } else {
             let cmd = if rollback {
                 CommandComplete::new_rollback()
@@ -34,8 +41,10 @@ impl QueryEngine {
         };
 
         self.stats.sent(bytes_sent);
-        self.backend.end_transaction();
-        context.transaction = None; // Clear transaction state
+        if executable {
+            self.backend.end_transaction();
+            context.transaction = None; // Clear transaction state
+        }
 
         if rollback {
             self.notify_buffer.clear();
@@ -70,7 +79,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, &client_request.messages, true, extended)
+            self.end_not_connected(context, client_request, true, extended)
                 .await?;
 
             return Ok(());
@@ -96,7 +105,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, &client_request.messages, false, extended)
+            self.end_not_connected(context, client_request, false, extended)
                 .await?;
         } else {
             if rollback {
@@ -150,7 +159,7 @@ mod tests {
     use super::*;
     use crate::config::load_test;
     use crate::frontend::client::{Transaction, TransactionType};
-    use crate::net::Stream;
+    use crate::net::{Query, Stream};
 
     #[tokio::test]
     async fn test_transaction_state_not_cleared() {
@@ -165,8 +174,10 @@ mod tests {
         let mut engine = QueryEngine::from_client(&client).unwrap();
         // state copied from client
         let (mut context, client_request) = QueryEngineContext::new(&mut client);
+        client_request.messages.push(Query::new("COMMIT").into());
+
         let result = engine
-            .end_not_connected(&mut context, &client_request.messages, false, false)
+            .end_not_connected(&mut context, client_request, false, false)
             .await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
@@ -175,7 +186,7 @@ mod tests {
                 .transaction
                 .map(|transaction| transaction.transaction_type()),
             None,
-            "Transaction state should be None, but is {:?}",
+            "transaction state should be cleared, but is {:?}",
             context
                 .transaction
                 .map(|transaction| transaction.transaction_type())
