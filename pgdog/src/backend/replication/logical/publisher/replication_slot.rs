@@ -450,7 +450,11 @@ impl ReplicationSlotInner {
             temporary: self.temporary,
             existing: self.existing(),
             lag: status.lag,
-            address: self.address.clone().into(),
+            address: pgdog_stats::Address {
+                host: self.address.host.clone(),
+                port: self.address.port,
+                database_name: self.address.database_name.clone(),
+            },
             last_transaction: status.last_transaction,
             task_id: status.task_id,
         }

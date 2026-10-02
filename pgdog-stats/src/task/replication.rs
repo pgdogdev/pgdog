@@ -5,7 +5,6 @@ use std::fmt;
 use std::time::SystemTime;
 
 use derive_more::Display;
-use pgdog_config::ServerAuth;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -33,17 +32,6 @@ pub struct Address {
     pub port: u16,
     /// PostgreSQL database name.
     pub database_name: String,
-    /// Username.
-    pub user: String,
-    /// Password.
-    pub passwords: Vec<String>,
-    /// Server auth mode for backend connections.
-    #[serde(default)]
-    pub server_auth: ServerAuth,
-    /// Optional IAM region override.
-    pub server_iam_region: Option<String>,
-    /// Database number (in the config).
-    pub database_number: usize,
 }
 
 /// Direction of a replication task: the initial migration (`Forward`) or the
