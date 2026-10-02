@@ -14,7 +14,6 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, trace, warn};
 
 use super::super::Error;
-use super::super::ee::{replication_slot_create, replication_slot_error, replication_slot_update};
 use crate::config::config;
 use crate::{
     backend::{ConnectReason, Server, ServerOptions, pool::Address},
@@ -147,15 +146,23 @@ impl ReplicationSlot<Permanent> {
         self.create_permanent().await
     }
 
-    pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
+    /// Refresh the tracked LSN from the confirmed flush LSN on the backend.
+    pub(crate) async fn reload(&self) -> Result<(), Error> {
         let mut server = self.connect().await?;
-        let lsn = self.confirmed_lsn(&mut server).await?;
+        self.inner.update_lsn(&mut server).await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn verify_exists(&self) -> Result<(), Error> {
+        self.reload().await?;
         self.mark_existing();
-        self.set_lsn(lsn);
 
         info!(
             "using existing replication slot \"{}\" at lsn {} [{}]",
-            self.name, lsn, self.address
+            self.name,
+            self.lsn(),
+            self.address
         );
 
         Ok(())
@@ -172,26 +179,10 @@ impl ReplicationSlot<Permanent> {
         let _permit = self.acquire()?;
         let mut server = self.connect_for_creation().await?;
 
-        let lsn = self
-            .execute_creation(&mut server, &self.create_slot_query())
+        self.execute_creation(&mut server, &self.create_slot_query())
             .await?;
-        self.set_lsn(lsn);
 
         Ok(())
-    }
-
-    async fn confirmed_lsn(&self, server: &mut Server) -> Result<Lsn, Error> {
-        let existing_slot = format!(
-            "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'",
-            self.name
-        );
-
-        let existing: Option<DataRow> = server.fetch_all(existing_slot).await?.pop();
-        let confirmed = existing
-            .and_then(|slot| slot.get::<String>(0, Format::Text))
-            .ok_or_else(|| Error::MissingReplicationSlot(self.name.clone()))?;
-
-        Ok(Lsn::from_str(&confirmed)?)
     }
 
     fn acquire(&self) -> Result<OwnedSemaphorePermit, Error> {
@@ -216,7 +207,7 @@ impl ReplicationSlot<Permanent> {
         let permit = self.acquire()?;
         let mut server = self.connect().await?;
 
-        let lsn = self.confirmed_lsn(&mut server).await?;
+        let lsn = self.update_lsn(&mut server).await?;
 
         info!(
             "replication slot \"{}\" opened at confirmed flush lsn {} [{}]",
@@ -224,7 +215,7 @@ impl ReplicationSlot<Permanent> {
         );
 
         Ok(ReplicationSlotGuard {
-            stream: self.stream(server, lsn),
+            stream: self.stream(server),
             _permit: permit,
         })
     }
@@ -288,9 +279,9 @@ impl ReplicationSlot<Temporary> {
             r#"CREATE_REPLICATION_SLOT "{}" TEMPORARY LOGICAL "pgoutput" (SNAPSHOT 'use')"#,
             self.name
         );
-        let lsn = self.execute_creation(&mut server, &create_slot).await?;
+        self.execute_creation(&mut server, &create_slot).await?;
 
-        Ok(self.stream(server, lsn))
+        Ok(self.stream(server))
     }
 }
 
@@ -307,7 +298,6 @@ impl<K> ReplicationSlot<K> {
         let inner = Arc::new(inner);
 
         ReplicationSlots::register(&inner);
-        replication_slot_create(&inner.stats());
 
         Self {
             inner,
@@ -335,7 +325,7 @@ impl<K> ReplicationSlot<K> {
         Ok(server)
     }
 
-    async fn execute_creation(&self, server: &mut Server, query: &str) -> Result<Lsn, Error> {
+    async fn execute_creation(&self, server: &mut Server, query: &str) -> Result<(), Error> {
         let mut result = server.fetch_all::<DataRow>(query).await?;
         let result = result.pop().ok_or(Error::MissingData)?;
         let lsn = result
@@ -348,16 +338,16 @@ impl<K> ReplicationSlot<K> {
             self.name, lsn, self.address,
         );
 
-        Ok(lsn)
+        self.set_lsn(lsn);
+
+        Ok(())
     }
 
     async fn connect(&self) -> Result<Server, Error> {
         connect_replication(&self.address).await
     }
 
-    fn stream(&self, server: Server, lsn: Lsn) -> ReplicationSlotStream {
-        self.inner.set_lsn(lsn);
-
+    fn stream(&self, server: Server) -> ReplicationSlotStream {
         ReplicationSlotStream {
             slot: self.inner.clone(),
             stopped: false,
@@ -467,23 +457,50 @@ impl ReplicationSlotInner {
         self.status.lock().lsn = lsn;
     }
 
+    async fn fetch_lag(&self, server: &mut Server) -> Result<ReplicationLag, Error> {
+        let query = format!(
+            "SELECT pg_current_wal_lsn()::text, confirmed_flush_lsn::text \
+             FROM pg_replication_slots \
+             WHERE slot_name = '{}'",
+            self.name
+        );
+        let row = server.fetch_all::<DataRow>(query).await?.pop();
+        let confirmed = row
+            .as_ref()
+            .and_then(|row| row.get::<String>(1, Format::Text))
+            .ok_or_else(|| Error::MissingReplicationSlot(self.name.clone()))?;
+        let current = row
+            .and_then(|row| row.get::<String>(0, Format::Text))
+            .ok_or(Error::MissingData)?;
+
+        Ok(ReplicationLag {
+            current_lsn: Lsn::from_str(&current)?,
+            confirmed_lsn: Lsn::from_str(&confirmed)?,
+        })
+    }
+
+    async fn update_lsn(&self, server: &mut Server) -> Result<Lsn, Error> {
+        let lsn = self.fetch_lag(server).await?.confirmed_lsn;
+
+        self.set_lsn(lsn);
+
+        Ok(lsn)
+    }
+
     fn advance_lsn(&self, lsn: Lsn) {
         {
             let mut status = self.status.lock();
             status.lsn = lsn;
             status.last_transaction = Some(SystemTime::now());
         }
-        replication_slot_update(&self.stats());
     }
 
     pub(crate) fn set_task_id(&self, task_id: TaskId) {
         self.status.lock().task_id = Some(task_id);
-        replication_slot_update(&self.stats());
     }
 
     fn set_lag(&self, lag: i64) {
         self.status.lock().lag = lag;
-        replication_slot_update(&self.stats());
     }
 }
 
@@ -495,6 +512,18 @@ async fn connect_replication(address: &Address) -> Result<Server, Error> {
         Default::default(),
     ))
     .await?)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReplicationLag {
+    pub(crate) current_lsn: Lsn,
+    pub(crate) confirmed_lsn: Lsn,
+}
+
+impl ReplicationLag {
+    pub(crate) fn lag(&self) -> i64 {
+        self.current_lsn.lsn - self.confirmed_lsn.lsn
+    }
 }
 
 /// Slot stream to manage update
@@ -521,11 +550,14 @@ impl ReplicationSlotStream {
     }
 
     /// Get or create a separate server connection for meta commands.
-    async fn meta_server(&mut self) -> Result<&mut Server, Error> {
-        if self.meta_server.is_none() {
-            self.meta_server = Some(
+    async fn meta_server<'a>(
+        meta_server: &'a mut Option<Server>,
+        address: &Address,
+    ) -> Result<&'a mut Server, Error> {
+        if meta_server.is_none() {
+            *meta_server = Some(
                 Server::connect(
-                    &self.slot.address,
+                    address,
                     ServerOptions::default(),
                     ConnectReason::Resharding,
                     Default::default(),
@@ -533,14 +565,13 @@ impl ReplicationSlotStream {
                 .await?,
             );
         }
-        Ok(self
-            .meta_server
+        Ok(meta_server
             .as_mut()
             .expect("metadata connection is established"))
     }
 
-    /// Replication lag in bytes for this slot.
-    pub(crate) async fn replication_lag(&mut self) -> Result<i64, Error> {
+    /// Replication lag in bytes for this slot, and the source WAL position it was measured at.
+    pub(crate) async fn replication_lag(&mut self) -> Result<ReplicationLag, Error> {
         let lag = self.query_replication_lag().await;
 
         if lag.is_err() {
@@ -550,20 +581,11 @@ impl ReplicationSlotStream {
         lag
     }
 
-    async fn query_replication_lag(&mut self) -> Result<i64, Error> {
-        let query = format!(
-            "SELECT pg_current_wal_lsn() - confirmed_flush_lsn \
-             FROM pg_replication_slots \
-             WHERE slot_name = '{}'",
-            self.slot.name
-        );
-        let mut lag: Vec<i64> = self.meta_server().await?.fetch_all(&query).await?;
+    async fn query_replication_lag(&mut self) -> Result<ReplicationLag, Error> {
+        let server = Self::meta_server(&mut self.meta_server, &self.slot.address).await?;
+        let lag = self.slot.fetch_lag(server).await?;
 
-        let lag = lag
-            .pop()
-            .ok_or(Error::MissingReplicationSlot(self.slot.name.clone()))?;
-
-        self.slot.set_lag(lag);
+        self.slot.set_lag(lag.lag());
 
         Ok(lag)
     }
@@ -628,7 +650,6 @@ impl ReplicationSlotStream {
                 }
                 'E' => {
                     let error = ErrorResponse::from_bytes(message.to_bytes())?;
-                    replication_slot_error(&self.slot.stats(), &error);
 
                     return Err(error.into());
                 }

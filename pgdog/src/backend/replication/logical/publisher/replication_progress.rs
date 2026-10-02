@@ -79,6 +79,12 @@ impl ReplicationProgress {
         }
     }
 
+    pub(crate) fn applied_lsn(&self, shard: usize) -> Option<Lsn> {
+        self.shards
+            .get(shard)
+            .and_then(|progress| progress.lock().applied_lsn)
+    }
+
     /// The combined progress of every shard, as reported to `SHOW TASKS` and
     /// read by the cutover policy. `lag_bytes` stays `None` until every shard
     /// has reported one.

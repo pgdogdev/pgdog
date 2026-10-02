@@ -21,6 +21,7 @@ use super::networking::{MultiTenant, Tcp, TlsVerifyMode};
 use super::otel::Otel;
 use super::pooling::PoolerMode;
 use super::replication::{MirrorConfig, Mirroring, MirroringLevel, ReplicaLag, Replication};
+use super::resharding::Resharding;
 use super::rewrite::Rewrite;
 use super::sharding::{OmnishardedTables, ShardedMappingDeprecated};
 use super::users::{Admin, Plugin, User, Users};
@@ -285,6 +286,9 @@ pub struct Config {
     /// Replication config.
     #[serde(default)]
     pub replication: Replication,
+
+    #[serde(default)]
+    pub resharding: Resharding,
 
     /// [Mirroring](https://docs.pgdog.dev/features/mirroring/) settings configure traffic mirroring between two databases. When enabled, query traffic is copied from the source database to the destination database, in real time.
     ///
