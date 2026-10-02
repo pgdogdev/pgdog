@@ -3,6 +3,7 @@ use pg_raw_parse::{
     list::NodeList,
     make::{MemoryToken, Unique},
     raw::SQLValueFunctionOp,
+    transform::Transform,
 };
 use pgdog_stats::{Column, Relation};
 
@@ -15,6 +16,7 @@ use crate::{
             rewrite::statement::{
                 Error,
                 non_deterministic_funcs::{
+                    rewrite_transaction_time::ReplaceTransactionTime,
                     time_function::TimeFunctionType, uuid_function::UUIDFunctionType,
                 },
                 plan::BindParam,
@@ -348,20 +350,35 @@ impl StatementRewrite<'_> {
 
             // Replaces all non-deterministic function calls (ParamRef or String)
             nd_rewrite.transform_func_calls_in_insert(stmt, &insert_context)?;
-        } else if let NodeMut::SelectStmt(select_stmt) = stmt {
+        } else if matches!(stmt, NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)) {
             // Still rewrite other kind of statements that use ND functions that
             // are reliant on transaction start time
 
-            // TODO: Eventually cover Update, Delete, etc
+            let statement_type = match stmt {
+                NodeMut::SelectStmt(_) => StatementType::Select,
+                NodeMut::UpdateStmt(_) => StatementType::Update,
+                _ => panic!("only select and update covered"),
+            };
 
             let mut nd_rewrite = NDRewrite {
                 rewrite: self,
                 bind_params,
                 mem,
-                statement_type: StatementType::Select,
+                statement_type,
             };
 
-            nd_rewrite.transform_func_calls_transaction_time(select_stmt)?;
+            let mut transform_tt = ReplaceTransactionTime {
+                nd_rewrite: &mut nd_rewrite,
+                outer_error: None,
+            };
+
+            match stmt {
+                NodeMut::SelectStmt(select_stmt) => transform_tt.transform_select_stmt(select_stmt),
+                NodeMut::UpdateStmt(update_stmt) => transform_tt.transform_update_stmt(update_stmt),
+                _ => panic!("only select and update covered"),
+            }
+
+            return transform_tt.outer_error.map(Err).unwrap_or(Ok(()));
         }
         Ok(())
     }
@@ -416,6 +433,7 @@ struct NDRewrite<'mem, 'a, 's> {
 enum StatementType {
     Insert,
     Select,
+    Update,
 }
 
 /// Extra context necessary for re-writing INSERT statements, where we need
@@ -448,7 +466,7 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                 .uncast();
 
             match self.statement_type {
-                StatementType::Insert => constant_text_node,
+                StatementType::Insert | StatementType::Update => constant_text_node,
                 StatementType::Select => self
                     .mem
                     .make_type_cast(
