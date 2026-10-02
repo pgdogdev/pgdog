@@ -337,3 +337,142 @@ impl MultiBinding {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test {
+    use std::ops::{Deref, DerefMut};
+
+    use crate::frontend::router::parser::ShardWithPriority;
+    use crate::net::{Parameter, Query};
+
+    use super::super::super::linked_server::test::TestLinkedServer;
+    use super::*;
+
+    pub(crate) struct TestMultiBinding {
+        pub(crate) binding: MultiBinding,
+        #[allow(unused)] // For the `Drop` trait.
+        links: Vec<TestLinkedServer>,
+    }
+
+    impl Deref for TestMultiBinding {
+        type Target = MultiBinding;
+
+        fn deref(&self) -> &Self::Target {
+            &self.binding
+        }
+    }
+
+    impl DerefMut for TestMultiBinding {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.binding
+        }
+    }
+
+    impl TestMultiBinding {
+        pub(crate) async fn new(shards: usize, is_read: bool, in_transaction: bool) -> Self {
+            let mut links = vec![];
+
+            for shard in 0..shards {
+                let link = TestLinkedServer::new(shard).await;
+                links.push(link);
+            }
+
+            let servers = links
+                .iter_mut()
+                .map(|link| link.server.take().unwrap())
+                .collect();
+
+            let route = if is_read {
+                Route::read(ShardWithPriority::new_table(Shard::All))
+            } else {
+                Route::write(ShardWithPriority::new_table(Shard::All))
+            };
+
+            let binding = MultiBinding {
+                servers,
+                state: MultiShard::new(shards, &route).boxed(),
+                transaction_stmt: if in_transaction {
+                    Some(BufferedQuery::Query(Query::new("BEGIN")))
+                } else {
+                    None
+                },
+                is_read,
+            };
+
+            Self { binding, links }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multi_binding() {
+        let mut binding = TestMultiBinding::new(5, false, true).await;
+
+        assert!(
+            binding
+                .servers
+                .iter()
+                .all(|server| !server.in_transaction()),
+            "creating a binding does not start transaction"
+        );
+
+        assert_eq!(
+            vec![0, 1, 2, 3, 4],
+            binding.connected_shards().collect::<Vec<_>>(),
+        );
+
+        let params = Parameters::from(vec![Parameter::from((
+            "application_name".to_string(),
+            "test_multi_binding".to_string(),
+        ))]);
+        let pid = FrontendPid::new();
+
+        assert_eq!(1, binding.link_client(pid, &params).await.unwrap());
+        assert!(
+            binding.servers.iter().all(|server| server.in_transaction()),
+            "link_client starts transaction"
+        );
+        assert!(
+            binding.servers.iter().all(|server| server.in_sync()),
+            "link_client leaves all servers in-sync"
+        );
+        assert_eq!(
+            0,
+            binding.link_client(pid, &params).await.unwrap(),
+            "link_params is idempotent"
+        );
+
+        assert!(
+            binding.required_shards_connected(
+                &Route::read(ShardWithPriority::new_table(Shard::All)),
+                5
+            ),
+            "cross-shard query has coverage"
+        );
+
+        assert!(
+            !binding.required_shards_connected(
+                &Route::read(ShardWithPriority::new_table(Shard::All)),
+                6
+            ),
+            "cross-shard query with more shards does not have coverage"
+        );
+
+        for shard in 0..5 {
+            assert!(
+                binding.required_shards_connected(
+                    &Route::read(ShardWithPriority::new_table(Shard::Direct(shard))),
+                    5
+                ),
+                "direct-to-shard has coverage"
+            );
+        }
+
+        assert!(
+            !binding.required_shards_connected(
+                &Route::read(ShardWithPriority::new_table(Shard::Direct(5))),
+                5
+            ),
+            "direct-to-shard with less shards does not have coverage"
+        );
+    }
+}

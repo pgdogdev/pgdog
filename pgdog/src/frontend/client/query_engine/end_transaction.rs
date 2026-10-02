@@ -114,6 +114,7 @@ impl QueryEngine {
 
         if rollback {
             self.backend.execute("ROLLBACK").await?;
+            self.backend.end_transaction();
             return Ok(());
         }
 
@@ -138,6 +139,7 @@ impl QueryEngine {
 
         // Remove transaction from 2pc state manager.
         self.two_pc.done().await?;
+        self.backend.end_transaction();
 
         Ok(())
     }

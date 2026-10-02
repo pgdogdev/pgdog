@@ -236,6 +236,7 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
+                    self.backend.end_transaction();
                 }
 
                 TransactionState::InTrasaction => {

@@ -116,6 +116,20 @@ impl Connection {
         Ok(())
     }
 
+    /// When a transaction is finished, remove the transaction statement,
+    /// so connections in session mode don't double-start a transaction again.
+    pub(crate) fn end_transaction(&mut self) {
+        match self.binding {
+            Binding::Transaction(_) => {
+                self.binding = Binding::NotConnected;
+            }
+
+            Binding::Direct(ref mut direct) => direct.transaction_stmt = None,
+            Binding::MultiShard(ref mut multi) => multi.transaction_stmt = None,
+            _ => (),
+        }
+    }
+
     /// The connection is inside a buffered transaction, i.e.,
     /// we captured a `BEGIN` but haven't connected to a shard yet.
     pub(crate) fn in_buffered_transaction(&self) -> bool {
@@ -195,7 +209,15 @@ impl Connection {
         let is_read = is_read.unwrap_or(route.is_read());
 
         if let Shard::Direct(shard) = route.shard() {
-            let server = self.cluster.get_conn(request, *shard, is_read).await?;
+            let server = match self.cluster.get_conn(request, *shard, is_read).await {
+                Ok(server) => server,
+                Err(err) => {
+                    if let Binding::Transaction(ref mut transaction) = self.binding {
+                        transaction.transaction_stmt = transaction_stmt;
+                    }
+                    return Err(err);
+                }
+            };
 
             self.binding = Binding::Direct(DirectBinding::new(
                 server,
@@ -206,10 +228,20 @@ impl Connection {
         } else {
             // TODO(lev): Shard::Multi intentionally ignored because it's stupid
             // and we should remove it.
-            let (shards, shard_indices) = self
+            let (shards, shard_indices) = match self
                 .cluster
                 .get_conns(request, route.shard(), is_read)
-                .await?;
+                .await
+            {
+                Ok((shards, shard_indices)) => (shards, shard_indices),
+                Err(err) => {
+                    if let Binding::Transaction(ref mut transaction) = self.binding {
+                        transaction.transaction_stmt = transaction_stmt;
+                    }
+
+                    return Err(err);
+                }
+            };
 
             self.binding = Binding::MultiShard(MultiBinding::new(
                 shards,
@@ -498,3 +530,6 @@ impl DerefMut for Connection {
         &mut self.binding
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test;
