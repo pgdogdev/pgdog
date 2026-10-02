@@ -167,10 +167,28 @@ impl ConfigAndUsers {
         Ok(())
     }
 
-    /// Prepared statements are enabled.
+    /// Prepared statements level for clients using the `[general]` pooler mode.
+    ///
+    /// Prefer [`Self::prepared_statements_for`] with the pooler mode the client's
+    /// pool actually runs in: users and databases can override `pooler_mode`.
     pub fn prepared_statements(&self) -> PreparedStatementsLevel {
-        // Disable prepared statements automatically in session mode
-        if self.config.general.pooler_mode == PoolerMode::Session {
+        self.prepared_statements_for(self.config.general.pooler_mode)
+    }
+
+    /// Prepared statements level for a client whose pool runs in `pooler_mode`.
+    ///
+    /// A pool that multiplexes server connections (transaction and statement
+    /// mode, and with read/write split, primary and replica servers) must track
+    /// prepared statements and re-prepare them per server, even when the
+    /// `[general]` default is session mode and would otherwise disable tracking.
+    ///
+    /// Session-pooled clients keep the `[general]`-derived behaviour: tracking is
+    /// not forced off for them, because the router still needs the statement
+    /// text to route `Bind` and `Execute` on sharded clusters.
+    pub fn prepared_statements_for(&self, pooler_mode: PoolerMode) -> PreparedStatementsLevel {
+        if pooler_mode == PoolerMode::Session
+            && self.config.general.pooler_mode == PoolerMode::Session
+        {
             PreparedStatementsLevel::Disabled
         } else {
             self.config.general.prepared_statements
@@ -1025,6 +1043,53 @@ tls_server_private_key = "/certs/replica-client.key"
             config.prepared_statements(),
             PreparedStatementsLevel::Disabled,
             "Prepared statements should remain disabled when explicitly set to Disabled in transaction mode"
+        );
+    }
+
+    /// A `[general]` session default must not disable tracking for a user or
+    /// database configured for transaction pooling. Session-pooled clients
+    /// keep whatever the `[general]` default resolves to.
+    #[test]
+    fn test_prepared_statements_for_pooler_mode() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.pooler_mode = PoolerMode::Session;
+        config.config.general.prepared_statements = PreparedStatementsLevel::Extended;
+
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatementsLevel::Disabled
+        );
+        assert_eq!(
+            config.prepared_statements_for(PoolerMode::Transaction),
+            PreparedStatementsLevel::Extended,
+            "transaction-pooled client must track statements despite the session default"
+        );
+        assert_eq!(
+            config.prepared_statements_for(PoolerMode::Statement),
+            PreparedStatementsLevel::Extended
+        );
+        assert_eq!(
+            config.prepared_statements_for(PoolerMode::Session),
+            PreparedStatementsLevel::Disabled,
+            "session-pooled client follows the session default"
+        );
+
+        config.config.general.pooler_mode = PoolerMode::Transaction;
+        assert_eq!(
+            config.prepared_statements(),
+            PreparedStatementsLevel::Extended
+        );
+        assert_eq!(
+            config.prepared_statements_for(PoolerMode::Session),
+            PreparedStatementsLevel::Extended,
+            "session-pooled client on a transaction default keeps tracking (needed for sharded routing)"
+        );
+
+        config.config.general.prepared_statements = PreparedStatementsLevel::Disabled;
+        assert_eq!(
+            config.prepared_statements_for(PoolerMode::Transaction),
+            PreparedStatementsLevel::Disabled,
+            "explicitly disabled stays disabled"
         );
     }
 

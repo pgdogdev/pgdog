@@ -255,7 +255,7 @@ async fn test_abrupt_disconnect() {
     drop(conn);
 
     let event = client
-        .buffer(State::Idle, &CancellationToken::new())
+        .buffer(State::Idle, None, &CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
@@ -277,7 +277,7 @@ async fn test_client_idle_timeout() {
 
     let start = Instant::now();
     let res = client
-        .buffer(State::Idle, &CancellationToken::new())
+        .buffer(State::Idle, None, &CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(res, BufferEvent::DisconnectAbrupt);
@@ -290,7 +290,7 @@ async fn test_client_idle_timeout() {
     assert!(
         timeout(
             Duration::from_millis(50),
-            client.buffer(State::IdleInTransaction, &CancellationToken::new())
+            client.buffer(State::IdleInTransaction, None, &CancellationToken::new())
         )
         .await
         .is_err()
@@ -643,7 +643,7 @@ async fn test_query_timeout() {
     conn.write_all(&buf).await.unwrap();
 
     client
-        .buffer(State::Idle, &CancellationToken::new())
+        .buffer(State::Idle, None, &CancellationToken::new())
         .await
         .unwrap();
     let result = client.client_messages(&mut engine).await;
