@@ -38,7 +38,7 @@ pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
 pub use otel::Otel;
 pub use overrides::Overrides;
-pub use pooling::{PoolerMode, PreparedStatementsLevel};
+pub use pooling::{PoolerMode, PreparedStatementsEviction, PreparedStatementsLevel};
 pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use role_config::RoleConfig;
