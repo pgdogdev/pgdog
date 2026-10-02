@@ -3,9 +3,7 @@ use tracing::{info, trace};
 use crate::{
     frontend::{
         client::{TransactionType, transaction_type::Transaction},
-        router::parser::{
-            ShardWithPriority, explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult,
-        },
+        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
         DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
@@ -48,19 +46,22 @@ impl QueryEngine {
         // for single-statement writes.
         self.two_pc_check(context, client_request)?;
 
-        let connect_route = match query_planner.as_ref() {
-            Some(RewriteResult::InsertSplit(_) | RewriteResult::ShardingKeyUpdate(_)) => {
-                lazy_static::lazy_static! {
-                    static ref ROUTE: Route = Route::write(ShardWithPriority::new_override_cross_shard(Shard::All));
-                }
+        // Rewriter can tell us how many shards we need.
+        let rewrite_connect_route = query_planner
+            .as_ref()
+            .map(|rewrite| rewrite.connect_route())
+            .flatten();
 
-                &ROUTE
-            }
-
-            _ => client_request.route(),
+        let connect_route = if let Some(ref rewrite_connect_route) = rewrite_connect_route {
+            rewrite_connect_route
+        } else {
+            client_request.route()
         };
 
-        if connect_route.needs_backend() && !self.connect(context, connect_route).await? {
+        // Sync-only requests should only be sent to currently connected shards.
+        let connect = connect_route.needs_backend() && !client_request.is_sync_only();
+
+        if connect && !self.connect(context, connect_route).await? {
             return Ok(());
         }
 
@@ -500,14 +501,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
     ) -> Result<bool, Error> {
-        let shards = match self.backend.shards() {
-            Ok(shards) => shards,
-            _ => {
-                return Ok(true);
-            }
-        };
-        if shards > 1 // This check only matters for cross-shard queries
-            && context.in_error()
+        if context.in_error()
             && !context.rollback
             && client_request.is_executable()
             && !client_request.route().rollback_savepoint()

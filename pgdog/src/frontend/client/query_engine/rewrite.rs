@@ -57,11 +57,18 @@ impl QueryEngine {
         let cluster = self.backend.cluster()?;
         let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
 
-        let rewrite_result = ast
+        let mut rewrite_result = ast
             .rewrite_plan
             .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
             .await?;
         client_request.ast = Some(ast);
+
+        // Route the requests so we can skip doing this
+        // if all of them go to the same shard.
+        if let RewriteResult::InsertSplit(ref mut insert_split) = rewrite_result {
+            super::multi_step::InsertMulti::route(insert_split, context, self.backend.cluster()?)?;
+        }
+
         Ok(Some(rewrite_result))
     }
 

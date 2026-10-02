@@ -27,7 +27,7 @@ pub(crate) struct MultiBinding {
     // Transaction statement, e.g., `BEGIN`, `BEGIN READ ONLY`, etc.
     pub(in crate::backend::pool::connection) transaction_stmt: Option<BufferedQuery>,
     // Is the transaction read-only (replicas) or write (primary)?
-    pub(super) is_read: bool,
+    pub(in crate::backend::pool::connection) is_read: bool,
 }
 
 impl MultiBinding {
@@ -311,14 +311,17 @@ impl MultiBinding {
         ignore_missing: bool,
     ) -> Result<(), Error> {
         let mut futures = Vec::new();
-        for (shard, server) in self.servers.iter_mut().enumerate() {
-            let query = phase_control(transaction, shard, phase);
-            futures.push(server.execute(query));
+        for (idx, server) in self.servers.iter_mut().enumerate() {
+            let query = phase_control(transaction, server.shard, phase);
+            futures.push(async move {
+                server.execute(query).await?;
+                Ok(idx)
+            });
         }
 
         let results = join_all(futures).await;
 
-        for (shard, result) in results.into_iter().enumerate() {
+        for result in results.into_iter() {
             match result {
                 Err(Error::ExecutionError(err)) => {
                     if !(ignore_missing && err.code == "42704") {
@@ -326,9 +329,9 @@ impl MultiBinding {
                     }
                 }
                 Err(err) => return Err(err),
-                Ok(_) => {
+                Ok(idx) => {
                     if phase == TwoPcPhase::Phase2 {
-                        self.servers[shard].stats_mut().transaction_2pc();
+                        self.servers[idx].stats_mut().transaction_2pc();
                     }
                 }
             }

@@ -101,7 +101,10 @@ impl Connection {
 
             // Record that we are inside a transaction now
             // even though we were already connected. This is necessary for pinned connections,
-            // i.e., advisory locks, so a transaction can be started on any newly added shards.
+            // i.e., advisory locks, so a transaction can be started on any newly added shards
+            // in the _next_ query (not this one).
+            //
+            // The query engine will start the transaction on any currently connected shards.
             Binding::Direct(ref mut direct) => {
                 direct.transaction_stmt = Some(transaction_stmt);
             }

@@ -57,7 +57,8 @@ impl QueryEngine {
                     .backend
                     .cluster()
                     .map(|cluster| cluster.client_connection_recovery().can_recover())
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    && !context.in_transaction();
 
                 if err.no_server() && can_recover {
                     error!("{} [{:?}]", err, context.stream.peer_addr());
