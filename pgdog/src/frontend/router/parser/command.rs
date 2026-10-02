@@ -24,7 +24,10 @@ pub(crate) enum DiscardTarget {
 #[derive(Debug, Clone)]
 pub(crate) enum Command {
     Query(Route),
-    Copy(Box<CopyParser>),
+    Copy {
+        copy: Box<CopyParser>,
+        route: Route,
+    },
     StartTransaction {
         query: BufferedQuery,
         transaction_type: TransactionType,
@@ -33,9 +36,11 @@ pub(crate) enum Command {
     },
     CommitTransaction {
         extended: bool,
+        route: Route,
     },
     RollbackTransaction {
         extended: bool,
+        route: Route,
     },
     Set {
         params: Vec<SetParam>,
@@ -77,6 +82,9 @@ impl Command {
             Self::Query(route) => route,
             Self::Set { route, .. } => route,
             Self::StartTransaction { route, .. } => route,
+            Self::Copy { route, .. } => route,
+            Self::CommitTransaction { route, .. } => route,
+            Self::RollbackTransaction { route, .. } => route,
             _ => &DEFAULT_ROUTE,
         }
     }
@@ -98,7 +106,7 @@ impl Command {
                 Command::Query(query)
             }
 
-            Command::Copy(_) => Command::Query(Route::write(
+            Command::Copy { .. } => Command::Query(Route::write(
                 ShardWithPriority::new_override_dry_run(Shard::Direct(0)),
             )),
             _ => self,

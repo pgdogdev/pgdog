@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -212,19 +213,35 @@ func TestShardedTwoPc(t *testing.T) {
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowField(t, "SHOW STATS", "total_xact_2pc_count", 0, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 
+	// Use unique random BIGINTs and a fixed seed for reproducible shard coverage.
+	const insertsPerTransaction = 50
+	rng := rand.New(rand.NewSource(2))
+	ids := make([]int64, 0, 200*insertsPerTransaction)
+	seen := make(map[int64]struct{}, cap(ids))
+	for len(ids) < cap(ids) {
+		id := rng.Int63()
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
 	for i := range 200 {
 		tx, err := conn.BeginTx(context.Background(), pgx.TxOptions{})
 		assert.NoError(t, err)
 
-		rows, err := tx.Query(
-			context.Background(),
-			"INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", int64(i), fmt.Sprintf("value_%d", i),
-		)
+		for _, id := range ids[i*insertsPerTransaction : (i+1)*insertsPerTransaction] {
+			rows, err := tx.Query(
+				context.Background(),
+				"INSERT INTO sharded (id, value) VALUES ($1, $2) RETURNING *", id, fmt.Sprintf("value_%d", id),
+			)
 
-		assert.NoError(t, err)
-		assert.True(t, rows.Next())
-		assert.False(t, rows.Next())
-		rows.Close()
+			assert.NoError(t, err)
+			assert.True(t, rows.Next())
+			assert.False(t, rows.Next())
+			rows.Close()
+		}
 
 		err = tx.Commit(context.Background())
 		assert.NoError(t, err)
@@ -235,10 +252,10 @@ func TestShardedTwoPc(t *testing.T) {
 	assertShowFieldGe(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 0, "primary")
 	assertShowFieldGe(t, "SHOW STATS", "total_xact_count", 400, "pgdog_2pc", "pgdog_sharded", 1, "primary")
 
-	for i := range 200 {
+	for _, id := range ids {
 		rows, err := conn.Query(
 			context.Background(),
-			"SELECT * FROM sharded WHERE id = $1", int64(i),
+			"SELECT * FROM sharded WHERE id = $1", id,
 		)
 		assert.NoError(t, err)
 		assert.True(t, rows.Next())

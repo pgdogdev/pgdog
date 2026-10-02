@@ -33,9 +33,6 @@ pub(crate) enum Error {
     #[error("server not connected")]
     NotConnected,
 
-    #[error("multi-shard not connected")]
-    MultiShardNotConnected,
-
     #[error("multi shard copy not connected")]
     CopyNotConnected,
 
@@ -119,6 +116,9 @@ pub(crate) enum Error {
 
     #[error("missing canonical oid for type {0}")]
     MissingCanonicalOid(String),
+
+    #[error("cannot switch shards in a direct-to-shard transaction")]
+    DirectShardMismatch,
 }
 
 impl From<crate::frontend::Error> for Error {
@@ -152,10 +152,7 @@ impl Error {
             | Self::ConnectionError(resp)
             | Self::PreparedStatementError(resp) => resp.is_retryable(),
             // Connection dropped between operations.
-            Self::NotConnected
-            | Self::MultiShardNotConnected
-            | Self::CopyNotConnected
-            | Self::ClusterNotConnected => true,
+            Self::NotConnected | Self::CopyNotConnected | Self::ClusterNotConnected => true,
             _ => false,
         }
     }

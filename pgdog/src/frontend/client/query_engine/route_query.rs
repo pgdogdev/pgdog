@@ -1,6 +1,7 @@
 use pgdog_config::PoolerMode;
 use tracing::trace;
 
+use crate::backend::Error as BackendError;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
@@ -162,20 +163,6 @@ impl QueryEngine {
                 if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_route(client_request)?;
                 }
-
-                // Only validate shard placement for requests that actually execute
-                // a query. Bare protocol-control batches (e.g. a lone Sync or Flush)
-                // route to a default/cross-shard target but must still be forwarded
-                // to the already-connected backend to finish the exchange.
-                if client_request.is_executable() && Self::is_shard_switch(command, &self.backend) {
-                    self.error_response(
-                        context,
-                        client_request,
-                        ErrorResponse::direct_shard_mismatch(),
-                    )
-                    .await?;
-                    return Ok(false);
-                }
             }
 
             Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {
@@ -200,6 +187,16 @@ impl QueryEngine {
 
                 return Ok(false);
             }
+            Err(RouterError::Backend(BackendError::DirectShardMismatch)) => {
+                self.error_response(
+                    context,
+                    client_request,
+                    ErrorResponse::direct_shard_mismatch(),
+                )
+                .await?;
+
+                return Ok(false);
+            }
             Err(err) => {
                 self.error_response(
                     context,
@@ -213,40 +210,6 @@ impl QueryEngine {
         }
 
         Ok(true)
-    }
-
-    // Caller switched shards mid-transaction and the transaction is pinned
-    // to one shard only.
-    fn is_shard_switch(command: &Command, backend: &Connection) -> bool {
-        if let Shard::Direct(shard) = command.route().shard() {
-            // Round robin doesn't matter, any shard
-            // can answer that query.
-            if command
-                .route()
-                .shard_with_priority()
-                .source()
-                .is_round_robin()
-            {
-                return false;
-            }
-            // Session mode shouldn't trigger any checks,
-            // you're on your own here.
-            if backend.session_mode() {
-                return false;
-            }
-            if let Some(connected_shard) = backend.direct_shard_number()
-                && *shard != connected_shard
-            {
-                return true;
-            }
-        } else if let Command::Query(route) = command {
-            // Tried to run a cross-shard query while connected to one shard only.
-            if route.is_cross_shard() && backend.direct_shard_number().is_some() {
-                return true;
-            }
-        }
-
-        false
     }
 }
 
