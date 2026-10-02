@@ -30,6 +30,9 @@ impl InsertSplitRewriteResult {
             .first()
             .and_then(|request| request.route.as_ref().and_then(|route| Some(route.shard())))
         {
+            if !first.is_direct() {
+                return None;
+            }
             if self
                 .requests
                 .iter()
