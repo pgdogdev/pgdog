@@ -2449,6 +2449,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "futures-util",
+ "itertools 0.15.0",
  "libc",
  "native-tls",
  "ordered-float",
