@@ -65,6 +65,66 @@ async fn two_conns_transaction_time_reuse_insert() {
     transaction.rollback().await.unwrap();
 }
 
+/// Verify that usage of now() / CURRENT_TIMESTAMP in an UPDATE statement uses transaction time re-writes.
+#[tokio::test]
+async fn transaction_time_update_statement_rewrites() {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+
+    let row_created_at_before_time: DateTime<Utc> = {
+        conn.execute("TRUNCATE sharded").await.unwrap();
+
+        let row_before_transaction_start_time: PgRow = conn
+            .fetch_one("INSERT INTO sharded(id) VALUES (1) RETURNING *")
+            .await
+            .unwrap();
+
+        conn.execute("INSERT INTO sharded(id) VALUES (2) RETURNING *")
+            .await
+            .unwrap();
+
+        row_before_transaction_start_time.get::<_, &str>("created_at")
+    };
+
+    let mut transaction = conn.begin().await.unwrap();
+
+    let transaction_start_time: DateTime<Utc> = {
+        let transaction_start_time_row: PgRow = transaction
+            .fetch_one("INSERT INTO sharded(id) VALUES (3) RETURNING *")
+            .await
+            .unwrap();
+
+        transaction_start_time_row.get::<_, &str>("created_at")
+    };
+
+    assert!(row_created_at_before_time != transaction_start_time);
+
+    // Update both to the transaction time NOW().
+    // We previously did an INSERT for both before the transaction started, so they'll differ
+    // (as asserted above)
+    let (row_tt_extended_protocol_time, row_tt_simple_protocol_time) = {
+        let row_tt_extended_protocol: PgRow = transaction
+            .fetch_one("UPDATE sharded SET created_at = NOW() WHERE id = 1 RETURNING *")
+            .await
+            .unwrap();
+
+        let row_tt_simple_protocol: PgRow = sqlx::raw_sql(
+            "UPDATE sharded SET created_at = CURRENT_TIMESTAMP WHERE id = 2 RETURNING *",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+
+        (
+            row_tt_extended_protocol.get::<DateTime<Utc>, &str>("created_at"),
+            row_tt_simple_protocol.get::<DateTime<Utc>, &str>("created_at"),
+        )
+    };
+
+    assert!(transaction_start_time == row_tt_simple_protocol_time);
+    assert!(transaction_start_time == row_tt_extended_protocol_time);
+}
+
 /// Ensure that SELECT now() and CURRENT_TIMESTAMP return the correct type, are consistent
 /// within a transaction across multiple queries, and return within the correct column name
 /// despite being re-written.

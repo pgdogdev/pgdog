@@ -2,7 +2,6 @@ use std::ops::Deref;
 
 use pg_raw_parse::{
     Node,
-    nodes::SelectStmtMut,
     transform::{self, Transform},
 };
 
@@ -11,31 +10,17 @@ use crate::frontend::router::parser::rewrite::statement::{
     non_deterministic_funcs::{NDFunction, NDFunctionType, NDRewrite, RewriteCase},
 };
 
-impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
-    pub(super) fn transform_func_calls_transaction_time<'mutref>(
-        &mut self,
-        stmt: SelectStmtMut<'mem, 'mutref>,
-    ) -> Result<(), Error> {
-        let mut transform_select = ReplaceTransactionTimeSelect {
-            nd_rewrite: self,
-            outer_error: None,
-        };
-
-        transform_select.transform_select_stmt(stmt);
-        transform_select.outer_error.map(Err).unwrap_or(Ok(()))
-    }
-}
 /// transform_node doesn't let us work with ResTargets, so we have to implement transform ourselves
 /// see <https://github.com/pgdogdev/pg_raw_parse/blob/f63e7f49d85612e4507081e52fc8f40349b70580/src/transform.rs#L107>
-struct ReplaceTransactionTimeSelect<'mutr, 'mem, 'a, 's> {
+pub(super) struct ReplaceTransactionTime<'mutr, 'mem, 'a, 's> {
     /// Ability to reference `self` within the Transform impl.
-    nd_rewrite: &'mutr mut NDRewrite<'mem, 'a, 's>,
+    pub(super) nd_rewrite: &'mutr mut NDRewrite<'mem, 'a, 's>,
     /// Replaced with an Error if we come across one, so we can return an Error from this function
     /// to the client.
-    outer_error: Option<Error>,
+    pub(super) outer_error: Option<Error>,
 }
 
-impl<'mutr, 'mem, 'a, 's> Transform<'mem> for ReplaceTransactionTimeSelect<'mutr, 'mem, 'a, 's> {
+impl<'mutr, 'mem, 'a, 's> Transform<'mem> for ReplaceTransactionTime<'mutr, 'mem, 'a, 's> {
     /// Case, basic: SELECT now()
     ///
     /// This means now is a ResTarget, and Postgres will output the timestamptz w/ **a now column**
