@@ -14,7 +14,6 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::api::Task;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::task::{TaskContext, TaskId};
-use crate::backend::replication::ee::{OrchestratorState, orchestrator_state};
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::cutover_policy::CutoverPolicy;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
@@ -214,7 +213,6 @@ impl<'a> Replication<'a> {
             ReplicationClusterTask::new(self.state.clone(), self.direction, progress.clone());
 
         info!("[replication] {} stream starting", self.direction);
-        orchestrator_state(OrchestratorState::Replication);
         ctx.set_status(match self.direction {
             ReplicationDirection::Forward => ReplicationStatus::Replicating,
             ReplicationDirection::Reverse => ReplicationStatus::ReverseReplicating,

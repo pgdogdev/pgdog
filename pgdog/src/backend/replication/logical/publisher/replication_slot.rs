@@ -14,7 +14,6 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, trace, warn};
 
 use super::super::Error;
-use super::super::ee::{replication_slot_create, replication_slot_error, replication_slot_update};
 use crate::config::config;
 use crate::{
     backend::{ConnectReason, Server, ServerOptions, pool::Address},
@@ -307,8 +306,6 @@ impl<K> ReplicationSlot<K> {
         let inner = Arc::new(inner);
 
         ReplicationSlots::register(&inner);
-        replication_slot_create(&inner.stats());
-
         Self {
             inner,
             kind: PhantomData,
@@ -468,22 +465,17 @@ impl ReplicationSlotInner {
     }
 
     fn advance_lsn(&self, lsn: Lsn) {
-        {
-            let mut status = self.status.lock();
-            status.lsn = lsn;
-            status.last_transaction = Some(SystemTime::now());
-        }
-        replication_slot_update(&self.stats());
+        let mut status = self.status.lock();
+        status.lsn = lsn;
+        status.last_transaction = Some(SystemTime::now());
     }
 
     pub(crate) fn set_task_id(&self, task_id: TaskId) {
         self.status.lock().task_id = Some(task_id);
-        replication_slot_update(&self.stats());
     }
 
     fn set_lag(&self, lag: i64) {
         self.status.lock().lag = lag;
-        replication_slot_update(&self.stats());
     }
 }
 
@@ -628,8 +620,6 @@ impl ReplicationSlotStream {
                 }
                 'E' => {
                     let error = ErrorResponse::from_bytes(message.to_bytes())?;
-                    replication_slot_error(&self.slot.stats(), &error);
-
                     return Err(error.into());
                 }
                 c => return Err(Error::OutOfSync(c)),
