@@ -23,6 +23,12 @@ pub enum ReadWriteStrategy {
     Aggressive,
 }
 
+impl ReadWriteStrategy {
+    pub fn is_aggressive(&self) -> bool {
+        matches!(self, Self::Aggressive)
+    }
+}
+
 impl FromStr for ReadWriteStrategy {
     type Err = String;
 
