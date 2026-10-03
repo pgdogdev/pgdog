@@ -39,7 +39,8 @@ impl QueryParser {
         } else if stmt.kind == VAR_RESET || stmt.kind == VAR_SET_DEFAULT {
             None
         } else {
-            panic!("parse_set_param called on invalid kind {}", stmt.kind);
+            // VAR_SET_CURRENT: the value lives on the server, we can't track it.
+            return Err(Error::SetFromCurrent);
         };
 
         match value {
@@ -61,6 +62,8 @@ impl QueryParser {
     /// - All SETs → returns `Ok(Some(Command::Set { .. }))`
     /// - No SETs → returns `Ok(None)`, caller falls through to default parsing
     /// - Mix of SET + non-SET → returns `Err(MultiStatementMixedSet)`
+    /// - Any `RESET ALL` or `SET ... FROM CURRENT` → returns `Err(MultiStatementMixedSet)`,
+    ///   so each statement is parsed on its own
     ///
     /// In session mode, returns `Ok(Some(Command::Query(..)))` immediately so that
     /// all multi-statement queries are forwarded to the server verbatim.
@@ -70,12 +73,19 @@ impl QueryParser {
         context: &QueryParserContext,
     ) -> Result<Option<Command>, Error> {
         let mut has_other = false;
+        let mut has_unparsed_set = false;
 
         let params = stmts
             .into_iter()
             .filter_map(|stmt| match stmt.stmt() {
-                Node::VariableSetStmt(stmt) if stmt.kind != VAR_SET_MULTI => {
+                Node::VariableSetStmt(stmt)
+                    if matches!(stmt.kind, VAR_SET_VALUE | VAR_SET_DEFAULT | VAR_RESET) =>
+                {
                     Some(Self::parse_set_param(stmt))
+                }
+                Node::VariableSetStmt(stmt) if stmt.kind != VAR_SET_MULTI => {
+                    has_unparsed_set = true;
+                    None
                 }
                 _ => {
                     has_other = true;
@@ -84,7 +94,9 @@ impl QueryParser {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        if params.is_empty() {
+        if has_unparsed_set {
+            Err(Error::MultiStatementMixedSet)
+        } else if params.is_empty() {
             Ok(None)
         } else if has_other {
             Err(Error::MultiStatementMixedSet)

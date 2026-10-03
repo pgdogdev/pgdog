@@ -284,3 +284,49 @@ fn test_single_shard_set() {
         _ => panic!("not a set"),
     }
 }
+
+#[test]
+fn test_multi_statement_reset_all_split() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![
+        Query::new("SET statement_timeout TO 1; RESET ALL").into(),
+    ]);
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
+
+    let command = test.execute(vec![Query::new("RESET ALL; SELECT 1").into()]);
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
+}
+
+#[test]
+fn test_npgsql_reset_no_panic() {
+    let mut test = QueryParserTest::new();
+
+    // Npgsql's connection reset with prepared statements (issue #1682).
+    let result = test
+        .try_execute(vec![
+            Query::new(
+                "SET SESSION AUTHORIZATION DEFAULT;RESET ALL;CLOSE ALL;UNLISTEN *;SELECT pg_advisory_unlock_all();DISCARD SEQUENCES;DISCARD TEMP",
+            )
+            .into(),
+        ])
+        .unwrap_err();
+
+    assert!(matches!(result, Error::MultiStatementSafety));
+}
+
+#[test]
+fn test_set_from_current_error() {
+    let mut test = QueryParserTest::new();
+
+    let result = test
+        .try_execute(vec![Query::new("SET work_mem FROM CURRENT").into()])
+        .unwrap_err();
+    assert!(matches!(result, Error::SetFromCurrent));
+
+    // Split, so the FROM CURRENT statement errors on its own.
+    let command = test.execute(vec![
+        Query::new("SET statement_timeout TO 1; SET work_mem FROM CURRENT").into(),
+    ]);
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
+}
