@@ -12,6 +12,7 @@ use crate::{
     tasks,
 };
 
+use super::lsn_cache::LsnCache;
 use super::*;
 use pgdog_postgres_types::Format;
 
@@ -185,7 +186,7 @@ impl LsnMonitor {
                 _ = self.pool.comms().shutdown.cancelled() => { break; }
             }
 
-            match self.run_check(aurora_detected).await {
+            match self.check(aurora_detected).await {
                 Ok(result) => aurora_detected = result,
                 Err(Error::Offline) => break,
                 Err(_) => continue,
@@ -193,6 +194,26 @@ impl LsnMonitor {
         }
 
         debug!("lsn monitor shutdown [{}]", self.pool.addr());
+    }
+
+    /// Run the LSN check, unless another pool connected to the same
+    /// server just did, in which case its stats apply to this pool too.
+    async fn check(&self, aurora_detected: Option<bool>) -> Result<Option<bool>, Error> {
+        let cache = LsnCache::global();
+        let addr = self.pool.addr();
+        let max_age = self.pool.config().lsn_check_interval / 2;
+
+        // Wait for another pool checking the server, but not for longer
+        // than it takes for its stats to go stale.
+        let _lock = safe_timeout(max_age, cache.lock(addr)).await;
+
+        if let Some(stats) = cache.recent(addr, max_age) {
+            self.update_stats(stats);
+            trace!("lsn monitor stats reused [{}]", addr);
+            return Ok(aurora_detected);
+        }
+
+        self.run_check(aurora_detected).await
     }
 
     async fn run_check(&self, mut aurora_detected: Option<bool>) -> Result<Option<bool>, Error> {
@@ -219,19 +240,22 @@ impl LsnMonitor {
         if let Some(row) = self.run_query(&mut conn, query).await {
             drop(conn);
             let stats = LsnStats::from_row(row, aurora);
-            {
-                let mut guard = self.pool.inner().lsn_stats.write();
-                // Notify that the role changed and the shard monitor
-                // should immediately resynchronize.
-                if stats.replica != guard.replica {
-                    self.pool.inner().lsn_role_change.notify_one();
-                }
-                (*guard) = stats;
-            }
+            LsnCache::global().set(self.pool.addr(), stats);
+            self.update_stats(stats);
             trace!("lsn monitor stats updated [{}]", self.pool.addr());
         }
 
         Ok(aurora_detected)
+    }
+
+    fn update_stats(&self, stats: LsnStats) {
+        let mut guard = self.pool.inner().lsn_stats.write();
+        // Notify that the role changed and the shard monitor
+        // should immediately resynchronize.
+        if stats.replica != guard.replica {
+            self.pool.inner().lsn_role_change.notify_one();
+        }
+        (*guard) = stats;
     }
 
     async fn get_connection(&self) -> Result<LsnConnection, Error> {
@@ -275,9 +299,12 @@ impl DerefMut for LsnConnection {
 mod test {
     use super::*;
 
+    use std::collections::HashSet;
+
+    use futures::future::join_all;
     use pgdog_postgres_types::TimestampTz;
     use pgdog_stats::Lsn;
-    use tokio::time::timeout;
+    use tokio::time::{sleep, timeout};
 
     // A launched pool against the local Postgres. The default `lsn_check_delay`
     // is `MAX_DURATION`, so the background LSN monitor spawned by `launch()`
@@ -497,6 +524,173 @@ mod test {
         assert!(
             !stats.valid(),
             "Non-Aurora stats should be invalid with zero LSN"
+        );
+    }
+
+    fn lsn_stats(replica: bool, lsn: i64) -> LsnStats {
+        StatsLsnStats {
+            replica,
+            lsn: Lsn::from_i64(lsn),
+            offset_bytes: lsn,
+            timestamp: TimestampTz::default(),
+            fetched: SystemTime::now(),
+            aurora: false,
+        }
+        .into()
+    }
+
+    // A pool for one of the test databases on the local Postgres.
+    fn server_pool(database: &str, lsn_check_interval: Duration) -> Pool {
+        Pool::new(&PoolConfig {
+            address: Address {
+                database_name: database.into(),
+                ..Address::new_test()
+            },
+            config: Config {
+                lsn_check_interval,
+                ..Config::default()
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn test_check_reuses_stats_from_same_server() {
+        crate::logger();
+
+        let pgdog = server_pool("pgdog", Duration::from_secs(5));
+        pgdog.launch();
+        // Never launched, so it can't check out a connection. It only gets
+        // stats by reusing the ones fetched for the other database.
+        let shard_0 = server_pool("shard_0", Duration::from_secs(5));
+
+        LsnMonitor {
+            pool: pgdog.clone(),
+        }
+        .check(None)
+        .await
+        .unwrap();
+
+        let result = LsnMonitor {
+            pool: shard_0.clone(),
+        }
+        .check(None)
+        .await;
+        assert_eq!(result, Ok(None), "no aurora detection, no query");
+
+        let (fetched, reused) = (pgdog.lsn_stats(), shard_0.lsn_stats());
+        assert!(reused.valid());
+        assert!(!reused.replica);
+        assert_eq!(reused.lsn, fetched.lsn);
+        assert_eq!(reused.fetched, fetched.fetched);
+
+        pgdog.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_checks_query_server_once() {
+        crate::logger();
+
+        let pools: Vec<_> = ["pgdog", "shard_0", "shard_1", "shard_2"]
+            .into_iter()
+            .map(|database| server_pool(database, Duration::from_secs(5)))
+            .collect();
+        let monitors: Vec<_> = pools
+            .iter()
+            .map(|pool| {
+                pool.launch();
+                LsnMonitor { pool: pool.clone() }
+            })
+            .collect();
+
+        // Every pool checks at the same time, like when their intervals line up.
+        let results = join_all(monitors.iter().map(|monitor| monitor.check(None))).await;
+        assert!(results.iter().all(Result::is_ok), "{:?}", results);
+
+        // One pool queried the server, the others reused its stats.
+        let fetched: HashSet<_> = pools.iter().map(|pool| pool.lsn_stats().fetched).collect();
+        assert_eq!(fetched.len(), 1);
+        assert!(pools.iter().all(|pool| pool.lsn_stats().valid()));
+
+        for pool in pools {
+            pool.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_queries_server_when_shared_stats_are_stale() {
+        crate::logger();
+
+        let pool = server_pool("pgdog", Duration::from_millis(100));
+        pool.launch();
+        let monitor = LsnMonitor { pool: pool.clone() };
+
+        // Another pool checked the server more than half an interval ago.
+        let stale = lsn_stats(true, 1);
+        LsnCache::global().set(pool.addr(), stale);
+        sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(monitor.check(None).await, Ok(Some(false)));
+
+        let stats = pool.lsn_stats();
+        assert!(!stats.replica);
+        assert!(stats.lsn.lsn > 1);
+
+        // The new stats replace the stale ones for other pools.
+        let shared = LsnCache::global()
+            .recent(pool.addr(), Duration::from_secs(5))
+            .expect("fresh stats are shared");
+        assert_eq!(shared.fetched, stats.fetched);
+
+        pool.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_check_does_not_wait_for_slow_check() {
+        crate::logger();
+
+        let pool = server_pool("pgdog", Duration::from_millis(100));
+        pool.launch();
+        let monitor = LsnMonitor { pool: pool.clone() };
+
+        // Another pool is stuck checking the same server.
+        let _slow = LsnCache::global().lock(pool.addr()).await;
+
+        // After half an interval, the pool stops waiting and checks the server itself.
+        let result = timeout(Duration::from_secs(5), monitor.check(None)).await;
+        assert_eq!(result, Ok(Ok(Some(false))));
+        assert!(pool.lsn_stats().valid());
+
+        pool.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_check_notifies_on_role_change_from_shared_stats() {
+        crate::logger();
+
+        // Nothing listens on this port, so the pool can only reuse stats.
+        let pool = Pool::new(&PoolConfig {
+            address: Address {
+                port: 1,
+                ..Address::new_test()
+            },
+            config: Config::default(),
+        });
+        assert!(pool.lsn_stats().replica);
+        let monitor = LsnMonitor { pool: pool.clone() };
+
+        // Another pool found out the server is a primary.
+        LsnCache::global().set(pool.addr(), lsn_stats(false, 100));
+
+        assert_eq!(monitor.check(None).await, Ok(None));
+        assert!(!pool.lsn_stats().replica);
+        assert!(
+            timeout(
+                Duration::from_millis(200),
+                pool.inner().lsn_role_change.notified()
+            )
+            .await
+            .is_ok(),
+            "role change should have been notified"
         );
     }
 }
