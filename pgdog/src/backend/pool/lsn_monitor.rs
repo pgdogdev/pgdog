@@ -47,7 +47,13 @@ SELECT
             COALESCE(pg_last_xact_replay_timestamp(), now())
         ELSE
             now()
-    END AS timestamp
+    END AS timestamp,
+    CASE
+        WHEN pg_is_in_recovery() THEN
+            0
+        ELSE
+            ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int
+    END AS timeline
 ";
 
 static AURORA_LSN_QUERY: &str = "
@@ -55,7 +61,8 @@ SELECT
     pg_is_in_recovery() AS replica,
     '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
-    now() AS timestamp
+    now() AS timestamp,
+    0 AS timeline
 ";
 
 /// LSN information.
@@ -105,6 +112,7 @@ impl LsnStats {
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
             fetched: SystemTime::now(),
             aurora,
+            timeline: value.get(4, Format::Text).unwrap_or_default(),
         }
         .into()
     }
@@ -304,6 +312,7 @@ mod test {
         assert!(!stats.aurora, "local Postgres is not Aurora");
         assert!(stats.lsn.lsn > 0, "primary LSN should advance past 0");
         assert!(stats.offset_bytes > 0, "offset bytes should be positive");
+        assert!(stats.timeline >= 1, "a primary reports its timeline");
 
         monitor.pool.shutdown();
     }
@@ -339,6 +348,7 @@ mod test {
         assert!(stats.valid(), "Aurora stats are valid even at LSN 0");
         assert_eq!(stats.lsn.lsn, 0, "Aurora query reports zero LSN");
         assert_eq!(stats.offset_bytes, 0);
+        assert_eq!(stats.timeline, 0, "Aurora query reports no timeline");
         assert!(!stats.replica);
 
         monitor.pool.shutdown();
@@ -367,6 +377,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
         .into();
 
@@ -473,6 +484,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: true,
+            timeline: 0,
         }
         .into();
 
@@ -491,6 +503,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
         .into();
 

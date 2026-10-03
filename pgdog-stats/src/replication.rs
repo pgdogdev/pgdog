@@ -99,6 +99,10 @@ pub struct LsnStats {
     pub fetched: SystemTime,
     /// Running on Aurora.
     pub aurora: bool,
+    /// Timeline of a primary, read from the name of its current WAL file.
+    /// Zero on replicas and on Aurora.
+    #[serde(default)]
+    pub timeline: i64,
 }
 
 /// Schema-only mirror of `std::time::SystemTime`'s default serde representation.
@@ -124,6 +128,7 @@ impl Default for LsnStats {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
     }
 }
