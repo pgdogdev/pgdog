@@ -161,6 +161,8 @@ async fn cached_parse_allows_transaction_exit_after_abort() {
                 .expect("startup");
             ready_messages(&mut stream).await;
             simple_query(&mut stream, "BEGIN").await;
+            // Materialize the deferred transaction before caching its exit statement.
+            simple_query(&mut stream, "SELECT 1").await;
             let warm = parse_and_sync(&mut stream, "warm_exit", sql).await;
             assert!(warm.iter().any(|message| message.code == '1'));
             assert_eq!(warm.last().expect("ReadyForQuery").payload.as_ref(), b"T");
