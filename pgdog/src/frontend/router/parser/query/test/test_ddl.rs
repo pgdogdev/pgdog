@@ -70,6 +70,22 @@ fn test_truncate() {
 }
 
 #[test]
+fn test_select_into() {
+    let mut test = QueryParserTest::new();
+
+    // SELECT ... INTO creates a table, like CREATE TABLE ... AS.
+    for query in [
+        "SELECT 1 AS id INTO test_table",
+        "CREATE TABLE test_table AS SELECT 1 AS id",
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
+
+        assert!(command.route().is_write(), "{query}");
+        assert_eq!(command.route().shard(), &Shard::All, "{query}");
+    }
+}
+
+#[test]
 fn test_create_sequence() {
     let mut test = QueryParserTest::new();
 
