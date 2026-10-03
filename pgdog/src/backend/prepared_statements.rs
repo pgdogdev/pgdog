@@ -317,8 +317,8 @@ impl PreparedStatements {
                 if !parse.anonymous() {
                     if self.contains(parse.name()) {
                         if self.server_state == State::TransactionError {
-                            // Let Postgres enforce abort-state rules and skip until Sync
-                            // on an error. Transaction-exit statements must still parse.
+                            // Parse may accept COMMIT/ROLLBACK in an aborted transaction,
+                            // unlike SQL PREPARE. Let Postgres decide before simulating success.
                             self.parses.push_back(parse.name().to_owned());
                             let close = Close::named(if self.config.level.rewrite_anonymous() {
                                 ""
