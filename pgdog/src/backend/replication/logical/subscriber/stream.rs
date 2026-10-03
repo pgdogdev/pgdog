@@ -841,7 +841,14 @@ impl StreamSubscriber {
             }
 
             // Only record tables we expect to stream changes for.
-            self.table_lsns.insert(relation.oid, table.lsn.lsn);
+            //
+            // table.lsn represents every change UP TO the table LSN (not AT)
+            // E.g., if it's at 100, we have 1-99
+            //
+            // This `table_lsns` map is what we check in the `lsn_applied()` method, where we
+            // SKIP changes AT or below. If we stored 100, it would skip 100 (losing the change)
+            // So, we store one less (99)
+            self.table_lsns.insert(relation.oid, table.lsn.lsn - 1);
             self.relations.insert(relation.oid, relation);
         }
 
@@ -1130,17 +1137,6 @@ mod tests {
             "commit should produce a status update"
         );
         cluster.shutdown();
-    }
-
-    #[test]
-    fn lsn_gating_is_inclusive_at_copy_boundary() {
-        let mut sub = make_subscriber();
-        let oid = Oid(42);
-
-        sub.table_lsns.insert(oid, 100);
-        sub.set_current_lsn(100);
-
-        assert!(sub.lsn_applied(&oid));
     }
 
     #[tokio::test]

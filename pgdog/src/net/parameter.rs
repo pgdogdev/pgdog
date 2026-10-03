@@ -522,12 +522,18 @@ impl From<&Parameters> for Vec<Parameter> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use crate::backend::server::test::test_server;
     use crate::net::ToBytes;
-    use crate::net::parameter::ParameterValue;
 
-    use super::Parameters;
+    use super::*;
+
+    pub(crate) fn new_test(name: &str) -> Parameters {
+        Parameters::from(vec![
+            Parameter::from(("application_name", name)),
+            Parameter::from(("pgdog.test_mode", "1")),
+        ])
+    }
 
     #[test]
     fn test_identical() {

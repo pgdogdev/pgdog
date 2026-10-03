@@ -15,7 +15,7 @@ use pg_raw_parse::raw::SQLValueFunctionOp;
 
 /// Represents what Postgres type the `TimeFunction` would normally output.
 #[derive(PartialEq)]
-enum TimeFunctionOutput {
+pub(super) enum TimeFunctionOutput {
     Date,
     TimeWithTimeZone,
     TimestampWithTimeZone,
@@ -59,6 +59,16 @@ impl TimeFunctionOutput {
                 local_time.nanosecond() / 1_000,
                 local_time.format("%Y %Z"),
             ),
+        }
+    }
+
+    pub(super) fn into_postgres_str(self) -> &'static str {
+        match self {
+            Self::Date => "date",
+            Self::TimeWithTimeZone => "timetz",
+            Self::TextFormattedTimestampWithTimeZone | Self::TimestampWithTimeZone => "timestamptz",
+            Self::Timestamp => "timestamp",
+            Self::Time => "time",
         }
     }
 
@@ -220,12 +230,12 @@ impl TimeFunctionType {
     /// If we're considering re-writing a `TimeFunction`, the decision as to whether or not we should
     /// rewrite rests solely on the corresponding `TimeReference` being `TransactionStart`. Otherwise,
     /// there's no point; Postgres can achieve the same functionality without our assistance.
-    pub(super) fn apply_rewrite_on_sharded_tables(&self) -> bool {
+    pub(super) fn is_transaction_time_function(&self) -> bool {
         self.time_reference() == TimeReference::TransactionStart
     }
 
     /// Represents what Postgres type the `TimeFunction` would normally output.
-    fn default_output_type(self) -> TimeFunctionOutput {
+    pub(super) fn default_output_type(self) -> TimeFunctionOutput {
         match self {
             Self::CurrentTimestamp(_)
             | Self::ClockTimestamp

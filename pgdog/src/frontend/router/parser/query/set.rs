@@ -26,7 +26,7 @@ impl QueryParser {
             let param = Self::parse_set_param(stmt)?;
             Ok(Command::Set {
                 params: vec![param],
-                route: Route::write(context.shards_calculator.shard()),
+                route: Route::write(context.shards_calculator.shard()).session_control(),
                 set_config: false,
             })
         }
@@ -91,7 +91,7 @@ impl QueryParser {
         } else {
             Ok(Some(Command::Set {
                 params,
-                route: Route::write(context.shards_calculator.shard()),
+                route: Route::write(context.shards_calculator.shard()).session_control(),
                 set_config: false,
             }))
         }

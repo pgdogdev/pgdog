@@ -60,7 +60,6 @@ pub(crate) use two_pc::*;
 /// State here is preserved between requests.
 #[derive(Debug)]
 pub(crate) struct QueryEngine {
-    begin_stmt: Option<BufferedQuery>,
     router: Router,
     comms: ClientComms,
     stats: Stats,
@@ -99,7 +98,6 @@ impl QueryEngine {
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
-            begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
@@ -123,7 +121,7 @@ impl QueryEngine {
 
     /// Client can safely disconnect (no active backend connection or pending transaction).
     pub(crate) fn can_disconnect(&self) -> bool {
-        self.begin_stmt.is_none() && self.backend.done()
+        !self.backend.in_buffered_transaction() && self.backend.done()
     }
 
     /// Current state.
@@ -175,10 +173,7 @@ impl QueryEngine {
         let rewrite_result = self.rewrite_request(context, client_request).await?;
 
         // Intercept commands we don't have to forward to a server.
-        if self
-            .intercept_incomplete(context, &client_request.messages)
-            .await?
-        {
+        if self.intercept_incomplete(context, client_request).await? {
             self.update_stats(context);
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
@@ -235,37 +230,35 @@ impl QueryEngine {
                 )
                 .await?
             }
-            Command::CommitTransaction { extended } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
-                    let transaction_route = self.transaction_route(client_request.route())?;
-                    client_request.route = Some(transaction_route.clone());
+            Command::CommitTransaction { extended, .. } => {
+                if self.backend.connected() {
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, false, extended)
+                    self.end_connected(context, client_request, false, *extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, &client_request.messages, false, *extended)
+                    self.end_not_connected(context, client_request, false, *extended)
                         .await?
                 }
 
-                if context.params.commit() {
+                if client_request.is_executable() && context.params.commit() {
                     self.comms.update_params(context.params);
                 }
             }
-            Command::RollbackTransaction { extended } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
-                    let transaction_route = self.transaction_route(client_request.route())?;
-                    client_request.route = Some(transaction_route.clone());
+            Command::RollbackTransaction { extended, .. } => {
+                if self.backend.connected() {
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, true, extended)
+                    self.end_connected(context, client_request, true, *extended)
                         .await?;
                 } else {
-                    self.end_not_connected(context, &client_request.messages, true, *extended)
+                    self.end_not_connected(context, client_request, true, *extended)
                         .await?
                 }
 
-                context.params.rollback();
+                if client_request.is_executable() {
+                    context.params.rollback();
+                }
             }
             Command::Query(_) => {
                 self.execute(context, client_request, rewrite_result)
@@ -314,7 +307,7 @@ impl QueryEngine {
             Command::ResetAll => {
                 self.reset_all(context, client_request).await?;
             }
-            Command::Copy(_) => {
+            Command::Copy { .. } => {
                 self.execute(context, client_request, rewrite_result)
                     .await?
             }
