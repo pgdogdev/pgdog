@@ -97,6 +97,9 @@ pub(crate) enum Error {
     #[error("multi-query statement cannot be safely executed")]
     MultiStatementSafety,
 
+    #[error("SET ... FROM CURRENT is not supported")]
+    SetFromCurrent,
+
     #[error("unmapped sharding key was specified")]
     UnmappedShardKey(String),
 
