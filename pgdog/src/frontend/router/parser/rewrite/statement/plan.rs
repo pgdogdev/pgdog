@@ -2,8 +2,11 @@ use super::super::ee;
 use super::insert::{build_resolved_split_requests, build_split_requests};
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
-use super::{Error, InsertSplit, PrepareExecute, ShardingKeyUpdate};
+use super::{Error, InsertSplit, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
 use crate::frontend::client::QueryTimestamps;
+
+use crate::frontend::router::Route;
+use crate::frontend::router::parser::ShardWithPriority;
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -145,11 +148,29 @@ pub(crate) struct RewritePlan {
 #[derive(Debug, Clone)]
 pub(crate) enum RewriteResult {
     InPlace { offset: Option<OffsetPlan> },
-    InsertSplit(Vec<ClientRequest>),
+    InsertSplit(InsertSplitRewriteResult),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
 impl RewriteResult {
+    /// The rewrite can possibly need more than one shard.
+    pub(crate) fn connect_route(&self) -> Option<Route> {
+        use crate::frontend::router::parser::{Shard, ShardWithPriority};
+        match self {
+            Self::InsertSplit(rewrite) => {
+                if let Some(same_shard) = rewrite.same_shard() {
+                    Some(Route::write(ShardWithPriority::new_table(same_shard)))
+                } else {
+                    Some(Route::write(ShardWithPriority::new_table(Shard::All)))
+                }
+            }
+            Self::ShardingKeyUpdate(_) => {
+                Some(Route::write(ShardWithPriority::new_table(Shard::All)))
+            }
+            Self::InPlace { .. } => None,
+        }
+    }
+
     pub(crate) fn offset_plan(&self) -> Option<&OffsetPlan> {
         match self {
             Self::InPlace { offset } => offset.as_ref(),
@@ -162,6 +183,16 @@ impl RewriteResult {
             Self::InPlace {
                 offset: Some(offset),
             } => offset.apply_after_route(request),
+            Self::InsertSplit(requests) => {
+                // Short-circuit multi-row inserts to one shard,
+                // if they only need one.
+                if let (Some(shard), Some(route)) = (requests.same_shard(), request.route.as_mut())
+                {
+                    route.set_shard(ShardWithPriority::new_table(shard));
+                }
+
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -377,12 +408,14 @@ impl RewritePlan {
                     _ => None,
                 })
             {
-                return Ok(RewriteResult::InsertSplit(build_resolved_split_requests(
-                    query, request,
-                )?));
+                return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
+                    requests: build_resolved_split_requests(query, request)?,
+                }));
             }
             let requests = build_split_requests(&self.insert_split, request)?;
-            return Ok(RewriteResult::InsertSplit(requests));
+            return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
+                requests,
+            }));
         }
 
         if let Some(sharding_key_update) = &self.sharding_key_update
