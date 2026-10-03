@@ -150,6 +150,60 @@
 //! }
 //! ```
 //!
+//! # Authenticating clients
+//!
+//! Plugins can also take part in client login. With `auth_type = "plugin"` in
+//! `pgdog.toml`, PgDog asks the client for a cleartext credential and offers it
+//! to each plugin in configuration order; the first one that does not return
+//! [`AuthDecision::Skip`] decides the login. [`AuthDecision::Allow`] carries an
+//! [`AuthGrant`], which can derive the PostgreSQL user the session runs as,
+//! assume a `server_role` on the backend, supply backend credentials and
+//! provision the pool.
+//!
+//! [`Plugin::authenticate`] differs from [`Plugin::route`] in two ways: PgDog
+//! calls it from its blocking thread pool, so blocking I/O such as a request to
+//! an identity provider is expected (apply your own timeout), and a panic is
+//! caught and turned into a denial rather than taking the process down.
+//!
+//! #### Example
+//!
+//! ```
+//! use pgdog_plugin::prelude::*;
+//!
+//! pgdog_plugin::plugin!(MyPlugin);
+//!
+//! struct MyPlugin;
+//!
+//! impl Plugin for MyPlugin {
+//!     # extern "C-unwind" fn version() -> PdStr<'static> {
+//!     #     env!("CARGO_PKG_VERSION").into()
+//!     # }
+//!
+//!     fn authenticate(context: AuthContext<'_>) -> AuthDecision {
+//!         // Credentials this plugin doesn't recognize are left to the next
+//!         // plugin, so one deployment can mix token and password logins.
+//!         let Some(token) = context.credential.strip_prefix("tok_") else {
+//!             return AuthDecision::Skip;
+//!         };
+//!
+//!         match verify(token) {
+//!             Some(email) => AuthDecision::Allow(AuthGrant {
+//!                 // Run the session as the authenticated identity.
+//!                 derived_user: Some(email.clone()),
+//!                 server_role: Some(email),
+//!                 provision: true,
+//!                 ..Default::default()
+//!             }),
+//!             None => AuthDecision::Deny("token not recognized".into()),
+//!         }
+//!     }
+//! }
+//!
+//! # fn verify(_token: &str) -> Option<String> {
+//! #     Some("alice@example.com".into())
+//! # }
+//! ```
+//!
 //! # Enabling plugins
 //!
 //! Plugins are shared libraries, loaded by PgDog at runtime using `dlopen(3)`. If specifying only its name, make sure to place the plugin's shared library
@@ -175,6 +229,7 @@
 //! ```
 //!
 
+pub mod auth;
 mod config;
 pub mod context;
 pub mod logging;
@@ -184,6 +239,7 @@ pub mod plugin;
 pub mod prelude;
 pub mod string;
 
+pub use auth::*;
 pub use config::Config;
 pub use context::*;
 pub use parameters::*;
