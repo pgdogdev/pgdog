@@ -3,18 +3,16 @@
 use futures::future::try_join_all;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
 use crate::{
     admin::server::AdminServer,
     backend::{PubSubClient, pool},
     config::PoolerMode,
     frontend::{
-        ClientRequest, Router,
+        BufferedQuery, ClientRequest, Router,
         router::{CopyRow, Route, parser::Shard},
     },
     net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
-    state::State,
 };
 
 use super::{
@@ -33,19 +31,26 @@ pub(crate) mod binding;
 pub(crate) mod binding_test;
 pub(crate) mod buffer;
 pub(crate) mod cluster_connection;
+pub(crate) mod direct;
+pub(crate) mod linked_server;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
+pub(crate) mod transaction;
 
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
+pub(crate) use direct::DirectBinding;
+pub(crate) use linked_server::LinkedServer;
+pub(crate) use transaction::TransactionBinding;
+
 use multi_shard::MultiBinding;
 
 /// Wrapper around a server connection.
 #[derive(Default, Debug)]
 pub(crate) struct Connection {
-    binding: Binding,
-    cluster: ClusterConnection,
+    pub(super) binding: Binding,
+    pub(super) cluster: ClusterConnection,
     pub_sub: PubSubClient,
 }
 
@@ -69,20 +74,111 @@ impl Connection {
         Ok(conn)
     }
 
+    /// Start a transaction on this connection, if the connection is idle.
+    pub(crate) fn start_transaction(
+        &mut self,
+        read_only: bool,
+        transaction_stmt: BufferedQuery,
+    ) -> Result<(), Error> {
+        let rw_aggressive = self.cluster()?.read_write_strategy().is_aggressive();
+        let cluster_read_only = self.cluster()?.read_only();
+
+        match self.binding {
+            Binding::NotConnected => {
+                self.binding = Binding::Transaction(TransactionBinding {
+                    is_read: if read_only {
+                        // BEGIN READ ONLY
+                        Some(true)
+                    } else if rw_aggressive {
+                        // Let the first statement decide.
+                        None
+                    } else if !cluster_read_only {
+                        // BEGIN = write
+                        Some(false)
+                    } else {
+                        // FIXME(lev): We know that the cluster is read-only, so we
+                        // can make this call here, but we don't since the parser will do this for
+                        // us once it processes the next statement. This is dumb, we should just do this here.
+                        None
+                    },
+                    transaction_stmt: Some(transaction_stmt),
+                });
+            }
+
+            // Record that we are inside a transaction now
+            // even though we were already connected. This is necessary for pinned connections,
+            // i.e., advisory locks, so a transaction can be started on any newly added shards
+            // in the _next_ query (not this one).
+            //
+            // The query engine will start the transaction on any currently connected shards.
+            Binding::Direct(ref mut direct) => {
+                direct.transaction_stmt = Some(transaction_stmt);
+            }
+
+            Binding::MultiShard(ref mut multi) => {
+                multi.transaction_stmt = Some(transaction_stmt);
+            }
+
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    /// When a transaction is finished, remove the transaction statement,
+    /// so connections in session mode don't double-start a transaction again.
+    ///
+    /// TODO(lev): Refactor the binding into an enum for Session and Transaction mode,
+    /// so this doesn't leak.
+    pub(crate) fn end_transaction(&mut self) {
+        match self.binding {
+            Binding::Transaction(_) => {
+                self.binding = Binding::NotConnected;
+            }
+
+            Binding::Direct(ref mut direct) => direct.transaction_stmt = None,
+            Binding::MultiShard(ref mut multi) => multi.transaction_stmt = None,
+            _ => (),
+        }
+    }
+
+    /// The connection is inside a buffered transaction, i.e.,
+    /// we captured a `BEGIN` but haven't connected to a shard yet.
+    pub(crate) fn in_buffered_transaction(&self) -> bool {
+        matches!(self.binding, Binding::Transaction(_))
+    }
+
     /// Create a server connection if one doesn't exist already.
     pub(crate) async fn connect(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
-        let connect = match &self.binding {
-            Binding::NotConnected => true,
-            Binding::MultiShard(shards) => shards.is_empty(),
-            _ => false,
-        };
+        self.ensure_connected(request, route).await?;
 
-        if connect {
-            self.connect_internal(request, route).await?;
+        Ok(())
+    }
 
-            if !self.binding.state_check(State::Idle) {
-                return Err(Error::NotInSync);
+    /// Check that we are connected to all required shards to serve this route.
+    pub(crate) fn required_shards_connected(&self, route: &Route) -> Result<bool, Error> {
+        Ok(match self.binding {
+            Binding::NotConnected | Binding::Transaction(_) => false,
+            Binding::MultiShard(ref servers) => {
+                servers.required_shards_connected(route, self.cluster()?.shards().len())
             }
+            Binding::Direct(ref shard) => {
+                matches!(route.shard(), Shard::Direct(s) if shard.shard == *s)
+            }
+            Binding::Admin(_) => true,
+        })
+    }
+
+    /// Make sure we have all required shard connections to serve the request.
+    async fn ensure_connected(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+        if matches!(
+            self.binding,
+            Binding::NotConnected | Binding::Transaction(_)
+        ) {
+            self.connect_internal(request, route).await?;
+        } else {
+            use multi_shard::MultiShardUpgrade;
+            MultiShardUpgrade::new(self).upgrade(request, route).await?;
         }
 
         Ok(())
@@ -111,17 +207,61 @@ impl Connection {
 
     /// Try to get a connection for the given route.
     async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
+        // Start a transaction on the server(s) if client started one.
+        let (is_read, transaction_stmt) =
+            if let Binding::Transaction(ref mut transaction) = self.binding {
+                (transaction.is_read, transaction.transaction_stmt.take())
+            } else {
+                (None, None)
+            };
+
+        // `read_write_split = "aggressive"` lets the first statement
+        // inside a transaction decide if it's a read or a write; we haven't
+        // connected to Postgres yet, so we can still make this call.
+        let is_read = is_read.unwrap_or(route.is_read());
+
         if let Shard::Direct(shard) = route.shard() {
-            let server = self
-                .cluster
-                .get_conn(request, *shard, route.is_read())
-                .await?;
+            let server = match self.cluster.get_conn(request, *shard, is_read).await {
+                Ok(server) => server,
+                Err(err) => {
+                    if let Binding::Transaction(ref mut transaction) = self.binding {
+                        transaction.transaction_stmt = transaction_stmt;
+                    }
+                    return Err(err);
+                }
+            };
 
-            self.binding = Binding::Direct(server, *shard);
+            self.binding = Binding::Direct(DirectBinding::new(
+                server,
+                *shard,
+                transaction_stmt,
+                is_read,
+            ));
         } else {
-            let (shards, shard_indices) = self.cluster.get_conns(request, route).await?;
+            // TODO(lev): Shard::Multi intentionally ignored because it's stupid
+            // and we should remove it.
+            let (shards, shard_indices) = match self
+                .cluster
+                .get_conns(request, route.shard(), is_read)
+                .await
+            {
+                Ok((shards, shard_indices)) => (shards, shard_indices),
+                Err(err) => {
+                    if let Binding::Transaction(ref mut transaction) = self.binding {
+                        transaction.transaction_stmt = transaction_stmt;
+                    }
 
-            self.binding = Binding::MultiShard(MultiBinding::new(shards, shard_indices, route));
+                    return Err(err);
+                }
+            };
+
+            self.binding = Binding::MultiShard(MultiBinding::new(
+                shards,
+                shard_indices,
+                route,
+                transaction_stmt,
+                is_read,
+            ));
         }
 
         Ok(())
@@ -291,10 +431,9 @@ impl Connection {
 
             if client_request.is_executable() && client_request.route().is_schema_changed() {
                 match &self.binding {
-                    Binding::Direct(_, shard) => router.schema_changed_on(*shard),
+                    Binding::Direct(server) => router.schema_changed_on(server.shard),
                     Binding::MultiShard(servers) => {
-                        for position in 0..servers.len() {
-                            let shard = servers.state().shard_number(position);
+                        for shard in servers.connected_shards() {
                             let sent = match client_request.route().shard() {
                                 Shard::Direct(target) => *target == shard,
                                 Shard::Multi(targets) => targets.contains(&shard),
@@ -322,14 +461,9 @@ impl Connection {
         self.cluster.safe_reload().await
     }
 
-    pub(crate) fn bind(&mut self, bind: &Bind) -> Result<(), Error> {
-        match self.binding {
-            Binding::MultiShard(ref mut servers) => {
-                servers.state_mut().push_bind(bind);
-                Ok(())
-            }
-
-            _ => Ok(()),
+    pub(crate) fn bind(&mut self, bind: &Bind) {
+        if let Binding::MultiShard(ref mut servers) = self.binding {
+            servers.bind(bind)
         }
     }
 
@@ -376,7 +510,9 @@ impl Connection {
     pub(crate) async fn cancel_query(&self) -> Result<(), Error> {
         let servers: Vec<&Guard> = match self.binding {
             Binding::Direct(ref server, ..) => vec![server],
-            Binding::MultiShard(ref servers) => servers.iter().collect(),
+            Binding::MultiShard(ref servers) => {
+                servers.iter().map(|server| server.deref()).collect()
+            }
             _ => return Ok(()),
         };
 
@@ -425,3 +561,6 @@ impl DerefMut for Connection {
         &mut self.binding
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test;

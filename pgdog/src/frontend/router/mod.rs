@@ -18,6 +18,8 @@ pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
 pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, Route, SetParam};
 
+use crate::frontend::router::parser::{Shard, route::ShardSource};
+
 use super::ClientRequest;
 pub(crate) use context::RouterContext;
 pub(crate) use parameter_hints::ParameterHints;
@@ -29,6 +31,7 @@ pub(crate) struct Router {
     query_parser: QueryParser,
     latest_command: Command,
     schema_changed_shards: HashSet<usize>,
+    pinned_shard: Option<Shard>,
 }
 
 impl Default for Router {
@@ -44,6 +47,7 @@ impl Router {
             query_parser: QueryParser::default(),
             latest_command: Command::default(),
             schema_changed_shards: HashSet::new(),
+            pinned_shard: None,
         }
     }
 
@@ -58,9 +62,31 @@ impl Router {
         if context.copy_mode {
             return Ok(&self.latest_command);
         }
+        let executable = context.executable;
 
         let command = self.query_parser.parse(context)?;
+
         self.latest_command = command;
+
+        // Check for shard pinning, e.g.,
+        // SET pgdog.shard TO x;
+        // The expectation here is the client cannot quietly change shards mid-transaction
+        // without explicitely unpining, e.g., removing pgdog.shard or setting a different value.
+        let pinned = self.latest_command.route().is_search_path_driven()
+            || self.latest_command.route().shard_with_priority().source() == &ShardSource::Set;
+
+        if pinned {
+            self.pinned_shard = Some(self.latest_command.route().shard().clone());
+        }
+
+        if let Some(ref shard) = self.pinned_shard
+            && let Command::Query(ref route) = self.latest_command
+        {
+            use crate::backend::Error as BackendError;
+            if shard != route.shard() && executable {
+                return Err(Error::Backend(BackendError::DirectShardMismatch));
+            }
+        }
 
         Ok(&self.latest_command)
     }
@@ -71,7 +97,7 @@ impl Router {
         buffer: &ClientRequest,
     ) -> Result<Vec<CopyRow>, Error> {
         match self.latest_command {
-            Command::Copy(ref mut copy) => Ok(copy.shard(&buffer.copy_data()?).await?),
+            Command::Copy { ref mut copy, .. } => Ok(copy.shard(&buffer.copy_data()?).await?),
             _ => Ok(buffer
                 .copy_data()?
                 .into_iter()
@@ -85,6 +111,7 @@ impl Router {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
         self.schema_changed_shards.clear();
+        self.pinned_shard = None;
     }
 
     /// Get last commmand computed by the query parser.

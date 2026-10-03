@@ -593,7 +593,6 @@ fn test_write_functions() {
 fn test_write_nolock() {
     let route = query!("SELECT nextval('234')");
     assert!(route.is_write());
-    assert!(!route.is_lock_session());
 }
 
 #[test]
