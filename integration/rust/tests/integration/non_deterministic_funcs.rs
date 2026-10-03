@@ -31,7 +31,7 @@ use sqlx::{Executor, Row};
 /// This tests a case where we're performing two INSERTs which resolve to different Shards. This uses 2 connections.
 /// Previously, the now() values would be different in each.
 #[tokio::test]
-async fn two_conns_transaction_time_reuse() {
+async fn two_conns_transaction_time_reuse_insert() {
     let single_sharded_list_pool = PgPoolOptions::new()
         .max_connections(1)
         .connect("postgres://pgdog:pgdog@127.0.0.1:6432/single_sharded_list?application_name=sqlx")
@@ -63,6 +63,169 @@ async fn two_conns_transaction_time_reuse() {
     }
 
     transaction.rollback().await.unwrap();
+}
+
+/// Verify that usage of now() / CURRENT_TIMESTAMP in an UPDATE statement uses transaction time re-writes.
+#[tokio::test]
+async fn transaction_time_update_statement_rewrites() {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+
+    let row_created_at_before_time: DateTime<Utc> = {
+        conn.execute("TRUNCATE sharded").await.unwrap();
+
+        let row_before_transaction_start_time: PgRow = conn
+            .fetch_one("INSERT INTO sharded(id) VALUES (1) RETURNING *")
+            .await
+            .unwrap();
+
+        conn.execute("INSERT INTO sharded(id) VALUES (2) RETURNING *")
+            .await
+            .unwrap();
+
+        row_before_transaction_start_time.get::<_, &str>("created_at")
+    };
+
+    let mut transaction = conn.begin().await.unwrap();
+
+    let transaction_start_time: DateTime<Utc> = {
+        let transaction_start_time_row: PgRow = transaction
+            .fetch_one("INSERT INTO sharded(id) VALUES (3) RETURNING *")
+            .await
+            .unwrap();
+
+        transaction_start_time_row.get::<_, &str>("created_at")
+    };
+
+    assert!(row_created_at_before_time != transaction_start_time);
+
+    // Update both to the transaction time NOW().
+    // We previously did an INSERT for both before the transaction started, so they'll differ
+    // (as asserted above)
+    let (row_tt_extended_protocol_time, row_tt_simple_protocol_time) = {
+        let row_tt_extended_protocol: PgRow = transaction
+            .fetch_one("UPDATE sharded SET created_at = NOW() WHERE id = 1 RETURNING *")
+            .await
+            .unwrap();
+
+        let row_tt_simple_protocol: PgRow = sqlx::raw_sql(
+            "UPDATE sharded SET created_at = CURRENT_TIMESTAMP WHERE id = 2 RETURNING *",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+
+        (
+            row_tt_extended_protocol.get::<DateTime<Utc>, &str>("created_at"),
+            row_tt_simple_protocol.get::<DateTime<Utc>, &str>("created_at"),
+        )
+    };
+
+    assert!(transaction_start_time == row_tt_simple_protocol_time);
+    assert!(transaction_start_time == row_tt_extended_protocol_time);
+}
+
+/// Ensure that SELECT now() and CURRENT_TIMESTAMP return the correct type, are consistent
+/// within a transaction across multiple queries, and return within the correct column name
+/// despite being re-written.
+#[tokio::test]
+async fn transaction_time_select_equality() {
+    run_and_assert_eq::<DateTime<Utc>>("SELECT now();", "now").await;
+    run_and_assert_eq::<DateTime<Utc>>("SELECT CURRENT_TIMESTAMP;", "current_timestamp").await;
+}
+
+/// Helper method to run a query twice, in one transaction, in both simple and extended protocol,
+/// and assert that the response is equal (and of the correct type)
+async fn run_and_assert_eq<T>(query: &str, col: &str)
+where
+    T: PartialEq
+        + std::fmt::Debug
+        + sqlx::Type<sqlx::Postgres>
+        + for<'a> sqlx::Decode<'a, sqlx::Postgres>,
+{
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+    let mut transaction = conn.begin().await.unwrap();
+
+    for simple_protocol in [false, true] {
+        let mut rows = vec![];
+        for _ in 0..2 {
+            rows.push(if simple_protocol {
+                sqlx::raw_sql(query)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .unwrap()
+            } else {
+                sqlx::query(query)
+                    .fetch_one(&mut *transaction)
+                    .await
+                    .unwrap()
+            });
+        }
+
+        assert_eq!(rows[0].get::<T, &str>(col), rows[1].get::<T, &str>(col));
+    }
+}
+
+/// Ensure that now() functionality isn't broken for use within a query
+/// Tests things like comparisons and addition with an interval in a SELECT query
+#[tokio::test]
+async fn transaction_time_usage_in_select_query() {
+    let conn = connections_sqlx().await;
+    let conn = conn.get(1).unwrap();
+
+    let mut transaction = conn.begin().await.unwrap();
+
+    // 'created_at' col has default now()
+    sqlx::query("INSERT INTO sharded (id) VALUES (1)")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+
+    for use_simple_protocol in [false, true] {
+        // Test comparisons
+        let query_tries = [
+            ("SELECT * FROM sharded WHERE created_at = now()", 1),
+            ("SELECT * FROM sharded WHERE created_at < now()", 0),
+            ("SELECT * FROM sharded WHERE created_at > now()", 0),
+        ];
+        for (query, expected_rows) in query_tries {
+            let rows_fetched = if use_simple_protocol {
+                sqlx::raw_sql(query)
+                    .fetch_all(&mut *transaction)
+                    .await
+                    .unwrap()
+            } else {
+                sqlx::query(query)
+                    .fetch_all(&mut *transaction)
+                    .await
+                    .unwrap()
+            };
+            assert_eq!(rows_fetched.len(), expected_rows);
+        }
+
+        // Test addition
+        let query = "SELECT now() + INTERVAL '1 day' AS this_time_tomorrow;";
+
+        let time_plus_1_day: DateTime<Utc> = if use_simple_protocol {
+            let row: PgRow = sqlx::raw_sql(query)
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+            row.get::<_, &str>("this_time_tomorrow")
+        } else {
+            sqlx::query_scalar(query)
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap()
+        };
+
+        let now: DateTime<Utc> = Utc::now();
+        assert!(
+            time_plus_1_day > now + Duration::hours(23)
+                && time_plus_1_day < now + Duration::hours(25)
+        );
+    }
 }
 
 /// Test that an INSERT into an omnisharded table which uses UUID functions is
