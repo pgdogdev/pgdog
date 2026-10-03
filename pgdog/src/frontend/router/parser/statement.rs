@@ -306,11 +306,6 @@ impl AdvisoryLocks {
     pub(crate) fn is_empty(&self) -> bool {
         self.locks.is_empty()
     }
-
-    /// True if any advisory lock (pg_advisory_lock, etc.) was taken.
-    pub(crate) fn has_lock(&self) -> bool {
-        self.locks.iter().any(|l| !l.unlock)
-    }
 }
 
 /// Accumulator shared across statement walkers — lets a single traversal

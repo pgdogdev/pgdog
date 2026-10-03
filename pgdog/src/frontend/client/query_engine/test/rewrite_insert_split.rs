@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 
 use super::prelude::*;
@@ -26,7 +28,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     );
 
     match rewrite_result.unwrap() {
-        RewriteResult::InsertSplit(requests) => requests,
+        RewriteResult::InsertSplit(requests) => requests.deref().clone(),
         _ => unreachable!(),
     }
 }

@@ -321,7 +321,7 @@ pub(crate) fn load_test_sharded_3() {
 }
 
 #[cfg(test)]
-fn load_test_sharded_n(num_shards: usize) {
+pub(crate) fn load_test_sharded_n(num_shards: usize) {
     use pgdog_config::{OmnishardedTables, ShardedSchema, ShardedTableConfig};
 
     use crate::backend::databases::init;

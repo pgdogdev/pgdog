@@ -256,8 +256,21 @@ impl ErrorResponse {
         }
     }
 
-    pub(crate) fn from_err(err: &impl std::error::Error) -> Self {
+    pub(crate) fn from_err(err: &(impl std::error::Error + 'static)) -> Self {
         let message = err.to_string();
+        let mut source: &(dyn std::error::Error + 'static) = err;
+        loop {
+            if let Some(type_error) = source.downcast_ref::<pgdog_postgres_types::Error>() {
+                return Self {
+                    message,
+                    ..Self::from(type_error)
+                };
+            }
+            let Some(next) = source.source() else {
+                break;
+            };
+            source = next;
+        }
         Self {
             severity: "ERROR".into(),
             code: "58000".into(),
@@ -271,32 +284,15 @@ impl ErrorResponse {
 
     pub(crate) fn from_client_err(err: &FrontendError) -> Self {
         use crate::backend::Error as BackendError;
-        use crate::backend::pool::connection::multi_shard::Error as MultiShardError;
-        use pgdog_postgres_types::Error as TypeError;
         if let FrontendError::Backend(BackendError::ExecutionError(err)) = err {
             *(err.clone())
         } else if let FrontendError::AdminTermination = err {
             // Allows us to set a custom code (to identically represent the same Postgres error)
             ErrorResponse::admin_termination()
-        } else if matches!(
-            err,
-            FrontendError::Backend(BackendError::Type(TypeError::NumericOutOfRange(_)))
-                | FrontendError::Backend(BackendError::MultiShard(MultiShardError::Type(
-                    TypeError::NumericOutOfRange(_)
-                )))
-        ) {
-            Self {
-                severity: "FATAL".into(),
-                code: "22003".into(),
-                message: err.to_string(),
-                ..Default::default()
-            }
         } else {
             Self {
                 severity: "FATAL".into(),
-                code: "58000".into(),
-                message: err.to_string(),
-                ..Default::default()
+                ..Self::from_err(err)
             }
         }
     }
@@ -450,6 +446,21 @@ impl Protocol for ErrorResponse {
     }
 }
 
+impl From<&pgdog_postgres_types::Error> for ErrorResponse {
+    fn from(err: &pgdog_postgres_types::Error) -> Self {
+        Self {
+            severity: "ERROR".into(),
+            code: match err {
+                pgdog_postgres_types::Error::NumericOutOfRange(_) => "22003",
+                _ => "58000",
+            }
+            .into(),
+            message: err.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +489,25 @@ mod tests {
         let error = BackendError::from(MultiShardError::from(error));
         let response = ErrorResponse::from_client_err(&FrontendError::from(error));
         assert_eq!(response.code, "58000");
+    }
+
+    #[test]
+    fn integer_overflow_keeps_sqlstate_through_net_errors() {
+        let error = FrontendError::from(crate::net::Error::from(TypeError::NumericOutOfRange(
+            DataType::Bigint,
+        )));
+        let response = ErrorResponse::from_client_err(&error);
+        assert_eq!(response.code, "22003");
+        assert_eq!(response.severity, "FATAL");
+        assert_eq!(response.message, error.to_string());
+    }
+
+    #[test]
+    fn integer_overflow_maps_to_nonfatal_error_response() {
+        let error = TypeError::NumericOutOfRange(DataType::Integer);
+        let response = ErrorResponse::from_err(&error);
+        assert_eq!(response.code, "22003");
+        assert_eq!(response.severity, "ERROR");
+        assert_eq!(response.message, error.to_string());
     }
 }

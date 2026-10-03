@@ -53,14 +53,10 @@ impl Sum {
         let data_type = self.sum.data_type();
         match (&mut self.sum, value) {
             (SumValue::Other(Datum::Null), value) => self.sum = value.into(),
-            (SumValue::SmallInt(sum), Datum::SmallInt(value)) => {
-                add_integer(sum, i128::from(value), data_type)?;
-            }
-            (SumValue::Integer(sum), Datum::Integer(value)) => {
-                add_integer(sum, i128::from(value), data_type)?;
-            }
-            (SumValue::Bigint(sum), Datum::Bigint(value)) => {
-                add_integer(sum, i128::from(value), data_type)?;
+            (SumValue::SmallInt(sum) | SumValue::Integer(sum) | SumValue::Bigint(sum), value)
+                if data_type == value.data_type() =>
+            {
+                add_integer(sum, i128::from(value.as_i64()?), data_type)?;
             }
             (SumValue::Other(sum), value) => checked_add_assign(sum, value)?,
             (_, value) => return Err(TypeError::IncompatibleTypes(data_type, value.data_type())),
