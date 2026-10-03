@@ -428,6 +428,25 @@ impl Connection {
 
             // Send query to server.
             self.send(client_request).await?;
+
+            if client_request.is_executable() && client_request.route().is_schema_changed() {
+                match &self.binding {
+                    Binding::Direct(server) => router.schema_changed_on(server.shard),
+                    Binding::MultiShard(servers) => {
+                        for shard in servers.connected_shards() {
+                            let sent = match client_request.route().shard() {
+                                Shard::Direct(target) => *target == shard,
+                                Shard::Multi(targets) => targets.contains(&shard),
+                                Shard::All => true,
+                            };
+                            if sent {
+                                router.schema_changed_on(shard);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
         }
 
         Ok(())

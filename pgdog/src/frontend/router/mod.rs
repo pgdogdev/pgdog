@@ -1,5 +1,7 @@
 //! Query router.
 
+use std::collections::HashSet;
+
 pub(crate) mod cli;
 mod comment;
 pub(crate) mod context;
@@ -28,7 +30,7 @@ pub(crate) use search_path::SearchPath;
 pub(crate) struct Router {
     query_parser: QueryParser,
     latest_command: Command,
-    schema_changed: bool,
+    schema_changed_shards: HashSet<usize>,
     pinned_shard: Option<Shard>,
 }
 
@@ -44,7 +46,7 @@ impl Router {
         Self {
             query_parser: QueryParser::default(),
             latest_command: Command::default(),
-            schema_changed: false,
+            schema_changed_shards: HashSet::new(),
             pinned_shard: None,
         }
     }
@@ -65,12 +67,6 @@ impl Router {
         let command = self.query_parser.parse(context)?;
 
         self.latest_command = command;
-
-        if let Command::Query(ref route) = self.latest_command
-            && route.is_schema_changed()
-        {
-            self.schema_changed = true;
-        }
 
         // Check for shard pinning, e.g.,
         // SET pgdog.shard TO x;
@@ -114,8 +110,8 @@ impl Router {
     pub(crate) fn reset(&mut self) {
         self.query_parser = QueryParser::default();
         self.latest_command = Command::default();
+        self.schema_changed_shards.clear();
         self.pinned_shard = None;
-        self.schema_changed = false;
     }
 
     /// Get last commmand computed by the query parser.
@@ -125,6 +121,15 @@ impl Router {
 
     /// Has the schema been altered?
     pub(crate) fn schema_changed(&self) -> bool {
-        self.schema_changed
+        !self.schema_changed_shards.is_empty()
+    }
+
+    /// Record a shard that received DDL in this transaction.
+    pub(crate) fn schema_changed_on(&mut self, shard: usize) {
+        self.schema_changed_shards.insert(shard);
+    }
+
+    pub(crate) fn schema_changed_shards(&self) -> &HashSet<usize> {
+        &self.schema_changed_shards
     }
 }

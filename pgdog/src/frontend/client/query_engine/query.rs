@@ -362,7 +362,7 @@ impl QueryEngine {
                 self.backend.disconnect();
             }
 
-            // Detect schema change and relaod the config so we get new schema.
+            // Refresh schema information for shards that received DDL.
             if self.router.schema_changed()
                 && self
                     .backend
@@ -374,7 +374,8 @@ impl QueryEngine {
                     "schema change detected, reloading config [{}]",
                     self.backend.cluster()?.identifier(),
                 );
-                schema_changed().await?;
+                schema_changed(self.backend.cluster()?, self.router.schema_changed_shards())
+                    .await?;
             }
 
             self.router.reset();

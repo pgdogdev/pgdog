@@ -13,7 +13,7 @@ use pgdog_config::{
     EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
     ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -97,6 +97,19 @@ pub(crate) fn reload_from_existing() -> Result<(), Error> {
     let databases = from_config(&config);
     replace_databases(databases, true)?;
     Ok(())
+}
+
+/// Reload DDL targets while preserving other shards' cached schema and type information.
+pub(crate) fn reload_schema(source: &Cluster, shards: &HashSet<usize>) -> Result<(), Error> {
+    let _lock = lock();
+    let current = databases();
+    let targets = current.schema_reload_targets(source, shards);
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let cache = current.schema_cache.with_invalidated_shards(&targets);
+    let new_databases = from_config_with_schema_cache(&config(), cache);
+    replace_databases(new_databases, true)
 }
 
 /// Initialize the databases for the first time.
@@ -341,9 +354,50 @@ pub(crate) struct Databases {
     databases: HashMap<User, Cluster>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
+    schema_cache: SchemaCache,
 }
 
 impl Databases {
+    /// Include other configured names for the same PostgreSQL database.
+    fn schema_reload_targets(
+        &self,
+        source: &Cluster,
+        shards: &HashSet<usize>,
+    ) -> HashMap<String, HashSet<usize>> {
+        // The transaction can finish after a config reload changed its logical database.
+        // Use the endpoints that received the DDL, not the replacement configuration.
+        let addresses: HashSet<_> = source
+            .shards()
+            .iter()
+            .filter(|shard| shards.contains(&shard.number()))
+            .flat_map(|shard| shard.pool_iter())
+            .map(|pool| {
+                let addr = pool.addr();
+                (addr.host.as_str(), addr.port, addr.database_name.as_str())
+            })
+            .collect();
+
+        let mut targets: HashMap<String, HashSet<usize>> = HashMap::new();
+        for cluster in self.databases.values() {
+            for shard in cluster.shards() {
+                if shard.pool_iter().any(|pool| {
+                    let addr = pool.addr();
+                    addresses.contains(&(
+                        addr.host.as_str(),
+                        addr.port,
+                        addr.database_name.as_str(),
+                    ))
+                }) {
+                    targets
+                        .entry(cluster.name().to_owned())
+                        .or_default()
+                        .insert(shard.number());
+                }
+            }
+        }
+        targets
+    }
+
     /// Get the database user password, if one is configured.
     pub(crate) fn passwords(&self, user: impl ToUser) -> Option<&[PasswordKind]> {
         if let Some(cluster) = self.databases.get(&user.to_user()) {
@@ -661,9 +715,11 @@ fn new_pool(
 
 /// Load databases from config.
 pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
+    from_config_with_schema_cache(config, SchemaCache::default())
+}
+
+fn from_config_with_schema_cache(config: &ConfigAndUsers, schema_cache: SchemaCache) -> Databases {
     let mut databases = HashMap::new();
-    // The schema cache is shared between all databases.
-    let schema_cache = SchemaCache::default();
 
     for user in &config.users.users {
         for database in config.config.user_databases(user) {
@@ -777,6 +833,7 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
         databases,
         mirrors,
         mirror_configs,
+        schema_cache,
     }
 }
 
@@ -786,6 +843,67 @@ mod tests {
 
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
+
+    #[test]
+    fn schema_reload_includes_aliases_but_not_unrelated_databases() {
+        let mut config = ConfigAndUsers::default();
+        for (name, shard, database_name, port) in [
+            ("source", 0, "tenant_0", 5432),
+            ("source", 1, "tenant_1", 5432),
+            ("alias", 0, "tenant_1", 5432),
+            ("unrelated", 0, "tenant_2", 5432),
+            ("different_port", 0, "tenant_1", 5433),
+        ] {
+            config.config.databases.push(Database {
+                name: name.into(),
+                shard,
+                database_name: Some(database_name.into()),
+                host: "127.0.0.1".into(),
+                port,
+                role: Role::Primary,
+                ..Default::default()
+            });
+        }
+        for database in ["source", "alias", "unrelated", "different_port"] {
+            for user in ["first", "second"] {
+                config
+                    .users
+                    .users
+                    .push(ConfigUser::new(user, "password", database));
+            }
+        }
+        let databases = from_config(&config);
+        let source = databases
+            .cluster(("first", "source"))
+            .expect("source cluster");
+
+        assert_eq!(
+            databases.schema_reload_targets(&source, &HashSet::from([1])),
+            HashMap::from([
+                ("source".to_owned(), HashSet::from([1])),
+                ("alias".to_owned(), HashSet::from([0])),
+            ]),
+        );
+        assert!(
+            databases
+                .schema_reload_targets(&source, &HashSet::new())
+                .is_empty()
+        );
+
+        config
+            .config
+            .databases
+            .iter_mut()
+            .find(|database| database.name == "source" && database.shard == 1)
+            .expect("source shard")
+            .database_name = Some("tenant_2".to_owned());
+        let reconfigured = from_config(&config);
+        assert_eq!(
+            reconfigured.schema_reload_targets(&source, &HashSet::from([1])),
+            HashMap::from([("alias".to_owned(), HashSet::from([0]))]),
+            "DDL finishing on the old endpoint must refresh its remaining alias",
+        );
+    }
 
     fn setup_config(passthrough_auth: PassthroughAuth, users: Vec<ConfigUser>) {
         let _lock = lock();

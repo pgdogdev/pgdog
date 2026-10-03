@@ -2,6 +2,133 @@ use crate::{expect_message, net::CommandComplete};
 
 use super::prelude::*;
 
+#[tokio::test]
+async fn test_ddl_reload_preserves_untouched_shard_schema() {
+    use crate::backend::{databases::databases, pool::Request};
+    use uuid::Uuid;
+
+    let mut client = Box::new(TestClient::new_sharded(Parameters::default()).await);
+    let before = client.engine.backend().cluster().expect("cluster").clone();
+    before.wait_ready().await;
+    let untouched_schema = before.shards()[0].schema();
+    let marker = format!("schema_marker_{}", Uuid::new_v4().simple());
+    let table = format!("schema_reload_{}", Uuid::new_v4().simple());
+
+    // An out-of-band change proves whether an untouched shard was fetched again.
+    let mut direct = before.shards()[0]
+        .primary(&Request::default())
+        .await
+        .expect("shard 0");
+    direct
+        .execute_checked(format!("CREATE TABLE {marker} (id int)"))
+        .await
+        .expect("marker");
+    drop(direct);
+    let mut direct = before.shards()[1]
+        .primary(&Request::default())
+        .await
+        .expect("shard 1");
+    direct
+        .execute_checked("CREATE SCHEMA IF NOT EXISTS bcustomer")
+        .await
+        .expect("schema");
+    drop(direct);
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.expect("begin");
+    client
+        .send_simple(Query::new(format!(
+            "CREATE TABLE bcustomer.{table} (id int)"
+        )))
+        .await;
+    client.read_until('Z').await.expect("DDL");
+    // A later read on other shards must not expand the set of DDL targets.
+    client.send_simple(Query::new("SELECT 1")).await;
+    client.read_until('Z').await.expect("select");
+    client.send_simple(Query::new("COMMIT")).await;
+    client.read_until('Z').await.expect("commit");
+
+    let after = databases()
+        .cluster(("pgdog", "pgdog"))
+        .expect("reloaded cluster");
+    after.wait_ready().await;
+    let actual_untouched = after.shards()[0].schema();
+    let changed = after.shards()[1]
+        .schema()
+        .get("bcustomer", &table)
+        .is_some();
+
+    // Clean up before asserting, including when checking this regression on main.
+    let mut direct = after.shards()[0]
+        .primary(&Request::default())
+        .await
+        .expect("shard 0");
+    direct
+        .execute_checked(format!("DROP TABLE {marker}"))
+        .await
+        .expect("drop marker");
+    drop(direct);
+    let mut direct = after.shards()[1]
+        .primary(&Request::default())
+        .await
+        .expect("shard 1");
+    direct
+        .execute_checked(format!("DROP TABLE bcustomer.{table}"))
+        .await
+        .expect("drop table");
+
+    assert!(changed, "the DDL target must get a fresh schema");
+    assert_eq!(
+        actual_untouched, untouched_schema,
+        "unaffected shard schema must be retained"
+    );
+}
+
+#[tokio::test]
+async fn test_ddl_reload_tracks_each_shard_until_commit() {
+    use crate::backend::{databases::databases, pool::Request};
+    use uuid::Uuid;
+
+    let mut client = Box::new(TestClient::new_sharded(Parameters::default()).await);
+    let before = client.engine.backend().cluster().expect("cluster").clone();
+    before.wait_ready().await;
+    let table = format!("schema_reload_{}", Uuid::new_v4().simple());
+    for (shard, schema) in before.shards().iter().zip(["acustomer", "bcustomer"]) {
+        let mut direct = shard.primary(&Request::default()).await.expect("shard");
+        direct
+            .execute_checked(format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+            .await
+            .expect("schema");
+    }
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.expect("begin");
+    for schema in ["acustomer", "bcustomer"] {
+        client
+            .send_simple(Query::new(format!(
+                "CREATE TABLE {schema}.{table} (id int)"
+            )))
+            .await;
+        client.read_until('Z').await.expect("DDL");
+    }
+    client.send_simple(Query::new("COMMIT")).await;
+    client.read_until('Z').await.expect("commit");
+
+    let after = databases()
+        .cluster(("pgdog", "pgdog"))
+        .expect("reloaded cluster");
+    after.wait_ready().await;
+    for (shard, schema) in after.shards().iter().zip(["acustomer", "bcustomer"]) {
+        let present = shard.schema().get(schema, &table).is_some();
+        let mut direct = shard.primary(&Request::default()).await.expect("shard");
+        direct
+            .execute_checked(format!("DROP TABLE {schema}.{table}"))
+            .await
+            .expect("drop table");
+        assert!(present, "DDL target {schema} must be refreshed");
+    }
+}
+
 /// Get the pool IDs for all pools in the cluster.
 fn get_pool_ids(engine: &mut QueryEngine) -> Vec<u64> {
     let cluster = engine.backend().cluster().unwrap();
