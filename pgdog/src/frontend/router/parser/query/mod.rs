@@ -102,7 +102,12 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } => {
+            Command::Query(route)
+            | Command::Set { route, .. }
+            | Command::Copy { route, .. }
+            | Command::StartTransaction { route, .. }
+            | Command::CommitTransaction { route, .. }
+            | Command::RollbackTransaction { route, .. } => {
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator
@@ -185,7 +190,7 @@ impl QueryParser {
             }
         }
 
-        debug!("query router decision: {:#?}", command);
+        debug!("query router decision: {:?}", command);
 
         self.attach_explain(&mut command);
 
@@ -597,7 +602,10 @@ impl QueryParser {
                 context.shards_calculator.shard(),
             )))
         } else {
-            Ok(Command::Copy(Box::new(parser)))
+            Ok(Command::Copy {
+                copy: Box::new(parser),
+                route: Route::write(ShardWithPriority::new_override_copy()),
+            })
         }
     }
 

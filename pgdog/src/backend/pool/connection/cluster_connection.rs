@@ -9,22 +9,25 @@ use crate::{
         reload_notify,
     },
     config::config,
-    frontend::router::{Route, parser::Shard},
+    frontend::router::parser::Shard,
 };
 use pgdog_config::{PoolerMode, User, users::PasswordKind};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+/// Manage cluster connection creation.
 #[derive(Default, Debug)]
-pub(super) struct ClusterConnection {
+pub(crate) struct ClusterConnection {
+    // User name.
     user: String,
+    // Database name.
     database: String,
-    /// Cluster smart pointer.
-    /// Swapped at reload time, hence optional.
+    // Cluster smart pointer.
+    // Swapped at reload time, hence optional.
     cluster: Option<Cluster>,
-    /// Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
+    // Cancelled when an admin terminates the cluster (`FORCE_RELOAD`).
     query_cancellation: CancellationToken,
-    /// Traffic mirrors.
+    // Traffic mirrors.
     mirrors: Vec<MirrorHandler>,
 }
 
@@ -76,18 +79,43 @@ impl ClusterConnection {
         Ok(())
     }
 
-    /// Get all connections necessary to serve the route.
+    /// Get connections for all `shards`. If `is_read` is true,
+    /// connect to replicas.
+    pub(crate) async fn get_conns_for_shards(
+        &mut self,
+        request: &Request,
+        shards: &[usize],
+        is_read: bool,
+    ) -> Result<Vec<Guard>, Error> {
+        let mut conns = vec![];
+        let shards_before = self.cluster()?.shards().len();
+
+        for shard in shards {
+            // TODO(lev): maybe parallelize, although pool checkout
+            // is very quick (unless things are broken, in which case it doesn't matter).
+            conns.push(self.get_conn(request, *shard, is_read).await?);
+        }
+
+        // TODO(lev): this doesn't protect against address changes for shards.
+        if shards_before != self.cluster()?.shards().len() {
+            return Err(Error::Pool(PoolError::Offline));
+        }
+
+        debug_assert_eq!(shards.len(), conns.len());
+
+        Ok(conns)
+    }
+
+    /// Get all connections necessary to serve the request.
     pub(super) async fn get_conns(
         &mut self,
         request: &Request,
-        route: &Route,
+        shard: &Shard,
+        is_read: bool,
     ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
-        let mut conns = vec![];
-        let shards = self.cluster()?.shards().len();
-
-        let indices = (0..shards)
+        let shards = (0..self.cluster()?.shards().len())
             .filter(|shard_number| {
-                if let Shard::Multi(numbers) = route.shard()
+                if let Shard::Multi(numbers) = shard
                     && !numbers.contains(shard_number)
                 {
                     false
@@ -97,19 +125,13 @@ impl ClusterConnection {
             })
             .collect::<Vec<_>>();
 
-        for index in &indices {
-            conns.push(self.get_conn(request, *index, route.is_read()).await?);
-        }
-
-        // TODO(lev): this doesn't protect against address changes for shards.
-        if shards != self.cluster()?.shards().len() {
-            return Err(Error::Pool(PoolError::Offline));
-        }
-
-        Ok((conns, indices))
+        Ok((
+            self.get_conns_for_shards(request, &shards, is_read).await?,
+            shards,
+        ))
     }
 
-    /// Get a connection from the cluster.
+    /// Get a connection from the cluster for the given `shard`.
     pub(super) async fn get_conn(
         &mut self,
         request: &Request,

@@ -12,6 +12,7 @@ pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
 pub(crate) mod insert;
+pub(crate) mod insert_split_plan;
 pub(crate) mod nextval;
 pub(crate) mod non_deterministic_funcs;
 pub(crate) mod offset;
@@ -26,6 +27,7 @@ pub(crate) use error::Error;
 pub(crate) use insert::InsertSplit;
 use pgdog_config::RewriteMode;
 //use pgdog_config::RewriteMode;
+pub(crate) use insert_split_plan::InsertSplitRewriteResult;
 pub(crate) use plan::RewritePlan;
 pub(crate) use simple_prepared::PrepareExecute;
 pub(crate) use update::*;
@@ -193,11 +195,14 @@ impl<'a> StatementRewrite<'a> {
 
         if nd_function_rewrite {
             match stmt.stmt_mut() {
-                NodeMut::InsertStmt(_) => {
+                NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_) => {
                     self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
-                    if matches!(prepare.query_mut(), NodeMut::InsertStmt(_)) {
+                    if matches!(
+                        prepare.query_mut(),
+                        NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)
+                    ) {
                         self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
                 }

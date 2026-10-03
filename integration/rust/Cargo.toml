@@ -27,3 +27,4 @@ bytes.workspace = true
 rust_decimal = { version = "1.42.0", features = ["macros"] }
 chrono-tz = "0.10.4"
 pgdog-stats = { path = "../../pgdog-stats" }
+itertools = "0.15"
