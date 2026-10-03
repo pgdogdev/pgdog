@@ -18,8 +18,10 @@ use multi_shard::MultiBinding;
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
 pub(crate) enum Binding {
+    /// Transaction binding: BEGIN.
+    Transaction(TransactionBinding),
     /// Direct-to-shard transaction.
-    Direct(Guard, usize),
+    Direct(DirectBinding),
     /// Admin database connection.
     Admin(AdminServer),
     /// Multi-shard transaction.
@@ -44,7 +46,7 @@ impl Binding {
     /// they are probably broken and should not be re-used.
     pub(crate) fn force_close(&mut self) {
         match self {
-            Binding::Direct(guard, _) => guard.stats_mut().state(State::ForceClose),
+            Binding::Direct(guard) => guard.stats_mut().state(State::ForceClose),
             Binding::MultiShard(servers) => {
                 for guard in servers.iter_mut() {
                     guard.stats_mut().state(State::ForceClose);
@@ -59,10 +61,11 @@ impl Binding {
     /// Are we connected to a backend?
     pub(crate) fn connected(&self) -> bool {
         match self {
-            Binding::Direct(_, _) => true,
+            Binding::Direct(_) => true,
             Binding::MultiShard(servers) => !servers.is_empty(),
             Binding::Admin(_) => true,
             Binding::NotConnected => false,
+            Binding::Transaction(_) => false,
         }
     }
 
@@ -76,7 +79,7 @@ impl Binding {
     ///
     pub(crate) fn connected_servers(&self) -> usize {
         match self {
-            Binding::Direct(_, _) => 1,
+            Binding::Direct(_) => 1,
             Binding::MultiShard(servers) => servers.len(),
             Binding::Admin(_) => 1,
             _ => 0,
@@ -85,9 +88,9 @@ impl Binding {
 
     pub(super) async fn read(&mut self) -> Result<Message, Error> {
         match self {
-            Binding::Direct(guard, _) => guard.read().await,
+            Binding::Direct(guard) => guard.read().await,
 
-            Binding::NotConnected => loop {
+            Binding::NotConnected | Binding::Transaction(_) => loop {
                 safe_sleep(Duration::MAX).await
             },
 
@@ -103,7 +106,7 @@ impl Binding {
                     }
 
                     loop {
-                        servers.state_mut().query_complete();
+                        servers.query_complete();
                         safe_sleep(Duration::MAX).await;
                     }
                 }
@@ -115,8 +118,8 @@ impl Binding {
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
         match self {
             Binding::Admin(backend) => Ok(backend.send(client_request).await?),
-            Binding::Direct(server, _) => server.send(client_request).await,
-            Binding::NotConnected => Err(Error::NotConnected),
+            Binding::Direct(server) => server.send(client_request).await,
+            Binding::NotConnected | Binding::Transaction(_) => Err(Error::NotConnected),
             Binding::MultiShard(servers) => servers.send(client_request).await,
         }
     }
@@ -134,7 +137,7 @@ impl Binding {
         route: &Route,
     ) -> Result<(), Error> {
         match self {
-            Binding::Direct(server, ..) => server.send_ignore(message).await,
+            Binding::Direct(server) => server.send_ignore(message).await,
             Binding::MultiShard(servers) => servers.send_ignore(message, route).await,
             _ => Err(Error::NotConnected),
         }
@@ -160,8 +163,9 @@ impl Binding {
     pub(super) fn done(&self) -> bool {
         match self {
             Binding::Admin(admin) => admin.done(),
-            Binding::Direct(server, ..) => server.done(),
+            Binding::Direct(server) => server.done(),
             Binding::MultiShard(servers) => servers.iter().all(|s| s.done()),
+            Binding::Transaction(_) => false,
             _ => true,
         }
     }
@@ -169,10 +173,8 @@ impl Binding {
     pub(crate) fn has_more_messages(&self) -> bool {
         match self {
             Binding::Admin(admin) => !admin.done(),
-            Binding::Direct(server, ..) => server.has_more_messages(),
-            Binding::MultiShard(servers) => {
-                servers.state().has_more_messages() || servers.iter().any(|s| s.has_more_messages())
-            }
+            Binding::Direct(server) => server.has_more_messages(),
+            Binding::MultiShard(servers) => servers.has_more_messages(),
             _ => false,
         }
     }
@@ -180,31 +182,9 @@ impl Binding {
     /// Protocol is out of sync due to an error in extended protocol.
     pub(crate) fn out_of_sync(&self) -> bool {
         match self {
-            Binding::Direct(server, ..) => server.out_of_sync(),
+            Binding::Direct(server) => server.out_of_sync(),
             Binding::MultiShard(servers) => servers.iter().any(|s| s.out_of_sync()),
             _ => false,
-        }
-    }
-
-    pub(super) fn state_check(&self, state: State) -> bool {
-        match self {
-            Binding::Direct(server, ..) => {
-                debug!(
-                    "server is in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-                server.stats().get_state() == state
-            }
-            Binding::MultiShard(servers) => servers.iter().all(|s| {
-                debug!(
-                    "server is in \"{}\" state [{}]",
-                    s.stats().get_state(),
-                    s.addr()
-                );
-                s.stats().get_state() == state
-            }),
-            _ => true,
         }
     }
 
@@ -216,7 +196,7 @@ impl Binding {
         let query: Query = query.into();
         let mut result = vec![];
         match self {
-            Binding::Direct(server, ..) => {
+            Binding::Direct(server) => {
                 result.extend(server.execute(query).await?);
             }
 
@@ -258,28 +238,10 @@ impl Binding {
         &mut self,
         id: FrontendPid,
         params: &Parameters,
-        transaction_start_stmt: Option<&str>,
     ) -> Result<usize, Error> {
         match self {
-            Binding::Direct(server, ..) => {
-                server.link_client(id, params, transaction_start_stmt).await
-            }
-            Binding::MultiShard(servers) => {
-                let futures = servers
-                    .iter_mut()
-                    .map(|server| server.link_client(id, params, transaction_start_stmt));
-                let results = join_all(futures).await;
-
-                let mut max = 0;
-                for result in results {
-                    let synced = result?;
-                    if max < synced {
-                        max = synced;
-                    }
-                }
-                Ok(max)
-            }
-
+            Binding::Direct(server, ..) => server.link_client(id, params).await,
+            Binding::MultiShard(servers) => Ok(servers.link_client(id, params).await?),
             _ => Ok(0),
         }
     }
@@ -357,39 +319,12 @@ impl Binding {
         }
     }
 
-    /// If connected to one shard only, get that shard number.
-    pub(crate) fn direct_shard_number(&self) -> Option<usize> {
-        if let Self::Direct(_, shard) = self {
-            Some(*shard)
-        } else {
-            None
-        }
-    }
-
     pub(crate) fn in_copy_mode(&self) -> bool {
         match self {
             Binding::Admin(_) => false,
             Binding::MultiShard(servers) => servers.iter().all(|s| s.in_copy_mode()),
-            Binding::Direct(server, ..) => server.in_copy_mode(),
+            Binding::Direct(server) => server.in_copy_mode(),
             _ => false,
         }
-    }
-
-    /// Number of connected shards.
-    pub(crate) fn shards(&self) -> Result<usize, Error> {
-        Ok(match self {
-            Binding::Admin(_) => 1,
-            Binding::Direct(_, _) => 1,
-            Binding::MultiShard(servers) => {
-                if servers.is_empty() {
-                    return Err(Error::MultiShardNotConnected);
-                } else {
-                    servers.len()
-                }
-            }
-            _ => {
-                return Err(Error::NotConnected);
-            }
-        })
     }
 }

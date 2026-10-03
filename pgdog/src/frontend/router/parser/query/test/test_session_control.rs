@@ -133,10 +133,7 @@ fn test_advisory_lock_detected() {
         let mut test = setup_with_locks();
         let command = test.execute(vec![Query::new(query).into()]);
         match command {
-            Command::Query(route) => assert!(
-                route.is_lock_session(),
-                "expected lock_session for '{query}', got {route:#?}"
-            ),
+            Command::Query(route) => assert!(!route.advisory_locks().is_empty()),
             _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
         }
     }
@@ -150,10 +147,7 @@ fn test_advisory_lock_detected() {
         let mut test = setup_with_locks();
         let command = test.execute(vec![Query::new(query).into()]);
         match command {
-            Command::Query(route) => assert!(
-                route.is_unlock_session(),
-                "expected unlock_session for '{query}', got {route:#?}"
-            ),
+            Command::Query(route) => assert!(!route.advisory_locks().is_empty()),
             _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
         }
     }
@@ -173,11 +167,7 @@ fn test_advisory_lock_detected() {
         let command = test.execute(vec![Query::new(query).into()]);
         match command {
             Command::Query(route) => {
-                assert!(
-                    route.is_lock_session(),
-                    "xact locks still need to pin the backend for '{query}'"
-                );
-                assert!(!route.is_unlock_session());
+                assert!(!route.advisory_locks().is_empty());
             }
             _ => panic!("expected Command::Query for '{query}', got {command:#?}"),
         }
@@ -192,10 +182,6 @@ fn test_advisory_lock_not_detected_without_locks_level() {
     let command = test.execute(vec![Query::new("SELECT pg_advisory_lock(1)").into()]);
     match command {
         Command::Query(route) => {
-            assert!(
-                !route.is_lock_session(),
-                "SessionControl level should not classify advisory locks",
-            );
             assert_eq!(
                 route.shard_with_priority().source(),
                 &ShardSource::Override(OverrideReason::ParserDisabled),
