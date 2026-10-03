@@ -6,7 +6,7 @@
 
 //! pgDog, modern PostgreSQL proxy, pooler and query router.
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "bench")))]
 use std::alloc::System;
 use std::fs::read_to_string;
 use std::io::IsTerminal;
@@ -339,7 +339,7 @@ fn bootstrap_logger(config_path: &Path) {
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "bench")))]
 #[global_allocator]
 static GLOBAL: &stats_alloc::StatsAlloc<System> = &stats_alloc::INSTRUMENTED_SYSTEM;
 

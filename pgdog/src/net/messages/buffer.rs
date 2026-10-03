@@ -276,6 +276,7 @@ mod test {
         assert!(buf.capacity() > 0);
     }
 
+    #[cfg(not(feature = "bench"))]
     #[test]
     fn test_bytes_mut() {
         let region = stats_alloc::Region::new(crate::GLOBAL);
