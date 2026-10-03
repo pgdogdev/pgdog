@@ -171,23 +171,20 @@ async fn cached_parse_allows_transaction_exit_after_abort() {
             assert!(failed.iter().any(|message| message.code == 'E'));
             assert_eq!(failed.last().expect("ReadyForQuery").payload.as_ref(), b"E");
 
-            let parsed = parse_and_sync(&mut stream, "aborted_exit", sql).await;
+            // Keep Parse/Bind/Execute in one cycle to exercise the backend cache path.
+            Message::new_parse("aborted_exit", sql)
+                .send(&mut stream)
+                .await
+                .expect("cached transaction-exit Parse");
+            let executed = execute_statement(&mut stream, "aborted_exit").await;
             assert_eq!(
-                parsed
+                executed
                     .iter()
                     .map(|message| message.code)
                     .collect::<Vec<_>>(),
-                ['1', 'Z'],
+                ['1', '2', 'C', 'Z'],
                 "cached {sql} Parse remains valid after abort ({user})"
             );
-            assert_eq!(parsed.last().expect("ReadyForQuery").payload.as_ref(), b"E");
-
-            let executed = execute_statement(&mut stream, "aborted_exit").await;
-            assert!(
-                !executed.iter().any(|message| message.code == 'E'),
-                "{executed:?}"
-            );
-            assert!(executed.iter().any(|message| message.code == 'C'));
             assert_eq!(
                 executed.last().expect("ReadyForQuery").payload.as_ref(),
                 b"I"
