@@ -14,6 +14,7 @@ pub(crate) mod guard;
 pub(crate) mod healthcheck;
 pub(crate) mod inner;
 pub(crate) mod lb;
+pub(crate) mod lsn_cache;
 pub(crate) mod lsn_monitor;
 pub(crate) mod monitor;
 pub(crate) mod password;
