@@ -1,7 +1,7 @@
 use std::{fmt::Display, ops::Deref};
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, explain_trace::ExplainTrace,
+    Aggregate, DistinctBy, Limit, OrderBy, StatementType, explain_trace::ExplainTrace,
     rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
@@ -135,6 +135,7 @@ pub(crate) struct Route {
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
+    stmt_type: StatementType,
 }
 
 impl Display for Route {
@@ -383,17 +384,6 @@ impl Route {
         &self.advisory_locks
     }
 
-    /// Returns true when this statement has an advisory lock function that acquires a lock.
-    pub(crate) fn is_lock_session(&self) -> bool {
-        self.advisory_locks.has_lock()
-    }
-
-    /// True when the statement only releases advisory locks — safe to unpin.
-    #[cfg(test)]
-    pub(crate) fn is_unlock_session(&self) -> bool {
-        !self.advisory_locks.is_empty() && !self.advisory_locks.has_lock()
-    }
-
     pub(crate) fn distinct(&self) -> &Option<DistinctBy> {
         &self.distinct
     }
@@ -405,6 +395,25 @@ impl Route {
     pub(super) fn with_temp_table_change(mut self, temp_table: Option<TempTableChange>) -> Self {
         self.temp_table_change = temp_table;
         self
+    }
+
+    pub(super) fn ddl(mut self) -> Self {
+        self.stmt_type = StatementType::Ddl;
+        self
+    }
+
+    pub(super) fn transaction_control(mut self) -> Self {
+        self.stmt_type = StatementType::TransactionControl;
+        self
+    }
+
+    pub(super) fn session_control(mut self) -> Self {
+        self.stmt_type = StatementType::SessionControl;
+        self
+    }
+
+    pub(crate) fn needs_backend(&self) -> bool {
+        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl) || self.rollback_savepoint
     }
 }
 
@@ -428,12 +437,6 @@ pub(crate) enum ShardSource {
     Override(OverrideReason),
 }
 
-impl ShardSource {
-    pub(crate) fn is_round_robin(&self) -> bool {
-        matches!(self, Self::RoundRobin(_))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub(crate) enum RoundRobinReason {
     Omni,
@@ -447,10 +450,11 @@ pub(crate) enum OverrideReason {
     AdvisoryLock,
     DryRun,
     ParserDisabled,
-    Transaction,
+    CrossShardTransaction,
     OnlyOneShard,
     CrossShardFunction,
     CanonicalSchemaInfo,
+    Copy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -518,10 +522,10 @@ impl ShardWithPriority {
         }
     }
 
-    pub(crate) fn new_override_transaction(shard: Shard) -> Self {
+    pub(crate) fn new_override_cross_shard(shard: Shard) -> Self {
         Self {
             shard,
-            source: ShardSource::Override(OverrideReason::Transaction),
+            source: ShardSource::Override(OverrideReason::CrossShardTransaction),
         }
     }
 
@@ -536,6 +540,13 @@ impl ShardWithPriority {
         Self {
             shard,
             source: ShardSource::Override(OverrideReason::CanonicalSchemaInfo),
+        }
+    }
+
+    pub(crate) fn new_override_copy() -> Self {
+        Self {
+            shard: Shard::All,
+            source: ShardSource::Override(OverrideReason::Copy),
         }
     }
 
