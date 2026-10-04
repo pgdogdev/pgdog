@@ -4,7 +4,10 @@ use tracing::debug;
 use crate::{
     frontend::{
         ClientRequest, Command, Router, RouterContext,
-        client::query_engine::{QueryEngine, QueryEngineContext},
+        client::{
+            protocol::{Commands, Statement},
+            query_engine::{QueryEngine, QueryEngineContext},
+        },
         router::parser::rewrite::statement::ShardingKeyUpdate,
     },
     net::{CommandComplete, DataRow, ErrorResponse, Protocol, ReadyForQuery, RowDescription},
@@ -82,9 +85,16 @@ impl<'a> UpdateMulti<'a> {
         if self.move_row(context, client_request).await?.is_none() {
             // This happens, but the UPDATE's WHERE clause
             // doesn't match any rows, so this whole thing is a no-op.
-            self.engine
-                .fake_command_response(context, &client_request.messages, "UPDATE 0", None)
+            let response = Commands::builder()
+                .maybe_transaction(context.transaction())
+                .pipeline(&context.pipeline)
+                .statement(Statement::Update)
+                .rows_affected(0)
+                .build();
+            let (bytes_sent, _) = response
+                .send_reply(client_request.messages.as_slice(), context.stream)
                 .await?;
+            self.engine.stats.sent(bytes_sent);
         }
 
         Ok(())

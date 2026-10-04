@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, ErrorResponse, NoData, ParameterDescription, ParseComplete,
-        ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, ParameterDescription,
+        ParseComplete, ReadyForQuery, RowDescription, parameter::ParameterValue,
     },
 };
 
@@ -71,6 +71,51 @@ async fn test_set_statement_describe() {
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
     );
+}
+
+#[tokio::test]
+async fn test_set_config_returns_value_or_null() {
+    for extended in [false, true] {
+        for value in [Some("set_config_result"), None] {
+            let mut client = TestClient::new_sharded(Parameters::default()).await;
+            let sql_value = value.map_or("NULL".to_owned(), |value| format!("'{value}'"));
+            let sql = format!("SELECT set_config('application_name', {sql_value}, false)");
+
+            if extended {
+                client.send(Parse::named("set_config", &sql)).await;
+                client.send(Describe::new_statement("set_config")).await;
+                client.send(Bind::new_statement("set_config")).await;
+                client.send(Execute::new()).await;
+                client.send(Sync).await;
+                client.try_process().await.expect("execute set_config");
+                expect_message!(client.read().await, ParseComplete);
+                expect_message!(client.read().await, ParameterDescription);
+            } else {
+                client.send_simple(Query::new(&sql)).await;
+            }
+
+            let description = expect_message!(client.read().await, RowDescription);
+            assert_eq!(description.fields[0].name, "set_config");
+            if extended {
+                expect_message!(client.read().await, BindComplete);
+            }
+            let row = expect_message!(client.read().await, DataRow);
+            let column = row.get_raw(0).expect("set_config result");
+            assert_eq!(column.is_null, value.is_none());
+            if let Some(value) = value {
+                assert_eq!(column.data.as_ref(), value.as_bytes());
+            }
+            assert_eq!(
+                expect_message!(client.read().await, CommandComplete).command(),
+                if value.is_some() { "SET" } else { "RESET" }
+            );
+            assert_eq!(
+                expect_message!(client.read().await, ReadyForQuery).status,
+                'I'
+            );
+            assert!(!client.backend_connected());
+        }
+    }
 }
 
 #[tokio::test]

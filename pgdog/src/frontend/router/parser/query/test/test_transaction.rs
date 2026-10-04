@@ -28,7 +28,7 @@ fn test_begin_extended() {
     ]);
 
     match command {
-        Command::StartTransaction { extended, .. } => assert!(extended),
+        Command::StartTransaction { .. } => (),
         _ => panic!("expected StartTransaction, got {command:?}"),
     }
 }

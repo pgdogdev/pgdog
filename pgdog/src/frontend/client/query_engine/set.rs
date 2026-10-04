@@ -1,7 +1,7 @@
 use crate::frontend::SetParam;
-use crate::frontend::client::query_engine::fake::FakeResponse;
+use crate::frontend::client::protocol::{Commands, Statement, Statements};
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
-use crate::net::messages::ErrorResponse;
+use crate::net::ErrorResponse;
 
 use super::*;
 
@@ -29,7 +29,7 @@ impl QueryEngine {
             return Ok(());
         }
 
-        let mut fake_command = "SET";
+        let mut statement = Statement::Set;
         for param in params {
             let is_pin = param.name == PGDOG_PIN;
 
@@ -50,7 +50,7 @@ impl QueryEngine {
                     }
                 }
             } else {
-                fake_command = "RESET";
+                statement = Statement::Reset;
                 context.params.reset(&param.name);
                 if is_pin {
                     self.manual_lock = false;
@@ -65,16 +65,20 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            let fake_response = set_config
-                .then(|| params.iter().map(|p| p.value.as_ref()))
-                .map(|values| FakeResponse::new_params(&["set_config"], values));
-            self.fake_command_response(
-                context,
-                &client_request.messages,
-                fake_command,
-                fake_response,
-            )
-            .await?;
+            let mut response = Statements::builder()
+                .maybe_transaction(context.transaction())
+                .pipeline(&context.pipeline)
+                .statement(statement)
+                .build();
+            if set_config {
+                response = response
+                    .columns(&["set_config"])
+                    .with_row(params.iter().map(|param| param.value.as_ref()));
+            }
+            let (bytes_sent, _) = response
+                .send_reply(client_request.messages.as_slice(), context.stream)
+                .await?;
+            self.stats.sent(bytes_sent);
         }
 
         Ok(())
@@ -126,8 +130,15 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            self.fake_command_response(context, &client_request.messages, "RESET", None)
+            let response = Commands::builder()
+                .maybe_transaction(context.transaction())
+                .pipeline(&context.pipeline)
+                .statement(Statement::Reset)
+                .build();
+            let (bytes_sent, _) = response
+                .send_reply(client_request.messages.as_slice(), context.stream)
                 .await?;
+            self.stats.sent(bytes_sent);
         }
 
         Ok(())

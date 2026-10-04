@@ -1,5 +1,8 @@
 use super::*;
-use crate::net::ProtocolMessage;
+use crate::{
+    frontend::client::protocol::{Commands, Statement},
+    net::ProtocolMessage,
+};
 
 impl QueryEngine {
     pub(super) async fn listen(
@@ -10,8 +13,15 @@ impl QueryEngine {
         shard: Shard,
     ) -> Result<(), Error> {
         self.backend.listen(channel, shard).await?;
-        self.fake_command_response(context, client_messages, "LISTEN", None)
+        let responder = Commands::builder()
+            .maybe_transaction(context.transaction())
+            .pipeline(&context.pipeline)
+            .statement(Statement::Listen)
+            .build();
+        let (bytes_sent, _) = responder
+            .send_reply(client_messages, context.stream)
             .await?;
+        self.stats.sent(bytes_sent);
 
         Ok(())
     }
@@ -32,8 +42,15 @@ impl QueryEngine {
             // Send immediately if not in transaction
             self.backend.notify(channel, payload, shard.clone()).await?;
         }
-        self.fake_command_response(context, client_messages, "NOTIFY", None)
+        let responder = Commands::builder()
+            .maybe_transaction(context.transaction())
+            .pipeline(&context.pipeline)
+            .statement(Statement::Notify)
+            .build();
+        let (bytes_sent, _) = responder
+            .send_reply(client_messages, context.stream)
             .await?;
+        self.stats.sent(bytes_sent);
         Ok(())
     }
 
@@ -44,8 +61,15 @@ impl QueryEngine {
         channel: &str,
     ) -> Result<(), Error> {
         self.backend.unlisten(channel);
-        self.fake_command_response(context, client_messages, "UNLISTEN", None)
+        let responder = Commands::builder()
+            .maybe_transaction(context.transaction())
+            .pipeline(&context.pipeline)
+            .statement(Statement::Unlisten)
+            .build();
+        let (bytes_sent, _) = responder
+            .send_reply(client_messages, context.stream)
             .await?;
+        self.stats.sent(bytes_sent);
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use crate::frontend::client::protocol::ProtocolResponder;
+use crate::frontend::client::protocol::{Commands, Statement};
 
 use super::*;
 
@@ -9,21 +9,23 @@ impl QueryEngine {
         client_request: &ClientRequest,
         rollback: bool,
     ) -> Result<(), Error> {
-        let in_pipeline = context.pipeline.is_done() || !context.pipeline.is_simple();
+        let responder = Commands::builder()
+            .maybe_transaction(context.transaction())
+            .pipeline(&context.pipeline)
+            .statement(if rollback {
+                Statement::Rollback
+            } else {
+                Statement::Commit
+            })
+            .build();
 
-        let responder = if rollback {
-            ProtocolResponder::rollback(context.transaction(), in_pipeline)
-        } else {
-            ProtocolResponder::commit(context.transaction(), in_pipeline)
-        };
-
-        let (bytes_sent, actionable) = responder
+        let (bytes_sent, statement_executed) = responder
             .send_reply(client_request.messages.as_slice(), context.stream)
             .await?;
 
         self.stats.sent(bytes_sent);
 
-        if actionable {
+        if statement_executed {
             self.backend.end_transaction();
             context.transaction = None; // Clear transaction state
         }
@@ -158,7 +160,7 @@ mod tests {
         client_request.messages.push(Query::new("COMMIT").into());
 
         let result = engine
-            .end_not_connected(&mut context, client_request, false, false)
+            .end_not_connected(&mut context, client_request, false)
             .await;
         assert!(result.is_ok(), "end_transaction should succeed");
 

@@ -31,15 +31,12 @@ pub(crate) enum Command {
     StartTransaction {
         query: BufferedQuery,
         transaction_type: TransactionType,
-        extended: bool,
         route: Route,
     },
     CommitTransaction {
-        extended: bool,
         route: Route,
     },
     RollbackTransaction {
-        extended: bool,
         route: Route,
     },
     Set {

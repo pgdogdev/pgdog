@@ -12,9 +12,8 @@ impl<'a> From<&'a [ProtocolMessage]> for ClientMessages<'a> {
 }
 
 impl ClientMessages<'_> {
-    /// Messages received from client will trigger a change
-    /// on the server, so we should act accordingly.
-    pub(super) fn actionable(&self) -> bool {
+    /// The request executes a statement, rather than only preparing or binding it.
+    pub(super) fn executes_statement(&self) -> bool {
         self.messages
             .iter()
             .any(|message| matches!(message.code(), 'E' | 'Q'))

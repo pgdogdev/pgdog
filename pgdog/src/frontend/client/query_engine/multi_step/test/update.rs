@@ -257,6 +257,33 @@ async fn test_no_rows_updated() {
 }
 
 #[tokio::test]
+async fn test_no_rows_updated_across_shards() {
+    let mut client = TestClient::new_rewrites(Parameters::default()).await;
+    let old_id = client.random_id_for_shard(0);
+    let new_id = client.random_id_for_shard(1);
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.expect("begin transaction");
+    client
+        .send_simple(Query::new(format!(
+            "UPDATE sharded SET id = {new_id} WHERE id = {old_id}"
+        )))
+        .await;
+
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "UPDATE 0"
+    );
+    assert_eq!(
+        expect_message!(client.read().await, ReadyForQuery).status,
+        'T'
+    );
+
+    client.send_simple(Query::new("ROLLBACK")).await;
+    client.read_until('Z').await.expect("rollback transaction");
+}
+
+#[tokio::test]
 async fn test_transaction_required() {
     let mut client = TestClient::new_rewrites(Parameters::default()).await;
 

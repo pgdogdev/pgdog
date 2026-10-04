@@ -19,7 +19,6 @@ pub(crate) mod context;
 pub(crate) mod deallocate;
 pub(crate) mod discard;
 pub(crate) mod end_transaction;
-pub(crate) mod fake;
 pub(crate) mod hooks;
 pub(crate) mod incomplete_requests;
 pub(crate) mod internal_values;
@@ -218,17 +217,10 @@ impl QueryEngine {
             Command::StartTransaction {
                 query,
                 transaction_type,
-                extended,
                 ..
             } => {
-                self.start_transaction(
-                    context,
-                    client_request,
-                    query.clone(),
-                    *transaction_type,
-                    *extended,
-                )
-                .await?
+                self.start_transaction(context, client_request, query.clone(), *transaction_type)
+                    .await?
             }
             Command::CommitTransaction { .. } => {
                 if self.backend.connected() {

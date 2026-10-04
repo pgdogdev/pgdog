@@ -1,67 +1,44 @@
 //! Respond to any request with affirmation.
 //! Do nothing otherwise.
 
-use super::ClientMessages;
-use crate::{frontend::client::Transaction, net::*};
-
-#[derive(Debug, Clone, PartialEq, Default)]
-enum Statement {
-    Commit,
-    Rollback,
-    Begin,
-    Select,
-    Update,
-    Delete,
-    Insert,
-    Show,
-    Notify,
-    Listen,
-    Unlisten,
-    #[default]
-    Unknown,
-}
+use super::{ClientMessages, Statement};
+use crate::{
+    frontend::client::{Transaction, query_engine::Pipeline},
+    net::*,
+};
 
 #[derive(Debug, Clone, Default)]
-pub(in crate::frontend) struct ProtocolResponder {
+pub(in crate::frontend) struct Commands {
     transaction: Option<Transaction>,
     statement: Statement,
-    in_pipeline: bool,
+    simple_pipeline_end: bool,
+    pub(super) row_description: Option<RowDescription>,
+    pub(super) data_rows: Vec<DataRow>,
+    pub(super) rows_affected: usize,
 }
 
-impl ProtocolResponder {
-    pub(in crate::frontend) fn new(transaction: Option<Transaction>, in_pipeline: bool) -> Self {
-        Self {
-            transaction,
-            in_pipeline,
-            ..Default::default()
-        }
-    }
-
-    pub(in crate::frontend) fn commit(transaction: Option<Transaction>, in_pipeline: bool) -> Self {
-        Self {
-            statement: Statement::Commit,
-            ..Self::new(transaction, in_pipeline)
-        }
-    }
-
-    pub(in crate::frontend) fn rollback(
+#[bon::bon]
+impl Commands {
+    #[builder(start_fn = builder, finish_fn = build)]
+    pub(in crate::frontend) fn new(
         transaction: Option<Transaction>,
-        in_pipeline: bool,
+        pipeline: &Pipeline,
+        statement: Statement,
+        row_description: Option<RowDescription>,
+        #[builder(default)] data_rows: Vec<DataRow>,
+        #[builder(default)] rows_affected: usize,
     ) -> Self {
         Self {
-            statement: Statement::Rollback,
-            ..Self::new(transaction, in_pipeline)
+            transaction,
+            statement,
+            simple_pipeline_end: pipeline.is_done() || !pipeline.is_simple(),
+            row_description,
+            data_rows,
+            rows_affected,
         }
     }
 
-    pub(in crate::frontend) fn begin(transaction: Option<Transaction>, in_pipeline: bool) -> Self {
-        Self {
-            statement: Statement::Begin,
-            ..Self::new(transaction, in_pipeline)
-        }
-    }
-
-    /// Send fake reply to stream, returning the number of bytes sent.
+    /// Send fake reply to stream, returning bytes sent and whether a statement executed.
     pub(in crate::frontend) async fn send_reply<'a>(
         &self,
         messages: impl Into<ClientMessages<'a>>,
@@ -72,7 +49,7 @@ impl ProtocolResponder {
         let reply = self.reply(messages);
         let sent = stream.send_many(&reply).await?;
 
-        Ok((sent, messages.actionable()))
+        Ok((sent, messages.executes_statement()))
     }
 
     fn reply<'a>(&self, messages: ClientMessages<'a>) -> Vec<Message> {
@@ -82,16 +59,19 @@ impl ProtocolResponder {
             match message.code() {
                 'P' => reply.push(ParseComplete.message()),
                 'B' => reply.push(BindComplete.message()),
+                'C' => reply.push(CloseComplete.message()),
                 'D' => {
                     if matches!(message, ProtocolMessage::Describe(d) if d.is_statement()) {
                         reply.push(ParameterDescription::empty().message());
                     }
-                    reply.push(NoData.message());
+                    if let Some(row_description) = &self.row_description {
+                        reply.push(row_description.message());
+                    } else {
+                        reply.push(NoData.message());
+                    }
                 }
                 'E' => {
-                    if let Some(notice) = self.notice_response() {
-                        reply.push(notice.message());
-                    }
+                    self.notice_and_data(&mut reply);
                     reply.push(self.command_complete().message());
                 }
                 // Extended protocol ReadyForQuery
@@ -100,13 +80,17 @@ impl ProtocolResponder {
                 //
                 // For example, a Parse("COMMIT"), Describe, Sync
                 // inside a transaction will not actually commit that transaction.
-                'S' => reply.push(self.ready_for_query(messages.actionable()).message()),
+                'S' => reply.push(
+                    self.ready_for_query(messages.executes_statement())
+                        .message(),
+                ),
                 'Q' => {
-                    if let Some(notice) = self.notice_response() {
-                        reply.push(notice.message());
+                    if let Some(row_description) = &self.row_description {
+                        reply.push(row_description.message());
                     }
+                    self.notice_and_data(&mut reply);
                     reply.push(self.command_complete().message());
-                    if !self.in_pipeline {
+                    if self.simple_pipeline_end {
                         reply.push(self.ready_for_query(true).message());
                     }
                 }
@@ -118,20 +102,30 @@ impl ProtocolResponder {
         reply
     }
 
+    fn notice_and_data(&self, reply: &mut Vec<Message>) {
+        if !self.data_rows.is_empty() {
+            reply.extend(self.data_rows.iter().map(|row| row.message()));
+        }
+        if let Some(notice) = self.notice_response() {
+            reply.push(notice.message());
+        }
+    }
+
     fn command_complete(&self) -> CommandComplete {
         match self.statement {
             Statement::Begin => CommandComplete::new_begin(),
             Statement::Rollback => CommandComplete::new_rollback(),
             Statement::Commit => CommandComplete::new_commit(),
-            Statement::Select => CommandComplete::new("SELECT 0"),
-            Statement::Delete => CommandComplete::new("DELETE 0"),
-            Statement::Update => CommandComplete::new("UDPATE 0"),
-            Statement::Insert => CommandComplete::new("INSERT 0 0"),
-            Statement::Show => CommandComplete::new("SHOW"),
-            Statement::Unknown => CommandComplete::new("UNKNOWN"),
             Statement::Listen => CommandComplete::new("LISTEN"),
             Statement::Notify => CommandComplete::new("NOTIFY"),
             Statement::Unlisten => CommandComplete::new("UNLISTEN"),
+            Statement::Insert => CommandComplete::new(format!("INSERT 0 {}", self.rows_affected)),
+            Statement::Update => CommandComplete::new(format!("UPDATE {}", self.rows_affected)),
+            Statement::Delete => CommandComplete::new(format!("DELETE {}", self.rows_affected)),
+            Statement::Select => CommandComplete::new(format!("SELECT {}", self.rows_affected)),
+            Statement::Set => CommandComplete::new("SET"),
+            Statement::Reset => CommandComplete::new("RESET"),
+            Statement::Unknown => CommandComplete::new("UNKNOWN"),
         }
     }
 
@@ -162,10 +156,14 @@ impl ProtocolResponder {
         None
     }
 
-    fn ready_for_query(&self, actionable: bool) -> ReadyForQuery {
+    fn ready_for_query(&self, statement_executed: bool) -> ReadyForQuery {
         match self.statement {
-            Statement::Begin => ReadyForQuery::in_transaction(self.in_transaction() || actionable),
-            Statement::Commit | Statement::Rollback => ReadyForQuery::in_transaction(actionable),
+            Statement::Begin => {
+                ReadyForQuery::in_transaction(self.in_transaction() || statement_executed)
+            }
+            Statement::Commit | Statement::Rollback => {
+                ReadyForQuery::in_transaction(self.in_transaction() && !statement_executed)
+            }
             _ => ReadyForQuery::in_transaction(self.in_transaction()),
         }
     }

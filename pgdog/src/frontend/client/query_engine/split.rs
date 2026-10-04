@@ -31,12 +31,12 @@ impl Pipeline {
     }
 
     /// Is the pipeline finished executing?
-    pub(super) fn is_done(&self) -> bool {
+    pub(in crate::frontend::client) fn is_done(&self) -> bool {
         self.requests_left() == 0
     }
 
     /// Is the pipeline consists of simple queries only?
-    pub(super) fn is_simple(&self) -> bool {
+    pub(in crate::frontend::client) fn is_simple(&self) -> bool {
         matches!(self, Self::Simple { .. })
     }
 }
