@@ -31,16 +31,11 @@ impl QueryEngine {
 
         // Take a server before touching the parameters: syncing a change the
         // statement is about to make itself would send it twice.
-        if set_config && !self.backend.connected() {
-            let connected = if context.in_transaction() {
-                self.connect_transaction(context).await?
-            } else {
-                self.connect(context, None).await?
-            };
-
-            if !connected {
-                return Ok(());
-            }
+        if set_config
+            && !self.backend.connected()
+            && !self.connect(context, client_request.route()).await?
+        {
+            return Ok(());
         }
 
         let mut fake_command = "SET";
