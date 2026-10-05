@@ -19,7 +19,8 @@ const SHOW_REPLICATION_SLOTS_LAYOUT: &[(&str, &str)] = &[
     ("lsn", "TEXT"),
     ("lag", "TEXT"),
     ("lag_bytes", "INT8"),
-    ("copy_data", "BOOL"),
+    ("temporary", "BOOL"),
+    ("existing", "BOOL"),
     ("last_transaction", "TEXT"),
     ("last_transaction_ms", "INT8"),
     ("task_id", "INT8"),
@@ -41,17 +42,35 @@ async fn slot_row(admin: &Pool<Postgres>) -> Option<PgRow> {
     row
 }
 
+async fn slot_exists(direct: &Pool<Postgres>) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)")
+        .bind(SLOT_NAME)
+        .fetch_one(direct)
+        .await
+        .expect("source slots must be readable")
+}
+
+async fn create_slot(direct: &Pool<Postgres>) {
+    sqlx::query("SELECT pg_create_logical_replication_slot($1, 'pgoutput')")
+        .bind(SLOT_NAME)
+        .execute(direct)
+        .await
+        .expect("named slot creation must succeed");
+}
+
 #[tokio::test]
 async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
     let direct = connection_sqlx_direct().await;
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
     prepare_replication(&admin, &direct).await;
+    create_slot(&direct).await;
 
     let task_id = start_replication(&admin, Some(SLOT_PREFIX)).await;
     let row = poll("the named replication slot", || slot_row(&admin)).await;
     assert_eq!(row.get::<String, _>("database_name"), "pgdog");
-    assert!(!row.get::<bool, _>("copy_data"));
+    assert!(!row.get::<bool, _>("temporary"));
+    assert!(row.get::<bool, _>("existing"));
 
     let before: String = sqlx::query_scalar("SELECT pg_current_wal_lsn()::text")
         .fetch_one(&direct)
@@ -79,17 +98,11 @@ async fn test_show_replication_slots_tracks_named_stream_until_stopped() {
         .await
         .expect("replication stop must succeed");
     wait_for_task_status(&admin, task_id, TaskProgress::Cancelled).await;
-    poll("the stopped slot to disappear", || async {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)",
-        )
-        .bind(SLOT_NAME)
-        .fetch_one(&direct)
-        .await
-        .expect("source slots must be readable");
-        (!exists && slot_row(&admin).await.is_none()).then_some(())
+    poll("the stopped slot to leave the report", || async {
+        slot_row(&admin).await.is_none().then_some(())
     })
     .await;
+    assert!(slot_exists(&direct).await);
 
     cleanup(&admin, &direct).await;
 }

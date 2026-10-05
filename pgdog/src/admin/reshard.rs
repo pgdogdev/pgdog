@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
-use crate::backend::replication::orchestrator::Orchestrator;
+use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::prelude::*;
 
@@ -52,16 +52,16 @@ impl Command for Reshard {
             r#"resharding "{}" to "{}", publication="{}""#,
             self.from_database, self.to_database, self.publication
         );
-        let orchestrator = Orchestrator::new(
-            &self.from_database,
-            &self.to_database,
-            &self.publication,
-            self.replication_slot.clone(),
-        )?;
+        let state = ReshardingState::builder()
+            .source(&self.from_database)
+            .destination(&self.to_database)
+            .publication(&self.publication)
+            .maybe_replication_slot(self.replication_slot.clone())
+            .build()?;
 
         let task_id = run_task(
             ReshardTask::builder()
-                .orchestrator(orchestrator)
+                .state(state)
                 .auto_cutover(true)
                 .build(),
         )

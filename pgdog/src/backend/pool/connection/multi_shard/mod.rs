@@ -15,12 +15,16 @@ use crate::{
 
 use super::buffer::Buffer;
 
+mod binding;
 mod error;
 #[cfg(test)]
 mod test;
+mod upgrade;
 mod validator;
 
+pub(crate) use binding::MultiBinding;
 pub(crate) use error::Error;
+pub(crate) use upgrade::MultiShardUpgrade;
 use validator::Validator;
 
 #[derive(Default, Debug)]
@@ -51,10 +55,6 @@ pub(crate) struct MultiShard {
     shards: usize,
     /// Route the query is taking.
     route: Route,
-    /// Maps positional index in the servers vec to actual shard number.
-    /// When all shards are connected, this is `[0, 1, 2, ...]`.
-    /// When only a subset is connected (e.g. shards 0 and 2), this is `[0, 2]`.
-    shard_indices: Vec<usize>,
     /// In-flight request state.
     request_state: RequestState,
     /// Sorting/aggregate buffer.
@@ -69,27 +69,12 @@ pub(crate) struct MultiShard {
 
 impl MultiShard {
     /// New multi-shard state given the actual shard indices connected.
-    pub(super) fn new(shard_indices: Vec<usize>, route: &Route) -> Self {
-        let shards = shard_indices.len();
+    pub(super) fn new(shards: usize, route: &Route) -> Self {
         Self {
             shards,
-            shard_indices,
             route: route.clone(),
             ..Default::default()
         }
-    }
-
-    /// Map a positional index to the actual shard number.
-    ///
-    /// These can diverge since we can connect to less shards than there
-    /// are in the config, while the query parser will produce shard numbers
-    /// relative to all configured shards.
-    ///
-    pub(super) fn shard_number(&self, position: usize) -> usize {
-        self.shard_indices
-            .get(position)
-            .copied()
-            .unwrap_or(position)
     }
 
     /// Update multi-shard state.
@@ -259,15 +244,19 @@ impl MultiShard {
             self.buffer.mark_full();
 
             if !self.buffer.is_empty() {
+                // Helpers remain in the internal row through aggregation and
+                // sorting, then are removed before client-visible operations.
                 self.buffer
                     .aggregate(
                         self.route.aggregate(),
                         &self.decoder,
-                        self.route.aggregate_rewrite_plan(),
+                        &self.route.projection_rewrite_plan,
                     )
                     .map_err(Error::from)?;
 
                 self.buffer.sort(self.route.order_by(), &self.decoder);
+                self.buffer
+                    .drop_helper_columns(&self.route.projection_rewrite_plan, &self.decoder);
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
                 self.buffer.limit(self.route.limit());
             }
@@ -310,11 +299,11 @@ impl MultiShard {
         {
             // Only send it to the client once all shards sent it,
             // so we don't get early requests from clients.
-            let plan = self.route.aggregate_rewrite_plan();
+            let plan = &self.route.projection_rewrite_plan;
             if plan.is_noop() {
                 forward = Some(message);
             } else {
-                let client_rd = rd.drop_columns(plan.drop_columns());
+                let client_rd = rd.drop_columns(plan.drop_columns(&rd));
                 forward = Some(client_rd.message());
             }
 
@@ -415,5 +404,10 @@ impl MultiShard {
         // 3. The route does not concern omnisharded tables which have the same data on all shards
         //    anyway.
         self.shards > 1 && self.route.requires_post_processing() && !self.route.is_omnisharded()
+    }
+
+    /// Box me up, Scotty.
+    pub(super) fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 }

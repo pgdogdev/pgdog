@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 
 use super::prelude::*;
@@ -10,10 +12,15 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     client.client_request = ClientRequest::from(messages);
 
     let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-    engine.rewrite_extended(&mut context).unwrap();
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    engine
+        .rewrite_extended(&mut context, &mut client_request.messages)
+        .unwrap();
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(
         matches!(rewrite_result, Some(RewriteResult::InsertSplit(_))),
@@ -21,7 +28,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     );
 
     match rewrite_result.unwrap() {
-        RewriteResult::InsertSplit(requests) => requests,
+        RewriteResult::InsertSplit(requests) => requests.deref().clone(),
         _ => unreachable!(),
     }
 }
@@ -56,11 +63,11 @@ async fn test_insert_split() {
         ("1".as_bytes(), "test@test.com".as_bytes()),
         ("1234567890102334".as_bytes(), "test2@test.com".as_bytes()),
     ]) {
-        assert!(
-            matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.anonymous()),
+        std::assert_matches!(
+            &request.messages[0], ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.anonymous(),
             "expected single tuple insert with no name"
         );
-        match request[1].clone() {
+        match &request.messages[1] {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -95,11 +102,11 @@ async fn test_insert_split_prepared() {
         ("1".as_bytes(), "test@test.com".as_bytes()),
         ("1234567890102334".as_bytes(), "test2@test.com".as_bytes()),
     ]) {
-        assert!(
-            matches!(request[0].clone(), ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.name() == "__pgdog_2"),
+        std::assert_matches!(
+            &request.messages[0], ProtocolMessage::Parse(parse) if parse.query() == "INSERT INTO test (id, email) VALUES ($1, $2)" && parse.name() == "__pgdog_2",
             "expected single tuple insert"
         );
-        match request[1].clone() {
+        match &request.messages[1] {
             ProtocolMessage::Bind(bind) => {
                 assert_eq!(bind.params_raw().first().unwrap().data, id);
                 assert_eq!(bind.params_raw().get(1).unwrap().data, email);
@@ -119,21 +126,15 @@ async fn test_insert_split_simple() {
 
     assert_eq!(requests.len(), 2);
 
-    match requests[0][0].clone() {
-        ProtocolMessage::Query(query) => assert_eq!(
-            query.query(),
-            "INSERT INTO test (id, email) VALUES (1, 'test@test.com') RETURNING *"
-        ),
-        _ => panic!("not a query"),
-    }
+    std::assert_matches!(
+        &requests[0].messages[0],
+        ProtocolMessage::Query(query) if query.query() == "INSERT INTO test (id, email) VALUES (1, 'test@test.com') RETURNING *",
+    );
 
-    match requests[1][0].clone() {
-        ProtocolMessage::Query(query) => assert_eq!(
-            query.query(),
-            "INSERT INTO test (id, email) VALUES (2, 'test2@test.com') RETURNING *"
-        ),
-        _ => panic!("not a query"),
-    }
+    std::assert_matches!(
+        &requests[1].messages[0],
+        ProtocolMessage::Query(query) if query.query() == "INSERT INTO test (id, email) VALUES (2, 'test2@test.com') RETURNING *",
+    );
 }
 
 #[tokio::test]
@@ -145,9 +146,12 @@ async fn test_insert_split_not_sharded() {
         )),
         ProtocolMessage::Other(Flush.message()),
     ]);
-    let mut engine = QueryEngine::from_client(&client).unwrap();
-    let mut context = QueryEngineContext::new(&mut client);
-    let rewrite_result = engine.parse_and_rewrite(&mut context).await.unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let rewrite_result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
 
     assert!(rewrite_result.is_none());
 }

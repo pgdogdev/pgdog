@@ -20,9 +20,12 @@ async fn test_intercept_incomplete_sync_only_not_connected() {
         assert!(!engine.backend().connected());
 
         client.client_request = vec![Sync.into()].into();
-        let mut context = QueryEngineContext::new(&mut client);
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
-        let intercepted = engine.intercept_incomplete(&mut context).await.unwrap();
+        let intercepted = engine
+            .intercept_incomplete(&mut context, client_request)
+            .await
+            .unwrap();
         assert!(
             intercepted,
             "intercept_incomplete should return true when backend not connected"
@@ -49,11 +52,11 @@ async fn test_intercept_incomplete_sync_only_when_connected() {
 
     test_client.client.client_request = vec![Sync.into()].into();
 
-    let mut context = QueryEngineContext::new(&mut test_client.client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut test_client.client);
 
     let intercepted = test_client
         .engine
-        .intercept_incomplete(&mut context)
+        .intercept_incomplete(&mut context, client_request)
         .await
         .unwrap();
     assert!(

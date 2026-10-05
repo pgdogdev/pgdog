@@ -2,8 +2,8 @@ use crate::{
     backend::pool::{Connection, Request},
     config::config,
     frontend::{
-        BufferedQuery, Client, ClientComms, Command, DiscardTarget, Error, Router, RouterContext,
-        Stats,
+        BufferedQuery, Client, ClientComms, ClientRequest, Command, DiscardTarget, Error, Router,
+        RouterContext, Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         router::{Route, parser::Shard},
     },
@@ -54,12 +54,12 @@ pub(in crate::frontend) use temp_table::TempTableChange;
 use temp_table::TempTables;
 use two_pc::TwoPc;
 pub(crate) use two_pc::phase::TwoPcPhase;
+pub(crate) use two_pc::*;
 
 /// Implements the entire client/server message exchange.
 /// State here is preserved between requests.
 #[derive(Debug)]
 pub(crate) struct QueryEngine {
-    begin_stmt: Option<BufferedQuery>,
     router: Router,
     comms: ClientComms,
     stats: Stats,
@@ -98,7 +98,6 @@ impl QueryEngine {
             two_pc: TwoPc::default(),
             notify_buffer: NotifyBuffer::default(),
             pending_explain: None,
-            begin_stmt: None,
             router: Router::default(),
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
@@ -122,7 +121,7 @@ impl QueryEngine {
 
     /// Client can safely disconnect (no active backend connection or pending transaction).
     pub(crate) fn can_disconnect(&self) -> bool {
-        self.begin_stmt.is_none() && self.backend.done()
+        !self.backend.in_buffered_transaction() && self.backend.done()
     }
 
     /// Current state.
@@ -134,57 +133,62 @@ impl QueryEngine {
     pub(crate) async fn handle(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
     ) -> Result<QueryEngineResult, Error> {
-        if let Some(result) = Self::check_extended_pipeline_rewrite(context.client_request)? {
+        if let Some(result) = Self::check_extended_pipeline_rewrite(client_request)? {
             return Ok(result);
         }
 
-        self.stats
-            .received(context.client_request.total_message_len());
+        self.stats.received(client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
-        if self.in_extended_pipeline_error(context) {
+        if self.in_extended_pipeline_error(context, client_request) {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
-        log_query_stdout(context);
+        log_query_stdout(context, client_request);
 
         // Rewrite prepared statements.
-        self.rewrite_extended(context)?;
+        self.rewrite_extended(context, &mut client_request.messages)?;
 
-        if let ClusterCheck::Offline = self.cluster_check(context).await? {
+        if let ClusterCheck::Offline = self.cluster_check(context, client_request).await? {
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
-        // Rewrite statement if necessary.
-        let rewrite_result = match self.parse_and_rewrite(context).await {
-            Ok(rewrite_result) => rewrite_result,
-            Err(e) => {
-                self.error_response(context, ErrorResponse::syntax(e.to_string()))
-                    .await?;
-                return Ok(QueryEngineResult::Done(context.transaction()));
-            }
-        };
+        if let Err(e) = self.parse_request(context, client_request) {
+            self.error_response(
+                context,
+                client_request,
+                ErrorResponse::syntax(e.to_string()),
+            )
+            .await?;
+            return Ok(QueryEngineResult::Done(context.transaction()));
+        }
+
+        // Queue up request to mirrors, if any.
+        // Do this before sending query to actual server
+        // to have accurate timings between queries.
+        self.backend.mirror(client_request);
+
+        let rewrite_result = self.rewrite_request(context, client_request).await?;
 
         // Intercept commands we don't have to forward to a server.
-        if self.intercept_incomplete(context).await? {
+        if self.intercept_incomplete(context, client_request).await? {
             self.update_stats(context);
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         // Route transaction to the right servers.
-        if !self.route_query(context, rewrite_result.as_ref()).await? {
+        if !self
+            .route_query(context, client_request, rewrite_result.as_ref())
+            .await?
+        {
             self.update_stats(context);
             debug!("query has nowhere to go");
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
         self.hooks.before_execution(context)?;
-
-        // Queue up request to mirrors, if any.
-        // Do this before sending query to actual server
-        // to have accurate timings between queries.
-        self.backend.mirror(context.client_request);
 
         self.pending_explain = None;
 
@@ -196,8 +200,7 @@ impl QueryEngine {
 
         let command = self.router.command();
 
-        if let Some(trace) = context
-            .client_request
+        if let Some(trace) = client_request
             .route // Admin commands don't have a route.
             .as_mut()
             .and_then(|route| route.take_explain())
@@ -218,71 +221,100 @@ impl QueryEngine {
                 extended,
                 ..
             } => {
-                self.start_transaction(context, query.clone(), *transaction_type, *extended)
-                    .await?
+                self.start_transaction(
+                    context,
+                    client_request,
+                    query.clone(),
+                    *transaction_type,
+                    *extended,
+                )
+                .await?
             }
-            Command::CommitTransaction { extended } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
-                    let transaction_route =
-                        self.transaction_route(context.client_request.route())?;
-                    context.client_request.route = Some(transaction_route.clone());
+            Command::CommitTransaction { extended, .. } => {
+                if self.backend.connected() {
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, false, extended).await?;
+                    self.end_connected(context, client_request, false, *extended)
+                        .await?;
                 } else {
-                    self.end_not_connected(context, false, *extended).await?
+                    self.end_not_connected(context, client_request, false, *extended)
+                        .await?
                 }
 
-                if context.params.commit() {
+                if client_request.is_executable() && context.params.commit() {
                     self.comms.update_params(context.params);
                 }
             }
-            Command::RollbackTransaction { extended } => {
-                if self.backend.connected() || *extended {
-                    let extended = *extended;
-                    let transaction_route =
-                        self.transaction_route(context.client_request.route())?;
-                    context.client_request.route = Some(transaction_route.clone());
+            Command::RollbackTransaction { extended, .. } => {
+                if self.backend.connected() {
+                    // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, true, extended).await?;
+                    self.end_connected(context, client_request, true, *extended)
+                        .await?;
                 } else {
-                    self.end_not_connected(context, true, *extended).await?
+                    self.end_not_connected(context, client_request, true, *extended)
+                        .await?
                 }
 
-                context.params.rollback();
+                if client_request.is_executable() {
+                    context.params.rollback();
+                }
             }
-            Command::Query(_) => self.execute(context, rewrite_result).await?,
+            Command::Query(_) => {
+                self.execute(context, client_request, rewrite_result)
+                    .await?
+            }
             Command::Listen { .. } | Command::Notify { .. } | Command::Unlisten(_)
                 if self.backend.session_mode() =>
             {
-                self.execute(context, rewrite_result).await?
+                self.execute(context, client_request, rewrite_result)
+                    .await?
             }
             Command::Listen { channel, shard } => {
-                self.listen(context, &channel.clone(), shard.clone())
-                    .await?
+                self.listen(
+                    context,
+                    &client_request.messages,
+                    &channel.clone(),
+                    shard.clone(),
+                )
+                .await?
             }
             Command::Notify {
                 channel,
                 payload,
                 shard,
             } => {
-                self.notify(context, &channel.clone(), &payload.clone(), &shard.clone())
+                self.notify(
+                    context,
+                    &client_request.messages,
+                    &channel.clone(),
+                    &payload.clone(),
+                    &shard.clone(),
+                )
+                .await?
+            }
+            Command::Unlisten(channel) => {
+                self.unlisten(context, &client_request.messages, &channel.clone())
                     .await?
             }
-            Command::Unlisten(channel) => self.unlisten(context, &channel.clone()).await?,
             Command::Set {
                 params, set_config, ..
             } => {
                 let params = params.clone();
-                self.set(context, &params, *set_config).await?;
+                self.set(context, client_request, &params, *set_config)
+                    .await?;
             }
             Command::ResetAll => {
-                self.reset_all(context).await?;
+                self.reset_all(context, client_request).await?;
             }
-            Command::Copy(_) => self.execute(context, rewrite_result).await?,
+            Command::Copy { .. } => {
+                self.execute(context, client_request, rewrite_result)
+                    .await?
+            }
             Command::Deallocate => self.deallocate(context).await?,
             Command::Discard { target, extended } => {
-                self.discard(context, *target, *extended).await?
+                self.discard(context, client_request, *target, *extended)
+                    .await?
             }
             Command::Split(queries) => return Ok(Self::build_simple_split(queries)),
         }

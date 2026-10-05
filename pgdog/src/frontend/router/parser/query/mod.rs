@@ -5,6 +5,7 @@ use crate::{
     backend::ShardingSchema,
     config::Role,
     frontend::router::{
+        RoutingComment,
         context::RouterContext,
         parser::{OrderBy, Shard, route::ShardSource},
         round_robin,
@@ -101,7 +102,12 @@ impl QueryParser {
         };
 
         match &mut command {
-            Command::Query(route) | Command::Set { route, .. } => {
+            Command::Query(route)
+            | Command::Set { route, .. }
+            | Command::Copy { route, .. }
+            | Command::StartTransaction { route, .. }
+            | Command::CommitTransaction { route, .. }
+            | Command::RollbackTransaction { route, .. } => {
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator
@@ -176,15 +182,15 @@ impl QueryParser {
             {
                 // SET sharding key
                 return Err(Error::UnmappedShardKey(sharding_key_value.to_string()));
-            } else if let Some(statement) = context.router_context.ast
-                && let Some(sharding_key) = &statement.comment_sharding_key
+            } else if let Some(comment) = context.router_context.comment
+                && let Some(sharding_key) = &comment.sharding_key
             {
                 // Comment directive sharding key
                 return Err(Error::UnmappedShardKey(sharding_key.to_string()));
             }
         }
 
-        debug!("query router decision: {:#?}", command);
+        debug!("query router decision: {:?}", command);
 
         self.attach_explain(&mut command);
 
@@ -268,6 +274,10 @@ impl QueryParser {
         }
 
         let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
+        let routing_comment = context
+            .router_context
+            .comment
+            .unwrap_or(const { &RoutingComment::empty() });
 
         if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
@@ -276,7 +286,7 @@ impl QueryParser {
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
-            match &statement.comment_shard {
+            match &routing_comment.shard {
                 Some(ShardOrLookup::Shard(comment_shard)) => {
                     context
                         .shards_calculator
@@ -306,7 +316,7 @@ impl QueryParser {
                 None => {}
             }
 
-            let role_override = statement.comment_role;
+            let role_override = routing_comment.role;
             if let Some(role) = role_override {
                 self.write_override = role == Role::Primary;
             }
@@ -386,7 +396,7 @@ impl QueryParser {
                         ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
                     )));
                 } else {
-                    self.select(statement, stmt, context)
+                    self.select(stmt, context)
                 }
             }
 
@@ -442,7 +452,7 @@ impl QueryParser {
 
             Node::ExecuteStmt(stmt) => self.execute(stmt, context),
 
-            Node::ExplainStmt(stmt) => self.explain(statement, stmt, context),
+            Node::ExplainStmt(stmt) => self.explain(stmt, context),
 
             Node::DiscardStmt(stmt) => {
                 let target = match stmt.target {
@@ -483,14 +493,16 @@ impl QueryParser {
         }
 
         // Run plugins, if any.
-        self.plugins(
-            context,
-            statement,
-            match &command {
-                Command::Query(query) => query.is_read(),
-                _ => false,
-            },
-        )?;
+        if context.router_context.bind.is_some() || !context.router_context.cached {
+            self.plugins(
+                context,
+                statement,
+                match &command {
+                    Command::Query(query) => query.is_read(),
+                    _ => false,
+                },
+            )?;
+        }
 
         // Set shard on route, if we're ready.
         if let Command::Query(ref mut route) = command {
@@ -537,7 +549,7 @@ impl QueryParser {
 
         if context.dry_run {
             // Record statement in cache with normalized parameters.
-            if !statement.cached {
+            if !context.router_context.cached {
                 Cache::get().record_normalized(
                     statement.ast.into_iter().next().ok_or(Error::EmptyQuery)?,
                     command.route(),
@@ -590,7 +602,10 @@ impl QueryParser {
                 context.shards_calculator.shard(),
             )))
         } else {
-            Ok(Command::Copy(Box::new(parser)))
+            Ok(Command::Copy {
+                copy: Box::new(parser),
+                route: Route::write(ShardWithPriority::new_override_copy()),
+            })
         }
     }
 

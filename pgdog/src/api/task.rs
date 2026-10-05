@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use dashmap::DashMap;
 use derive_more::Debug;
@@ -16,6 +16,7 @@ use pgdog_stats::{TaskDefinition, TaskStatus, TaskUpdate};
 pub(crate) use pgdog_stats::{TaskId, TaskProgress};
 use tokio::select;
 use tokio::sync::oneshot::{self, Receiver};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 
@@ -565,11 +566,35 @@ impl TaskStorage {
         Some(state)
     }
 
-    pub(crate) fn cancel_all(&self) {
+    fn cancel_all(&self) {
         info!("cancelling all current api tasks");
 
         for task in &self.tasks.map {
             task.value().cancel();
+        }
+    }
+
+    fn has_running_tasks(&self) -> bool {
+        let mut running = false;
+
+        self.try_for_each(|entry| {
+            if entry.state().is_terminal() {
+                ControlFlow::Continue(())
+            } else {
+                running = true;
+                ControlFlow::Break(())
+            }
+        });
+
+        running
+    }
+
+    pub(crate) async fn shutdown(&self, limit: Duration) {
+        self.cancel_all();
+
+        let deadline = Instant::now() + limit;
+        while self.has_running_tasks() && Instant::now() < deadline {
+            sleep(Duration::from_millis(50)).await;
         }
     }
 

@@ -2449,6 +2449,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "futures-util",
+ "itertools 0.15.0",
  "libc",
  "native-tls",
  "ordered-float",
@@ -3094,7 +3095,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=cf9e398#cf9e398915285d5fae88f213a837895358f67c3b"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1#89937b1a9c39bbb53b679f12aba3ff7c5ab3c093"
 dependencies = [
  "bindgen 0.72.1",
  "cc",

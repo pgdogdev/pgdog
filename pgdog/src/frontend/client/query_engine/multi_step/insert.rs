@@ -1,12 +1,10 @@
 use super::{CommandType, MultiServerState};
 use crate::{
+    backend::Cluster,
     frontend::{
         ClientRequest, Command, Router, RouterContext,
         client::query_engine::{QueryEngine, QueryEngineContext},
-        router::{
-            Route,
-            parser::route::{Shard, ShardWithPriority},
-        },
+        router::parser::rewrite::statement::InsertSplitRewriteResult,
     },
     net::Protocol,
 };
@@ -16,7 +14,7 @@ use super::super::Error;
 #[derive(Debug)]
 pub(crate) struct InsertMulti<'a> {
     /// Requests split by the rewrite engine.
-    requests: Vec<ClientRequest>,
+    requests: InsertSplitRewriteResult,
     /// Execution state.
     state: MultiServerState,
     /// Query engine.
@@ -26,7 +24,10 @@ pub(crate) struct InsertMulti<'a> {
 impl<'a> InsertMulti<'a> {
     /// Create multi-shard INSERT handler
     /// from query engine and a set of routed requests.
-    pub(crate) fn from_engine(engine: &'a mut QueryEngine, requests: Vec<ClientRequest>) -> Self {
+    pub(crate) fn from_engine(
+        engine: &'a mut QueryEngine,
+        requests: InsertSplitRewriteResult,
+    ) -> Self {
         Self {
             state: MultiServerState::new(requests.len()),
             requests,
@@ -34,34 +35,21 @@ impl<'a> InsertMulti<'a> {
         }
     }
 
-    /// If every split routes to the same `Shard::Direct(n)`, return that shard
-    /// number. Returns `None` when the splits span multiple shards or contain
-    /// any non-direct routing.
-    fn uniform_shard(&self) -> Option<usize> {
-        let first = match self.requests.first()?.route.as_ref()?.shard() {
-            Shard::Direct(n) => *n,
-            _ => return None,
-        };
+    /// Route each request in the split to its respective shard.
+    ///
+    /// This is implemented separately since we want to route the requests
+    /// before we check out connections from the pools. If all inserts are sent
+    /// to the same shard, we will only check out that shard's connection.
+    pub(crate) fn route(
+        requests: &mut InsertSplitRewriteResult,
+        context: &QueryEngineContext<'_>,
+        cluster: &Cluster,
+    ) -> Result<(), Error> {
+        for request in requests.iter_mut() {
+            if request.route.is_some() {
+                continue;
+            }
 
-        self.requests
-            .iter()
-            .skip(1)
-            .all(|req| {
-                matches!(
-                    req.route.as_ref().map(|r| r.shard()),
-                    Some(Shard::Direct(n)) if *n == first
-                )
-            })
-            .then_some(first)
-    }
-
-    /// Execute the multi-shard INSERT.
-    pub(crate) async fn execute(
-        &'a mut self,
-        context: &mut QueryEngineContext<'_>,
-    ) -> Result<bool, Error> {
-        let cluster = self.engine.backend.cluster()?;
-        for request in self.requests.iter_mut() {
             let context = RouterContext::new(
                 request,
                 cluster,
@@ -78,16 +66,26 @@ impl<'a> InsertMulti<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Execute the multi-shard INSERT.
+    pub(crate) async fn execute(
+        &'a mut self,
+        context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
+    ) -> Result<bool, Error> {
+        let cluster = self.engine.backend.cluster()?;
+        // TODO(lev): This is a no-op since we route requests in [`QueryEngine::parse_and_rewrite`].
+        Self::route(&mut self.requests, context, cluster)?;
+
         // All tuples map to the same shard: send the original multi-row INSERT
         // as a single statement, skipping the multi-step path entirely.
-        if let Some(shard_n) = self.uniform_shard() {
-            context.client_request.route = Some(Route::write(ShardWithPriority::new_table(
-                Shard::Direct(shard_n),
-            )));
+        if self.requests.same_shard().is_some() {
             self.engine
                 .backend
                 .handle_client_request(
-                    context.client_request,
+                    client_request,
                     &mut self.engine.router,
                     self.engine.streaming,
                 )

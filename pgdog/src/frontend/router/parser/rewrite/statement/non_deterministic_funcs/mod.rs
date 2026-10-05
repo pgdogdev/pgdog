@@ -1,24 +1,25 @@
-use std::ops::Deref;
-
 use pg_raw_parse::{
     ConstValue, Node, NodeMut,
     list::NodeList,
     make::{MemoryToken, Unique},
     raw::SQLValueFunctionOp,
-    transform::{TransformClosure, transform_node},
+    transform::Transform,
 };
 use pgdog_stats::{Column, Relation};
 
+use super::BindParams;
 use crate::{
     frontend::{
-        RewritePlan,
         client::QueryTimestamps,
         router::parser::{
             StatementParser, StatementRewrite, Table,
             rewrite::statement::{
                 Error,
-                non_deterministic_funcs::{time::TimeFunctionType, uuid::UUIDFunctionType},
-                plan::{GeneratedId, GeneratedParam},
+                non_deterministic_funcs::{
+                    rewrite_transaction_time::ReplaceTransactionTime,
+                    time_function::TimeFunctionType, uuid_function::UUIDFunctionType,
+                },
+                plan::BindParam,
             },
         },
     },
@@ -26,8 +27,10 @@ use crate::{
 };
 
 /// No need to expose these outside.
-mod time;
-mod uuid;
+mod rewrite_insert;
+mod rewrite_transaction_time;
+mod time_function;
+mod uuid_function;
 
 /// A non-deterministic function that we must re-write when writing to an omnisharded table (or now() for sharded),
 /// so that we can maintain consistency instead of generating a different value (from executing the function)
@@ -88,12 +91,19 @@ enum NDFunctionType {
     UUIDFunction(UUIDFunctionType),
 }
 
+/// We cover two cases in this code: (1) transaction time functions (SELECT, all INSERT) and (2) omnisharded INSERT
+#[derive(PartialEq)]
+enum RewriteCase {
+    TransactionTimeFunction,
+    OmnishardedInsert,
+}
+
 impl NDFunctionType {
     /// Convert `SQLValueFunctionOp` (e.g. current_date, current_time... non ()) to `NDFunctionType`
     fn from_sql_value_function(
         op: SQLValueFunctionOp::Type,
         typmod: i32,
-        is_sharded: bool,
+        rewrite_case: &RewriteCase,
     ) -> Option<Self> {
         let nd_func_type = TimeFunctionType::from_sql_value_function(op, typmod)
             .map(NDFunctionType::TimeFunction)
@@ -102,9 +112,11 @@ impl NDFunctionType {
                     .map(NDFunctionType::UUIDFunction)
             });
 
+        // Verify the `SQLValueFunction` is transaction time based, if we're
+        // only re-writing transaction time functions.
         if let Some(nd_func) = nd_func_type
-            && is_sharded
-            && !nd_func.apply_rewrite_on_sharded_tables()
+            && *rewrite_case == RewriteCase::TransactionTimeFunction
+            && !nd_func.is_transaction_time_function()
         {
             return None;
         }
@@ -136,10 +148,19 @@ impl NDFunctionType {
     /// Why not re-write everything? This implementation isn't perfect; some things aren't implemented (e.g. interval arg for uuidv7).
     /// Best not to do anything we don't have to; otherwise, it could unnecessarily break something for someone.
     /// (maybe they're reliant on the config setting for something else)
-    fn apply_rewrite_on_sharded_tables(&self) -> bool {
+    fn is_transaction_time_function(&self) -> bool {
         match self {
-            Self::TimeFunction(tf) => tf.apply_rewrite_on_sharded_tables(),
+            Self::TimeFunction(tf) => tf.is_transaction_time_function(),
             Self::UUIDFunction(_) => false,
+        }
+    }
+
+    /// Used to determine what type the Postgres function outputs by default, so we can cast the text into it
+    /// in cases like SELECT where we don't have a corresponding column type to go by.
+    fn output_type_as_str(&self) -> &'static str {
+        match self {
+            Self::TimeFunction(tf) => tf.default_output_type().into_postgres_str(),
+            Self::UUIDFunction(_) => "uuid",
         }
     }
 
@@ -151,7 +172,7 @@ impl NDFunctionType {
     fn from_node(
         node: Node,
         column_relation: Option<&Column>,
-        is_sharded: bool,
+        rewrite_case: &RewriteCase,
     ) -> Result<Option<Self>, Error> {
         match node {
             Node::FuncCall(func) => {
@@ -163,12 +184,12 @@ impl NDFunctionType {
                     return Ok(None);
                 };
 
-                Self::from_func_call(func_name, Some(func.args()), is_sharded)
+                Self::from_func_call(func_name, Some(func.args()), rewrite_case)
             }
             Node::SQLValueFunction(func) => Ok(Self::from_sql_value_function(
                 func.op,
                 func.typmod,
-                is_sharded,
+                rewrite_case,
             )),
 
             // If DEFAULT is in a VALUES list; fetch the column based on index.
@@ -177,7 +198,7 @@ impl NDFunctionType {
                     return Self::from_func_call(
                         relation.column_default.as_str(),
                         None,
-                        is_sharded,
+                        rewrite_case,
                     );
                 }
 
@@ -198,7 +219,7 @@ impl NDFunctionType {
     fn from_func_call(
         func_name: &str,
         args: Option<&NodeList>,
-        is_sharded: bool,
+        case: &RewriteCase,
     ) -> Result<Option<Self>, Error> {
         // Normalize the function name. Postgres does this.
         let func_name = func_name.to_lowercase();
@@ -207,7 +228,12 @@ impl NDFunctionType {
             .iter()
             .chain(UUIDFunctionType::ALL_VARIANTS.iter())
         {
-            if is_sharded && !variant.apply_rewrite_on_sharded_tables() {
+            // If we're re-writing for a transaction time function, and
+            // the current variant we're looking at isn't one, then
+            // we should skip.
+            if *case == RewriteCase::TransactionTimeFunction
+                && !variant.is_transaction_time_function()
+            {
                 continue;
             }
 
@@ -283,37 +309,77 @@ impl StatementRewrite<'_> {
         &mut self,
         mut stmt: NodeMut<'mem, 'mutref>,
         mem: MemoryToken<'mem>,
-        // TODO: Replace `next_param` with plan.param directly
-        next_param: &mut i32,
-        plan: &mut RewritePlan,
+        bind_params: &mut BindParams,
     ) -> Result<(), Error> {
-        let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema);
+        if matches!(stmt.as_ref(), Node::InsertStmt(_)) {
+            let mut parser = StatementParser::new(stmt.as_ref(), None, self.schema);
 
-        // We allow `ShardedTable`s on a case-by-case basis (see `apply_rewrite_on_sharded_tables`)
-        let is_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);
+            let mut nd_rewrite = NDRewrite {
+                rewrite: self,
+                bind_params,
+                mem,
+                statement_type: StatementType::Insert,
+            };
 
-        let Some((relation, cols, not_covered_cols)) = self.find_not_used_cols(&mut stmt, mem)
-        else {
-            return Ok(());
-        };
+            // We allow `ShardedTable`s on a case-by-case basis (see `apply_rewrite_on_sharded_tables`)
+            let is_sharded = parser.is_sharded(
+                nd_rewrite.rewrite.db_schema,
+                nd_rewrite.rewrite.user,
+                nd_rewrite.rewrite.search_path,
+            );
 
-        let mut nd_rewrite = NDRewrite {
-            rewrite: self,
-            plan,
-            next_param,
-            mem,
-            relation,
-            cols,
-            is_sharded,
-        };
+            let Some((relation, cols, not_covered_cols)) =
+                nd_rewrite.rewrite.find_not_used_cols(&mut stmt, mem)
+            else {
+                return Ok(());
+            };
 
-        // 1. iterates through Schema to find DEFAULT columns
-        // 2. adds the column to target list & all the values lists (ParamRef or String)
-        nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols)?;
+            let insert_context = InsertContext {
+                relation,
+                cols,
+                rewrite_case: if is_sharded {
+                    RewriteCase::TransactionTimeFunction
+                } else {
+                    RewriteCase::OmnishardedInsert
+                },
+            };
 
-        // Replaces all non-deterministic function calls (ParamRef or String)
-        nd_rewrite.transform_func_calls(stmt)?;
+            // 1. iterates through Schema to find DEFAULT columns
+            // 2. adds the column to target list & all the values lists (ParamRef or String)
+            nd_rewrite.handle_adding_defaults(&mut stmt, &not_covered_cols, &insert_context)?;
 
+            // Replaces all non-deterministic function calls (ParamRef or String)
+            nd_rewrite.transform_func_calls_in_insert(stmt, &insert_context)?;
+        } else if matches!(stmt, NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)) {
+            // Still rewrite other kind of statements that use ND functions that
+            // are reliant on transaction start time
+
+            let statement_type = match stmt {
+                NodeMut::SelectStmt(_) => StatementType::Select,
+                NodeMut::UpdateStmt(_) => StatementType::Update,
+                _ => panic!("only select and update covered"),
+            };
+
+            let mut nd_rewrite = NDRewrite {
+                rewrite: self,
+                bind_params,
+                mem,
+                statement_type,
+            };
+
+            let mut transform_tt = ReplaceTransactionTime {
+                nd_rewrite: &mut nd_rewrite,
+                outer_error: None,
+            };
+
+            match stmt {
+                NodeMut::SelectStmt(select_stmt) => transform_tt.transform_select_stmt(select_stmt),
+                NodeMut::UpdateStmt(update_stmt) => transform_tt.transform_update_stmt(update_stmt),
+                _ => panic!("only select and update covered"),
+            }
+
+            return transform_tt.outer_error.map(Err).unwrap_or(Ok(()));
+        }
         Ok(())
     }
 
@@ -359,152 +425,27 @@ impl StatementRewrite<'_> {
 
 struct NDRewrite<'mem, 'a, 's> {
     rewrite: &'a mut StatementRewrite<'s>,
-    plan: &'a mut RewritePlan,
-    /// TODO: Replace `next_param` with plan.param directly
-    ///       could do like a .next_param() method on `RewritePlan`
-    next_param: &'a mut i32,
+    bind_params: &'a mut BindParams,
     mem: MemoryToken<'mem>,
+    statement_type: StatementType,
+}
+
+enum StatementType {
+    Insert,
+    Select,
+    Update,
+}
+
+/// Extra context necessary for re-writing INSERT statements, where we need
+/// information to determine things like if it's sharded, or what kind of column each column is
+struct InsertContext<'mem> {
     relation: Relation,
     cols: Unique<'mem, &'mem NodeList>,
-    is_sharded: bool,
+    rewrite_case: RewriteCase,
 }
 
 impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
     /// Replaces all non-deterministic function calls (ParamRef or String)
-    /// Used by all to handle re-writes.
-    fn transform_func_calls(&mut self, stmt: NodeMut<'mem, '_>) -> Result<(), Error> {
-        // If any Error is caught during transform_node, update this, and it'll be returned when the transform is done.
-        // Have this workaround because it's within a closure.
-        let mut err: Option<Error> = None;
-        transform_node(
-            stmt,
-            &mut TransformClosure::new(|node| match &*node {
-                // TODO: Is this guaranteed to be a VALUES list?
-                //       What if it's something unrelated in the statement?
-                NodeMut::NodeList(list_of_values) => {
-                    // VALUES (...), (...) where (...) is what we're inspecting (one NodeList)
-
-                    let mut cloned_values = self.mem.make_unique(list_of_values.deref());
-                    let mut changed = false;
-
-                    // The reason this is iterating over the NodeList instead of individual
-                    // FuncCalls is that we must know where we are within a VALUES, as that
-                    // allows us to know the present column's data type (for potential later coersion)
-                    for (i, value) in list_of_values.iter().enumerate() {
-                        let col_relation = if self.cols.is_empty() {
-                            self.relation.columns.get_index(i).map(|(_, column)| column)
-                        } else {
-                            match self.cols.get(i) {
-                                Some(Node::ResTarget(target)) => target
-                                    .name()
-                                    .and_then(|name| self.relation.columns.get(name)),
-                                _ => None,
-                            }
-                        };
-
-                        match NDFunctionType::from_node(value, col_relation, self.is_sharded) {
-                            Ok(Some(nd_function_type)) => {
-                                let Some(col_relation) = col_relation else {
-                                    continue;
-                                };
-
-                                let nd_function = NDFunction {
-                                    nd_function_type,
-                                    column_type: col_relation.data_type.clone(),
-                                };
-
-                                let node = self.make_node(&nd_function);
-                                match node {
-                                    Ok(node) => {
-                                        // Replace the specific node within the list.
-                                        cloned_values.as_mut().set(i, node);
-                                        changed = true;
-                                    }
-                                    Err(e) => {
-                                        err.get_or_insert(e);
-                                        break;
-                                    }
-                                }
-                            }
-
-                            Ok(None) => continue,
-                            Err(e) => {
-                                err.get_or_insert(e);
-                                break;
-                            }
-                        }
-                    }
-
-                    // Replaces the entire VALUES list at once with the one we cloned and re-wrote.
-                    if changed {
-                        node.replace(cloned_values.uncast());
-
-                        // Do not continue to traverse.
-                        return None;
-                    }
-
-                    Some(node)
-                }
-                _ => Some(node),
-            }),
-        );
-
-        err.map(Err).unwrap_or(Ok(()))
-    }
-
-    /// Iterates through Schema to find DEFAULT columns
-    /// Adds the column to target list & all the values lists (ParamRef or String)
-    fn handle_adding_defaults(
-        &mut self,
-        mut stmt: &mut NodeMut<'mem, '_>,
-        not_covered_cols: &Vec<String>,
-    ) -> Result<(), Error> {
-        let NodeMut::InsertStmt(insert_stmt) = &mut stmt else {
-            return Ok(());
-        };
-
-        for col in not_covered_cols {
-            let col_relation = self.relation.columns.get(col.as_str()).unwrap();
-
-            let nd_function_type = NDFunctionType::from_func_call(
-                &col_relation.column_default,
-                None,
-                self.is_sharded,
-            )?;
-
-            let Some(nd_function_type) = nd_function_type else {
-                continue;
-            };
-
-            let nd_function = NDFunction {
-                nd_function_type,
-                column_type: col_relation.data_type.clone(),
-            };
-
-            // Add to the list of cols in the INSERT.
-            insert_stmt.cols_mut().push(
-                self.mem,
-                self.mem
-                    .make_res_target(Some(col), self.mem.empty(), self.mem.none())
-                    .uncast(),
-            );
-
-            let NodeMut::SelectStmt(select_stmt) = &mut insert_stmt.select_stmt_mut() else {
-                return Ok(());
-            };
-
-            // Have to add the now() to every single select VALUES list now.
-            // VALUES (...), (....)
-            for values_list in select_stmt.values_lists_mut() {
-                let mut node_list_mut = values_list.expect_node_list();
-
-                node_list_mut.push(self.mem, self.make_node(&nd_function)?);
-            }
-        }
-
-        Ok(())
-    }
-
     /// If simple protocol, make an A_Const node with the String constant of the formatted function output.
     /// If extended or prepare, make a ParamRef, so that we can cache it and put in the formatted output later.
     fn make_node(&mut self, nd_function: &NDFunction) -> Result<Unique<'mem, Node<'mem>>, Error> {
@@ -518,18 +459,31 @@ impl<'mem, 'a, 's> NDRewrite<'mem, 'a, 's> {
                 // The statement is discarded when the error is returned (thus, value doesn't matter)
                 Err(err) => return Err(err),
             };
-            self.mem
+
+            let constant_text_node = self
+                .mem
                 .make_a_const(ConstValue::String(text.as_str()))
-                .uncast()
+                .uncast();
+
+            match self.statement_type {
+                StatementType::Insert | StatementType::Update => constant_text_node,
+                StatementType::Select => self
+                    .mem
+                    .make_type_cast(
+                        constant_text_node,
+                        self.mem.make_list(&[self
+                            .mem
+                            .make_string(Some(nd_function.col_type_to_type_cast_alias()))]),
+                    )
+                    .uncast(),
+            }
+            .uncast()
         } else {
-            let param_ref = self.mem.make_param_ref(*self.next_param);
-            *self.next_param += 1;
+            let param_ref = self.mem.make_param_ref(self.bind_params.len() as i32 + 1);
 
             // TODO: add a method to plan() for this...
-            self.plan.generated_params.push(GeneratedParam {
-                param_num: (*self.next_param - 1) as u16,
-                generated_id: GeneratedId::NDFunction(nd_function.clone()),
-            });
+            self.bind_params
+                .push(BindParam::NDFunction(nd_function.clone()));
 
             // Example: CAST($1::pg_catalog.text AS timetz)
             // This is 30x less code at the expense of query verbosity;

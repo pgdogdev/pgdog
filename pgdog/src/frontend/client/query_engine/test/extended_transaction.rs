@@ -93,10 +93,10 @@ async fn commit_statement_describe() {
         Sync.into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
     client
         .engine
-        .end_not_connected(&mut context, false, true)
+        .end_not_connected(&mut context, client_request, false, true)
         .await
         .unwrap();
 
@@ -122,10 +122,10 @@ async fn rollback_without_transaction_describe() {
         Sync.into(),
     ]);
 
-    let mut context = QueryEngineContext::new(&mut client.client);
+    let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
     client
         .engine
-        .end_not_connected(&mut context, true, true)
+        .end_not_connected(&mut context, client_request, true, true)
         .await
         .unwrap();
 

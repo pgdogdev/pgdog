@@ -1,11 +1,20 @@
-use crate::setup::{admin_sqlx, connection_sqlx_direct};
+use crate::setup::{admin_sqlx, connection_sqlx_direct, connection_sqlx_direct_db};
 use pgdog_stats::TaskProgress;
 use sqlx::{Executor, Pool, Postgres, Row};
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
 
 use super::{
-    TEST_PUB, TEST_SCHEMA, TEST_TABLE, assert_layout, cleanup, create_publication,
+    POLL, TEST_PUB, TEST_SCHEMA, TEST_TABLE, assert_layout, cleanup, create_publication,
     create_test_table, run_task_command, wait_for_relation_on_shards, wait_for_task_status,
+    with_cleanup,
 };
+
+const VALID_FK: &str = "validation_children_parent_fk";
+const SOURCE_NOT_VALID_FK: &str = "validation_unchecked_parent_fk";
+const VALIDATION_PARENT: &str = "validation_parents";
+const VALIDATION_CHILD: &str = "validation_children";
+const VALIDATION_UNCHECKED_CHILD: &str = "validation_unchecked_children";
 
 const SHOW_SCHEMA_SYNC_LAYOUT: &[(&str, &str)] = &[
     ("parent_id", "INT8"),
@@ -116,6 +125,94 @@ async fn assert_schema_sync_rows(admin: &Pool<Postgres>, task_id: i64, sync_stat
     }
 }
 
+async fn create_validation_schema(direct: &Pool<Postgres>) {
+    let script = format!(
+        "CREATE SCHEMA {TEST_SCHEMA};
+
+         CREATE TABLE {TEST_SCHEMA}.{VALIDATION_PARENT} (id BIGINT PRIMARY KEY);
+
+         CREATE TABLE {TEST_SCHEMA}.{VALIDATION_CHILD} (
+             id BIGINT PRIMARY KEY,
+             parent_id BIGINT,
+             CONSTRAINT {VALID_FK} FOREIGN KEY (parent_id)
+                 REFERENCES {TEST_SCHEMA}.{VALIDATION_PARENT}(id)
+         );
+
+         CREATE TABLE {TEST_SCHEMA}.{VALIDATION_UNCHECKED_CHILD} (
+             id BIGINT PRIMARY KEY,
+             parent_id BIGINT
+         );
+
+         ALTER TABLE {TEST_SCHEMA}.{VALIDATION_UNCHECKED_CHILD}
+             ADD CONSTRAINT {SOURCE_NOT_VALID_FK}
+             FOREIGN KEY (parent_id)
+             REFERENCES {TEST_SCHEMA}.{VALIDATION_PARENT}(id)
+             NOT VALID;
+
+         CREATE PUBLICATION {TEST_PUB} FOR TABLE
+             {TEST_SCHEMA}.{VALIDATION_PARENT},
+             {TEST_SCHEMA}.{VALIDATION_CHILD},
+             {TEST_SCHEMA}.{VALIDATION_UNCHECKED_CHILD};"
+    );
+
+    direct.execute(script.as_str()).await.unwrap();
+}
+
+async fn run_schema_sync_phase(admin: &Pool<Postgres>, phase: &str) -> i64 {
+    let task_id = run_task_command(
+        admin,
+        &format!("SCHEMA_SYNC {phase} pgdog pgdog_sharded {TEST_PUB}"),
+    )
+    .await;
+    wait_for_task_status(admin, task_id, TaskProgress::Finished).await;
+    task_id
+}
+
+async fn constraint_is_validated(database: &str, constraint: &str) -> bool {
+    let database = connection_sqlx_direct_db(database).await;
+    sqlx::query_scalar(
+        "SELECT constraint_row.convalidated
+         FROM pg_constraint AS constraint_row
+         JOIN pg_namespace AS namespace
+           ON namespace.oid = constraint_row.connamespace
+         WHERE namespace.nspname = $1
+           AND constraint_row.conname = $2",
+    )
+    .bind(TEST_SCHEMA)
+    .bind(constraint)
+    .fetch_one(&database)
+    .await
+    .unwrap()
+}
+
+async fn assert_constraint_validation(constraint: &str, expected: bool) {
+    for database in ["shard_0", "shard_1"] {
+        assert_eq!(
+            constraint_is_validated(database, constraint).await,
+            expected,
+            "{constraint} validation state on {database}"
+        );
+    }
+}
+
+async fn wait_for_validation_failure(admin: &Pool<Postgres>, task_id: i64) -> SchemaSyncRow {
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(row) = schema_sync_rows(admin)
+                .await
+                .into_iter()
+                .find(|row| row.id == task_id && row.shard.is_none())
+                && row.status.is_error()
+            {
+                return row;
+            }
+            sleep(POLL).await;
+        }
+    })
+    .await
+    .expect("validation task did not fail in time")
+}
+
 #[tokio::test]
 async fn test_schema_sync_pre() {
     let direct = connection_sqlx_direct().await;
@@ -174,4 +271,70 @@ async fn test_schema_sync_post() {
     assert_schema_sync_rows(&admin, task_id, "post_data").await;
 
     cleanup(&admin, &direct).await;
+}
+
+#[tokio::test]
+async fn test_schema_sync_validation() {
+    let direct = connection_sqlx_direct().await;
+    let admin = admin_sqlx().await;
+    cleanup(&admin, &direct).await;
+
+    with_cleanup(&admin, &direct, async {
+        create_validation_schema(&direct).await;
+        run_schema_sync_phase(&admin, "pre").await;
+        run_schema_sync_phase(&admin, "post").await;
+
+        assert_constraint_validation(VALID_FK, false).await;
+        assert_constraint_validation(SOURCE_NOT_VALID_FK, false).await;
+
+        let task_id = run_schema_sync_phase(&admin, "post-data-validation").await;
+
+        assert_constraint_validation(VALID_FK, true).await;
+        assert_constraint_validation(SOURCE_NOT_VALID_FK, false).await;
+        assert_schema_sync_rows(&admin, task_id, "post_data_validation").await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_schema_sync_validation_rejects_existing_orphan() {
+    let direct = connection_sqlx_direct().await;
+    let admin = admin_sqlx().await;
+    cleanup(&admin, &direct).await;
+
+    with_cleanup(&admin, &direct, async {
+        create_validation_schema(&direct).await;
+        run_schema_sync_phase(&admin, "pre").await;
+
+        let shard = connection_sqlx_direct_db("shard_0").await;
+        shard
+            .execute(
+                format!(
+                    "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+
+        run_schema_sync_phase(&admin, "post").await;
+
+        let task_id = run_task_command(
+            &admin,
+            &format!("SCHEMA_SYNC post-data-validation pgdog pgdog_sharded {TEST_PUB}"),
+        )
+        .await;
+        let failure = wait_for_validation_failure(&admin, task_id).await;
+
+        assert_eq!(failure.sync_state, "post_data_validation");
+        assert_eq!(failure.source, "pgdog");
+        assert_eq!(failure.destination, "pgdog_sharded");
+        let TaskProgress::Error { message } = failure.status else {
+            panic!("validation task did not report an error");
+        };
+        assert!(message.contains("23503"), "{message}");
+        assert!(message.contains(VALID_FK), "{message}");
+        assert!(!constraint_is_validated("shard_0", VALID_FK).await);
+    })
+    .await;
 }

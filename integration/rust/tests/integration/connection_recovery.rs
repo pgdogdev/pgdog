@@ -104,7 +104,6 @@ async fn test_client_connection_recovery_default() {
     sleep(Duration::from_millis(50)).await;
 
     // This query should fail with Banned error because both pools are banned
-    conn.simple_query("BEGIN").await.unwrap();
     let result = conn.simple_query("SELECT 1").await;
     assert!(result.is_err(), "Expected error when pools are banned");
     let err = result.unwrap_err();
@@ -139,6 +138,50 @@ async fn test_client_connection_recovery_default() {
 
     // Reset settings
     admin.simple_query("RELOAD").await.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn test_client_connection_recovery_disabled_in_transaction() {
+    let admin = admin_tokio().await;
+    admin
+        .simple_query("SET client_connection_recovery TO 'recover'")
+        .await
+        .expect("enable client connection recovery");
+    sleep(Duration::from_millis(200)).await;
+
+    let conn = connection_tokio("pgdog").await;
+    // BEGIN is buffered, but the client is already inside a transaction.
+    conn.simple_query("BEGIN").await.expect("begin transaction");
+    ban_pools("pgdog").await;
+    sleep(Duration::from_millis(50)).await;
+
+    let failed = conn.simple_query("SELECT 1").await;
+
+    // Restore the pools and settings before asserting the failure behavior.
+    unban_pools("pgdog").await;
+    admin
+        .simple_query("RELOAD")
+        .await
+        .expect("restore settings");
+
+    let err = failed.expect_err("checkout must fail when both pools are banned");
+    let db_err = err.as_db_error().expect("expected a database error");
+    assert_eq!(db_err.severity(), "FATAL");
+    assert!(
+        db_err
+            .message()
+            .to_lowercase()
+            .contains("all replicas down"),
+        "expected all replicas down, got: {db_err}"
+    );
+
+    // Restoring pool availability must not let this client start a new transaction.
+    let err = conn
+        .simple_query("BEGIN")
+        .await
+        .expect_err("recovery must not keep a transaction's client connection open");
+    assert!(err.is_closed(), "expected a closed connection, got: {err}");
 }
 
 #[tokio::test]

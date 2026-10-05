@@ -530,4 +530,9 @@ impl Pool {
     pub(crate) fn update_config(&self, config: Config) {
         self.lock().config = config;
     }
+
+    #[cfg(test)]
+    pub(crate) async fn get_test(&self) -> Result<Guard, Error> {
+        self.get(&Request::default()).await
+    }
 }

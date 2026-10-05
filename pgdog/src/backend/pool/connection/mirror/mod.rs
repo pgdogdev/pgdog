@@ -158,8 +158,8 @@ impl Mirror {
                 safe_sleep(req.delay).await;
             }
 
-            let mut context = QueryEngineContext::new_mirror(self, &mut req.buffer);
-            query_engine.handle(&mut context).await?;
+            let mut context = QueryEngineContext::new_mirror(self);
+            query_engine.handle(&mut context, &mut req.buffer).await?;
             self.transaction = context.transaction();
         }
 

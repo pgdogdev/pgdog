@@ -10,6 +10,7 @@ impl QueryEngine {
     pub(super) async fn intercept_incomplete(
         &mut self,
         context: &mut QueryEngineContext<'_>,
+        client_request: &ClientRequest,
     ) -> Result<bool, Error> {
         // Don't intercept requests when we are connected.
         if self.backend.connected() {
@@ -17,15 +18,10 @@ impl QueryEngine {
         }
 
         // Client sent Sync only
-        let only_sync = context
-            .client_request
-            .messages
-            .iter()
-            .all(|m| m.code() == 'S');
+        let only_sync = client_request.is_sync_only();
 
         // Client sent only Close.
-        let only_close = context
-            .client_request
+        let only_close = client_request
             .messages
             .iter()
             .all(|m| ['C', 'S'].contains(&m.code()))
@@ -33,7 +29,7 @@ impl QueryEngine {
 
         let mut bytes_sent = 0;
 
-        for msg in context.client_request.messages.iter() {
+        for msg in client_request.messages.iter() {
             match msg.code() {
                 'C' => {
                     if only_close {
@@ -63,6 +59,6 @@ impl QueryEngine {
             context.stream.flush().await?;
         }
 
-        Ok(bytes_sent > 0)
+        Ok(bytes_sent > 0 || only_sync)
     }
 }

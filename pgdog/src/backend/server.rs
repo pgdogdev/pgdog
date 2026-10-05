@@ -508,6 +508,10 @@ impl Server {
                 self.send_stream(protocol_message).await?;
                 self.send_stream(message).await?;
             }
+            HandleResult::PrependProtocolMessageRewrite { prepend, rewrite } => {
+                self.send_stream(prepend).await?;
+                self.send_stream(rewrite).await?;
+            }
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 self.send_prepare(prepend).await?;
                 self.send_stream(rewrite).await?;
@@ -523,7 +527,11 @@ impl Server {
             self.send_stream(close).await?;
         }
 
-        self.send_stream(prepare.parse()).await
+        self.send_stream(prepare.parse()).await?;
+        if let Some(describe) = prepare.describe() {
+            self.send_stream(describe).await?;
+        }
+        Ok(())
     }
 
     /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].
@@ -1285,11 +1293,8 @@ impl Server {
     pub(crate) fn replace_oids(&mut self, oids: &Arc<Oids>) {
         self.prepared_statements.replace_oids(oids);
     }
-}
 
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stats().disconnect();
+    pub(crate) fn terminate(&mut self) {
         if let Some(mut stream) = self.stream.take() {
             info!(
                 "closing server connection: state={}, reason={} [{}]",
@@ -1304,6 +1309,13 @@ impl Drop for Server {
                 Ok::<(), Error>(())
             });
         }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stats().disconnect();
+        self.terminate();
     }
 }
 
@@ -1322,7 +1334,7 @@ pub(crate) mod test {
     use crate::{
         backend::pool::token_cache::TokenCache,
         config::Memory,
-        frontend::{PreparedStatements, RewritePlan},
+        frontend::PreparedStatements,
         net::{Prepare, *},
     };
 
@@ -2247,14 +2259,7 @@ pub(crate) mod test {
         let mut prep = PreparedStatements::new();
         let name = "test";
         let query = Bytes::from("SELECT 1::bigint".to_owned());
-        let prepare = prep.insert_prepare(
-            name,
-            query.clone(),
-            None,
-            &RewritePlan::default(),
-            None,
-            vec![],
-        );
+        let prepare = prep.insert_test(name, query.clone());
         assert_eq!(prepare.name(), "__pgdog_1");
 
         server

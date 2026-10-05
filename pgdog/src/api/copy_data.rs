@@ -12,7 +12,7 @@ use crate::backend::replication::data_sync::{
     validate_replica_identity,
 };
 use crate::backend::replication::logical::Error;
-use crate::backend::replication::logical::orchestrator::Orchestrator;
+use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
@@ -39,10 +39,10 @@ const LOG_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 /// upfront before calling this task.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
-    pub(crate) orchestrator: Orchestrator,
+    pub(crate) state: ReshardingState,
     pub(crate) format: CopyFormat,
     /// Require a usable replica identity per table. Only streaming needs it,
-    /// so a sync-only migration passes `false`. See `Publisher::data_sync`.
+    /// so a sync-only migration passes `false`.
     pub(crate) require_replica_identity: bool,
 }
 
@@ -53,29 +53,29 @@ impl Task for CopyDataTask {
 
     fn definition(&self) -> impl Into<TaskDefinition> {
         CopyDataDefinition {
-            databases: self.orchestrator.databases(),
+            databases: self.state.databases(),
             format: self.format,
         }
     }
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
-        let source = &self.orchestrator.source;
-        let dest = &self.orchestrator.destination;
-        let mut publisher = self.orchestrator.publisher().await;
+        let source = &self.state.source;
+        let dest = &self.state.destination;
+        let state = &self.state;
         let cancel = ctx.cancellation_token();
 
         ctx.set_status(CopyDataStage::LoadingTableMetadata.into());
-        publisher.sync_tables(true, source).await?;
+        state.sync_tables().await?;
 
         if self.require_replica_identity {
             ctx.set_status(CopyDataStage::ValidatingTables.into());
-            validate_replica_identity(&publisher.tables)?;
+            validate_replica_identity(&state.tables())?;
         }
 
         ctx.set_status(CopyDataStage::CreatingSlots.into());
-        publisher.create_slots(source, &cancel).await?;
+        state.create_slots(&cancel).await?;
 
-        let tables = &publisher.tables;
+        let mut tables = state.tables();
         ctx.set_status(CopyDataStatus {
             stage: CopyDataStage::CopyingTables,
             tables_per_shard: Some(
@@ -92,11 +92,11 @@ impl Task for CopyDataTask {
         let mut handles = FuturesUnordered::new();
 
         for shard in source.shards().iter() {
-            let tables = tables.get(&shard.number()).cloned().unwrap_or_default();
+            let shard_tables = tables.remove(&shard.number()).unwrap_or_default();
 
             info!(
                 "table sync starting for {} tables, shard={}",
-                tables.len(),
+                shard_tables.len(),
                 shard.number()
             );
 
@@ -108,7 +108,7 @@ impl Task for CopyDataTask {
                     .unwrap_or(NonZeroUsize::new(1).unwrap()),
             )?);
 
-            for table in tables {
+            for table in shard_tables {
                 let pool = Arc::clone(&pool);
                 let source = source.clone();
                 let dest = dest.clone();
@@ -139,7 +139,7 @@ impl Task for CopyDataTask {
         }
         guard.disarm();
 
-        publisher.post_data_sync(result);
+        state.set_tables(result);
 
         Ok(())
     }
