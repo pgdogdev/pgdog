@@ -84,6 +84,19 @@ pub(crate) enum Error {
         source: Box<crate::backend::Error>,
     },
 
+    #[error(
+        "Replication origin access denied for user \"{user}\" on database \"{database}\": {source}.
+    Check and update EXECUTE permissions for pg_replication_origin_* functions
+    or use a superuser/rds_superuser role.
+    "
+    )]
+    ReplicationOriginPermissionDenied {
+        user: String,
+        database: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
     #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 
@@ -144,6 +157,9 @@ pub(crate) enum Error {
         confirmed: String,
     },
 
+    #[error("replication origin {0} is in use")]
+    ReplicationOriginInUse(String),
+
     #[error("replication slots for \"{0}\" are already created")]
     SlotsAlreadyCreated(String),
 
@@ -155,6 +171,9 @@ pub(crate) enum Error {
 
     #[error("shard {0} has no replication slot")]
     NoReplicationSlot(usize),
+
+    #[error("shard {0} has no replication origins")]
+    NoReplicationOrigins(usize),
 
     #[error("shard {0} has no replication table entry")]
     NoReplicationTables(usize),
@@ -287,6 +306,9 @@ impl Error {
             // handle was dropped). The transaction is torn down; retry from a
             // fresh connection.
             Self::PipelineClosed => true,
+            // Another session still holds the origin, e.g. a backend from
+            // before a reconnect that has not exited yet.
+            Self::ReplicationOriginInUse(_) => true,
             _ => false,
         }
     }
