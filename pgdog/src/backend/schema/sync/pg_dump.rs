@@ -734,7 +734,13 @@ impl PgDumpOutput {
                                                     .set_skip_if_exists()
                                                 }
                                                 (SyncState::PostData, false) => {
-                                                    Statement::new(original).set_skip_if_exists()
+                                                    let statement = Statement::new(original)
+                                                        .set_skip_if_exists();
+                                                    if partitioned {
+                                                        statement.set_ignore_errors()
+                                                    } else {
+                                                        statement
+                                                    }
                                                 }
                                                 (SyncState::PostDataValidation, true) => {
                                                     let relation = stmt
@@ -889,11 +895,14 @@ impl PgDumpOutput {
                         });
 
                         let index_schema = stmt.relation().map(schema_name).unwrap_or("public");
-                        result.push(Statement::new(format!(
-                            "DROP INDEX IF EXISTS \"{}\".\"{}\"",
-                            index_schema,
-                            stmt.idxname().expect("name always present"),
-                        )));
+                        result.push(
+                            Statement::new(format!(
+                                "DROP INDEX IF EXISTS \"{}\".\"{}\"",
+                                index_schema,
+                                stmt.idxname().expect("name always present"),
+                            ))
+                            .set_ignore_errors(),
+                        );
 
                         result.push(deparsed(&*changed_stmt)?);
                     }
@@ -1423,6 +1432,8 @@ ALTER TABLE ONLY child ADD CONSTRAINT child_parent_fk FOREIGN KEY (parent_id) RE
             statements[1].sql.trim(),
             "ALTER TABLE other.child ADD CONSTRAINT partitioned_fk FOREIGN KEY (parent_id) REFERENCES public.parent(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED"
         );
+        assert!(!statements[0].ignore_errors);
+        assert!(statements[1].ignore_errors);
         assert_eq!(
             output.statements(SyncState::PostDataValidation).unwrap()[0].sql,
             "ALTER TABLE \"public\".\"child\" VALIDATE CONSTRAINT \"ordinary_fk\""

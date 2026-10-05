@@ -566,7 +566,7 @@ The re-sharding process is done in 5 steps:
 1. Create new empty cluster with the desired number of shards
 2. Configure it in `pgdog.toml` and run `schema-sync` command to copy table schemas to the new databases
 3. Run `data-sync` command to copy and re-shard table data with logical replication (tables are copied in parallel)
-4. While keeping previous command running (it streams row updates in real-time), run `schema-sync --phase post` to create secondary indexes on the new databases (much faster to do this after data is copied)
+4. Keep the previous command running. It restores indexes and constraints after copying and before streaming row updates.
 5. Cutover traffic to new cluster with `MAINTENANCE ON`, `RELOAD`, `MAINTENANCE OFF` command sequence
 
 Cutover can be done atomically with multiple PgDog containers because `RELOAD` doesn't resume traffic, `MAINTENANCE OFF` does, so the config is the same in all containers before queries are resumed. No complex synchronization tooling like etcd or Zookeeper is required.
