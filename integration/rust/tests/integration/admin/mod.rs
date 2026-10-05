@@ -62,6 +62,12 @@ impl Tasks {
                 let updated_at: String = row.get("updated_at");
                 let elapsed: String = row.get("elapsed");
                 let elapsed_ms: i64 = row.get("elapsed_ms");
+                let task_type: &str = row.get("type");
+                let kind = task_type
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
 
                 assert!(!started_at.is_empty(), "task {id:?}: started_at is empty");
                 assert!(!updated_at.is_empty(), "task {id:?}: updated_at is empty");
@@ -77,7 +83,7 @@ impl Tasks {
                 Task {
                     parent_id,
                     id,
-                    kind: row.get("type"),
+                    kind,
                     status,
                     inner_status: row.get("inner_status"),
                     started_at,

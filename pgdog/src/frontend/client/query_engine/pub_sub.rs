@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::net::ProtocolMessage;
 
 impl QueryEngine {
@@ -10,7 +11,7 @@ impl QueryEngine {
         shard: Shard,
     ) -> Result<(), Error> {
         self.backend.listen(channel, shard).await?;
-        self.fake_command_response(context, client_messages, "LISTEN", None)
+        self.fake_command_response(context, client_messages, &FakeResponse::command("LISTEN"))
             .await?;
 
         Ok(())
@@ -32,7 +33,7 @@ impl QueryEngine {
             // Send immediately if not in transaction
             self.backend.notify(channel, payload, shard.clone()).await?;
         }
-        self.fake_command_response(context, client_messages, "NOTIFY", None)
+        self.fake_command_response(context, client_messages, &FakeResponse::command("NOTIFY"))
             .await?;
         Ok(())
     }
@@ -44,7 +45,7 @@ impl QueryEngine {
         channel: &str,
     ) -> Result<(), Error> {
         self.backend.unlisten(channel);
-        self.fake_command_response(context, client_messages, "UNLISTEN", None)
+        self.fake_command_response(context, client_messages, &FakeResponse::command("UNLISTEN"))
             .await?;
         Ok(())
     }
