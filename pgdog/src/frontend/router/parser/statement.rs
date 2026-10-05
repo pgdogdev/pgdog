@@ -244,7 +244,7 @@ fn is_param_ref(node: Node<'_>) -> bool {
 }
 
 use super::{
-    super::sharding::Value as ShardingValue, Column, Error, Table, Value,
+    super::sharding::Value as ShardingValue, Column, Error, Function, Table, Value,
     explain_trace::ExplainEntry,
 };
 
@@ -296,6 +296,9 @@ impl AdvisoryLockId {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AdvisoryLocks {
     locks: HashSet<AdvisoryLock>,
+    /// The statement is `SELECT pg_try_advisory_lock(...)` and nothing else,
+    /// so the first column tells us if the lock was acquired.
+    try_lock: bool,
 }
 
 impl AdvisoryLocks {
@@ -305,6 +308,10 @@ impl AdvisoryLocks {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.locks.is_empty()
+    }
+
+    pub(crate) fn try_lock(&self) -> bool {
+        self.try_lock
     }
 }
 
@@ -758,9 +765,41 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
     pub(crate) fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
-        AdvisoryLocks {
-            locks: self.walk().advisory_locks.clone(),
+        let locks = self.walk().advisory_locks.clone();
+        let try_lock = locks.len() == 1 && self.is_try_lock();
+
+        AdvisoryLocks { locks, try_lock }
+    }
+
+    /// `SELECT pg_try_advisory_lock(...)` with no casts, FROM or other columns.
+    /// Postgres returns false instead of an error if the lock is taken.
+    fn is_try_lock(&self) -> bool {
+        let Node::SelectStmt(stmt) = self.stmt else {
+            return false;
+        };
+
+        if !stmt.from_clause().is_empty() {
+            return false;
         }
+
+        let Ok(target) = stmt.target_list().into_iter().exactly_one() else {
+            return false;
+        };
+
+        let Node::FuncCall(func) = target.val() else {
+            return false;
+        };
+
+        let Some(func) = Function::from_strings(func.funcname().iter().filter_map(Node::as_str))
+        else {
+            return false;
+        };
+
+        matches!(func.schema, None | Some("pg_catalog"))
+            && matches!(
+                func.name,
+                "pg_try_advisory_lock" | "pg_try_advisory_lock_shared"
+            )
     }
 
     // Are we running? Or walking? MAKE UP YOUR MIND DAMMIT
@@ -3552,6 +3591,37 @@ mod test {
                     session(Some(AdvisoryLockId::OneParameter(99)), false)
                 ],
             );
+        }
+
+        #[test]
+        fn try_lock_only_for_single_column_select() {
+            let try_lock = |query: &str| {
+                let schema = ShardingSchema::default();
+                let raw = pg_raw_parse::parse(query).unwrap();
+                let stmt = raw.stmts().next().unwrap();
+                StatementParser::new(stmt, None, &schema)
+                    .extract_advisory_locks()
+                    .try_lock()
+            };
+
+            for query in [
+                "SELECT pg_try_advisory_lock(1)",
+                "SELECT pg_try_advisory_lock_shared(1)",
+                "SELECT pg_catalog.pg_try_advisory_lock(1, 2)",
+            ] {
+                assert!(try_lock(query), "{query}");
+            }
+
+            for query in [
+                "SELECT pg_advisory_lock(1)",
+                "SELECT pg_try_advisory_xact_lock(1)",
+                "SELECT pg_try_advisory_lock(1)::int",
+                "SELECT 1, pg_try_advisory_lock(1)",
+                "SELECT pg_try_advisory_lock(1), pg_try_advisory_lock(2)",
+                "SELECT pg_try_advisory_lock(v) FROM (VALUES (1)) AS t(v)",
+            ] {
+                assert!(!try_lock(query), "{query}");
+            }
         }
     }
 }
