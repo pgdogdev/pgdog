@@ -7,7 +7,7 @@ use super::table_copies::{copy_row, poll};
 use super::{
     TEST_PUB, TEST_SCHEMA, TEST_TABLE, cleanup, create_publication, create_test_table,
     run_task_command, seed_rows, shard_row_count, wait_for_relation_on_shards,
-    wait_for_rows_each_shard, wait_for_task,
+    wait_for_rows_each_shard, wait_for_task, with_cleanup,
 };
 
 const SIBLING_ROWS: i64 = 200_000;
@@ -48,22 +48,69 @@ async fn test_copy_data() {
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
 
-    create_test_table(&direct).await;
-    seed_rows(&direct, 20).await;
-    create_publication(&direct).await;
+    with_cleanup(&admin, &direct, async {
+        let secondary_index = format!("{TEST_TABLE}_val_key");
+        create_test_table(&direct).await;
+        // pg_dump emits REPLICA IDENTITY USING INDEX right after the
+        // index it references, which is created in the post-data step.
+        // Running it in pre-data fails, and a restore that ignores
+        // errors silently leaves the table with its default identity.
+        direct
+            .execute(
+                format!(
+                    "ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ALTER COLUMN val SET NOT NULL;
+                     ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ADD CONSTRAINT {secondary_index} UNIQUE (val);
+                     ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} REPLICA IDENTITY USING INDEX {secondary_index}"
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+        seed_rows(&direct, 20).await;
+        create_publication(&direct).await;
 
-    let row = admin
-        .fetch_one(format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}").as_str())
-        .await
-        .unwrap();
-    let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
-    let slot_name: String = row.get("replication_slot");
-    assert!(!slot_name.is_empty(), "replication_slot must be non-empty");
+        let row = admin
+            .fetch_one(format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}").as_str())
+            .await
+            .unwrap();
+        let task_id: i64 = row.get::<String, _>("task_id").parse().unwrap();
+        let slot_name: String = row.get("replication_slot");
+        assert!(!slot_name.is_empty(), "replication_slot must be non-empty");
 
-    wait_for_relation_on_shards(&admin, task_id, TEST_TABLE).await;
-    wait_for_rows_each_shard(&admin, task_id, TEST_TABLE, 20).await;
+        wait_for_relation_on_shards(&admin, task_id, TEST_TABLE).await;
+        wait_for_rows_each_shard(&admin, task_id, TEST_TABLE, 20).await;
+        wait_for_task(&admin, "copy data to finish synchronization", |task| {
+            task.parent_id == Some(task_id)
+                && task.kind == "copy_data"
+                && task.status == TaskProgress::Finished
+        })
+        .await;
 
-    cleanup(&admin, &direct).await;
+        // The index it references is created earlier in the same step.
+        for database in ["shard_0", "shard_1"] {
+            let shard = connection_sqlx_direct_db(database).await;
+            let identity: String = sqlx::query_scalar(
+                "SELECT relreplident::text FROM pg_class WHERE oid = to_regclass($1)",
+            )
+            .bind(format!("{TEST_SCHEMA}.{TEST_TABLE}"))
+            .fetch_one(&shard)
+            .await
+            .unwrap();
+            assert_eq!(identity, "i");
+            let error = shard
+                .execute(
+                    format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (id, val) VALUES (21, 'v1')")
+                        .as_str(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("23505")
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]

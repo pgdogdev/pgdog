@@ -49,6 +49,17 @@ impl QueryParser {
 
             Node::CreateSeqStmt(stmt) => {
                 shard = Self::shard_ddl_table(stmt.sequence(), schema)?.unwrap_or(Shard::All);
+                if let Some(rv) = stmt.sequence()
+                    && rv.relpersistence == b't' as c_char
+                {
+                    temp_table = Some(TempTableChange::Create {
+                        name: rv
+                            .relname()
+                            .expect("CREATE SEQUENCE always has a name")
+                            .to_owned(),
+                        drop_on_commit: false,
+                    });
+                }
             }
 
             Node::DropStmt(stmt) => match stmt.remove_type {
@@ -249,6 +260,7 @@ impl QueryParser {
 mod test {
     use super::*;
     use crate::backend::replication::ShardedSchemas;
+    use crate::frontend::client::query_engine::TempTableChange;
     use pgdog_config::ShardedSchema;
 
     fn test_schema() -> ShardingSchema {
@@ -310,6 +322,29 @@ mod test {
         let command = parse_stmt("CREATE SEQUENCE public.test_seq");
         assert_eq!(command.route().shard(), &Shard::All);
         assert!(!command.route().is_schema_changed());
+        assert!(command.route().temp_table_change.is_none());
+    }
+
+    #[test]
+    fn test_create_temp_sequence_pins_backend() {
+        let command = parse_stmt("CREATE TEMP SEQUENCE test_seq");
+        assert!(matches!(
+            &command.route().temp_table_change,
+            Some(TempTableChange::Create {
+                name,
+                drop_on_commit: false,
+            }) if name == "test_seq"
+        ));
+
+        let command = parse_stmt("CREATE TEMPORARY SEQUENCE IF NOT EXISTS shard_1.test_seq");
+        assert_eq!(command.route().shard(), &Shard::Direct(1));
+        assert!(matches!(
+            &command.route().temp_table_change,
+            Some(TempTableChange::Create {
+                name,
+                drop_on_commit: false,
+            }) if name == "test_seq"
+        ));
     }
 
     #[test]

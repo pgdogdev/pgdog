@@ -137,6 +137,13 @@ pub(crate) enum Error {
     #[error("replication slot \"{0}\" is in use")]
     SlotInUse(String),
 
+    #[error("replication slot \"{slot}\" confirmed {confirmed}, expected at least {expected}")]
+    SlotLsnNotConfirmed {
+        slot: String,
+        expected: String,
+        confirmed: String,
+    },
+
     #[error("replication slots for \"{0}\" are already created")]
     SlotsAlreadyCreated(String),
 
@@ -181,6 +188,9 @@ pub(crate) enum Error {
 
     #[error("cutover abort timeout")]
     AbortTimeout,
+
+    #[error("replication did not apply the source WAL written before the traffic stop in time")]
+    CatchUpTimeout,
 
     #[error("task is not a replication task")]
     NotReplication,
