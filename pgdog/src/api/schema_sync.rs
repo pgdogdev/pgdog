@@ -44,7 +44,7 @@ impl From<SchemaSyncPhase> for SyncState {
 
 /// Sync one phase of a dump to the destination. Clone the builder before
 /// setting the phase to give every phase the same dump.
-#[derive(Debug, bon::Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 #[builder(derive(Clone, Debug))]
 pub(crate) struct SchemaSyncTask {
     #[builder(field)]
@@ -57,6 +57,10 @@ pub(crate) struct SchemaSyncTask {
     #[builder(default)]
     dry_run: bool,
 }
+
+pub(crate) type SchemaSyncBuilder = SchemaSyncTaskBuilder<
+    schema_sync_task_builder::SetPublication<schema_sync_task_builder::SetDatabases>,
+>;
 
 impl Task for SchemaSyncTask {
     type Status = SchemaSyncStatus;

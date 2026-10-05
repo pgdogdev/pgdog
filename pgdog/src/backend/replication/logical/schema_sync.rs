@@ -118,7 +118,8 @@ pub(crate) struct ShardRestore {
 impl ShardRestore {
     /// Apply one statement. An "already exists" error is reported as
     /// [`StatementOutcome::Skipped`] when the statement tolerates it, and any
-    /// other error fails the restore unless `ignore_errors` is set.
+    /// other error fails the restore unless `ignore_errors` is set for the
+    /// restore or for the statement.
     pub(crate) async fn execute(
         &mut self,
         statement: &Statement,
@@ -142,7 +143,7 @@ impl ShardRestore {
             return Ok(StatementOutcome::Skipped);
         }
 
-        if !ignore_errors {
+        if !ignore_errors && !statement.ignore_errors {
             return Err(err.into());
         }
 
