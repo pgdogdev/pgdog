@@ -16,11 +16,13 @@ pub mod copy_data;
 pub mod replication;
 pub mod reshard;
 pub mod schema_sync;
+pub mod synchronize_tables;
 
 pub use copy_data::*;
 pub use replication::*;
 pub use reshard::*;
 pub use schema_sync::*;
+pub use synchronize_tables::*;
 
 /// Identity of a task in the registry. Ids are unique per registry.
 #[derive(
@@ -65,6 +67,7 @@ pub enum TaskStatus {
     SchemaShard(SchemaShardStatus),
     TableCopy(TableCopyStatus),
     CopyData(CopyDataStatus),
+    SynchronizeTables(SynchronizeTablesStatus),
     // in progress, not used
     Replication(ReplicationStatus),
     ReplicationCluster(ReplicationClusterStatus),
@@ -630,6 +633,7 @@ mod test {
                 stage: CopyDataStage::CopyingTables,
                 tables_per_shard: Some(vec![5, 3]),
             }),
+            TaskStatus::SynchronizeTables(SynchronizeTablesStatus::InitializingReplicationStreams),
             TaskStatus::SchemaSync(SchemaSyncStatus::ApplyingStatements {
                 statements: Arc::new(vec![
                     SchemaSyncStatement::new("CREATE INDEX ...").set_skip_if_exists(),
@@ -707,6 +711,7 @@ mod test {
                 TaskStatus::RatioProgress(_)
                 | TaskStatus::Reshard(_)
                 | TaskStatus::CopyData(_)
+                | TaskStatus::SynchronizeTables(_)
                 | TaskStatus::SchemaSync(_)
                 | TaskStatus::SchemaShard(_)
                 | TaskStatus::TableCopy(_)

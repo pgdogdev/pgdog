@@ -90,11 +90,11 @@ pub(crate) enum Commands {
         #[arg(long)]
         to_database: String,
 
-        /// Replicate or copy data over.
+        /// Only replicate; skip the initial data copy.
         #[arg(long, default_value = "false")]
         replicate_only: bool,
 
-        /// Replicate or copy data over.
+        /// Only copy data and synchronize tables; skip replication and cutover.
         #[arg(long, default_value = "false")]
         sync_only: bool,
 
@@ -102,7 +102,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         replication_slot: Option<String>,
 
-        /// Don't perform pre-data schema sync.
+        /// Don't perform pre-data or post-data schema sync.
         #[arg(long)]
         skip_schema_sync: bool,
     },
@@ -124,7 +124,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Ignore errors.
+        /// Ignore errors for any phase. Post-data ignores errors by default.
         #[arg(long)]
         ignore_errors: bool,
 
@@ -310,6 +310,7 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
         validation,
     } = commands
     {
+        let phase = legacy_phase(data_sync_complete, cutover, validation).unwrap_or(phase);
         run_to_completion(
             SchemaSyncTask::builder()
                 .databases(Databases {
@@ -317,8 +318,8 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
                     destination: to_database,
                 })
                 .publication(publication)
-                .phase(legacy_phase(data_sync_complete, cutover, validation).unwrap_or(phase))
-                .ignore_errors(ignore_errors)
+                .phase(phase)
+                .ignore_errors(ignore_errors || phase == SchemaSyncPhase::Post)
                 .dry_run(dry_run)
                 .build(),
         )

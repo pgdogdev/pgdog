@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::api::replication::ReplicationTask;
 use crate::api::run_task;
-use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::schema_sync::SchemaSyncTask;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::prelude::*;
@@ -63,15 +63,13 @@ impl Command for Replicate {
 
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
-            .publication(self.publication.clone())
-            .phase(SchemaSyncPhase::Cutover)
-            .ignore_errors(true)
-            .build();
+            .publication(self.publication.clone());
 
         let task_id = run_task(
             ReplicationTask::builder()
                 .state(state)
                 .schema_sync(schema_sync)
+                .validate(false)
                 .build(),
         )
         .id();
