@@ -71,19 +71,20 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            let fake_response = set_config
-                .then(|| params.iter().map(|p| p.value.as_ref()))
-                .map(|values| FakeResponse::new_params(&["set_config"], values));
-            let notice = set_local_outside_transaction
-                .then(|| NoticeResponse::from(ErrorResponse::set_local_outside_transaction()));
-            self.fake_command_response_with_notice(
-                context,
-                &client_request.messages,
-                fake_command,
-                fake_response,
-                notice.as_ref(),
-            )
-            .await?;
+            let mut response = FakeResponse::command(fake_command);
+            if set_config {
+                response = response.with_params(
+                    &["set_config"],
+                    params.iter().map(|param| param.value.as_ref()),
+                );
+            }
+            if set_local_outside_transaction {
+                response = response.with_notice(NoticeResponse::from(
+                    ErrorResponse::set_local_outside_transaction(),
+                ));
+            }
+            self.fake_command_response(context, &client_request.messages, &response)
+                .await?;
         }
 
         Ok(())
@@ -136,8 +137,12 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            self.fake_command_response(context, &client_request.messages, "RESET", None)
-                .await?;
+            self.fake_command_response(
+                context,
+                &client_request.messages,
+                &FakeResponse::command("RESET"),
+            )
+            .await?;
         }
 
         Ok(())
