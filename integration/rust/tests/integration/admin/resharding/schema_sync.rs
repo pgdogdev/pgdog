@@ -242,35 +242,31 @@ async fn test_schema_sync_post() {
     let admin = admin_sqlx().await;
     cleanup(&admin, &direct).await;
 
-    let secondary_index = format!("{TEST_TABLE}_val_idx");
-    create_test_table(&direct).await;
-    direct
-        .execute(
-            format!("CREATE INDEX {secondary_index} ON {TEST_SCHEMA}.{TEST_TABLE} (val)").as_str(),
-        )
-        .await
-        .unwrap();
-    create_publication(&direct).await;
+    with_cleanup(&admin, &direct, async {
+        create_validation_schema(&direct).await;
+        run_schema_sync_phase(&admin, "pre").await;
 
-    let pre_task_id = run_task_command(
-        &admin,
-        &format!("SCHEMA_SYNC pre pgdog pgdog_sharded {TEST_PUB}"),
-    )
+        let task_id = run_schema_sync_phase(&admin, "post").await;
+        assert_schema_sync_rows(&admin, task_id, "post_data").await;
+
+        for database in ["shard_0", "shard_1"] {
+            let shard = connection_sqlx_direct_db(database).await;
+            let error = shard
+                .execute(
+                    format!(
+                        "INSERT INTO {TEST_SCHEMA}.{VALIDATION_CHILD} (id, parent_id) VALUES (1, 42)"
+                    )
+                    .as_str(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("23503")
+            );
+        }
+    })
     .await;
-    wait_for_task_status(&admin, pre_task_id, TaskProgress::Finished).await;
-    wait_for_relation_on_shards(&admin, pre_task_id, TEST_TABLE).await;
-
-    let task_id = run_task_command(
-        &admin,
-        &format!("SCHEMA_SYNC post pgdog pgdog_sharded {TEST_PUB}"),
-    )
-    .await;
-
-    wait_for_task_status(&admin, task_id, TaskProgress::Finished).await;
-    wait_for_relation_on_shards(&admin, task_id, &secondary_index).await;
-    assert_schema_sync_rows(&admin, task_id, "post_data").await;
-
-    cleanup(&admin, &direct).await;
 }
 
 #[tokio::test]

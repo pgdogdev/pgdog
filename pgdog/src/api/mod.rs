@@ -14,6 +14,7 @@ pub(crate) mod copy_data;
 pub(crate) mod replication;
 pub(crate) mod resharding;
 pub(crate) mod schema_sync;
+pub(crate) mod synchronize_tables;
 pub(crate) mod task;
 
 /// Process-global task registry shared by all `crate::api` task modules.

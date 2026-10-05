@@ -300,3 +300,17 @@ INSERT INTO copy_data.event_types (code, label, description) VALUES
     -- NULL description: exercises IS NOT DISTINCT FROM NULL in the FULL identity WHERE clause.
     -- A plain = predicate would silently skip this row on UPDATE/DELETE.
     ('null_desc', 'Null Description', NULL);
+
+CREATE TABLE copy_data.index_identity_events (
+    code TEXT NOT NULL,
+    label TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX index_identity_events_code_idx
+    ON copy_data.index_identity_events (code);
+ALTER TABLE copy_data.index_identity_events
+    REPLICA IDENTITY USING INDEX index_identity_events_code_idx;
+
+INSERT INTO copy_data.index_identity_events (code, label) VALUES
+    ('original', 'Original'),
+    ('removed', 'Removed');
