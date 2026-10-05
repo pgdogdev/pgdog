@@ -86,7 +86,7 @@ async fn test_show_table_copies_during_copy() {
         run_task_command(&admin, &format!("COPY_DATA pgdog pgdog_sharded {TEST_PUB}")).await;
 
     wait_for_task(&admin, "the copy_data child task", |task| {
-        task.parent_id == Some(task_id) && task.kind.split_whitespace().next() == Some("copy_data")
+        task.parent_id == Some(task_id) && task.kind == "copy_data"
     })
     .await;
 

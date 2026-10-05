@@ -34,16 +34,15 @@ const LOG_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 ///
 /// # Invariants
 ///
-/// This task does only the copy of tables without creating replication slots by itself.
-/// The replication slots to preserve any updates while copy is in progress should be created
-/// upfront before calling this task.
+/// This task creates replication slots before copying tables.
+/// These slots keep the changes made while the copy runs.
+/// Each table copy uses its own snapshot, so the copied tables can be
+/// inconsistent with each other until
+/// [`SynchronizeTablesTask`](crate::api::synchronize_tables::SynchronizeTablesTask) runs.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct CopyDataTask {
     pub(crate) state: ReshardingState,
     pub(crate) format: CopyFormat,
-    /// Require a usable replica identity per table. Only streaming needs it,
-    /// so a sync-only migration passes `false`.
-    pub(crate) require_replica_identity: bool,
 }
 
 impl Task for CopyDataTask {
@@ -67,10 +66,8 @@ impl Task for CopyDataTask {
         ctx.set_status(CopyDataStage::LoadingTableMetadata.into());
         state.sync_tables().await?;
 
-        if self.require_replica_identity {
-            ctx.set_status(CopyDataStage::ValidatingTables.into());
-            validate_replica_identity(&state.tables())?;
-        }
+        ctx.set_status(CopyDataStage::ValidatingTables.into());
+        validate_replica_identity(&state.tables())?;
 
         ctx.set_status(CopyDataStage::CreatingSlots.into());
         state.create_slots(&cancel).await?;

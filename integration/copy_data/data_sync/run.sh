@@ -100,8 +100,21 @@ query_one() {
     psql -d "$db" -tAc "$sql" | tr -d '\n\r'
 }
 
+check_index_identity_events() {
+    local hop=$1 db rows
+    shift
+    for db in "$@"; do
+        rows=$(query_one "${db}" "SELECT string_agg(code || ':' || label, ',' ORDER BY code) FROM copy_data.index_identity_events")
+        if [ "${rows}" != "changed:Updated,inserted:Inserted" ]; then
+            echo "ERROR REPLICA IDENTITY USING INDEX (${hop}): ${db} contains '${rows}'"
+            exit 1
+        fi
+    done
+    echo "OK REPLICA IDENTITY USING INDEX (${hop}): INSERT, UPDATE, and DELETE reached both shards"
+}
+
 SHARDED_TABLES="copy_data.users copy_data.orders copy_data.order_items copy_data.log_actions copy_data.with_identity copy_data.posts copy_data.full_identity_events"
-OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories copy_data.event_types"
+OMNI_TABLES="copy_data.countries copy_data.currencies copy_data.categories copy_data.event_types copy_data.index_identity_events"
 
 pushd ${SCRIPT_DIR}
 
@@ -172,6 +185,10 @@ psql -d "${SRC_DB}" -c "UPDATE copy_data.event_types SET label = 'Click Updated'
 # A plain = predicate would match zero rows; this UPDATE would silently not propagate.
 psql -d "${SRC_DB}" -c "UPDATE copy_data.event_types SET label = 'Null Desc Updated' WHERE code = 'null_desc'"
 
+psql -d "${SRC_DB}" -c "UPDATE copy_data.index_identity_events SET code = 'changed', label = 'Updated' WHERE code = 'original'"
+psql -d "${SRC_DB}" -c "DELETE FROM copy_data.index_identity_events WHERE code = 'removed'"
+psql -d "${SRC_DB}" -c "INSERT INTO copy_data.index_identity_events (code, label) VALUES ('inserted', 'Inserted')"
+
 # Duplicate-row UPDATE test (ctid single-row targeting).
 # Two identical rows (tenant_id=1, seq=200, label='dup_label') were seeded. Update exactly
 # one on the source by targeting its ctid. PgDog receives one WAL UPDATE event whose OLD
@@ -223,6 +240,8 @@ if [ ${REPL_EXIT} -ne 0 ] && [ ${REPL_EXIT} -ne 130 ] && [ ${REPL_EXIT} -ne 143 
     echo "ERROR: replication process exited with code ${REPL_EXIT}"
     exit ${REPL_EXIT}
 fi
+
+check_index_identity_events "0 -> 2" "${DST_DB1}" "${DST_DB2}"
 
 ${PGDOG_BIN} --config "${PGDOG_CONFIG}" --users "${PGDOG_USERS}" \
     schema-sync --from-database source --to-database destination --publication pgdog --cutover
@@ -308,6 +327,8 @@ if [ "${OMNI_LABEL_0}" != "Click Updated" ] || [ "${OMNI_LABEL_1}" != "Click Upd
     exit 1
 fi
 echo "OK REPLICA IDENTITY FULL omni UPDATE: label='Click Updated' on both shards"
+
+check_index_identity_events "2 -> 2" "${DST2_DB1}" "${DST2_DB2}"
 
 # IS NOT DISTINCT FROM: the null_desc row (description IS NULL) must have propagated
 # through both resharding hops. A plain = predicate would have matched zero rows on the

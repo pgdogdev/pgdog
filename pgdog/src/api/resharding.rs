@@ -1,11 +1,9 @@
 //! Reshard / migration composer task.
 //!
-//! Composes the full migration from a source database to a target: pre-data
-//! schema sync, the [`CopyDataTask`] bulk copy, post-data schema sync, then
-//! replication. With `auto_cutover` it cuts over automatically once replication
-//! has caught up (reshard); otherwise it waits for an operator `CUTOVER`
-//! (`copy_data`). The admin `COPY_DATA`/`RESHARD` commands and the CLI
-//! `data_sync` all run this task, differing only in their options.
+//! Composes the full migration from a source database to a target.
+//! `RESHARD` runs schema sync, data copy, replication, and automatic cutover.
+//! The manual admin flow uses `COPY_DATA` without automatic cutover.
+//! The CLI `data_sync` command selects stages through its options.
 
 use std::time::Duration;
 
@@ -14,15 +12,16 @@ use tracing::warn;
 use crate::api::copy_data::CopyDataTask;
 use crate::api::replication::ReplicationTask;
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
+use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
-/// Run the full migration from a source database to a target: schema sync
-/// (pre-data tables, then post-data indexes around the bulk copy), data copy,
-/// then replication. With `auto_cutover` it also performs the cutover.
+/// Run the full migration from a source database to a target.
+/// Restore pre-data schema, copy data, restore post-data schema, then synchronize tables.
+/// With `auto_cutover`, also perform the cutover.
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReshardTask {
     pub(crate) state: ReshardingState,
@@ -65,15 +64,20 @@ impl Task for ReshardTask {
         let mut state = self.state;
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
-            .publication(state.publication.clone())
-            .ignore_errors(true);
+            .publication(state.publication.clone());
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.
         if !self.skip_schema_sync {
             ctx.set_status(ReshardStatus::SchemaSync);
-            ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Pre).build())
-                .await?;
+            ctx.run(
+                schema_sync
+                    .clone()
+                    .phase(SchemaSyncPhase::Pre)
+                    .ignore_errors(true)
+                    .build(),
+            )
+            .await?;
 
             // The pre-data sync changed the destination's schema, so its pools
             // reloaded. `SchemaSync::reload_destination` refreshes only its own
@@ -81,7 +85,7 @@ impl Task for ReshardTask {
             state.reload()?;
         }
 
-        let result: Result<(), MigrationError> = async {
+        let result: Result<(), MigrationError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
@@ -89,8 +93,6 @@ impl Task for ReshardTask {
                     CopyDataTask::builder()
                         .state(state.clone())
                         .format(config().config.general.resharding_copy_format)
-                        // Only streaming needs replica identity, not a sync-only copy.
-                        .require_replica_identity(!self.sync_only)
                         .build(),
                 )
                 .await?;
@@ -102,8 +104,22 @@ impl Task for ReshardTask {
             // calls if they were executed.
             if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::FinalizingSchema);
-                ctx.run(schema_sync.clone().phase(SchemaSyncPhase::Post).build())
-                    .await?;
+                ctx.run(
+                    schema_sync
+                        .clone()
+                        .phase(SchemaSyncPhase::Post)
+                        .ignore_errors(self.replicate_only)
+                        .build(),
+                )
+                .await?;
+            }
+
+            if !self.replicate_only {
+                ctx.set_status(ReshardStatus::SynchronizingTables);
+                ctx.run(SynchronizeTablesTask {
+                    state: state.clone(),
+                })
+                .await?;
             }
 
             // Replication, unless sync-only.
@@ -119,18 +135,21 @@ impl Task for ReshardTask {
                 // a forward phase resolves to `Err(ReplicationAborted)` and runs
                 // the cleanup below; a stop in a reverse phase resolves to
                 // `Ok`, because the migration is already complete.
-                ctx.run(
-                    ReplicationTask::builder()
-                        .state(state.clone())
-                        .auto_cutover(self.auto_cutover)
-                        .schema_sync(schema_sync.clone().phase(SchemaSyncPhase::Cutover).build())
-                        .build(),
+                Box::pin(
+                    ctx.run(
+                        ReplicationTask::builder()
+                            .state(state.clone())
+                            .auto_cutover(self.auto_cutover)
+                            .schema_sync(schema_sync.clone())
+                            .validate(!self.skip_schema_sync && !self.replicate_only)
+                            .build(),
+                    ),
                 )
                 .await?;
             }
 
             Ok(())
-        }
+        })
         .await;
 
         if result.is_err() || cancel.is_cancelled() {
