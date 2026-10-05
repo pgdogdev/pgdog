@@ -1054,6 +1054,10 @@ impl StreamSubscriber {
         self.lsn
     }
 
+    pub(crate) fn committed_lsn(&self) -> i64 {
+        self.committed_lsn
+    }
+
     /// Whether we are inside a transaction.
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction

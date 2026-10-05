@@ -1,6 +1,5 @@
 //! Server address.
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::ops::Deref;
 
 use pgdog_config::Role;
 use pgdog_config::users::PasswordKind;
@@ -50,21 +49,6 @@ pub(crate) struct Address {
     /// back to the `[general]` settings.
     #[serde(default)]
     pub(crate) tls: ServerTls,
-}
-
-impl From<Address> for pgdog_stats::Address {
-    fn from(value: Address) -> Self {
-        pgdog_stats::Address {
-            host: value.host,
-            port: value.port,
-            database_name: value.database_name,
-            user: value.user,
-            passwords: value.passwords.iter().map(|p| p.deref().clone()).collect(),
-            server_auth: value.server_auth,
-            server_iam_region: value.server_iam_region,
-            database_number: value.database_number,
-        }
-    }
 }
 
 impl Address {

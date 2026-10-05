@@ -23,7 +23,7 @@ fn latest_copy_data() -> Option<TaskId> {
     tasks_storage().try_for_each(|task| {
         let state = task.state();
 
-        // Copy data is the child of reshard, go deeper
+        // Copy data can be a Reshard child or a standalone root.
         match state.definition.kind {
             TaskDefinitionKind::Reshard(_) => return ControlFlow::Continue(()),
             TaskDefinitionKind::CopyData(_) => {}

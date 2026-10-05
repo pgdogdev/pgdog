@@ -1,7 +1,7 @@
 use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
-use crate::net::messages::ErrorResponse;
+use crate::net::messages::{ErrorResponse, NoticeResponse};
 
 use super::*;
 
@@ -29,8 +29,14 @@ impl QueryEngine {
             return Ok(());
         }
 
+        let set_local_outside_transaction =
+            !context.in_transaction() && params.iter().any(|param| param.local);
         let mut fake_command = "SET";
         for param in params {
+            if !context.in_transaction() && param.local {
+                continue;
+            }
+
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
@@ -65,16 +71,20 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            let fake_response = set_config
-                .then(|| params.iter().map(|p| p.value.as_ref()))
-                .map(|values| FakeResponse::new_params(&["set_config"], values));
-            self.fake_command_response(
-                context,
-                &client_request.messages,
-                fake_command,
-                fake_response,
-            )
-            .await?;
+            let mut response = FakeResponse::command(fake_command);
+            if set_config {
+                response = response.with_params(
+                    &["set_config"],
+                    params.iter().map(|param| param.value.as_ref()),
+                );
+            }
+            if set_local_outside_transaction {
+                response = response.with_notice(NoticeResponse::from(
+                    ErrorResponse::set_local_outside_transaction(),
+                ));
+            }
+            self.fake_command_response(context, &client_request.messages, &response)
+                .await?;
         }
 
         Ok(())
@@ -93,9 +103,10 @@ impl QueryEngine {
         }
 
         let Some(param) = params.iter().find(|param| {
-            SHARD_TARGETING_PARAMS
-                .iter()
-                .any(|name| param.name.eq_ignore_ascii_case(name))
+            (context.in_transaction() || !param.local)
+                && SHARD_TARGETING_PARAMS
+                    .iter()
+                    .any(|name| param.name.eq_ignore_ascii_case(name))
         }) else {
             return Ok(false);
         };
@@ -126,8 +137,12 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            self.fake_command_response(context, &client_request.messages, "RESET", None)
-                .await?;
+            self.fake_command_response(
+                context,
+                &client_request.messages,
+                &FakeResponse::command("RESET"),
+            )
+            .await?;
         }
 
         Ok(())

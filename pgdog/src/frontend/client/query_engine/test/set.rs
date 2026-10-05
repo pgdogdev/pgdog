@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, ErrorResponse, NoData, ParameterDescription, ParseComplete,
-        ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, ErrorResponse, NoData, NoticeResponse, ParameterDescription,
+        ParseComplete, ReadyForQuery, parameter::ParameterValue,
     },
 };
 
@@ -43,6 +43,63 @@ async fn test_set() {
     );
 
     assert!(!test_client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_set_local_outside_transaction_warns_and_has_no_effect() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("SET LOCAL application_name TO 'ignored'"))
+        .await;
+
+    let notice = expect_message!(client.read().await, NoticeResponse);
+    assert_eq!(notice.message.severity, "WARNING");
+    assert_eq!(notice.message.code, "25P01");
+    assert_eq!(
+        notice.message.message,
+        "SET LOCAL can only be used in transaction blocks"
+    );
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    assert_eq!(
+        expect_message!(client.read().await, ReadyForQuery).status,
+        'I'
+    );
+    assert_eq!(client.client().params.get("application_name"), None);
+    assert!(!client.backend_connected());
+}
+
+#[tokio::test]
+async fn test_extended_set_local_outside_transaction_warns_and_has_no_effect() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send(Parse::named(
+            "set_local",
+            "SET LOCAL application_name TO 'ignored'",
+        ))
+        .await;
+    client.send(Bind::new_statement("set_local")).await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    expect_message!(client.read().await, ParseComplete);
+    expect_message!(client.read().await, BindComplete);
+    expect_message!(client.read().await, NoticeResponse);
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "SET"
+    );
+    assert_eq!(
+        expect_message!(client.read().await, ReadyForQuery).status,
+        'I'
+    );
+    assert_eq!(client.client().params.get("application_name"), None);
+    assert!(!client.backend_connected());
 }
 
 #[tokio::test]
