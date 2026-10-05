@@ -60,7 +60,7 @@ pub(super) struct Inner {
     queries: LruCache<Arc<str>, Entry>,
     /// Maximum number of cached entries (0 = unlimited).
     count_limit: usize,
-    /// Approximate memory budget in bytes (0 = unlimited).
+    /// Memory budget in bytes (0 = unlimited).
     byte_limit: usize,
     bytes: usize,
     /// Idle expiry: entries untouched for longer than this are swept (None = off).
@@ -70,9 +70,8 @@ pub(super) struct Inner {
 }
 
 impl Inner {
-    /// `size` is the measured byte footprint; 0 falls back to an estimate.
-    fn insert(&mut self, key: Arc<str>, ast: Arc<Ast>, size: usize) {
-        let size = if size > 0 { size } else { ast.approx_size() };
+    fn insert(&mut self, key: Arc<str>, ast: Arc<Ast>) {
+        let size = ast.stats.lock().memory_allocated;
         if let Some(old) = self.queries.put(
             key,
             Entry {
@@ -118,40 +117,6 @@ impl Inner {
             }
         }
     }
-}
-
-/// Measure the net bytes a build closure keeps allocated, using jemalloc's
-/// per-thread allocation counters. The parse is synchronous (no `.await`
-/// between the reads), so the delta is attributable to the entry it builds.
-/// Returns 0 when the counters are unavailable, so callers fall back to the
-/// `approx_size` estimate.
-#[cfg(all(not(test), not(target_env = "msvc")))]
-fn measure_build<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    use tikv_jemalloc_ctl::thread::{allocatedp, allocatedp_mib, deallocatedp, deallocatedp_mib};
-    // Cache the MIBs once so each measurement skips the name-to-MIB lookup.
-    static ALLOCATED: Lazy<Option<allocatedp_mib>> = Lazy::new(|| allocatedp::mib().ok());
-    static DEALLOCATED: Lazy<Option<deallocatedp_mib>> = Lazy::new(|| deallocatedp::mib().ok());
-    let net = || -> Option<u64> {
-        let a = ALLOCATED.as_ref()?.read().ok()?.get();
-        let d = DEALLOCATED.as_ref()?.read().ok()?.get();
-        Some(a.wrapping_sub(d))
-    };
-    match net() {
-        Some(before) => {
-            let r = f();
-            let after = net().unwrap_or(before);
-            // `deallocated` counts frees of memory allocated on other threads,
-            // so the delta can be negative under a work-stealing runtime.
-            let delta = after.wrapping_sub(before) as i64;
-            (r, delta.max(0) as usize)
-        }
-        None => (f(), 0),
-    }
-}
-
-#[cfg(any(test, target_env = "msvc"))]
-fn measure_build<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    (f(), 0)
 }
 
 /// AST cache.
@@ -238,18 +203,15 @@ impl Cache {
             ast
         }
         .unwrap_or_else(|| {
-            // Parse query without holding lock, measuring the entry's footprint.
-            let (built, size) = measure_build(|| {
-                Ast::parse_and_rewrite(
-                    &AstQuery {
-                        original_query: query,
-                        query_without_comment: query_and_comment.query,
-                    },
-                    ctx,
-                    prepared_statements,
-                )
-            });
-            let ast = Arc::new(built?);
+            // Parse query without holding lock.
+            let ast = Arc::new(Ast::parse_and_rewrite(
+                &AstQuery {
+                    original_query: query,
+                    query_without_comment: query_and_comment.query,
+                },
+                ctx,
+                prepared_statements,
+            )?);
             let parse_time = ast.stats.lock().parse_time;
 
             let mut guard = self.inner.lock();
@@ -261,7 +223,7 @@ impl Cache {
             let cacheable =
                 query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty();
             if cacheable {
-                guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast), size);
+                guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast));
             }
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
@@ -315,10 +277,9 @@ impl Cache {
             })
         }
         .unwrap_or_else(|| {
-            let (built, size) = measure_build(|| Ast::parse(query));
-            let ast = Arc::new(built?);
+            let ast = Arc::new(Ast::parse(query)?);
             let mut guard = self.inner.lock();
-            guard.insert(query.into(), Arc::clone(&ast), size);
+            guard.insert(query.into(), Arc::clone(&ast));
             guard.stats.misses += 1;
             Ok(ast)
         })?;
@@ -355,12 +316,11 @@ impl Cache {
             }
         }
 
-        let (built, size) = measure_build(|| Ast::parse(normalized));
-        let entry = built?;
+        let entry = Ast::parse(normalized)?;
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.insert(normalized.into(), Arc::new(entry), size);
+        guard.insert(normalized.into(), Arc::new(entry));
         guard.stats.misses += 1;
 
         Ok(())
@@ -421,10 +381,10 @@ impl Cache {
 mod tests {
     use super::*;
 
-    /// A minimal valid AST entry; its content is irrelevant to the limit
-    /// logic, which is driven by the explicit `size` passed to `insert`.
-    fn ast() -> Arc<Ast> {
-        Arc::new(Ast::parse("SELECT 1").expect("parse"))
+    fn ast(size: usize) -> Arc<Ast> {
+        let ast = Ast::parse("SELECT 1").expect("parse");
+        ast.stats.lock().memory_allocated = size;
+        Arc::new(ast)
     }
 
     fn inner(count_limit: usize, byte_limit: usize, idle_timeout: Option<Duration>) -> Inner {
@@ -442,7 +402,7 @@ mod tests {
     fn count_limit_caps_and_evicts_lru() {
         let mut c = inner(3, 0, None);
         for i in 0..5 {
-            c.insert(format!("q{i}").into(), ast(), 10);
+            c.insert(format!("q{i}").into(), ast(10));
         }
         assert_eq!(c.queries.len(), 3);
         assert!(c.queries.peek("q4").is_some(), "newest kept");
@@ -455,7 +415,7 @@ mod tests {
     fn count_limit_zero_is_unlimited() {
         let mut c = inner(0, 0, None);
         for i in 0..1000 {
-            c.insert(format!("q{i}").into(), ast(), 1);
+            c.insert(format!("q{i}").into(), ast(1));
         }
         assert_eq!(c.queries.len(), 1000);
         assert_eq!(c.bytes, 1000);
@@ -465,7 +425,7 @@ mod tests {
     fn byte_limit_caps_and_evicts_lru() {
         let mut c = inner(0, 25, None);
         for i in 0..5 {
-            c.insert(format!("q{i}").into(), ast(), 10);
+            c.insert(format!("q{i}").into(), ast(10));
         }
         assert!(c.bytes <= 25, "stays within byte budget");
         assert_eq!(c.queries.len(), 2);
@@ -476,7 +436,7 @@ mod tests {
     #[test]
     fn entry_larger_than_byte_budget_is_not_cached() {
         let mut c = inner(0, 25, None);
-        c.insert("big".into(), ast(), 100);
+        c.insert("big".into(), ast(100));
         assert_eq!(
             c.queries.len(),
             0,
@@ -488,9 +448,9 @@ mod tests {
     #[test]
     fn replacing_a_key_updates_byte_total() {
         let mut c = inner(0, 0, None);
-        c.insert("q".into(), ast(), 10);
+        c.insert("q".into(), ast(10));
         assert_eq!(c.bytes, 10);
-        c.insert("q".into(), ast(), 30);
+        c.insert("q".into(), ast(30));
         assert_eq!(c.queries.len(), 1);
         assert_eq!(c.bytes, 30, "old size subtracted, new size added");
     }
@@ -498,28 +458,27 @@ mod tests {
     #[test]
     fn byte_total_saturates_instead_of_overflowing() {
         let mut c = inner(0, 0, None);
-        c.insert("q1".into(), ast(), usize::MAX);
-        c.insert("q2".into(), ast(), usize::MAX);
+        c.insert("q1".into(), ast(usize::MAX));
+        c.insert("q2".into(), ast(usize::MAX));
         assert_eq!(c.bytes, usize::MAX);
         assert_eq!(c.queries.len(), 2);
     }
 
     #[test]
-    fn zero_size_falls_back_to_query_length() {
+    fn entry_size_is_the_parse_tree_allocation() {
         let mut c = inner(0, 0, None);
-        c.insert("q".into(), ast(), 0);
-        assert_eq!(
-            c.bytes,
-            "SELECT 1".len(),
-            "record entries carry their query text"
-        );
+        let ast = Arc::new(Ast::parse("SELECT 1").expect("parse"));
+        let allocated = ast.stats.lock().memory_allocated;
+        assert!(allocated > 0);
+        c.insert("q".into(), ast);
+        assert_eq!(c.bytes, allocated);
     }
 
     #[test]
     fn no_limits_keeps_everything() {
         let mut c = inner(0, 0, None);
         for i in 0..50 {
-            c.insert(format!("q{i}").into(), ast(), 7);
+            c.insert(format!("q{i}").into(), ast(7));
         }
         assert_eq!(c.queries.len(), 50);
         assert_eq!(c.bytes, 350);
@@ -529,7 +488,7 @@ mod tests {
     fn sweep_is_noop_when_idle_timeout_disabled() {
         let mut c = inner(0, 0, None);
         for i in 0..3 {
-            c.insert(format!("q{i}").into(), ast(), 5);
+            c.insert(format!("q{i}").into(), ast(5));
         }
         c.sweep();
         assert_eq!(c.queries.len(), 3);
@@ -540,7 +499,7 @@ mod tests {
     fn sweep_keeps_fresh_entries() {
         let mut c = inner(0, 0, Some(Duration::from_secs(3600)));
         for i in 0..3 {
-            c.insert(format!("q{i}").into(), ast(), 5);
+            c.insert(format!("q{i}").into(), ast(5));
         }
         c.sweep();
         assert_eq!(c.queries.len(), 3);
@@ -551,7 +510,7 @@ mod tests {
     fn sweep_drops_idle_entries_and_updates_bytes() {
         let mut c = inner(0, 0, Some(Duration::ZERO));
         for i in 0..3 {
-            c.insert(format!("q{i}").into(), ast(), 5);
+            c.insert(format!("q{i}").into(), ast(5));
         }
         c.sweep();
         assert_eq!(c.queries.len(), 0);
@@ -576,7 +535,7 @@ mod tests {
             assert_eq!(guard.byte_limit, 500);
             assert_eq!(guard.idle_timeout, Some(Duration::from_millis(30_000)));
             for key in &keys {
-                guard.insert(key.clone(), ast(), 10);
+                guard.insert(key.clone(), ast(10));
             }
             assert!(guard.queries.len() <= 3, "configure() caps are enforced");
         }

@@ -449,9 +449,9 @@ pub struct General {
     #[serde(default = "General::query_cache_limit")]
     pub query_cache_limit: usize,
 
-    /// Approximate memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.
+    /// Memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.
     ///
-    /// **Note:** Entry sizes are measured with jemalloc; on builds without it the budget is approximated from query text length.
+    /// **Note:** An entry's size is its parse tree allocation, the same figure the `query_cache_memory` metric sums.
     ///
     /// _Default:_ `0`
     ///

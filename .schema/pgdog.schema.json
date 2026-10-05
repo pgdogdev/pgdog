@@ -1127,7 +1127,7 @@
           "minimum": 0
         },
         "query_cache_memory_limit": {
-          "description": "Approximate memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.\n\n**Note:** Entry sizes are measured with jemalloc; on builds without it the budget is approximated from query text length.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_memory_limit>",
+          "description": "Memory budget (bytes) for the query (AST) cache; entries are evicted (LRU) once the sum of their sizes exceeds it. Bounds RAM regardless of query complexity, unlike the count-based `query_cache_limit`. `0` disables the memory cap.\n\n**Note:** An entry's size is its parse tree allocation, the same figure the `query_cache_memory` metric sums.\n\n_Default:_ `0`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#query_cache_memory_limit>",
           "type": "integer",
           "format": "uint",
           "default": 0,

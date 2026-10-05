@@ -53,14 +53,6 @@ impl Ast {
         }
     }
 
-    /// Rough byte footprint of this cache entry, used as a fallback when the
-    /// jemalloc allocation measurement is unavailable. The query text length
-    /// tracks entry weight well enough for the memory budget: a wide report
-    /// query has a long body, `SELECT 1` a short one.
-    pub fn approx_size(&self) -> usize {
-        self.query_without_comment.len()
-    }
-
     /// Parse statement and run the rewrite engine, if necessary.
     pub(super) fn parse_and_rewrite(
         query: &AstQuery,
@@ -120,9 +112,7 @@ impl Ast {
 
     /// Parse the query without rewriting it
     pub(crate) fn parse(query: &str) -> Result<Self, ParseError> {
-        let mut ast = Self::new(pg_raw_parse::parse(query)?.into_inner());
-        ast.query_without_comment = query.into();
-        Ok(ast)
+        Ok(Self::new(pg_raw_parse::parse(query)?.into_inner()))
     }
 
     /// Update stats for this statement, given the route
