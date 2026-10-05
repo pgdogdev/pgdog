@@ -257,6 +257,18 @@ impl Binding {
         }
     }
 
+    pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
+        match self {
+            Binding::Direct(server, ..) => server.sync_client_params(params),
+            Binding::MultiShard(servers) => {
+                for server in servers.iter_mut() {
+                    server.sync_client_params(params);
+                }
+            }
+            _ => (),
+        }
+    }
+
     pub(crate) fn changed_params(&mut self) -> Parameters {
         match self {
             Binding::Direct(server, ..) => server.changed_params().clone(),

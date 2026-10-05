@@ -80,6 +80,80 @@ fn test_set_comment() {
 }
 
 #[test]
+fn test_set_role_is_tracked_as_parameter() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SET ROLE other_user").into()]);
+
+    match command {
+        Command::Set {
+            params, set_config, ..
+        } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "role");
+            assert_eq!(
+                params[0].value,
+                Some(ParameterValue::String("other_user".into()))
+            );
+            assert!(!params[0].local);
+            assert!(!set_config);
+        }
+        _ => panic!("expected Command::Set, got {command:#?}"),
+    }
+}
+
+#[test]
+fn test_session_identity_commands_are_parameters() {
+    let mut test = QueryParserTest::new();
+
+    for (query, name, value) in [
+        (
+            "SET SESSION AUTHORIZATION other_user",
+            "session_authorization",
+            Some("other_user"),
+        ),
+        (
+            "SET SESSION AUTHORIZATION DEFAULT",
+            "session_authorization",
+            None,
+        ),
+        ("RESET SESSION AUTHORIZATION", "session_authorization", None),
+        ("SET ROLE NONE", "role", None),
+        (r#"SET ROLE "none""#, "role", Some("none")),
+        ("RESET ROLE", "role", None),
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
+        let Command::Set { params, .. } = command else {
+            panic!("expected Command::Set for {query}, got {command:#?}");
+        };
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, name);
+        assert_eq!(
+            params[0].value.as_ref().and_then(ParameterValue::as_str),
+            value
+        );
+    }
+}
+
+#[test]
+fn test_local_identity_reset_preserves_scope() {
+    let mut test = QueryParserTest::new();
+
+    for query in [
+        "SET LOCAL ROLE NONE",
+        "SET LOCAL SESSION AUTHORIZATION DEFAULT",
+    ] {
+        let command = test.execute(vec![Query::new(query).into()]);
+        let Command::Set { params, .. } = command else {
+            panic!("expected Command::Set for {query}, got {command:#?}");
+        };
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].value, None);
+        assert!(params[0].local);
+    }
+}
+
+#[test]
 fn test_set_config_null_value() {
     let mut test = QueryParserTest::new();
 

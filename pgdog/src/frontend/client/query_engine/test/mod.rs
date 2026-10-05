@@ -45,6 +45,7 @@ mod rewrite_offset;
 mod rewrite_projection;
 mod rewrite_simple_prepared;
 mod schema_changed;
+mod session_identity;
 mod set;
 mod set_schema_sharding;
 mod sharded;

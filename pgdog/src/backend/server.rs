@@ -684,6 +684,7 @@ impl Server {
                     "DISCARD ALL" => {
                         self.prepared_statements.clear();
                         self.client_params.clear();
+                        self.client_params.clear_session_identity();
                     }
                     "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
@@ -729,7 +730,7 @@ impl Server {
             // Construct client parameter SET queries.
             let tracked = params.tracked_and_different(&self.client_params);
             // Construct RESET queries to reset any current params
-            // to their default values.
+            // to their default values. Session identity is included here.
             let mut queries = self.client_params.reset_queries(params);
 
             // Combine both to create a new, fresh session state
@@ -1136,6 +1137,16 @@ impl Server {
 
     pub(crate) fn reset_params(&mut self) {
         self.client_params.clear();
+        self.client_params.clear_session_identity();
+    }
+
+    /// Record the client's current parameters on this backend.
+    ///
+    /// Used after a connected `SET` so the next checkout can diff against
+    /// the identity and GUCs this connection actually has.
+    pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
+        self.client_params = params.tracked();
+        self.client_params.copy_in_transaction(params);
     }
 
     pub(crate) fn reset_re_synced(&mut self) {
@@ -2463,6 +2474,7 @@ pub(crate) mod test {
             .link_client(FrontendPid::new(), &params, None)
             .await?;
         assert_eq!(changed, 1);
+        assert!(!server.dirty());
 
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
@@ -2483,6 +2495,52 @@ pub(crate) mod test {
                 .await?;
             assert_eq!(changed, 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_link_client_reconciles_session_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut params = Parameters::default();
+        params.insert_identity("role", &"pgdog".into(), false, false);
+
+        let mut server = test_server().await;
+        assert!(!server.dirty());
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await?;
+
+        assert_eq!(changed, 2);
+        assert!(!server.dirty());
+
+        let changed = server
+            .link_client(FrontendPid::new(), &params, None)
+            .await?;
+        assert_eq!(changed, 0, "identity stays on the server snapshot");
+
+        let peer = Parameters::default();
+        let changed = server.link_client(FrontendPid::new(), &peer, None).await?;
+        assert_eq!(changed, 1, "next client resets identity from the snapshot");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_link_client_reconciles_transaction_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut params = Parameters::default();
+        params.insert_identity("role", &"pgdog".into(), true, false);
+
+        let mut server = test_server().await;
+        let changed = server
+            .link_client(FrontendPid::new(), &params, Some("BEGIN"))
+            .await?;
+
+        assert_eq!(changed, 2);
+        assert!(!server.dirty());
+        server.rollback().await?;
 
         Ok(())
     }

@@ -194,6 +194,7 @@ impl QueryEngine {
         }
 
         if code == 'E' {
+            self.last_server_error = true;
             if let Some(state) = self.pending_explain.as_mut() {
                 state.annotated = true;
             }

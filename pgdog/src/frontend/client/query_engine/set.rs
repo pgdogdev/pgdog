@@ -34,7 +34,14 @@ impl QueryEngine {
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
-                if context.in_transaction() {
+                if context.params.insert_identity(
+                    &param.name,
+                    &value,
+                    context.in_transaction(),
+                    param.local,
+                ) {
+                    continue;
+                } else if context.in_transaction() {
                     context
                         .params
                         .insert_transaction(&param.name, value, param.local);
@@ -51,7 +58,13 @@ impl QueryEngine {
                 }
             } else {
                 fake_command = "RESET";
-                context.params.reset(&param.name);
+                if !context.params.reset_identity(
+                    &param.name,
+                    context.in_transaction(),
+                    param.local,
+                ) {
+                    context.params.reset(&param.name);
+                }
                 if is_pin {
                     self.manual_lock = false;
                 }
@@ -64,6 +77,9 @@ impl QueryEngine {
 
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
+            if !self.last_server_error {
+                self.backend.sync_client_params(context.params);
+            }
         } else {
             let fake_response = set_config
                 .then(|| params.iter().map(|p| p.value.as_ref()))
@@ -119,7 +135,9 @@ impl QueryEngine {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
-            context.params.restore_startup(context.startup_params);
+            context
+                .params
+                .restore_startup_parameters(context.startup_params);
             self.comms.update_params(context.params);
         }
 
