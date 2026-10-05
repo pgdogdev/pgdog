@@ -761,6 +761,35 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_omni_global_skips_missing_search_path_schema() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+        let search_path = ParameterValue::Tuple(vec!["customer_a".into(), "public".into()]);
+
+        let (sql, plan) = rewrite_sql_with_search_path(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+            Some(&search_path),
+        )
+        .expect("rewrite succeeds");
+
+        assert_eq!(
+            sql,
+            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('public.users_id_seq'))"
+        );
+        assert_eq!(
+            plan.bind_params,
+            [BindParam::Sequence(SequenceCall::Nextval(
+                "public.users_id_seq".into()
+            ))]
+        );
+    }
+
+    #[test]
     fn test_rewrite_omni_global_skips_sharded_table() {
         let db_schema = make_schema_with_bigint_pk();
         let schema = sharding_schema_with_sharded_users(RewriteMode::RewriteOmniGlobal);
