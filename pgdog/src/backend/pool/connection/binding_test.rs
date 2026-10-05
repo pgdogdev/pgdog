@@ -16,7 +16,8 @@ mod tests {
         },
     };
 
-    use super::super::multi_shard::MultiShard;
+    use super::super::DirectBinding;
+    use super::super::multi_shard::MultiBinding;
     use tokio::time::Instant;
 
     async fn create_multishard_binding() -> Binding {
@@ -49,9 +50,10 @@ mod tests {
         ];
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
-        let multishard = MultiShard::new(vec![0, 1, 2], &route);
 
-        let mut binding = Binding::MultiShard(guards, Box::new(multishard));
+        let servers = MultiBinding::new(guards, vec![0, 1, 2], &route, None, false);
+
+        let mut binding = Binding::MultiShard(servers);
 
         // Start transaction on all shards for two-phase commit tests
         let _result = binding
@@ -74,7 +76,7 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(guard, 0);
+        let mut binding = Binding::Direct(DirectBinding::new(guard, 0, None, false));
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)

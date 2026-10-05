@@ -9,21 +9,24 @@ on:
     types: [checks_requested]
 
 jobs:
-  tests:
+  coverage:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: 1, shard: 1/3 }
+          - { name: 2, shard: 2/3 }
+          - { name: 3, shard: 3/3 }
     steps:
       - uses: actions/checkout@v6
-      - name: Install CI deps
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 5
-          command: bash integration/ci/install-deps.sh
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v1" # Change this when updating tooling
+          prefix-key: "v2" # Change this when updating tooling
+          shared-key: coverage
       - name: Setup PostgreSQL
         run: bash integration/ci/setup.sh --with-toxi
       - name: Run tests with coverage
@@ -31,9 +34,10 @@ jobs:
           RUSTFLAGS: "--cfg tokio_unstable -C link-dead-code"
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --lcov --output-path lcov.info --no-fail-fast --test-threads=1 --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
-      - name: Run documentation tests
-        run: cargo test --doc
+          cargo llvm-cov nextest --no-report --no-fail-fast --test-threads=1 --partition count:${{ matrix.shard }} --filter-expr "package(pgdog) | package(pgdog-config) | package(pgdog-vector) | package(pgdog-stats) | package(pgdog-postgres-types)"
+      - name: Generate coverage report
+        if: ${{ github.event_name != 'merge_group' }}
+        run: cargo llvm-cov report --lcov --output-path lcov.info
       # Requires CODECOV_TOKEN secret for upload
       - uses: codecov/codecov-action@v4
         if: ${{ github.event_name != 'merge_group' }}
@@ -42,4 +46,25 @@ jobs:
         with:
           files: lcov.info
           flags: unit
-          fail_ci_if_error: true
+          name: coverage-${{ matrix.name }}
+          fail_ci_if_error: false
+
+  doc-tests:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/pgdogdev/pgdog-ci:v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "unit-v2"
+          shared-key: doc-tests
+      - run: cargo test --doc
+
+  tests:
+    needs: [coverage, doc-tests]
+    if: always()
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - run: test "${{ needs.coverage.result }}" = "success" && test "${{ needs.doc-tests.result }}" = "success"

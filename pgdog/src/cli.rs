@@ -128,13 +128,23 @@ pub(crate) enum Commands {
         #[arg(long)]
         ignore_errors: bool,
 
-        /// Data sync has been complete.
-        #[arg(long)]
+        #[arg(
+            long,
+            value_enum,
+            help = "Schema sync phase to run.",
+            default_value_t = SchemaSyncPhase::Pre,
+            conflicts_with_all = ["data_sync_complete", "cutover", "validation"]
+        )]
+        phase: SchemaSyncPhase,
+
+        #[arg(long, hide = true, conflicts_with_all = ["cutover", "validation"])]
         data_sync_complete: bool,
 
-        /// Execute cutover statements.
-        #[arg(long)]
+        #[arg(long, hide = true, conflicts_with = "validation")]
         cutover: bool,
+
+        #[arg(long, hide = true)]
+        validation: bool,
     },
 
     /// For testing purposes only.
@@ -271,6 +281,22 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+fn legacy_phase(
+    data_sync_complete: bool,
+    cutover: bool,
+    validation: bool,
+) -> Option<SchemaSyncPhase> {
+    if data_sync_complete {
+        Some(SchemaSyncPhase::Post)
+    } else if cutover {
+        Some(SchemaSyncPhase::Cutover)
+    } else if validation {
+        Some(SchemaSyncPhase::PostDataValidation)
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::error::Error>> {
     if let Commands::SchemaSync {
         from_database,
@@ -278,18 +304,12 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
         publication,
         dry_run,
         ignore_errors,
+        phase,
         data_sync_complete,
         cutover,
+        validation,
     } = commands
     {
-        let phase = if data_sync_complete {
-            SchemaSyncPhase::Post
-        } else if cutover {
-            SchemaSyncPhase::Cutover
-        } else {
-            SchemaSyncPhase::Pre
-        };
-
         run_to_completion(
             SchemaSyncTask::builder()
                 .databases(Databases {
@@ -297,7 +317,7 @@ pub(crate) async fn schema_sync(commands: Commands) -> Result<(), Box<dyn std::e
                     destination: to_database,
                 })
                 .publication(publication)
-                .phase(phase)
+                .phase(legacy_phase(data_sync_complete, cutover, validation).unwrap_or(phase))
                 .ignore_errors(ignore_errors)
                 .dry_run(dry_run)
                 .build(),
@@ -335,4 +355,63 @@ pub(crate) async fn route(commands: Commands) -> Result<(), Box<dyn std::error::
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    mod schema_sync {
+        use crate::cli::*;
+
+        fn parse(args: &[&str]) -> Result<SchemaSyncPhase, clap::Error> {
+            let mut argv = vec![
+                "pgdog",
+                "schema-sync",
+                "--from-database",
+                "a",
+                "--to-database",
+                "b",
+                "--publication",
+                "p",
+            ];
+            argv.extend_from_slice(args);
+
+            let Some(Commands::SchemaSync {
+                phase,
+                data_sync_complete,
+                cutover,
+                validation,
+                ..
+            }) = Cli::try_parse_from(argv)?.command
+            else {
+                panic!("not a schema sync command");
+            };
+
+            Ok(legacy_phase(data_sync_complete, cutover, validation).unwrap_or(phase))
+        }
+
+        #[test]
+        fn test_phase_flags() {
+            for (args, expected) in [
+                (vec![], Some(SchemaSyncPhase::Pre)),
+                (vec!["--phase", "post"], Some(SchemaSyncPhase::Post)),
+                (vec!["--phase", "cutover"], Some(SchemaSyncPhase::Cutover)),
+                (
+                    vec!["--phase", "post-data-validation"],
+                    Some(SchemaSyncPhase::PostDataValidation),
+                ),
+                (vec!["--data-sync-complete"], Some(SchemaSyncPhase::Post)),
+                (vec!["--cutover"], Some(SchemaSyncPhase::Cutover)),
+                (
+                    vec!["--validation"],
+                    Some(SchemaSyncPhase::PostDataValidation),
+                ),
+                (vec!["--phase", "bogus"], None),
+                (vec!["--phase", "post", "--cutover"], None),
+                (vec!["--cutover", "--validation"], None),
+                (vec!["--data-sync-complete", "--validation"], None),
+            ] {
+                assert_eq!(parse(&args).ok(), expected, "{args:?}");
+            }
+        }
+    }
 }

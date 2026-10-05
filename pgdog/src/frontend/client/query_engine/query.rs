@@ -44,24 +44,23 @@ impl QueryEngine {
 
         // Check if we need to do 2pc automatically
         // for single-statement writes.
-        self.two_pc_check(context, client_request);
+        self.two_pc_check(context, client_request)?;
 
-        // We need to run a query now.
-        if context.in_transaction() || client_request.route().is_lock_session() {
-            // Connect to one shard if not sharded or to all shards
-            // for a cross-shard transaction.
-            //
-            // We also do this for advisory locks. Otherwise, we'd be pinned to one shard,
-            // and if we get a hash for a different one next query around, we'd be stuck
-            // at a point where we would have to refuse it (thus, maintaining all
-            // connections gives us freedom to fix that)
-            if !self
-                .connect_transaction(context, client_request.route())
-                .await?
-            {
-                return Ok(());
-            }
-        } else if !self.connect(context, client_request.route()).await? {
+        // Rewriter can tell us how many shards we need.
+        let rewrite_connect_route = query_planner
+            .as_ref()
+            .and_then(|rewrite| rewrite.connect_route());
+
+        let connect_route = if let Some(ref rewrite_connect_route) = rewrite_connect_route {
+            rewrite_connect_route
+        } else {
+            client_request.route()
+        };
+
+        // Sync-only requests should only be sent to currently connected shards.
+        let connect = connect_route.needs_backend() && !client_request.is_sync_only();
+
+        if connect && !self.connect(context, connect_route).await? {
             return Ok(());
         }
 
@@ -75,7 +74,7 @@ impl QueryEngine {
         // Set response format.
         for msg in &client_request.messages {
             if let ProtocolMessage::Bind(bind) = msg {
-                self.backend.bind(bind)?
+                self.backend.bind(bind);
             }
         }
 
@@ -238,6 +237,7 @@ impl QueryEngine {
 
                 TransactionState::Idle => {
                     context.transaction = None;
+                    self.backend.end_transaction();
                 }
 
                 TransactionState::InTrasaction => {
@@ -474,7 +474,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
-    ) {
+    ) -> Result<(), Error> {
         let enabled = self
             .backend
             .cluster()
@@ -483,14 +483,17 @@ impl QueryEngine {
 
         if enabled
             && client_request.route().should_2pc()
-            && self.begin_stmt.is_none()
+            && !self.backend.in_buffered_transaction()
             && client_request.is_executable()
             && !context.in_transaction()
         {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
-            self.begin_stmt = Some(BufferedQuery::Query(Query::new("BEGIN")));
+            self.backend
+                .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")))?;
         }
+
+        Ok(())
     }
 
     async fn transaction_error_check(
@@ -498,14 +501,7 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
     ) -> Result<bool, Error> {
-        let shards = match self.backend.shards() {
-            Ok(shards) => shards,
-            _ => {
-                return Ok(true);
-            }
-        };
-        if shards > 1 // This check only matters for cross-shard queries
-            && context.in_error()
+        if context.in_error()
             && !context.rollback
             && client_request.is_executable()
             && !client_request.route().rollback_savepoint()

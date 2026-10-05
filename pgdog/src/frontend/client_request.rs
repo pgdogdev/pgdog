@@ -4,9 +4,11 @@
 //!
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::mem;
+use std::sync::Arc;
 
 use crate::{
-    frontend::router::Ast,
+    frontend::router::{Ast, RoutingComment},
     net::{
         Error, Flush, Parse, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
@@ -28,7 +30,11 @@ pub(crate) struct ClientRequest {
     /// The QueryEngine will set the route once it handles the request.
     pub(crate) route: Option<Route>,
     /// The statement AST, if we parsed the request with our query parser.
-    pub(crate) ast: Option<Ast>,
+    pub(crate) ast: Option<Arc<Ast>>,
+    /// Was the statement AST loaded from the cache?
+    pub(in crate::frontend) cached: bool,
+    /// Any routing comment that was present on the client's query
+    pub(in crate::frontend) routing_comment: Option<Arc<RoutingComment>>,
     /// Last Parse we received.
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
@@ -38,8 +44,9 @@ pub(crate) struct ClientRequest {
 impl MemoryUsage for ClientRequest {
     fn memory_usage(&self) -> usize {
         // ProtocolMessage uses memory allocated by BytesMut (mostly).
-        self.messages.capacity() * std::mem::size_of::<ProtocolMessage>()
-            + std::mem::size_of::<Option<Ast>>()
+        self.messages.capacity() * mem::size_of::<ProtocolMessage>()
+            - mem::size_of::<Vec<ProtocolMessage>>()
+            + mem::size_of::<Self>()
     }
 }
 
@@ -56,6 +63,8 @@ impl ClientRequest {
             messages: Vec::with_capacity(5),
             route: None,
             ast: None,
+            cached: false,
+            routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
         }
@@ -214,6 +223,8 @@ impl ClientRequest {
             messages,
             route: self.route.clone(),
             ast: self.ast.clone(),
+            cached: self.cached,
+            routing_comment: self.routing_comment.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
         }
@@ -398,6 +409,8 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             messages,
             route: None,
             ast: None,
+            cached: false,
+            routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
         }

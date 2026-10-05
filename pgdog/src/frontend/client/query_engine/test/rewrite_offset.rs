@@ -13,7 +13,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(messages);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
     let rewrite_result = engine
@@ -103,7 +103,7 @@ async fn test_offset_limit_not_sharded() {
         "SELECT * FROM test LIMIT 10 OFFSET 5",
     ))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
     let rewrite_result = engine
@@ -131,7 +131,7 @@ async fn test_offset_with_unique_id_simple() {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
     let rewrite_result = engine
@@ -210,7 +210,7 @@ async fn test_offset_with_unique_id_extended() {
         ProtocolMessage::Sync(Sync),
     ]);
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
 
     let rewrite_result = engine
@@ -274,7 +274,7 @@ async fn split_anonymous_pagination_keeps_original_plan() {
     client.client_request.push(Flush.into());
 
     {
-        let mut engine = QueryEngine::from_client(&client).unwrap();
+        let engine = QueryEngine::from_client(&client).unwrap();
         let (mut context, client_request) = QueryEngineContext::new(&mut client);
         let result = engine
             .parse_and_rewrite(&mut context, client_request)
@@ -308,7 +308,7 @@ async fn split_anonymous_pagination_keeps_original_plan() {
         .push(ProtocolMessage::Execute(Execute::new()));
     client.client_request.push(ProtocolMessage::Sync(Sync));
 
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let result = engine
         .parse_and_rewrite(&mut context, client_request)

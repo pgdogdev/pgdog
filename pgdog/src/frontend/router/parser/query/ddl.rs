@@ -225,7 +225,8 @@ impl QueryParser {
         Ok(Command::Query(
             Route::write(calculator.shard())
                 .with_schema_changed(schema_changed)
-                .with_temp_table_change(temp_table),
+                .with_temp_table_change(temp_table)
+                .ddl(),
         ))
     }
 

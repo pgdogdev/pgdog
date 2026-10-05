@@ -21,12 +21,12 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Parse client request and rewrite it, if necessary.
-    pub(super) async fn parse_and_rewrite(
-        &mut self,
+    /// Parse client request
+    pub(super) fn parse_request(
+        &self,
         context: &mut QueryEngineContext<'_>,
         client_request: &mut ClientRequest,
-    ) -> Result<Option<RewriteResult>, Error> {
+    ) -> Result<(), Error> {
         let use_parser = self
             .backend
             .cluster()
@@ -34,23 +34,53 @@ impl QueryEngine {
             .unwrap_or(false);
 
         if !use_parser {
-            return Ok(None);
+            return Ok(());
         }
 
-        let query = client_request.query()?;
-        if let Some(query) = query {
+        if let Some(query) = client_request.query()? {
             let cluster = self.backend.cluster()?;
             let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
             let ast = Cache::get().query(&query, &ast_ctx, context.prepared_statements)?;
-
-            let rewrite_result = ast
-                .rewrite_plan
-                .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
-                .await?;
-            client_request.ast = Some(ast);
-            Ok(Some(rewrite_result))
-        } else {
-            Ok(None)
+            client_request.ast = Some(ast.ast);
+            client_request.cached = ast.cached;
+            client_request.routing_comment = Some(ast.comment);
         }
+        Ok(())
+    }
+
+    pub(super) async fn rewrite_request(
+        &self,
+        context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
+    ) -> Result<Option<RewriteResult>, Error> {
+        let Some(ast) = client_request.ast.take() else {
+            return Ok(None);
+        };
+        let cluster = self.backend.cluster()?;
+        let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+
+        let mut rewrite_result = ast
+            .rewrite_plan
+            .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
+            .await?;
+        client_request.ast = Some(ast);
+
+        // Route the requests so we can skip doing this
+        // if all of them go to the same shard.
+        if let RewriteResult::InsertSplit(ref mut insert_split) = rewrite_result {
+            super::multi_step::InsertMulti::route(insert_split, context, self.backend.cluster()?)?;
+        }
+
+        Ok(Some(rewrite_result))
+    }
+
+    #[cfg(test)]
+    pub(super) async fn parse_and_rewrite(
+        &self,
+        context: &mut QueryEngineContext<'_>,
+        client_request: &mut ClientRequest,
+    ) -> Result<Option<RewriteResult>, Error> {
+        self.parse_request(context, client_request)?;
+        self.rewrite_request(context, client_request).await
     }
 }

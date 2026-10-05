@@ -53,7 +53,9 @@ mod test_show {
             .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        buffer.ast = Some(ast);
+        buffer.ast = Some(ast.ast);
+        buffer.cached = ast.cached;
+        buffer.routing_comment = Some(ast.comment);
         let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let first = parser.parse(context).unwrap().clone();
@@ -67,7 +69,9 @@ mod test_show {
             .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut buffer = ClientRequest::from(vec![Query::new(query).into()]);
-        buffer.ast = Some(ast);
+        buffer.ast = Some(ast.ast);
+        buffer.cached = ast.cached;
+        buffer.routing_comment = Some(ast.comment);
         let context = RouterContext::new(&buffer, &c, &params, None, Sticky::new()).unwrap();
 
         let second = parser.parse(context).unwrap().clone();

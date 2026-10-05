@@ -55,7 +55,9 @@ fn parse_query(query: &str) -> Command {
         .query(&buffered, &ctx, &mut PreparedStatements::default())
         .unwrap();
     let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
-    client_request.ast = Some(ast);
+    client_request.ast = Some(ast.ast);
+    client_request.cached = ast.cached;
+    client_request.routing_comment = Some(ast.comment);
 
     let context =
         RouterContext::new(&client_request, &cluster, &params, None, Sticky::new_test()).unwrap();
@@ -81,7 +83,9 @@ macro_rules! command {
             .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut client_request = ClientRequest::from(vec![Query::new(query).into()]);
-        client_request.ast = Some(ast);
+        client_request.ast = Some(ast.ast);
+        client_request.cached = ast.cached;
+        client_request.routing_comment = Some(ast.comment);
         let transaction = if $in_transaction {
             Some(Transaction::new(TransactionType::ReadWrite))
         } else {
@@ -134,11 +138,12 @@ macro_rules! query_parser {
             QueryTimestamps::default(),
         );
 
-        let mut ast = crate::frontend::router::parser::Cache::get()
+        let ast = crate::frontend::router::parser::Cache::get()
             .query(&buffered_query, &ctx, &mut prep_stmts)
             .unwrap();
-        ast.cached = false; // Dry run test needs this.
-        client_request.ast = Some(ast);
+        client_request.ast = Some(ast.ast);
+        client_request.cached = false; // Dry run test needs this
+        client_request.routing_comment = Some(ast.comment);
 
         let maybe_transaction = if $in_transaction {
             Some(Transaction::new(TransactionType::ReadWrite))
@@ -195,7 +200,9 @@ macro_rules! parse {
             .query(&buffered, &ctx, &mut PreparedStatements::default())
             .unwrap();
         let mut client_request = ClientRequest::from(vec![parse.into(), bind.into()]);
-        client_request.ast = Some(ast);
+        client_request.ast = Some(ast.ast);
+        client_request.cached = ast.cached;
+        client_request.routing_comment = Some(ast.comment);
         let route = QueryParser::default()
             .parse(
                 RouterContext::new(
@@ -480,7 +487,9 @@ fn test_set() {
         .query(&buffered_query, &ctx, &mut prep_stmts)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
-    buffer.ast = Some(ast);
+    buffer.ast = Some(ast.ast);
+    buffer.cached = ast.cached;
+    buffer.routing_comment = Some(ast.comment);
     let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
@@ -584,7 +593,6 @@ fn test_write_functions() {
 fn test_write_nolock() {
     let route = query!("SELECT nextval('234')");
     assert!(route.is_write());
-    assert!(!route.is_lock_session());
 }
 
 #[test]
@@ -625,7 +633,9 @@ WHERE t2.account = (
         .query(&buffered_query, &ctx, &mut prep_stmts)
         .unwrap();
     let mut buffer: ClientRequest = vec![Query::new(query_str).into()].into();
-    buffer.ast = Some(ast);
+    buffer.ast = Some(ast.ast);
+    buffer.cached = ast.cached;
+    buffer.routing_comment = Some(ast.comment);
     let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();

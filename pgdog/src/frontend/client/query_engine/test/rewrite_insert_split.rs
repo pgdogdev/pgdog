@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 
 use super::prelude::*;
@@ -26,7 +28,7 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     );
 
     match rewrite_result.unwrap() {
-        RewriteResult::InsertSplit(requests) => requests,
+        RewriteResult::InsertSplit(requests) => requests.deref().clone(),
         _ => unreachable!(),
     }
 }
@@ -144,7 +146,7 @@ async fn test_insert_split_not_sharded() {
         )),
         ProtocolMessage::Other(Flush.message()),
     ]);
-    let mut engine = QueryEngine::from_client(&client).unwrap();
+    let engine = QueryEngine::from_client(&client).unwrap();
     let (mut context, client_request) = QueryEngineContext::new(&mut client);
     let rewrite_result = engine
         .parse_and_rewrite(&mut context, client_request)

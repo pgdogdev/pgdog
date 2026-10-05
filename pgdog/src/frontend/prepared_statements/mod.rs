@@ -8,10 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{
     config::PreparedStatementsLevel,
-    frontend::{
-        RewritePlan,
-        router::parser::rewrite::statement::{offset::OffsetPlan, plan::GeneratedParam},
-    },
+    frontend::router::parser::rewrite::statement::{offset::OffsetPlan, plan::BindParams},
     net::{Parse, Prepare, ProtocolMessage},
 };
 
@@ -125,32 +122,31 @@ impl PreparedStatements {
     }
 
     /// Insert PREPARE statement into the cache.
-    pub(crate) fn insert_prepare(
+    pub(in crate::frontend) fn insert_prepare(
         &mut self,
         name: &str,
         original_query: Bytes,
         rewritten_query: Option<Bytes>,
-        // TODO: I think we should just pass `unique_ids` in here by itself.
-        //       Otherwise, it could be easily confused to want
-        //       to use `RewritePlan` for `offset_plan` too (which isn't possible; see comment below)
-        rewrite_plan: &RewritePlan,
-        // Needs to be separate from `RewritePlan`. See comment in `global_cache.rs`.
         offset_plan: Option<OffsetPlan>,
-        generated_params: Vec<GeneratedParam>,
+        bind_params: BindParams,
     ) -> Prepare {
         let (_new, prepare) = {
             self.global.write().insert_prepare(
                 original_query,
                 rewritten_query,
-                rewrite_plan,
                 offset_plan,
-                generated_params,
+                bind_params,
             )
         };
 
         self.insert_internal(name, prepare.name());
 
         prepare
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test(&mut self, name: &str, original_query: Bytes) -> Prepare {
+        self.insert_prepare(name, original_query, None, None, Default::default())
     }
 
     /// Get the global unique name for a prepared statement

@@ -58,7 +58,7 @@ async fn test_session_lock_tracked_outside_transaction() {
 }
 
 #[tokio::test]
-async fn test_session_lock_connects_to_all_shards() {
+async fn test_session_lock_connects_to_one_shard() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 
     client
@@ -66,10 +66,8 @@ async fn test_session_lock_connects_to_all_shards() {
         .await;
     client.read_until('Z').await.unwrap();
 
-    // If we use a pg_advisory_lock, we must be connected to all shards,
-    // as we may need to use any particular shard based on how the ID is hashed.
-    let connected_to_all_shards = client.engine.backend().connected_servers() == 2;
-    assert!(connected_to_all_shards);
+    let conected_to_one_shard = client.engine.backend().connected_servers() == 1;
+    assert!(conected_to_one_shard);
 }
 
 // We want a pg_advisory_lock(ID), and related functions, to deterministically resolve to the same Shard.

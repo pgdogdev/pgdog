@@ -8,7 +8,8 @@ use crate::{
         Error as BackendError, Server,
         pool::{Address, ClusterConfig, ClusterShardConfig, PoolConfig, cluster::Cluster},
         replication::logical::publisher::{
-            Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, Table,
+            Lsn, PublicationTable, PublicationTableColumn, ReplicaIdentity, ReplicationData,
+            ReplicationSlot, Table,
         },
         server::test::test_server,
     },
@@ -26,11 +27,14 @@ use crate::{
                 tuple_data::{Column as TupleColumn, Identifier, TupleData},
                 update::{Update as XLogUpdate, UpdateIdentity},
             },
+            xlog_data::XLogPayload,
         },
     },
 };
 
 use super::{Error, connect_primary, stream::StreamSubscriber};
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
 fn resharding_test_cluster(user: &str) -> Cluster {
     let user = User::new(user, "pgdog", "pgdog");
@@ -357,6 +361,19 @@ fn make_subscriber_single_shard() -> StreamSubscriber {
     StreamSubscriber::new(&cluster, tables)
 }
 
+async fn wait_for_commit(sub: &mut StreamSubscriber, lsn: i64) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        sub.refresh_wal_positions().await.unwrap();
+        sub.check_for_committed_transaction().await.unwrap();
+        if sub.status_update().last_flushed >= lsn {
+            return;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    panic!("transaction {lsn} never completed");
+}
+
 /// Count rows matching the given `WHERE` predicate using a separate connection.
 async fn count_where(server: &mut Server, table: &str, predicate: &str) -> i64 {
     let query = format!("SELECT COUNT(*) FROM {} WHERE {}", table, predicate);
@@ -492,10 +509,13 @@ async fn commit_returns_status_and_clears_transaction() {
     assert!(sub.in_transaction());
 
     let result = sub.handle(commit_copy_data(200)).await.unwrap();
+
+    wait_for_commit(&mut sub, 200).await;
     assert!(!sub.in_transaction());
     assert_eq!(sub.lsn(), 200);
 
-    let status = result.expect("commit should return a StatusUpdate");
+    assert!(result.is_some());
+    let status = sub.status_update();
     assert_eq!(status.last_applied, 200);
     assert_eq!(status.last_flushed, 200);
     assert_eq!(status.last_written, 200);
@@ -524,6 +544,7 @@ async fn bytes_sharded_accumulates() {
 
     let after_begin = sub.bytes_sharded();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
     assert!(sub.bytes_sharded() > after_begin);
 }
 
@@ -542,6 +563,7 @@ async fn status_update_stays_at_committed_lsn_during_transaction() {
     // Commit a first transaction (begin LSN 50, end LSN 100).
     sub.handle(begin_copy_data(50)).await.unwrap();
     sub.handle(commit_copy_data(100)).await.unwrap();
+    wait_for_commit(&mut sub, 100).await;
     assert_eq!(sub.status_update().last_flushed, 100);
 
     // Open a second transaction: Begin advances lsn to 200 (future commit LSN).
@@ -631,6 +653,7 @@ async fn relation_after_insert_inside_transaction() {
 
     // Commit both tables atomically.
     let status = sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
     assert!(!sub.in_transaction());
     assert!(status.is_some());
     assert_eq!(sub.lsn(), 200);
@@ -699,6 +722,8 @@ async fn partition_leaves_share_destination() {
 
     sub.handle(commit_copy_data(200)).await.unwrap();
 
+    wait_for_commit(&mut sub, 200).await;
+
     // Both inserts must land in the shared destination table. Before the fix,
     // leaf_b's row would be silently dropped.
     assert_eq!(count_row(&mut verify, "public.sharded", &id_a).await, 1);
@@ -728,6 +753,8 @@ async fn full_insert_transaction() {
         .unwrap();
 
     let status = sub.handle(commit_copy_data(200)).await.unwrap();
+
+    wait_for_commit(&mut sub, 200).await;
     assert!(!sub.in_transaction());
     assert!(status.is_some());
     assert_eq!(sub.lsn(), 200);
@@ -757,6 +784,7 @@ async fn full_delete_transaction() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
 
@@ -764,6 +792,7 @@ async fn full_delete_transaction() {
     sub.handle(begin_copy_data(300)).await.unwrap();
     sub.handle(delete_copy_data(oid, &id)).await.unwrap();
     let status = sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
     assert!(status.is_some());
     assert!(!sub.in_transaction());
 
@@ -790,6 +819,7 @@ async fn multiple_transactions() {
         .await
         .unwrap();
     let status = sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
     assert!(status.is_some());
     assert_eq!(sub.lsn(), 200);
 
@@ -800,6 +830,7 @@ async fn multiple_transactions() {
         .await
         .unwrap();
     let status = sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
     assert!(status.is_some());
     assert_eq!(sub.lsn(), 400);
 
@@ -829,6 +860,7 @@ async fn lsn_gating_skips_old_inserts() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Second transaction at LSN 50 (behind table LSN 100) — insert skipped.
     sub.handle(begin_copy_data(50)).await.unwrap();
@@ -837,6 +869,7 @@ async fn lsn_gating_skips_old_inserts() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(60)).await.unwrap();
+    wait_for_commit(&mut sub, 60).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
     assert_eq!(count_row(&mut verify, "public.sharded", &id2).await, 0);
@@ -844,29 +877,213 @@ async fn lsn_gating_skips_old_inserts() {
     cleanup(&mut verify, "public.sharded", &[&id]).await;
 }
 
-/// Equal LSNs are skipped so streaming does not replay rows already copied by COPY.
+/// Helper method for copy boundary test
+/// Insert `id` into the copy boundary source table
+async fn insert_uncommitted(server: &mut Server, id: i64) -> Result<String, BackendError> {
+    server.execute("BEGIN").await?;
+    server
+        .execute(format!(
+            "INSERT INTO copy_boundary_source (id) VALUES ({id})"
+        ))
+        .await?;
+    let mut transaction_ids: Vec<String> = server
+        .fetch_all("SELECT pg_current_xact_id()::xid::text")
+        .await?;
+    Ok(transaction_ids.remove(0))
+}
+
+/// Helper method for copy boundary test
+/// Wait until creation of `slot_name` is blocked on transaction `transaction_id`
+async fn wait_for_slot_blocked_on(server: &mut Server, slot_name: &str, transaction_id: &str) {
+    let waiting_on_transaction = format!(
+        "slots.slot_name = '{slot_name}' AND locks.locktype = 'transactionid' AND locks.transactionid::text = '{transaction_id}' AND NOT locks.granted"
+    );
+
+    let slot_locks =
+        "pg_locks locks JOIN pg_replication_slots slots ON slots.active_pid = locks.pid";
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    while count_where(server, slot_locks, &waiting_on_transaction).await == 0 {
+        assert!(Instant::now() < deadline);
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Regression test to ensure that LSNs are applied properly at COPY boundaries.
+/// This calls `copy_boundary_attempt` multiple times because there's a small chance
+/// that Postgres behaves inconsistently (very small) to prevent a flaky test
+/// This is because Postgres *may* write WAL on its own between the point
+/// of consistency and our COMMIT
 #[tokio::test]
-async fn lsn_gating_skips_copy_boundary_inserts() {
-    let mut table = make_sharded_table();
-    table.lsn = Lsn::from_i64(100);
+async fn lsn_gating_at_copy_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..10 {
+        if Box::pin(copy_boundary_attempt()).await? {
+            return Ok(());
+        }
+    }
+    Err("(flaky?) no transaction committed exactly at the consistent point".into())
+}
 
-    let mut sub = make_subscriber_with_tables(vec![table, make_sharded_test_b_table()]);
-    let mut verify = test_server().await;
-    sub.connect().await.unwrap();
+/// Returns `false` if the transaction missed the point of consistency
+async fn copy_boundary_attempt() -> Result<bool, Box<dyn std::error::Error>> {
+    let mut admin = test_server().await;
+    for query in [
+        "DROP PUBLICATION IF EXISTS copy_boundary",
+        "DROP TABLE IF EXISTS copy_boundary_source, copy_boundary_dest",
+        "CREATE TABLE copy_boundary_source (id BIGINT PRIMARY KEY, value TEXT)",
+        "CREATE TABLE copy_boundary_dest (id BIGINT PRIMARY KEY, value TEXT)",
+        "CREATE PUBLICATION copy_boundary FOR TABLE copy_boundary_source",
+    ] {
+        admin.execute(query).await?;
+    }
 
-    let oid = Oid(16384);
-    let id = random_id();
+    let mut tables = Table::load("copy_boundary", &mut admin).await?;
+    tables[0].table.parent_schema = tables[0].table.schema.clone();
+    tables[0].table.parent_name = "copy_boundary_dest".into();
 
-    cleanup(&mut verify, "public.sharded", &[&id]).await;
+    let mut replication_stream = ReplicationSlot::new_temporary("copy_boundary", admin.addr())
+        .create()
+        .await?;
+    replication_stream.server().execute("COMMIT").await?;
 
-    sub.handle(begin_copy_data(100)).await.unwrap();
-    sub.handle(relation_copy_data(oid)).await.unwrap();
-    sub.handle(insert_copy_data(oid, &id, "copied_already"))
-        .await
-        .unwrap();
-    sub.handle(commit_copy_data(200)).await.unwrap();
+    let (copy_lsn, rows_in_copy_snapshot) = {
+        let mut before_copy = test_server().await;
+        let mut during_copy = test_server().await;
+        let mut at_copy_boundary = test_server().await;
 
-    assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 0);
+        // Row 1: left open to make the copy slot wait, lets us control when its snapshot is taken.
+        let transaction_id = insert_uncommitted(&mut before_copy, 1).await?;
+        let copy_slot = ReplicationSlot::new_temporary("copy_boundary", admin.addr());
+        let copy_slot_name = copy_slot.name().to_owned();
+        let copy_slot_creation = tokio::spawn(copy_slot.create());
+        wait_for_slot_blocked_on(&mut admin, &copy_slot_name, &transaction_id).await;
+
+        // Row 2: keeps slot waiting a second time
+        let transaction_id = insert_uncommitted(&mut during_copy, 2).await?;
+        before_copy.execute("COMMIT").await?;
+        wait_for_slot_blocked_on(&mut admin, &copy_slot_name, &transaction_id).await;
+
+        // Row 3 starts before the snapshot and commits right after it
+        // (ends up EXACTLY at the copy LSN).
+        insert_uncommitted(&mut at_copy_boundary, 3).await?;
+        during_copy.execute("COMMIT").await?;
+        let mut copy_stream = copy_slot_creation.await??;
+        at_copy_boundary.execute("COMMIT").await?;
+
+        // Row 4: commits well after the snapshot.
+        admin
+            .execute("INSERT INTO copy_boundary_source (id) VALUES (4)")
+            .await?;
+
+        // These are the rows the copy would see
+        let copy_lsn = copy_stream.lsn();
+        let rows_in_copy_snapshot: Vec<i64> = copy_stream
+            .server()
+            .fetch_all("SELECT id FROM copy_boundary_source ORDER BY id")
+            .await?;
+        copy_stream.server().execute("COMMIT").await?;
+
+        (copy_lsn, rows_in_copy_snapshot)
+    };
+
+    tables[0].lsn = copy_lsn;
+
+    let cluster = Cluster::new_test_single_shard(&config());
+    let mut subscriber = StreamSubscriber::new(&cluster, tables);
+    subscriber.connect().await?;
+    replication_stream.start_replication().await?;
+
+    let (begin_lsns, last_transaction_messages) = {
+        // Play the four transactions from above through the subscriber
+        let mut begin_lsns = vec![];
+        let mut last_transaction_messages = vec![];
+
+        let last_commit_end_lsn = loop {
+            let Some(ReplicationData::CopyData(message)) =
+                replication_stream.replicate(Duration::from_secs(5)).await?
+            else {
+                return Err("Replication ended early?".into());
+            };
+
+            let payload = message
+                .xlog_data()
+                .and_then(|xlog_data| xlog_data.payload());
+
+            if matches!(payload, Some(XLogPayload::Begin(_))) {
+                last_transaction_messages.clear();
+            }
+
+            last_transaction_messages.push(message.clone());
+            subscriber.handle(message).await?;
+
+            match payload {
+                Some(XLogPayload::Begin(begin)) => begin_lsns.push(begin.final_transaction_lsn),
+                Some(XLogPayload::Commit(commit)) if begin_lsns.len() == 4 => break commit.end_lsn,
+                _ => (),
+            }
+        };
+
+        wait_for_commit(&mut subscriber, last_commit_end_lsn).await;
+        (begin_lsns, last_transaction_messages)
+    };
+
+    // Fetch rows the subscriber wrote to the destination.
+    let rows_applied: Vec<i64> = admin
+        .fetch_all("SELECT id FROM copy_boundary_dest ORDER BY id")
+        .await?;
+
+    // Send the last transaction again (it was already applied, must be skipped)
+    {
+        admin
+            .execute("DELETE FROM copy_boundary_dest WHERE id = 4")
+            .await?;
+        for message in last_transaction_messages {
+            subscriber.handle(message).await?;
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !subscriber.check_for_committed_transaction().await? {
+            assert!(Instant::now() < deadline);
+            subscriber.refresh_wal_positions().await?;
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    let rows_after_redelivery: Vec<i64> = admin
+        .fetch_all("SELECT id FROM copy_boundary_dest ORDER BY id")
+        .await?;
+
+    // Cleanup!
+    for query in [
+        "DROP PUBLICATION copy_boundary",
+        "DROP TABLE copy_boundary_source, copy_boundary_dest",
+    ] {
+        admin.execute(query).await?;
+    }
+
+    // Verify that row 3 ended up exactly at the copy LSN (else we must re-try for accurate results)
+    if begin_lsns[2] != copy_lsn.lsn {
+        return Ok(false);
+    }
+
+    // row 1 & 2 are before the copy
+    assert!(begin_lsns[0] < copy_lsn.lsn && begin_lsns[1] < copy_lsn.lsn);
+
+    // row 4 is after the copy
+    assert!(begin_lsns[3] > copy_lsn.lsn);
+
+    // row 3 is **NOT** included (it's exactly at the copy LSN)
+    assert_eq!(rows_in_copy_snapshot, [1, 2]);
+
+    // stream skipped row 1 and 2
+    assert_eq!(rows_applied, [3, 4]);
+
+    // repeat was skipped
+    assert_eq!(rows_after_redelivery, [3]);
+
+    // no need to re-try
+    Ok(true)
 }
 
 /// Multiple rows in the same transaction must still be applied after inclusive LSN gating.
@@ -891,6 +1108,7 @@ async fn multiple_inserts_same_transaction_are_applied() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id1).await, 1);
     assert_eq!(count_row(&mut verify, "public.sharded", &id2).await, 1);
@@ -1099,6 +1317,7 @@ async fn toast_update_preserves_unchanged_column() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     let row = fetch_posts_row(&mut verify, &id)
         .await
@@ -1112,6 +1331,7 @@ async fn toast_update_preserves_unchanged_column() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     let row = fetch_posts_row(&mut verify, &id)
         .await
@@ -1144,6 +1364,7 @@ async fn toast_update_shape_reuse() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Two UPDATEs with identical TOAST shape: title changes each time, body stays
     // Toasted.  The second must hit the shape cache without re-preparing.
@@ -1155,6 +1376,7 @@ async fn toast_update_shape_reuse() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     let row = fetch_posts_row(&mut verify, &id)
         .await
@@ -1192,6 +1414,7 @@ async fn toast_update_all_toasted_is_noop() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     let row = fetch_posts_row(&mut verify, &id)
         .await
@@ -1214,6 +1437,7 @@ async fn toast_update_all_toasted_is_noop() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     // Watermark advanced even though we took the no-op path.
     assert_eq!(sub.lsn(), 400);
@@ -1684,6 +1908,7 @@ async fn full_identity_insert_sharded() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
     cleanup(&mut verify, "public.sharded", &[&id]).await;
@@ -1712,6 +1937,7 @@ async fn full_identity_update_fast_path() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
 
     // Update the row: change id from `id` to `id2`, value from "before" to "after".
@@ -1720,6 +1946,7 @@ async fn full_identity_update_fast_path() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     assert_eq!(
         count_row(&mut verify, "public.sharded", &id).await,
@@ -1767,6 +1994,7 @@ async fn full_identity_update_slow_path() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Rename id → id2; value Toasted in NEW (unchanged), inline in OLD.
     // Using distinct id2 forces a real row rename so assertions are non-trivial.
@@ -1777,6 +2005,7 @@ async fn full_identity_update_slow_path() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     // Old row must be gone.
     assert_eq!(
@@ -1826,6 +2055,7 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Realistic UPDATE shape produced by PG: OLD has every column inline,
     // NEW marks the unchanged `value` column as 'u'.
@@ -1883,6 +2113,7 @@ async fn full_identity_update_all_toasted_is_noop() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // All columns Toasted: no-op, must not error, row must be untouched.
     sub.handle(begin_copy_data(300)).await.unwrap();
@@ -1890,6 +2121,7 @@ async fn full_identity_update_all_toasted_is_noop() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
     // Value column must be untouched — a no-op that silently zeros a column would
@@ -1925,6 +2157,7 @@ async fn full_identity_delete() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 1);
 
     // Delete via full old-row match.
@@ -1933,6 +2166,7 @@ async fn full_identity_delete() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     assert_eq!(count_row(&mut verify, "public.sharded", &id).await, 0);
 
@@ -1965,6 +2199,7 @@ async fn full_identity_insert_omni_dedup() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // First INSERT: row lands.
     sub.handle(begin_copy_data(300)).await.unwrap();
@@ -1972,6 +2207,7 @@ async fn full_identity_insert_omni_dedup() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     let predicate = "a = 'hello' AND b = 'world'";
     let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
@@ -1983,6 +2219,7 @@ async fn full_identity_insert_omni_dedup() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(600)).await.unwrap();
+    wait_for_commit(&mut sub, 600).await;
 
     let count = count_where(&mut verify, "public.full_omni_dedup", predicate).await;
     assert_eq!(
@@ -2026,6 +2263,7 @@ async fn full_identity_update_duplicate_rows() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Seed two identical rows directly.
     verify
@@ -2049,6 +2287,7 @@ async fn full_identity_update_duplicate_rows() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     // Exactly one row was updated: the old (id, 'dup') row remains, the other became (id2, 'changed').
     assert_eq!(
@@ -2091,6 +2330,7 @@ async fn full_identity_delete_duplicate_rows() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // Seed two identical rows.
     verify
@@ -2112,6 +2352,7 @@ async fn full_identity_delete_duplicate_rows() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     // Exactly one row deleted: one (id, 'dup') row must remain.
     assert_eq!(
@@ -2164,6 +2405,7 @@ async fn full_identity_update_matches_null_column() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // FULL UPDATE: old = (id, NULL), new = (id, "filled"). The WHERE clause must use
     // IS NOT DISTINCT FROM so NULL participates in the match.
@@ -2180,6 +2422,7 @@ async fn full_identity_update_matches_null_column() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     assert_eq!(
         fetch_value(&mut verify, "public.full_dup_rows", &id)
@@ -2224,6 +2467,7 @@ async fn full_identity_delete_matches_null_column() {
         .await
         .unwrap();
     sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
 
     // DELETE with old = (id, NULL).
     sub.handle(begin_copy_data(300)).await.unwrap();
@@ -2240,6 +2484,7 @@ async fn full_identity_delete_matches_null_column() {
     .await
     .unwrap();
     sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
 
     assert_eq!(
         count_row(&mut verify, "public.full_dup_rows", &id).await,
