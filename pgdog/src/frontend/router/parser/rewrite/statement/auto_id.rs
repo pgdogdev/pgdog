@@ -752,15 +752,11 @@ mod tests {
             sql,
             "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('tenant_users_id_seq'))"
         );
-        assert_eq!(plan.auto_id_injected, 1);
         assert_eq!(
-            plan.generated_params,
-            vec![GeneratedParam {
-                param_num: 1,
-                generated_id: GeneratedId::Sequence(SequenceCall::Nextval(
-                    "tenant_users_id_seq".into()
-                )),
-            }]
+            plan.bind_params,
+            [BindParam::Sequence(SequenceCall::Nextval(
+                "tenant_users_id_seq".into()
+            ))]
         );
     }
 
