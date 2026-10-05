@@ -173,18 +173,18 @@ impl GlobalCache {
             query: parse.query_ref(),
             data_types: parse.data_types_ref(),
         };
-        self.cross_shard_variants.insert(
-            variant_name.clone(),
-            Statement {
-                stmt: StatementType::Parse {
-                    parse,
-                    rewrite: None,
-                    client_params,
-                },
-                row_description: None,
-                cache_key,
+        let variant = Statement {
+            stmt: StatementType::Parse {
+                parse,
+                rewrite: None,
+                client_params,
             },
-        );
+            row_description: None,
+            cache_key,
+        };
+        let key = variant_name.clone();
+        self.content_bytes += key.capacity() + variant.content_bytes();
+        self.cross_shard_variants.insert(key, variant);
 
         Some(variant_name)
     }
@@ -358,6 +358,7 @@ impl GlobalCache {
         {
             self.statements.shrink_to_fit();
             self.names.shrink_to_fit();
+            self.cross_shard_variants.shrink_to_fit();
             self.unused.shrink_to_fit();
         }
     }
@@ -366,6 +367,7 @@ impl GlobalCache {
     fn recomputed_content_bytes(&self) -> usize {
         self.names
             .iter()
+            .chain(self.cross_shard_variants.iter())
             .map(|(k, v)| k.capacity() + v.content_bytes())
             .sum()
     }
@@ -377,8 +379,14 @@ impl GlobalCache {
                 .content_bytes
                 .saturating_sub(name.len() + stmt.content_bytes());
             self.statements.remove(stmt.cache_key());
-            self.cross_shard_variants
-                .remove(&cross_shard_variant_name(name));
+            if let Some((key, variant)) = self
+                .cross_shard_variants
+                .remove_entry(&cross_shard_variant_name(name))
+            {
+                self.content_bytes = self
+                    .content_bytes
+                    .saturating_sub(key.capacity() + variant.content_bytes());
+            }
         }
     }
 
@@ -917,7 +925,13 @@ mod test {
         cache.rewrite(&rewrite, 0);
         let row_description = RowDescription::new(&[Field::text("name"), Field::bigint("id")]);
         cache.insert_row_description("__pgdog_2", row_description.clone());
-        cache.insert_row_description("__pgdog_2", row_description);
+        cache.insert_row_description("__pgdog_2", row_description.clone());
+        let variant = cache
+            .cross_shard_variant("__pgdog_3", "SELECT 3, 'sort key'")
+            .unwrap();
+        cache.cross_shard_variant("__pgdog_3", "SELECT 3, 'sort key'");
+        cache.cross_shard_variant("__pgdog_4", "SELECT 4, 'sort key'");
+        cache.insert_row_description(&variant, row_description);
         assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
 
         for i in 1..=500 {
@@ -932,6 +946,7 @@ mod test {
         assert_eq!(cache.content_bytes, cache.recomputed_content_bytes());
 
         cache.close_unused(0);
+        assert!(cache.cross_shard_variants.is_empty());
         assert_eq!(cache.content_bytes, 0);
     }
 }
