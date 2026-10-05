@@ -18,7 +18,7 @@ impl StatementRewrite<'_> {
     ///   or replace DEFAULT values with pgdog.unique_id()
     /// - `rewrite_omni`: Rewrite only omnisharded tables using pgdog.unique_id()
     /// - `rewrite_omni_global`: Rewrite only omnisharded tables using
-    ///   pgdog.nextval('[schema_]table_column_seq')
+    ///   pgdog.nextval('schema.table_column_seq')
     ///
     /// This runs before function replacement so injected calls will be
     /// processed by the unique_id and nextval rewriters.
@@ -70,7 +70,7 @@ impl StatementRewrite<'_> {
             ) && !is_sharded;
 
         let sequence_prefix = (mode == RewriteMode::RewriteOmniGlobal && !is_sharded)
-            .then(|| format!("{}_{}", relation.schema(), relation.name));
+            .then(|| format!("{}.{}", relation.schema(), relation.name));
 
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
@@ -681,8 +681,8 @@ mod tests {
         };
 
         for (table, sequence) in [
-            ("users", "public_users_id_seq"),
-            ("public.users", "public_users_id_seq"),
+            ("users", "public.users_id_seq"),
+            ("public.users", "public.users_id_seq"),
         ] {
             for (columns, values, expected_values) in [
                 (
@@ -750,12 +750,12 @@ mod tests {
 
         assert_eq!(
             sql,
-            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('tenant_users_id_seq'))"
+            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('tenant.users_id_seq'))"
         );
         assert_eq!(
             plan.bind_params,
             [BindParam::Sequence(SequenceCall::Nextval(
-                "tenant_users_id_seq".into()
+                "tenant.users_id_seq".into()
             ))]
         );
     }

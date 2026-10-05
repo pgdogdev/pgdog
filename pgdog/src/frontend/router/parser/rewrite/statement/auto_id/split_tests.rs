@@ -53,7 +53,7 @@ async fn test_nextval_auto_id_simple_splits_use_resolved_values() {
         ("name, id", "('a', DEFAULT), ('b', DEFAULT)"),
         (
             "name, id",
-            "('a', pgdog.nextval('public_users_id_seq')), ('b', pgdog.nextval('public_users_id_seq'))",
+            "('a', pgdog.nextval('public.users_id_seq')), ('b', pgdog.nextval('public.users_id_seq'))",
         ),
     ] {
         let original = format!(
@@ -110,7 +110,7 @@ async fn test_nextval_auto_id_simple_splits_use_resolved_values() {
         }
         assert_eq!(
             calls,
-            vec![SequenceCall::Nextval("public_users_id_seq".into()); 4]
+            vec![SequenceCall::Nextval("public.users_id_seq".into()); 4]
         );
     }
 }
@@ -124,7 +124,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                 ("name, id", "($1, DEFAULT), ($2, DEFAULT)"),
                 (
                     "name, id",
-                    "($1, pgdog.nextval('public_users_id_seq')), ($2, pgdog.nextval('public_users_id_seq'))",
+                    "($1, pgdog.nextval('public.users_id_seq')), ($2, pgdog.nextval('public.users_id_seq'))",
                 ),
             ] {
                 let original =
@@ -155,7 +155,7 @@ async fn test_nextval_auto_id_extended_splits_keep_generated_parameters() {
                         None,
                         crate::frontend::client::QueryTimestamps::now(),
                         async |call: &SequenceCall| {
-                            assert_eq!(call, &SequenceCall::Nextval("public_users_id_seq".into()));
+                            assert_eq!(call, &SequenceCall::Nextval("public.users_id_seq".into()));
                             value += 1;
                             Ok(value)
                         },
