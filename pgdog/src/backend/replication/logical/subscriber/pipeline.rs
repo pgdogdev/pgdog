@@ -1,12 +1,13 @@
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::Mutex;
-use pgdog_postgres_types::Oid;
 use tokio::select;
 use tokio::spawn;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 use tracing::trace;
 
 use crate::backend::Server;
@@ -18,20 +19,10 @@ use crate::net::{
 use pgdog_stats::MissedRows;
 
 use super::super::Error;
-
-/// The current state of a transaction that is either:
-/// (1) sent to the shard, but we have not heard back with a RFQ
-/// (2) we've heard back, but it hasn't been confirmed flushed
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TransactionAwaitingCommit {
-    pub(crate) transaction_lsn: i64,
-    pub(crate) current_lsn: i64,
-    pub(crate) changed_tables: HashSet<Oid>,
-    /// Set when we've heard back, and ran `set_durable_bound_if_not_set` stemming from `check_for_committed_transaction`
-    /// After which, we await the `wal_flush_lsn` to advance past, so we know, with certainty, this transaction has flushed.
-    pub(crate) durable_bound: Option<i64>,
-    pub(crate) missed: MissedRows,
-}
+use super::connect_address;
+use super::replication_origin::ReplicationOrigin;
+use crate::util::retry::{Retry, RetryConfig};
+use crate::util::safe_interval;
 
 /// We flush the buffer when hitting this so that we can batch that number of operations together,
 /// instead of doing them individually.
@@ -42,21 +33,35 @@ const ROWS_PER_FLUSH: u32 = 100;
 /// This represents backpressure (if the Shard can't keep up)
 const COMMAND_CHANNEL_SIZE: usize = 4096;
 
-// State shared between the handle and its background listener task.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, bon::Builder)]
+pub(crate) struct ProgressCheck {
+    #[builder(default = PROGRESS_INTERVAL)]
+    interval: Duration,
+    retry_attempts: usize,
+    retry_delay: Duration,
+}
+
+// State shared between the handle and its background listener and progress tasks.
 #[derive(Debug, Default)]
 struct Shared {
     // First error observed on this connection. Sticky until taken.
     error: Option<Error>,
     // Rows a direct-to-shard DML expected to touch but didn't (0 rows affected).
     missed: MissedRows,
-
-    /// A queue of not fully flushed transactions.
-    finished_commit: VecDeque<TransactionAwaitingCommit>,
-
-    /// These two fields below are saved state from `refresh_wal_positions` for
-    /// transaction bookkeeping.
-    last_flushed_lsn: i64,
-    last_insert_lsn: i64,
+    /// Missed rows of acknowledged commits, keyed by the commit's source LSN,
+    /// counted once the commit is confirmed to the source.
+    pending_missed: VecDeque<(i64, MissedRows)>,
+    /// Source LSN of the last commit acknowledged with ReadyForQuery.
+    /// It's only acknowledged by backend, but could be not yet durable.
+    source_lsn_acked: i64,
+    /// Source LSN that should be committed on this shard and should
+    /// become durable eventually. It's higher than or equal
+    /// to [`Self::source_lsn_durable`]
+    source_lsn_changed: i64,
+    /// Source LSN that is marked durable by replication origin tracker.
+    source_lsn_durable: i64,
 }
 
 /// How a sync point completes.
@@ -70,13 +75,10 @@ enum SyncPointKind {
 // One entry per command sent to Postgres, in send order. Popped as acks arrive.
 enum OpSyncPoint {
     // Bind/Execute/Flush: resolved by CommandComplete ('C').
-    DirectDml {
-        is_direct: bool,
-    },
+    DirectDml { is_direct: bool },
     // Commit or out-of-transaction prepare (Sync): resolved by ReadyForQuery ('Z').
-    ReadyForQuery {
-        transaction: Option<TransactionAwaitingCommit>,
-    },
+    // `source_lsn` is the source LSN of the commit.
+    ReadyForQuery { source_lsn: Option<i64> },
 }
 
 // Work sent from the handle to the listener task.
@@ -90,7 +92,7 @@ enum Command {
     SyncPoint {
         messages: Vec<ProtocolMessage>,
         kind: SyncPointKind,
-        transaction: Option<TransactionAwaitingCommit>,
+        source_lsn: Option<i64>,
     },
 }
 
@@ -101,11 +103,17 @@ pub(crate) struct PipelinedConnection {
     tx: Sender<Command>,
     shared: Arc<Mutex<Shared>>,
     address: Address,
+    progress: JoinHandle<()>,
 }
 
 impl PipelinedConnection {
     /// This moves `server` into a background task and returns a handle to it.
-    pub(crate) fn new(server: Server) -> Result<Self, Error> {
+    /// A second background task reads the progress of `origin`, as set by `check`.
+    pub(crate) fn new(
+        server: Server,
+        origin: ReplicationOrigin,
+        check: ProgressCheck,
+    ) -> Result<Self, Error> {
         let (tx, rx) = channel(COMMAND_CHANNEL_SIZE);
         let shared = Arc::new(Mutex::new(Shared::default()));
         let address = server.addr().clone();
@@ -120,10 +128,18 @@ impl PipelinedConnection {
 
         spawn(listener.run());
 
+        let progress = Progress {
+            origin,
+            address: address.clone(),
+            shared: shared.clone(),
+            check,
+        };
+
         Ok(Self {
             tx,
             shared,
             address,
+            progress: spawn(progress.run()),
         })
     }
 
@@ -132,17 +148,27 @@ impl PipelinedConnection {
         &self.address
     }
 
-    /// Fetches the `last_flushed_lsn` and `last_insert_lsn` for this shard.
-    pub(crate) fn get_flushed_and_insert_lsn(&self) -> (i64, i64) {
-        let lock = self.shared.lock();
-        (lock.last_flushed_lsn, lock.last_insert_lsn)
+    /// Identify if the progress should be limited with upper bound by
+    /// the durable_lsn on this destination.
+    /// Some(durable_lsn) - on shard, if there are commits in progress that
+    /// are not yet durable. Returns the last durable lsn.
+    /// None - all pushed commits already durable
+    pub(crate) fn durable_lsn_progress(&self) -> Option<i64> {
+        let shared = self.shared.lock();
+        (shared.source_lsn_durable < shared.source_lsn_changed).then_some(shared.source_lsn_durable)
     }
 
-    /// Sets the `last_flushed_lsn` and `last_insert_lsn` for this shard.
-    pub(crate) fn set_wal_positions(&self, insert_lsn: i64, flush_lsn: i64) {
-        let mut lock = self.shared.lock();
-        lock.last_insert_lsn = insert_lsn;
-        lock.last_flushed_lsn = flush_lsn;
+    /// Missed rows of the commits confirmed up to `source_lsn_confirmed`.
+    pub(crate) fn take_confirmed_missed(&self, source_lsn_confirmed: i64) -> MissedRows {
+        let mut shared = self.shared.lock();
+        let mut missed = MissedRows::default();
+        while let Some((_, rows)) = shared
+            .pending_missed
+            .pop_front_if(|(source_lsn, _)| *source_lsn <= source_lsn_confirmed)
+        {
+            missed.merge(rows);
+        }
+        missed
     }
 
     /// Enqueue a DML statement (`Bind/Execute/Flush`) without waiting for its
@@ -177,40 +203,19 @@ impl PipelinedConnection {
         self.send_command(messages, kind, None).await
     }
 
+    /// Commit the open implicit transaction on this shard as the source
+    /// commit at `source_lsn`, recording it in the replication origin first.
+    pub(crate) async fn commit(&self, origin: Bind, source_lsn: i64) -> Result<(), Error> {
+        self.shared.lock().source_lsn_changed = source_lsn;
+        self.execute(origin, false).await?;
+        self.sync(Some(source_lsn)).await
+    }
+
     /// Send `Sync` and wait for `ReadyForQuery` (commits the open implicit
-    /// transaction on this shard).
-    pub(crate) async fn sync(
-        &self,
-        transaction: Option<TransactionAwaitingCommit>,
-    ) -> Result<(), Error> {
-        self.send_command(vec![Sync.into()], SyncPointKind::ReadyForQuery, transaction)
+    /// transaction on this shard). `source_lsn` is the source LSN of the commit.
+    async fn sync(&self, source_lsn: Option<i64>) -> Result<(), Error> {
+        self.send_command(vec![Sync.into()], SyncPointKind::ReadyForQuery, source_lsn)
             .await
-    }
-
-    /// Checks the front of the `finished_commit` queue, to see what the
-    /// `current_lsn` and `durable_bound` are for that transaction.
-    pub(crate) fn peek_finished_commits_lsn(&self) -> Option<(i64, Option<i64>)> {
-        self.shared
-            .lock()
-            .finished_commit
-            .front()
-            .map(|trans| (trans.current_lsn, trans.durable_bound))
-    }
-
-    /// If any transactions in the `finished_commit` queue do not have
-    /// their `durable_bound` set, set it to `dur`.
-    pub(crate) fn set_durable_bound_if_not_set(&self, dur: i64) {
-        let mut lock = self.shared.lock();
-        for x in &mut lock.finished_commit {
-            if x.durable_bound.is_none() {
-                x.durable_bound = Some(dur);
-            }
-        }
-    }
-
-    /// Pop the front of `finished_commit`
-    pub(crate) fn pop_finished_commit(&self) -> Option<TransactionAwaitingCommit> {
-        self.shared.lock().finished_commit.pop_front()
     }
 
     /// Non-blocking peek + take of the latched error. `Some` means the shard
@@ -224,13 +229,13 @@ impl PipelinedConnection {
         &self,
         messages: Vec<ProtocolMessage>,
         kind: SyncPointKind,
-        transaction: Option<TransactionAwaitingCommit>,
+        source_lsn: Option<i64>,
     ) -> Result<(), Error> {
         self.tx
             .send(Command::SyncPoint {
                 messages,
                 kind,
-                transaction,
+                source_lsn,
             })
             .await
             .map_err(|_| Error::PipelineClosed)
@@ -304,7 +309,7 @@ impl Listener {
             Command::SyncPoint {
                 messages,
                 kind,
-                transaction,
+                source_lsn,
             } => {
                 if let Err(err) = self.write(&messages).await {
                     self.latch_error(err);
@@ -316,7 +321,7 @@ impl Listener {
                 match kind {
                     SyncPointKind::ReadyForQuery => {
                         self.queue
-                            .push_back(OpSyncPoint::ReadyForQuery { transaction });
+                            .push_back(OpSyncPoint::ReadyForQuery { source_lsn });
                     }
                     SyncPointKind::Flush => {}
                 }
@@ -363,12 +368,16 @@ impl Listener {
             }
             // ReadyForQuery: resolve the front ReadySync waiter.
             'Z' => {
-                if let Some(OpSyncPoint::ReadyForQuery { transaction }) = self.queue.pop_front()
-                    && let Some(mut waiting_transaction) = transaction
+                if let Some(OpSyncPoint::ReadyForQuery {
+                    source_lsn: Some(source_lsn),
+                }) = self.queue.pop_front()
                 {
                     let mut shared = self.shared.lock();
-                    waiting_transaction.missed = std::mem::take(&mut shared.missed);
-                    shared.finished_commit.push_back(waiting_transaction);
+                    shared.source_lsn_acked = source_lsn;
+                    if shared.missed.non_zero() {
+                        let missed = std::mem::take(&mut shared.missed);
+                        shared.pending_missed.push_back((source_lsn, missed));
+                    }
                 }
             }
             // NoticeResponse / ParameterStatus / NotificationResponse / etc.
@@ -402,10 +411,7 @@ impl Listener {
     }
 
     fn latch_error(&self, err: Error) {
-        let mut shared = self.shared.lock();
-        if shared.error.is_none() {
-            shared.error = Some(err);
-        }
+        self.shared.lock().latch_error(err);
     }
 
     fn wake_all(&mut self) {
@@ -414,6 +420,82 @@ impl Listener {
 
     fn address(&self) -> &Address {
         self.server.addr()
+    }
+}
+
+impl Shared {
+    fn latch_error(&mut self, err: Error) {
+        if self.error.is_none() {
+            self.error = Some(err);
+        }
+    }
+}
+
+impl Drop for PipelinedConnection {
+    fn drop(&mut self) {
+        self.progress.abort();
+    }
+}
+
+/// Background task: reads the replication origin progress on a separate
+/// connection and updates the durable LSN.
+struct Progress {
+    origin: ReplicationOrigin,
+    address: Address,
+    shared: Arc<Mutex<Shared>>,
+    check: ProgressCheck,
+}
+
+impl Progress {
+    async fn run(self) {
+        let mut server = None;
+        let mut interval = safe_interval(self.check.interval);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut retry = Retry::new(
+            RetryConfig::builder()
+                .name(format!("[replication] origin progress {}", self.address))
+                .max_attempts(self.check.retry_attempts)
+                .delay(self.check.retry_delay)
+                .build(),
+        );
+
+        loop {
+            interval.tick().await;
+            let Err(err) = self.refresh(&mut server).await else {
+                retry.reset();
+                continue;
+            };
+
+            server = None;
+            if !err.is_retryable() || !retry.delay_retry(&err).await {
+                self.shared.lock().latch_error(err);
+                break;
+            }
+        }
+    }
+
+    /// The progress is capped by the acknowledged LSN: an aborted commit also
+    /// moves the origin, but it is never acknowledged.
+    async fn refresh(&self, server: &mut Option<Server>) -> Result<(), Error> {
+        {
+            let shared = self.shared.lock();
+            if shared.source_lsn_durable >= shared.source_lsn_changed {
+                return Ok(());
+            }
+        }
+
+        let server = match server {
+            Some(server) => server,
+            None => server.insert(connect_address(&self.address).await?),
+        };
+        // PERF: the progress will cause actual flush on destination, that could
+        // lower the performance in theory. But the effect is unknown and it's
+        // not very simple to get the what is actually flushed otherwise.
+        let progress = self.origin.progress(server, true).await?;
+        let mut shared = self.shared.lock();
+        shared.source_lsn_durable = shared.source_lsn_acked.min(progress.lsn);
+
+        Ok(())
     }
 }
 
@@ -427,28 +509,34 @@ mod test {
     use std::time::{Duration, Instant};
     use tokio::time::sleep;
 
-    async fn commit_and_wait(
-        conn: &PipelinedConnection,
-        lsn: i64,
-    ) -> Option<TransactionAwaitingCommit> {
-        conn.sync(Some(TransactionAwaitingCommit {
-            transaction_lsn: lsn,
-            current_lsn: lsn,
-            changed_tables: HashSet::new(),
-            durable_bound: None,
-            missed: MissedRows::default(),
-        }))
-        .await
-        .unwrap();
+    fn origin(name: &str, address: &Address) -> ReplicationOrigin {
+        ReplicationOrigin::builder()
+            .name(name)
+            .address(address)
+            .shard(0)
+            .build()
+    }
+
+    fn pipelined(server: Server) -> PipelinedConnection {
+        let origin = origin("test_pipeline", server.addr());
+        let check = ProgressCheck::builder()
+            .retry_attempts(0)
+            .retry_delay(Duration::from_millis(100))
+            .build();
+        PipelinedConnection::new(server, origin, check).unwrap()
+    }
+
+    async fn commit_and_wait(conn: &PipelinedConnection, lsn: i64) -> bool {
+        conn.sync(Some(lsn)).await.unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if conn.peek_finished_commits_lsn().map(|(front, _)| front) == Some(lsn) {
-                return conn.pop_finished_commit();
+            if conn.shared.lock().source_lsn_acked == lsn {
+                return true;
             }
             sleep(Duration::from_millis(10)).await;
         }
-        None
+        false
     }
 
     async fn wait_for_error(conn: &PipelinedConnection) -> Option<Error> {
@@ -465,7 +553,7 @@ mod test {
     #[tokio::test]
     async fn prepare_execute_drain_commit() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         // Prepare + create a temp table (out of transaction: uses Sync).
         conn.prepare(
@@ -498,15 +586,14 @@ mod test {
         .await
         .unwrap();
 
-        let committed = commit_and_wait(&conn, 1).await;
-        assert!(committed.is_some());
+        assert!(commit_and_wait(&conn, 1).await);
         assert!(conn.take_error().is_none());
     }
 
     #[tokio::test]
     async fn in_transaction_prepare_uses_flush() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         conn.prepare(&[Parse::named("__pipe_flush", "SELECT $1::bigint")], true)
             .await
@@ -518,15 +605,14 @@ mod test {
         )
         .await
         .unwrap();
-        let committed = commit_and_wait(&conn, 1).await;
-        assert!(committed.is_some());
+        assert!(commit_and_wait(&conn, 1).await);
         assert!(conn.take_error().is_none());
     }
 
     #[tokio::test]
     async fn prepare_invalid_sql_sync_returns_error() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         conn.prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], false)
             .await
@@ -542,7 +628,7 @@ mod test {
     #[tokio::test]
     async fn prepare_invalid_sql_flush_returns_error() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         conn.prepare(&[Parse::named("__pipe_bad", "NOT VALID SQL")], true)
             .await
@@ -560,7 +646,7 @@ mod test {
         use tokio::time::timeout;
 
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         // Valid prepare (succeeds), then a fire-and-forget execute that errors
         // only at execution time: division by zero. The ErrorResponse arrives
@@ -601,7 +687,7 @@ mod test {
     #[tokio::test]
     async fn errored_connection_never_completes_commit() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         // Fire-and-forget DML that fails at execution time (division by zero).
         conn.prepare(&[Parse::named("__drain_div", "SELECT 1 / $1::int")], false)
@@ -614,29 +700,20 @@ mod test {
         .await
         .unwrap();
 
-        conn.sync(Some(TransactionAwaitingCommit {
-            transaction_lsn: 1,
-            current_lsn: 1,
-            changed_tables: HashSet::new(),
-            durable_bound: None,
-            missed: MissedRows::default(),
-        }))
-        .await
-        .unwrap();
+        conn.sync(Some(1)).await.unwrap();
         let err = wait_for_error(&conn).await.unwrap();
         assert!(
             matches!(err, Error::PgError(_)),
             "unexpected error: {err:?}"
         );
         sleep(Duration::from_millis(300)).await;
-        let finished = conn.peek_finished_commits_lsn();
-        assert!(finished.is_none());
+        assert_eq!(conn.shared.lock().source_lsn_acked, 0);
     }
 
     #[tokio::test]
     async fn direct_dml_zero_rows_counts_missed() {
         let server = test_server().await;
-        let conn = PipelinedConnection::new(server).unwrap();
+        let conn = pipelined(server);
 
         // Scratch table with one row (id = 1).
         conn.prepare(
@@ -715,16 +792,156 @@ mod test {
         .await
         .unwrap();
 
-        let committed = commit_and_wait(&conn, 1).await;
-        assert!(committed.is_some());
+        assert!(commit_and_wait(&conn, 1).await);
         assert!(conn.take_error().is_none());
 
-        let missed = committed.unwrap().missed;
+        // Counted only once the commit is confirmed to the source.
+        assert!(!conn.take_confirmed_missed(0).non_zero());
+        let missed = conn.take_confirmed_missed(1);
         // (insert, update, delete): one 0-row direct UPDATE and one 0-row direct
         // DELETE counted; the non-direct DELETE and the 1-row DELETE are not.
         // Insert never missed here, so it must stay 0 (no spurious counter).
         assert_eq!(missed.inserts, 0);
         assert_eq!(missed.updates, 1);
         assert_eq!(missed.deletes, 1);
+        assert!(!conn.take_confirmed_missed(1).non_zero());
+    }
+
+    fn spawn_progress(
+        origin: ReplicationOrigin,
+        address: Address,
+        check: ProgressCheck,
+        changed: i64,
+        acked: i64,
+    ) -> (Arc<Mutex<Shared>>, JoinHandle<()>) {
+        let shared = Arc::new(Mutex::new(Shared {
+            source_lsn_changed: changed,
+            source_lsn_acked: acked,
+            ..Default::default()
+        }));
+        let progress = Progress {
+            origin,
+            address,
+            shared: shared.clone(),
+            check,
+        };
+        (shared, spawn(progress.run()))
+    }
+
+    async fn wait_until(shared: &Mutex<Shared>, done: impl Fn(&Shared) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(&shared.lock()) {
+            assert!(Instant::now() < deadline, "condition not reached");
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn unreachable() -> Address {
+        Address {
+            port: 1,
+            ..Address::new_test()
+        }
+    }
+
+    #[tokio::test]
+    async fn progress_durable_follows_origin_capped_by_acked() {
+        let address = Address::new_test();
+        let origin = origin("test_progress_durable", &address);
+        origin.drop_origin().await.unwrap();
+        origin.create_origin().await.unwrap();
+
+        let mut session = test_server().await;
+        origin.setup_session(&mut session).await.unwrap();
+        session
+            .execute_checked(
+                "BEGIN; \
+                 SELECT pg_replication_origin_xact_setup('0/1000', now()); \
+                 SELECT pg_current_xact_id(); \
+                 COMMIT",
+            )
+            .await
+            .unwrap();
+        drop(session);
+
+        let check = ProgressCheck::builder()
+            .interval(Duration::from_millis(10))
+            .retry_attempts(0)
+            .retry_delay(Duration::from_millis(10))
+            .build();
+        let (shared, task) = spawn_progress(origin.clone(), address, check, 0x1000, 0x800);
+
+        wait_until(&shared, |shared| shared.source_lsn_durable == 0x800).await;
+        sleep(Duration::from_millis(50)).await;
+        assert_eq!(shared.lock().source_lsn_durable, 0x800);
+
+        shared.lock().source_lsn_acked = 0x1000;
+        wait_until(&shared, |shared| shared.source_lsn_durable == 0x1000).await;
+        assert!(shared.lock().error.is_none());
+
+        task.abort();
+        origin.drop_origin().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn progress_skips_shard_without_pending_commits() {
+        let address = unreachable();
+        let check = ProgressCheck::builder()
+            .interval(Duration::from_millis(10))
+            .retry_attempts(1)
+            .retry_delay(Duration::from_millis(10))
+            .build();
+        let (shared, task) =
+            spawn_progress(origin("test_progress_idle", &address), address, check, 0, 0);
+
+        sleep(Duration::from_millis(300)).await;
+        assert!(shared.lock().error.is_none());
+
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn progress_retries_retryable_errors_then_latches() {
+        let address = unreachable();
+        let check = ProgressCheck::builder()
+            .interval(Duration::from_millis(10))
+            .retry_attempts(2)
+            .retry_delay(Duration::from_millis(100))
+            .build();
+        let started = Instant::now();
+        let (shared, task) = spawn_progress(
+            origin("test_progress_retry", &address),
+            address,
+            check,
+            100,
+            100,
+        );
+
+        wait_until(&shared, |shared| shared.error.is_some()).await;
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        {
+            let shared = shared.lock();
+            assert!(shared.error.as_ref().unwrap().is_retryable());
+            assert_eq!(shared.source_lsn_durable, 0);
+        }
+
+        assert!(task.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn progress_latches_non_retryable_error_at_once() {
+        let address = Address::new_test();
+        let origin = origin("test_progress_missing", &address);
+        origin.drop_origin().await.unwrap();
+        let check = ProgressCheck::builder()
+            .interval(Duration::from_millis(10))
+            .retry_attempts(5)
+            .retry_delay(Duration::from_secs(10))
+            .build();
+        let (shared, task) = spawn_progress(origin, address, check, 100, 100);
+
+        wait_until(&shared, |shared| shared.error.is_some()).await;
+        assert!(!shared.lock().error.as_ref().unwrap().is_retryable());
+
+        assert!(task.await.is_ok());
     }
 }

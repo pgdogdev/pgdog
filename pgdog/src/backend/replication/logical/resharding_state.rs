@@ -1,3 +1,4 @@
+use futures::future::try_join_all;
 use futures::prelude::future::join_all;
 use parking_lot::Mutex;
 use pgdog_stats::Databases;
@@ -7,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::publisher::{Permanent, ReplicationSlot, Table};
+use super::subscriber::replication_origin::ReplicationOrigin;
 use super::tables_sync::tables_sync;
 use super::*;
 use crate::backend::pool::Request;
@@ -43,11 +45,14 @@ struct ReshardingStateInner {
     /// Shard -> Replication slot mapping.
     #[builder(skip)]
     slots: HashMap<usize, ReplicationSlot<Permanent>>,
+    #[builder(skip)]
+    origins: Origins,
     #[builder(into)]
     slot_name: String,
 }
 
 type Slots = HashMap<usize, ReplicationSlot<Permanent>>;
+type Origins = HashMap<usize, Vec<ReplicationOrigin>>;
 
 impl ReshardingStateInner {
     /// Take every slot out of this state.
@@ -62,11 +67,17 @@ impl ReshardingStateInner {
 
         slots
     }
+
+    /// Take every origin out of this state.
+    fn take_origins(&mut self) -> Origins {
+        std::mem::take(&mut self.origins)
+    }
 }
 
 impl Drop for ReshardingStateInner {
     fn drop(&mut self) {
         remove_slots(self.take_owned_slots());
+        remove_origins(self.take_origins());
     }
 }
 
@@ -169,6 +180,15 @@ impl ReshardingState {
             .ok_or(Error::NoReplicationSlot(shard))
     }
 
+    pub(crate) fn origins(&self, shard: usize) -> Result<Vec<ReplicationOrigin>, Error> {
+        self.inner
+            .lock()
+            .origins
+            .get(&shard)
+            .cloned()
+            .ok_or(Error::NoReplicationOrigins(shard))
+    }
+
     /// Create permanent slots for each shard of the source.
     ///
     /// N.B.: These are not synchronized across multiple shards.
@@ -223,38 +243,98 @@ impl ReshardingState {
         .collect()
     }
 
+    async fn create_origins(&self) -> Result<(), Error> {
+        let slots: Vec<(usize, String)> = self
+            .inner
+            .lock()
+            .slots
+            .iter()
+            .map(|(number, slot)| (*number, slot.name().to_owned()))
+            .collect();
+
+        let mut addresses = vec![];
+        for shard in self.destination.shards() {
+            addresses.push(shard.primary(&Request::default()).await?.addr().clone());
+        }
+
+        for (number, slot_name) in slots {
+            let origins: Vec<ReplicationOrigin> = addresses
+                .iter()
+                .enumerate()
+                .map(|(shard, address)| {
+                    ReplicationOrigin::builder()
+                        .name(&slot_name)
+                        .address(address)
+                        .shard(shard)
+                        .build()
+                })
+                .collect();
+            self.inner.lock().origins.insert(number, origins.clone());
+
+            try_join_all(origins.iter().map(ReplicationOrigin::recreate_origin)).await?;
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn prepare_replication(
         &self,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
         self.sync_tables().await?;
 
-        let ready = !self.inner.lock().slots.is_empty();
-
-        if ready {
-            return Ok(());
+        if self.inner.lock().slots.is_empty() {
+            self.create_slots(cancel).await?;
         }
 
-        self.create_slots(cancel).await
+        let has_origins = {
+            let inner = self.inner.lock();
+            inner
+                .slots
+                .keys()
+                .all(|number| inner.origins.contains_key(number))
+        };
+
+        if !has_origins {
+            self.create_origins().await?;
+        }
+
+        Ok(())
     }
 
-    /// Remove every slot this state holds.
+    /// Remove every slot this state holds, and its origins.
     pub(crate) async fn drop_slots(&self) -> Result<(), Error> {
-        let slots = self.inner.lock().take_slots();
+        let (slots, origins) = {
+            let mut inner = self.inner.lock();
+            (inner.take_slots(), inner.take_origins())
+        };
 
-        remove_slots(slots).await?
+        let slots = remove_slots(slots);
+        let origins = remove_origins(origins);
+        slots.await?.and(origins.await?)
     }
 
-    /// Remove only the slots this state created.
+    /// Remove only the slots this state created, and every origin.
     pub(crate) async fn drop_slots_if_owned(&self) -> Result<(), Error> {
-        let slots = self.inner.lock().take_owned_slots();
+        let (slots, origins) = {
+            let mut inner = self.inner.lock();
+            (inner.take_owned_slots(), inner.take_origins())
+        };
 
-        remove_slots(slots).await?
+        let slots = remove_slots(slots);
+        let origins = remove_origins(origins);
+        slots.await?.and(origins.await?)
     }
 
-    /// Forget the slots without removing them from the backend.
+    /// Forget the slots without removing them from the backend, and remove
+    /// the origins.
     pub(crate) fn detach_slots(&self) {
-        self.inner.lock().take_slots();
+        let origins = {
+            let mut inner = self.inner.lock();
+            inner.take_slots();
+            inner.take_origins()
+        };
+        remove_origins(origins);
     }
 }
 
@@ -270,6 +350,22 @@ fn remove_slots(slots: Slots) -> JoinHandle<Result<(), Error>> {
         let result: Result<Vec<_>, _> = join_all(removals).await.into_iter().collect();
         if let Err(err) = &result {
             warn!("failed to drop replication slots: {err}");
+        }
+
+        result.map(|_| ())
+    })
+}
+
+fn remove_origins(origins: Origins) -> JoinHandle<Result<(), Error>> {
+    tasks::spawn("replication origin cleanup", async move {
+        let removals = origins
+            .into_values()
+            .flatten()
+            .map(|origin| async move { origin.drop_origin().await });
+
+        let result: Result<Vec<_>, _> = join_all(removals).await.into_iter().collect();
+        if let Err(err) = &result {
+            warn!("failed to drop replication origins: {err}");
         }
 
         result.map(|_| ())
@@ -402,6 +498,86 @@ mod test {
         state.drop_slots().await.unwrap();
         wait_until_removed(&mut publication.server, name).await;
 
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    async fn origin_count(server: &mut Server, name: &str) -> i64 {
+        let rows: Vec<i64> = server
+            .fetch_all(format!(
+                "SELECT count(*) FROM pg_replication_origin WHERE roname LIKE '__pgdog_origin_{name}%'"
+            ))
+            .await
+            .unwrap();
+        rows[0]
+    }
+
+    #[tokio::test]
+    async fn prepare_creates_origins_dropped_with_slots() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_origins_drop";
+        let source = Cluster::new_test(&config());
+        source.launch();
+        let shards = source.shards().len();
+
+        let state = state_for(&source, name);
+        state.create_slots(&CancellationToken::new()).await.unwrap();
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
+
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(state.origins(0).unwrap().len(), shards);
+        assert_eq!(
+            origin_count(&mut publication.server, name).await,
+            (shards * shards) as i64
+        );
+
+        state.drop_slots().await.unwrap();
+        assert_eq!(origin_count(&mut publication.server, name).await, 0);
+        wait_until_removed(&mut publication.server, name).await;
+
+        source.shutdown();
+        publication.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn detaching_slots_drops_origins_and_keeps_slots() {
+        crate::logger();
+        let mut publication = setup_publication().await;
+        let name = "state_origins_detach";
+        let source = Cluster::new_test(&config());
+        source.launch();
+
+        let state = state_for(&source, name);
+        state
+            .prepare_replication(&CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(origin_count(&mut publication.server, name).await > 0);
+        let slots = slot_count(&mut publication.server, name).await;
+        assert!(slots > 0);
+
+        state.detach_slots();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while origin_count(&mut publication.server, name).await != 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(slot_count(&mut publication.server, name).await, slots);
+
+        publication
+            .server
+            .execute_checked(format!(
+                "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name LIKE '{name}%'"
+            ))
+            .await
+            .unwrap();
         source.shutdown();
         publication.cleanup().await;
     }

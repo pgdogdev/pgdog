@@ -45,6 +45,13 @@ _pg_check_str wal_level                 logical
 _pg_check_int max_worker_processes      64
 _pg_check_int max_wal_senders           32
 _pg_check_int max_replication_slots     32
+# PostgreSQL 18 moved the replication origin limit from max_replication_slots to
+# max_active_replication_origins. Older versions do not have it and are covered above.
+# https://www.postgresql.org/docs/release/18.0/
+# https://www.postgresql.org/docs/18/runtime-config-replication.html#GUC-MAX-ACTIVE-REPLICATION-ORIGINS
+if [[ -n "$(psql -tAc "SELECT current_setting('max_active_replication_origins', true)")" ]]; then
+    _pg_check_int max_active_replication_origins 32
+fi
 
 if [[ "$_pg_needs_restart" == true ]]; then
     echo 'PostgreSQL settings changed. Restart PostgreSQL and re-run this script.'
