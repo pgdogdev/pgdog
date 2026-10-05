@@ -1,10 +1,11 @@
 # Contribution guidelines
 
-Contributions are welcome. If you see a bug, feel free to submit a PR with a fix or an issue to discuss. For any features, please open an issue to discuss first.
+If you see a bug or would like to request a feature, please create an [issue](https://github.com/pgdogdev/pgdog/issues). If you would like to submit a bug fix, please fork the repository and give us a link to your branch. Pull requests are currently restricted to project contributors.
 
 ## Necessary crates - cargo install <name>
 
 (if you use mise, these can be installed with `mise install`)
+
 - cargo-nextest
 - cargo-watch
 
