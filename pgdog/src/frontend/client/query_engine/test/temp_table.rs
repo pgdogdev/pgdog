@@ -1,6 +1,38 @@
 use super::prelude::*;
 
 #[tokio::test]
+async fn test_creating_temp_sequences_locks_client() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client
+        .send_simple(Query::new("CREATE TEMP SEQUENCE foo"))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("DROP SEQUENCE foo")).await;
+    client.read_until('Z').await.unwrap();
+    assert!(!client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_temp_sequence_drop_on_rollback() {
+    let mut client = TestClient::new_sharded(Parameters::default()).await;
+
+    client.send_simple(Query::new("BEGIN")).await;
+    client.read_until('Z').await.unwrap();
+    client
+        .send_simple(Query::new("CREATE TEMP SEQUENCE foo"))
+        .await;
+    client.read_until('Z').await.unwrap();
+    assert!(client.backend_locked());
+
+    client.send_simple(Query::new("ROLLBACK")).await;
+    client.read_until('Z').await.unwrap();
+    assert!(!client.backend_locked());
+}
+
+#[tokio::test]
 async fn test_creating_temp_tables_locks_client() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
 

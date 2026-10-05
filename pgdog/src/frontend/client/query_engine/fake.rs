@@ -2,22 +2,36 @@ use itertools::Itertools;
 use tokio::io::AsyncWriteExt;
 
 use crate::net::{
-    BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, ParameterDescription,
-    ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription, parameter::ParameterValue,
+    BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, NoticeResponse,
+    ParameterDescription, ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription,
+    parameter::ParameterValue,
 };
 
 use super::*;
 
-#[derive(Debug, Clone)]
+/// Messages this engine sends back for a command it handles itself.
+#[derive(Debug)]
 pub(super) struct FakeResponse {
-    pub(super) row_description: RowDescription,
-    pub(super) row: DataRow,
+    command: String,
+    row_description: Option<RowDescription>,
+    row: Option<DataRow>,
+    notice: Option<NoticeResponse>,
 }
 
 impl FakeResponse {
-    pub(super) fn new_params<'a>(
+    pub(super) fn command(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            row_description: None,
+            row: None,
+            notice: None,
+        }
+    }
+
+    pub(super) fn with_params<'a>(
+        mut self,
         columns: &[&str],
-        values: impl IntoIterator<Item = Option<&'a ParameterValue>> + Clone,
+        values: impl IntoIterator<Item = Option<&'a ParameterValue>>,
     ) -> Self {
         let row_description =
             RowDescription::new(&columns.iter().map(|col| Field::text(col)).collect_vec());
@@ -27,10 +41,14 @@ impl FakeResponse {
             row.add(val);
         }
 
-        Self {
-            row_description,
-            row,
-        }
+        self.row_description = Some(row_description);
+        self.row = Some(row);
+        self
+    }
+
+    pub(super) fn with_notice(mut self, notice: NoticeResponse) -> Self {
+        self.notice = Some(notice);
+        self
     }
 }
 
@@ -41,8 +59,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_messages: &[ProtocolMessage],
-        command: &str,
-        fake_response: Option<FakeResponse>,
+        response: &FakeResponse,
     ) -> Result<(), Error> {
         let mut sent = 0;
 
@@ -56,8 +73,8 @@ impl QueryEngine {
                             .stream
                             .send(&ParameterDescription::default())
                             .await?
-                            + if let Some(fake_response) = fake_response.as_ref() {
-                                context.stream.send(&fake_response.row_description).await?
+                            + if let Some(row_description) = response.row_description.as_ref() {
+                                context.stream.send(row_description).await?
                             } else {
                                 context.stream.send(&NoData).await?
                             }
@@ -66,11 +83,18 @@ impl QueryEngine {
                     }
                 }
                 ProtocolMessage::Execute(_) => {
-                    (if let Some(fake_response) = fake_response.as_ref() {
-                        context.stream.send(&fake_response.row).await?
+                    (if let Some(notice) = response.notice.as_ref() {
+                        context.stream.send(notice).await?
                     } else {
                         0
-                    }) + context.stream.send(&CommandComplete::new(command)).await?
+                    }) + (if let Some(row) = response.row.as_ref() {
+                        context.stream.send(row).await?
+                    } else {
+                        0
+                    }) + context
+                        .stream
+                        .send(&CommandComplete::new(&response.command))
+                        .await?
                 }
                 ProtocolMessage::Sync(_) => {
                     context
@@ -79,12 +103,21 @@ impl QueryEngine {
                         .await?
                 }
                 ProtocolMessage::Query(_) => {
-                    (if let Some(fake_response) = fake_response.as_ref() {
-                        context.stream.send(&fake_response.row_description).await?
-                            + context.stream.send(&fake_response.row).await?
+                    (if let Some(notice) = response.notice.as_ref() {
+                        context.stream.send(notice).await?
                     } else {
                         0
-                    }) + context.stream.send(&CommandComplete::new(command)).await?
+                    }) + (if let (Some(row_description), Some(row)) =
+                        (response.row_description.as_ref(), response.row.as_ref())
+                    {
+                        context.stream.send(row_description).await?
+                            + context.stream.send(row).await?
+                    } else {
+                        0
+                    }) + context
+                        .stream
+                        .send(&CommandComplete::new(&response.command))
+                        .await?
                         + if context.pipeline.is_simple() && !context.pipeline.is_done() {
                             // Don't send ReadyForQuery for intermediate queries in a simple query
                             // pipeline.

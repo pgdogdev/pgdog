@@ -575,6 +575,12 @@ async fn status_update_stays_at_committed_lsn_during_transaction() {
         100,
         "committed_lsn must not advance before commit"
     );
+
+    assert!(sub.in_transaction());
+    sub.handle(commit_copy_data(250)).await.unwrap();
+    assert!(!sub.in_transaction());
+    wait_for_commit(&mut sub, 250).await;
+    assert_eq!(sub.status_update().last_flushed, 250);
 }
 
 // ── Relation handling tests ─────────────────────────────────────────

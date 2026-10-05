@@ -18,7 +18,7 @@ impl StatementRewrite<'_> {
     ///   or replace DEFAULT values with pgdog.unique_id()
     /// - `rewrite_omni`: Rewrite only omnisharded tables using pgdog.unique_id()
     /// - `rewrite_omni_global`: Rewrite only omnisharded tables using
-    ///   pgdog.nextval('schema_table_column_seq')
+    ///   pgdog.nextval('schema.table_column_seq')
     ///
     /// This runs before function replacement so injected calls will be
     /// processed by the unique_id and nextval rewriters.
@@ -70,7 +70,7 @@ impl StatementRewrite<'_> {
             ) && !is_sharded;
 
         let sequence_prefix = (mode == RewriteMode::RewriteOmniGlobal && !is_sharded)
-            .then(|| format!("{}_{}", relation.schema(), relation.name));
+            .then(|| format!("{}.{}", relation.schema(), relation.name));
 
         // Replace DEFAULT values for present columns (only in rewrite mode).
         if rewrite {
@@ -243,12 +243,22 @@ mod tests {
     use crate::test_utils::set_env_var;
 
     pub(super) fn make_schema_with_bigint_pk() -> Schema {
+        make_schema_with_bigint_pk_in("public")
+    }
+
+    fn make_schema_with_bigint_pk_in(schema: &str) -> Schema {
+        let relation = make_bigint_pk_relation(schema);
+        let relations = HashMap::from([((schema.into(), "users".into()), relation)]);
+        Schema::from_parts(vec![schema.into()], relations)
+    }
+
+    fn make_bigint_pk_relation(schema: &str) -> Relation {
         let mut columns = IndexMap::new();
         columns.insert(
             "id".to_string(),
             SchemaColumn {
                 table_catalog: "test".into(),
-                table_schema: "public".into(),
+                table_schema: schema.into(),
                 table_name: "users".into(),
                 column_name: "id".into(),
                 column_default: String::new(),
@@ -264,7 +274,7 @@ mod tests {
             "name".to_string(),
             SchemaColumn {
                 table_catalog: "test".into(),
-                table_schema: "public".into(),
+                table_schema: schema.into(),
                 table_name: "users".into(),
                 column_name: "name".into(),
                 column_default: String::new(),
@@ -276,9 +286,7 @@ mod tests {
             }
             .into(),
         );
-        let relation = Relation::test_table("public", "users", columns);
-        let relations = HashMap::from([(("public".into(), "users".into()), relation)]);
-        Schema::from_parts(vec!["public".into()], relations)
+        Relation::test_table(schema, "users", columns)
     }
 
     fn make_schema_with_non_bigint_pk() -> Schema {
@@ -527,8 +535,17 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
     ) -> Result<(String, RewritePlan), Error> {
+        rewrite_sql_with_search_path(sql, db_schema, schema, None)
+    }
+
+    fn rewrite_sql_with_search_path(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+        search_path: Option<&ParameterValue>,
+    ) -> Result<(String, RewritePlan), Error> {
         let mut prepared = PreparedStatements::default();
-        rewrite_sql_with_prepared_statements(sql, db_schema, schema, &mut prepared)
+        rewrite_sql_with_context(sql, db_schema, schema, &mut prepared, search_path)
     }
 
     fn rewrite_sql_with_prepared_statements(
@@ -536,6 +553,16 @@ mod tests {
         db_schema: &Schema,
         schema: &ShardingSchema,
         prepared: &mut PreparedStatements,
+    ) -> Result<(String, RewritePlan), Error> {
+        rewrite_sql_with_context(sql, db_schema, schema, prepared, None)
+    }
+
+    fn rewrite_sql_with_context(
+        sql: &str,
+        db_schema: &Schema,
+        schema: &ShardingSchema,
+        prepared: &mut PreparedStatements,
+        search_path: Option<&ParameterValue>,
     ) -> Result<(String, RewritePlan), Error> {
         let _guard = set_env_var("NODE_ID", "pgdog-1");
         let ast = pg_raw_parse::parse(sql).unwrap();
@@ -546,7 +573,7 @@ mod tests {
             schema,
             db_schema,
             user: "",
-            search_path: None,
+            search_path,
             timezone: None,
             query_timestamps: QueryTimestamps::default(),
         });
@@ -646,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn test_global_sequence_follows_resolved_schema() {
+    fn test_global_sequence_respects_user_and_qualified_overrides() {
         let base = make_schema_with_bigint_pk();
         let columns = base
             .table(
@@ -685,11 +712,11 @@ mod tests {
         };
         for extended in [false, true] {
             for (path, table, expected) in [
-                (vec!["tenant_a", "public"], "users", "tenant_a_users_id_seq"),
-                (vec!["tenant_b", "public"], "users", "tenant_b_users_id_seq"),
-                (vec!["missing", "public"], "users", "public_users_id_seq"),
-                (vec!["$user", "public"], "users", "tenant_a_users_id_seq"),
-                (vec!["tenant_b"], "tenant_a.users", "tenant_a_users_id_seq"),
+                (vec!["tenant_a", "public"], "users", "tenant_a.users_id_seq"),
+                (vec!["tenant_b", "public"], "users", "tenant_b.users_id_seq"),
+                (vec!["missing", "public"], "users", "public.users_id_seq"),
+                (vec!["$user", "public"], "users", "tenant_a.users_id_seq"),
+                (vec!["tenant_b"], "tenant_a.users", "tenant_a.users_id_seq"),
             ] {
                 for sql in [
                     format!("INSERT INTO {table} (name) VALUES ('a')"),
@@ -739,8 +766,8 @@ mod tests {
         };
 
         for (table, sequence) in [
-            ("users", "public_users_id_seq"),
-            ("public.users", "public_users_id_seq"),
+            ("users", "public.users_id_seq"),
+            ("public.users", "public.users_id_seq"),
         ] {
             for (columns, values, expected_values) in [
                 (
@@ -775,6 +802,76 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_rewrite_omni_global_uses_search_path_schema() {
+        let db_schema = Schema::from_parts(
+            vec!["public".into()],
+            HashMap::from([
+                (
+                    ("public".into(), "users".into()),
+                    make_bigint_pk_relation("public"),
+                ),
+                (
+                    ("tenant".into(), "users".into()),
+                    make_bigint_pk_relation("tenant"),
+                ),
+            ]),
+        );
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+        let search_path = ParameterValue::Tuple(vec!["tenant".into(), "public".into()]);
+
+        let (sql, plan) = rewrite_sql_with_search_path(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+            Some(&search_path),
+        )
+        .expect("rewrite succeeds");
+
+        assert_eq!(
+            sql,
+            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('tenant.users_id_seq'))"
+        );
+        assert_eq!(
+            plan.bind_params,
+            [BindParam::Sequence(SequenceCall::Nextval(
+                "tenant.users_id_seq".into()
+            ))]
+        );
+    }
+
+    #[test]
+    fn test_rewrite_omni_global_skips_missing_search_path_schema() {
+        let db_schema = make_schema_with_bigint_pk();
+        let schema = ShardingSchema {
+            shards: 3,
+            ..sharding_schema_with_mode(RewriteMode::RewriteOmniGlobal)
+        };
+        let search_path = ParameterValue::Tuple(vec!["customer_a".into(), "public".into()]);
+
+        let (sql, plan) = rewrite_sql_with_search_path(
+            "INSERT INTO users (name) VALUES ('test')",
+            &db_schema,
+            &schema,
+            Some(&search_path),
+        )
+        .expect("rewrite succeeds");
+
+        assert_eq!(
+            sql,
+            "INSERT INTO users (name, id) VALUES ('test', pgdog.nextval('public.users_id_seq'))"
+        );
+        assert_eq!(
+            plan.bind_params,
+            [BindParam::Sequence(SequenceCall::Nextval(
+                "public.users_id_seq".into()
+            ))]
+        );
     }
 
     #[test]
