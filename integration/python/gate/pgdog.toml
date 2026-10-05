@@ -1,0 +1,18 @@
+[general]
+prepared_statements = "extended"
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog_leak_auto"
+host = "127.0.0.1"
+database_name = "pgdog"
+pool_size = 1
+min_pool_size = 1
+
+[[query_parsers]]
+database = "pgdog_leak_auto"
+level = "auto"
+engine = "pg_query_raw"
