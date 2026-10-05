@@ -170,7 +170,7 @@ const SESSION_AUTHORIZATION: &str = "session_authorization";
 /// PostgreSQL session identity overrides.
 ///
 /// `None` means the authenticated connection user.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SessionIdentity {
     session_authorization: Option<String>,
     role: Option<String>,
@@ -270,8 +270,8 @@ pub(crate) struct Parameters {
     transaction_identity: Option<Box<SessionIdentity>>,
     /// Session identity changed by SET LOCAL inside a transaction.
     transaction_local_identity: Option<Box<SessionIdentity>>,
-    /// Hash of `params` to avoid syncing params between clients and servers
-    /// when they are the same.
+    /// Hash of tracked parameters and committed session identity to avoid
+    /// syncing clients and servers when their session state is the same.
     hash: u64,
 }
 
@@ -314,7 +314,7 @@ impl Parameters {
         let name = name.as_ref().to_lowercase();
         let result = self.params.insert(name, value.into());
 
-        self.hash = Self::compute_hash(&self.params);
+        self.update_hash();
 
         result
     }
@@ -322,7 +322,7 @@ impl Parameters {
     /// Recompute hash when params are cleared.
     pub(crate) fn clear(&mut self) {
         self.params.clear();
-        self.hash = Self::compute_hash(&self.params);
+        self.update_hash();
     }
 
     /// Restore the authenticated PostgreSQL identity.
@@ -330,6 +330,7 @@ impl Parameters {
         self.identity = SessionIdentity::default();
         self.transaction_identity = None;
         self.transaction_local_identity = None;
+        self.update_hash();
     }
 
     /// Get parameter.
@@ -385,6 +386,7 @@ impl Parameters {
             }
         } else {
             self.identity.set_parameter(&name, value);
+            self.update_hash();
         }
 
         true
@@ -422,6 +424,7 @@ impl Parameters {
             }
         } else {
             self.identity.reset(&name);
+            self.update_hash();
         }
 
         true
@@ -463,7 +466,7 @@ impl Parameters {
 
         if let Some(value) = self.params.remove(&name) {
             self.reset_params.insert(name.clone(), value);
-            self.hash = Self::compute_hash(&self.params);
+            self.update_hash();
         }
 
         self.transaction_params.remove(&name);
@@ -477,13 +480,14 @@ impl Parameters {
         self.identity.clone_from(&startup.identity);
         self.transaction_identity = None;
         self.transaction_local_identity = None;
+        self.update_hash();
     }
 
     /// Restore ordinary startup parameters while preserving session identity.
     pub(crate) fn restore_startup_parameters(&mut self, startup: &Parameters) {
         self.params.clone_from(&startup.params);
         self.reset_params.clear();
-        self.hash = Self::compute_hash(&self.params);
+        self.update_hash();
     }
 
     /// Reset all tracked parameters.
@@ -521,7 +525,7 @@ impl Parameters {
         self.reset_params.clear();
 
         if changed {
-            self.hash = Self::compute_hash(&self.params);
+            self.update_hash();
         }
 
         changed
@@ -539,11 +543,15 @@ impl Parameters {
         self.params.extend(reset_params);
 
         if reset {
-            self.hash = Self::compute_hash(&self.params);
+            self.update_hash();
         }
     }
 
-    fn compute_hash(params: &BTreeMap<String, ParameterValue>) -> u64 {
+    fn update_hash(&mut self) {
+        self.hash = Self::compute_hash(&self.params, &self.identity);
+    }
+
+    fn compute_hash(params: &BTreeMap<String, ParameterValue>, identity: &SessionIdentity) -> u64 {
         let mut hasher = DefaultHasher::new();
         let mut entries = 0;
 
@@ -557,7 +565,16 @@ impl Parameters {
             v.hash(&mut hasher);
         }
 
-        if entries > 0 { hasher.finish() } else { 0 }
+        let has_identity = identity.session_authorization.is_some() || identity.role.is_some();
+        if has_identity {
+            identity.hash(&mut hasher);
+        }
+
+        if entries > 0 || has_identity {
+            hasher.finish()
+        } else {
+            0
+        }
     }
 
     /// Iterate over parameters that we track with SET queries.
@@ -574,12 +591,13 @@ impl Parameters {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
 
-        let hash = Self::compute_hash(&params);
+        let identity = self.identity.clone();
+        let hash = Self::compute_hash(&params, &identity);
 
         Self {
             params,
             hash,
-            identity: self.identity.clone(),
+            identity,
             ..Default::default()
         }
     }
@@ -600,7 +618,7 @@ impl Parameters {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<BTreeMap<_, _>>();
 
-        let hash = Self::compute_hash(&params);
+        let hash = Self::compute_hash(&params, &SessionIdentity::default());
 
         Self {
             params,
@@ -612,7 +630,7 @@ impl Parameters {
     /// Merge params from self into other, generating the queries
     /// needed to sync that state on the server.
     pub(crate) fn identical(&self, other: &Self) -> bool {
-        self.hash == other.hash && self.identity == other.identity
+        self.hash == other.hash
     }
 
     /// Generate SET queries to change server state.
@@ -742,14 +760,15 @@ impl From<Vec<Parameter>> for Parameters {
             .into_iter()
             .map(|p| (p.name, p.value))
             .collect::<BTreeMap<_, _>>();
-        let hash = Self::compute_hash(&params);
+        let identity = SessionIdentity::default();
+        let hash = Self::compute_hash(&params, &identity);
         Self {
             params,
             hash,
             transaction_params: BTreeMap::new(),
             transaction_local_params: BTreeMap::new(),
             reset_params: BTreeMap::new(),
-            identity: SessionIdentity::default(),
+            identity,
             transaction_identity: None,
             transaction_local_identity: None,
         }
@@ -801,6 +820,24 @@ pub(crate) mod test {
         assert!(!same);
 
         assert!(Parameters::default().identical(&Parameters::default()));
+    }
+
+    #[test]
+    fn test_identical_includes_session_identity() {
+        let mut first = Parameters::default();
+        let mut second = Parameters::default();
+
+        first.insert_identity("role", &"reporting".into(), false, false);
+        assert!(!first.identical(&second));
+
+        second.insert_identity("role", &"reporting".into(), false, false);
+        assert!(first.identical(&second));
+
+        first.clear_session_identity();
+        assert!(!first.identical(&second));
+
+        second.clear_session_identity();
+        assert!(first.identical(&second));
     }
 
     #[test]

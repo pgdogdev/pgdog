@@ -260,8 +260,8 @@ impl Binding {
     pub(crate) fn sync_client_params(&mut self, params: &Parameters) {
         match self {
             Binding::Direct(server, ..) => server.sync_client_params(params),
-            Binding::MultiShard(servers, _) => {
-                for server in servers {
+            Binding::MultiShard(servers) => {
+                for server in servers.iter_mut() {
                     server.sync_client_params(params);
                 }
             }
