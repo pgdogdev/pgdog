@@ -47,7 +47,7 @@ jobs:
   ci:
     runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
     needs: [build]
-    timeout-minutes: 30
+    timeout-minutes: 10
     container:
       image: ghcr.io/pgdogdev/pgdog-ci:v2
       options: ${{ matrix.needs_docker && '--privileged' || '' }}
@@ -111,8 +111,18 @@ jobs:
             }
           - { name: tls, script: integration/tls/run.sh, needs_docker: true }
           - {
-              name: resharding,
-              script: integration/resharding/run.sh,
+              name: resharding-reshard,
+              script: integration/resharding/reshard.sh,
+              needs_docker: true,
+            }
+          - {
+              name: resharding-admin,
+              script: integration/resharding/admin.sh,
+              needs_docker: true,
+            }
+          - {
+              name: resharding-cli,
+              script: integration/resharding/cli.sh,
               needs_docker: true,
             }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs

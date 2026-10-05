@@ -316,6 +316,15 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn set_local_outside_transaction() -> Self {
+        Self {
+            severity: "WARNING".into(),
+            code: "25P01".into(),
+            message: "SET LOCAL can only be used in transaction blocks".into(),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn discard_all_in_transaction() -> Self {
         Self {
             severity: "ERROR".into(),

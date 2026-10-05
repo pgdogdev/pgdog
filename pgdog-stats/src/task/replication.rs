@@ -2,12 +2,37 @@
 //! stream of it, and one shard slot of that stream.
 
 use std::fmt;
+use std::time::SystemTime;
 
 use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Databases, Lsn, MissedRows};
+use crate::{Databases, Lsn, TaskId};
+
+/// Replication slot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicationSlot {
+    pub name: String,
+    pub lsn: Lsn,
+    pub lag: i64,
+    pub temporary: bool,
+    pub existing: bool,
+    pub address: Address,
+    pub last_transaction: Option<SystemTime>,
+    pub task_id: Option<TaskId>,
+}
+
+/// Server address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, Eq, Hash)]
+pub struct Address {
+    /// Server host.
+    pub host: String,
+    /// Server port.
+    pub port: u16,
+    /// PostgreSQL database name.
+    pub database_name: String,
+}
 
 /// Direction of a replication task: the initial migration (`Forward`) or the
 /// post-cutover reverse stream that backs a rollback (`Reverse`). A `CUTOVER`
@@ -156,6 +181,63 @@ pub struct ReplicationShardDefinition {
     pub port: u16,
     pub database_name: String,
     pub source_shard: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MissedRows {
+    pub inserts: usize,
+    pub updates: usize,
+    pub deletes: usize,
+}
+
+impl MissedRows {
+    pub fn non_zero(&self) -> bool {
+        self.inserts > 0 || self.updates > 0 || self.deletes > 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.inserts += other.inserts;
+        self.updates += other.updates;
+        self.deletes += other.deletes;
+    }
+
+    pub fn record(&mut self, tag: &str) {
+        if tag.starts_with("INSERT") {
+            self.inserts += 1;
+        } else if tag.starts_with("UPDATE") {
+            self.updates += 1;
+        } else if tag.starts_with("DELETE") {
+            self.deletes += 1;
+        }
+    }
+}
+
+impl std::fmt::Display for MissedRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut written = false;
+        if self.inserts > 0 {
+            write!(f, "insert={}", self.inserts)?;
+            written = true;
+        }
+        if self.updates > 0 {
+            write!(
+                f,
+                "{}update={}",
+                if written { " " } else { "" },
+                self.updates
+            )?;
+            written = true;
+        }
+        if self.deletes > 0 {
+            write!(
+                f,
+                "{}delete={}",
+                if written { " " } else { "" },
+                self.deletes
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// How far one replication slot has streamed.
