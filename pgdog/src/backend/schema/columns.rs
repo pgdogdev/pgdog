@@ -287,4 +287,63 @@ mod test {
             .await
             .unwrap();
     }
+
+    #[tokio::test]
+    async fn test_load_primary_keys() {
+        let pool = pool();
+        let mut conn = pool.get(&Request::default()).await.unwrap();
+
+        conn.execute("DROP TABLE IF EXISTS pk_test_parted CASCADE")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS pk_test_no_pk CASCADE")
+            .await
+            .unwrap();
+
+        // Composite PK on a partitioned table: parent and partition each own a PK constraint.
+        conn.execute(
+            "CREATE TABLE pk_test_parted (
+                tenant_id BIGINT NOT NULL,
+                id BIGINT NOT NULL,
+                payload TEXT,
+                PRIMARY KEY (tenant_id, id)
+            ) PARTITION BY HASH (tenant_id)",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE pk_test_parted_0 PARTITION OF pk_test_parted
+                FOR VALUES WITH (MODULUS 1, REMAINDER 0)",
+        )
+        .await
+        .unwrap();
+        conn.execute("CREATE TABLE pk_test_no_pk (id BIGINT UNIQUE, name TEXT)")
+            .await
+            .unwrap();
+
+        let columns = Column::load(&mut conn).await.unwrap();
+
+        let primary_keys = |table: &str| {
+            let mut pks: Vec<_> = columns
+                .get(&("pgdog".to_string(), table.to_string()))
+                .unwrap_or_else(|| panic!("{} table should exist", table))
+                .iter()
+                .filter(|c| c.is_primary_key)
+                .map(|c| c.column_name.as_str())
+                .collect();
+            pks.sort();
+            pks
+        };
+
+        assert_eq!(primary_keys("pk_test_parted"), ["id", "tenant_id"]);
+        assert_eq!(primary_keys("pk_test_parted_0"), ["id", "tenant_id"]);
+        assert!(primary_keys("pk_test_no_pk").is_empty());
+
+        conn.execute("DROP TABLE IF EXISTS pk_test_parted CASCADE")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS pk_test_no_pk CASCADE")
+            .await
+            .unwrap();
+    }
 }
