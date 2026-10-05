@@ -7,7 +7,20 @@ use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Databases, SyncState};
+use crate::Databases;
+
+#[derive(
+    Debug, Display, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[display(rename_all = "snake_case")]
+pub enum SyncState {
+    PreData,
+    PostData,
+    Cutover,
+    PostDataValidation,
+    #[serde(other)]
+    Unknown,
+}
 
 /// The schema sync one schema-sync task runs, and at which stage.
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
