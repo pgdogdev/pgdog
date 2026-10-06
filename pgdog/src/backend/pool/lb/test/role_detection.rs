@@ -95,3 +95,31 @@ async fn test_roles_detected_survives_reload_and_new_targets_remain_unknown() {
     reloaded.redetect_roles();
     assert!(reloaded.roles_detected());
 }
+
+#[test]
+fn test_redetect_roles_prefers_highest_timeline_then_freshest_stats() {
+    for (first_timeline, second_timeline, expected_primary) in [
+        (1, 2, "127.0.0.1"),
+        (2, 2, "localhost"),
+        (0, 0, "localhost"),
+    ] {
+        let lb = auto_pool(&["localhost", "127.0.0.1"]);
+        let now = SystemTime::now();
+        for (target, timeline, age) in [
+            (&lb.targets[0], first_timeline, Duration::ZERO),
+            (&lb.targets[1], second_timeline, Duration::from_secs(10)),
+        ] {
+            set_lsn_stats(target, false, 100);
+            let mut stats = target.pool.inner().lsn_stats.write();
+            stats.timeline = timeline;
+            stats.fetched = now - age;
+        }
+
+        assert!(lb.redetect_roles());
+        assert_eq!(
+            lb.primary().expect("elected primary").addr().host,
+            expected_primary,
+            "timelines: {first_timeline}, {second_timeline}"
+        );
+    }
+}
