@@ -22,32 +22,35 @@ pub(crate) use pgdog_stats::replication::ReplicaLag;
 static AURORA_DETECTION_QUERY: &str = "SELECT aurora_version()";
 
 static LSN_QUERY: &str = "
+WITH recovery AS MATERIALIZED (
+    SELECT pg_is_in_recovery() AS replica
+),
+wal AS MATERIALIZED (
+    SELECT
+        replica,
+        CASE
+            WHEN replica THEN
+                COALESCE(
+                    pg_last_wal_replay_lsn(),
+                    pg_last_wal_receive_lsn()
+                )
+            ELSE
+                pg_current_wal_lsn()
+        END AS lsn
+    FROM recovery
+)
 SELECT
-    pg_is_in_recovery() AS replica,
+    replica,
+    lsn,
+    lsn - '0/0'::pg_lsn AS offset_bytes,
     CASE
-        WHEN pg_is_in_recovery() THEN
-            COALESCE(
-                pg_last_wal_replay_lsn(),
-                pg_last_wal_receive_lsn()
-            )
-        ELSE
-            pg_current_wal_lsn()
-    END AS lsn,
-    CASE
-        WHEN pg_is_in_recovery() THEN
-            COALESCE(
-                pg_last_wal_replay_lsn(),
-                pg_last_wal_receive_lsn()
-            ) - '0/0'::pg_lsn
-        ELSE
-            pg_current_wal_lsn() - '0/0'::pg_lsn
-    END AS offset_bytes,
-    CASE
-        WHEN pg_is_in_recovery() THEN
+        WHEN replica THEN
             COALESCE(pg_last_xact_replay_timestamp(), now())
         ELSE
             now()
-    END AS timestamp
+    END AS timestamp,
+    (pg_control_checkpoint()).timeline_id AS timeline
+FROM wal
 ";
 
 static AURORA_LSN_QUERY: &str = "
@@ -55,7 +58,8 @@ SELECT
     pg_is_in_recovery() AS replica,
     '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
-    now() AS timestamp
+    now() AS timestamp,
+    (pg_control_checkpoint()).timeline_id AS timeline
 ";
 
 /// LSN information.
@@ -105,6 +109,7 @@ impl LsnStats {
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
             fetched: SystemTime::now(),
             aurora,
+            timeline: value.get(4, Format::Text).unwrap_or_default(),
         }
         .into()
     }
@@ -367,6 +372,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
         .into();
 
@@ -473,6 +479,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: true,
+            timeline: 0,
         }
         .into();
 
@@ -491,6 +498,7 @@ mod test {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
         .into();
 

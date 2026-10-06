@@ -99,6 +99,8 @@ pub struct LsnStats {
     pub fetched: SystemTime,
     /// Running on Aurora.
     pub aurora: bool,
+    /// Timeline
+    pub timeline: i64,
 }
 
 /// Schema-only mirror of `std::time::SystemTime`'s default serde representation.
@@ -124,6 +126,7 @@ impl Default for LsnStats {
             timestamp: TimestampTz::default(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
     }
 }
