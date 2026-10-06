@@ -14,6 +14,34 @@ use super::Error;
 use super::setup::*;
 
 #[test]
+fn test_npgsql_reset_is_split() {
+    for mut test in [
+        QueryParserTest::new(),
+        QueryParserTest::new_single_shard(&config()),
+    ] {
+        let command = test.execute(vec![Query::new(
+            "SET SESSION AUTHORIZATION DEFAULT;RESET ALL;CLOSE ALL;UNLISTEN *;SELECT pg_advisory_unlock_all();DISCARD SEQUENCES;DISCARD TEMP",
+        ).into()]);
+
+        let Command::Split(queries) = command else {
+            panic!("expected Npgsql reset batch to split, got {command:?}");
+        };
+        assert_eq!(
+            queries,
+            [
+                "SET session_authorization TO DEFAULT",
+                "RESET ALL",
+                "CLOSE ALL",
+                "UNLISTEN *",
+                "SELECT pg_advisory_unlock_all()",
+                "DISCARD SEQUENCES",
+                "DISCARD TEMP",
+            ],
+        );
+    }
+}
+
+#[test]
 fn test_mixed_set_passthrough_in_session_mode() {
     let mut test = QueryParserTest::new_session_mode(&config());
 
