@@ -3,6 +3,41 @@ use crate::setup::connections_sqlx;
 use sqlx::{Executor, Row, postgres::PgPool};
 
 #[tokio::test]
+async fn limit_without_order_by_across_shards() -> Result<(), Box<dyn std::error::Error>> {
+    let pools = connections_sqlx().await;
+    let mut transaction = pools[1].begin().await?;
+
+    transaction.execute("TRUNCATE sharded").await?;
+    // Guarantee five rows on each shard so a per-shard LIMIT exceeds the global limit.
+    for shard in [0, 1] {
+        transaction
+            .execute(
+                format!(
+                    "/* pgdog_shard: {shard} */ INSERT INTO sharded (id) VALUES (1), (2), (3), (4), (5)"
+                )
+                .as_str(),
+            )
+            .await?;
+    }
+
+    for (limit, expected) in [(5_i64, 5), (0, 0), (100, 10)] {
+        let rows = sqlx::raw_sql(&format!("SELECT id FROM sharded LIMIT {limit}"))
+            .fetch_all(&mut *transaction)
+            .await?;
+        assert_eq!(rows.len(), expected, "simple protocol LIMIT {limit}");
+
+        let rows = sqlx::query("SELECT id FROM sharded LIMIT $1")
+            .bind(limit)
+            .fetch_all(&mut *transaction)
+            .await?;
+        assert_eq!(rows.len(), expected, "extended protocol LIMIT {limit}");
+    }
+
+    transaction.rollback().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn limit_across_shards() -> Result<(), Box<dyn std::error::Error>> {
     let sharded = connections_sqlx().await.get(1).cloned().unwrap();
 
