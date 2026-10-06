@@ -25,8 +25,8 @@ tls_certificate = "integration/tls/cert.pem"
 tls_private_key = "integration/tls/key.pem"
 query_parser_engine = "pg_query_raw"
 system_catalogs = "omnisharded_sticky"
-reload_schema_on_ddl = true
-idle_healthcheck_delay = 50000000
+reload_schema_on_ddl = false
+# idle_healthcheck_delay = 50000000
 unique_id_function = "standard"
 auth_type = "scram"
 workers = 4
@@ -42,7 +42,7 @@ message_buffer = 8096
 [rewrite]
 enabled = false
 shard_key = "ignore"
-split_inserts = "rewrite"
+split_inserts = "error"
 # primary_key = "rewrite"
 non_deterministic_functions = "rewrite"
 
@@ -188,11 +188,6 @@ primary = true
 [[sharded_tables]]
 database = "pgdog_sharded"
 column = "customer_id"
-data_type = "bigint"
-
-[[sharded_tables]]
-database = "pgdog_sharded"
-column = "tenant_id"
 data_type = "bigint"
 
 # ------------------------------------------------------------------------------
