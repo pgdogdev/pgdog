@@ -59,21 +59,12 @@ FROM wal
 ";
 
 static AURORA_LSN_QUERY: &str = "
-WITH wal AS MATERIALIZED (
-    SELECT pg_is_in_recovery() AS replica, '0/0'::pg_lsn AS lsn
-)
 SELECT
-    replica,
-    lsn,
+    pg_is_in_recovery() AS replica,
+    '0/0'::pg_lsn AS lsn,
     0::bigint AS offset_bytes,
     now() AS timestamp,
-    CASE
-        WHEN replica THEN
-            (pg_control_checkpoint()).timeline_id
-        ELSE
-            ('x' || substr(pg_walfile_name(lsn), 1, 8))::bit(32)::int
-    END AS timeline
-FROM wal
+    (pg_control_checkpoint()).timeline_id AS timeline
 ";
 
 /// LSN information.
