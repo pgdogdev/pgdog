@@ -27,6 +27,7 @@ pub mod non_deterministic_funcs;
 pub mod notify;
 mod numeric_infinity;
 pub mod offset;
+mod order_by;
 pub mod partial_req;
 pub mod per_stmt_routing;
 pub mod prepared;
