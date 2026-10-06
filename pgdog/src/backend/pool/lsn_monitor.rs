@@ -49,7 +49,12 @@ SELECT
         ELSE
             now()
     END AS timestamp,
-    (pg_control_checkpoint()).timeline_id AS timeline
+    CASE
+        WHEN replica THEN
+            (pg_control_checkpoint()).timeline_id
+        ELSE
+            ('x' || substr(pg_walfile_name(lsn), 1, 8))::bit(32)::int
+    END AS timeline
 FROM wal
 ";
 
