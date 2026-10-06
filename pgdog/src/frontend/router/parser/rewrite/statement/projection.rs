@@ -18,6 +18,9 @@ use pg_raw_parse::{Node, Owned, StmtList, list::CastNodeList, make, nodes};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+mod names;
+pub(super) use names::{HelperColumnKind, helper_column_name};
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AggregateHelper {
     pub(crate) target_column: usize,

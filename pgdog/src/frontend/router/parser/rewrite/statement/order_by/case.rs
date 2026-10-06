@@ -1,9 +1,10 @@
 use pg_raw_parse::{Node, make, nodes, walk};
-use std::collections::HashSet;
 
 use crate::backend::schema::Schema;
 
-use super::{OrderBySource, ProjectionRewritePlan, push_helper};
+use super::{
+    HelperColumnKind, OrderBySource, ProjectionRewritePlan, helper_column_name, push_helper,
+};
 
 /// Project row-level CASE sort keys. Aggregation and DISTINCT need their own
 /// rewrite rules because adding a target can change the query's semantics.
@@ -29,7 +30,6 @@ pub(in crate::frontend::router::parser::rewrite::statement) fn rewrite_cases<'a>
     // present only in ORDER BY must also prevent this rewrite. Without a
     // function catalog, conservatively leave function calls alone.
     let mut aggregate = false;
-    let mut names = HashSet::new();
     walk::walk(Node::SelectStmt(select), |node| match node {
         Node::FuncCall(func) => {
             let name = func.funcname().iter().next_back().and_then(Node::as_str);
@@ -42,31 +42,11 @@ pub(in crate::frontend::router::parser::rewrite::statement) fn rewrite_cases<'a>
                 || func.over().is_some();
         }
         Node::JsonAggConstructor(_) => aggregate = true,
-        Node::ResTarget(target) => {
-            if let Some(name) = target.name() {
-                names.insert(name.to_owned());
-            }
-        }
-        Node::String(string) => {
-            if let Some(name) = string.sval() {
-                names.insert(name.to_owned());
-            }
-        }
         _ => {}
     });
     if aggregate {
         return;
     }
-
-    // Include known star expansions, and keep names deterministic so a cached
-    // prepared variant still matches if its AST is evicted and rebuilt.
-    names.extend(
-        schema
-            .relations
-            .values()
-            .flat_map(|relations| relations.values())
-            .flat_map(|relation| relation.columns.keys().cloned()),
-    );
 
     let mut helpers = Vec::new();
     for (position, mut sort) in select.sort_clause_mut().into_iter().enumerate() {
@@ -74,14 +54,7 @@ pub(in crate::frontend::router::parser::rewrite::statement) fn rewrite_cases<'a>
             continue;
         }
 
-        let mut suffix = position;
-        let alias = loop {
-            let alias = format!("__pgdog_order_case{suffix}");
-            if names.insert(alias.clone()) {
-                break alias;
-            }
-            suffix += 1;
-        };
+        let alias = helper_column_name(HelperColumnKind::Case);
         helpers.push(mem.make_res_target(
             Some(&alias),
             mem.empty(),
