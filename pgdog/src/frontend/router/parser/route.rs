@@ -333,6 +333,7 @@ impl Route {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
             || self.distinct().is_some()
+            || self.limit().limit.is_some()
             || self.limit().offset.is_some()
     }
 
@@ -741,7 +742,7 @@ mod test {
             },
             None,
         );
-        assert!(!route.requires_post_processing());
+        assert!(route.requires_post_processing());
     }
 
     #[test]
