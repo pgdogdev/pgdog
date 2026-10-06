@@ -9,10 +9,12 @@ use super::aggregate::{AggregatesRewrite, HelperKind};
 use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{Aggregate, OrderBy};
+use crate::frontend::router::parser::{
+    Aggregate, Cache, ExecuteParams, OrderBy, StatementParameters,
+};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
-use pg_raw_parse::{Node, StmtList, make};
+use pg_raw_parse::{Node, Owned, StmtList, list::CastNodeList, make, nodes};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -30,7 +32,7 @@ pub(crate) struct OrderByHelper {
     pub(crate) source: OrderBySource,
     pub(crate) alias: String,
     /// False when the SELECT list already has this unique name and we only
-    /// remap the route. Those columns must stay in the client result.
+    /// rewrite its ORDER BY reference. Those columns stay in the client result.
     pub(crate) injected: bool,
 }
 
@@ -38,19 +40,6 @@ pub(crate) struct OrderByHelper {
 pub(crate) enum OrderBySource {
     Column(String),
     Vector(String),
-}
-
-impl OrderByHelper {
-    fn matches(&self, order_by: &OrderBy) -> bool {
-        match (&self.source, order_by) {
-            (OrderBySource::Column(source), OrderBy::AscColumn(column))
-            | (OrderBySource::Column(source), OrderBy::DescColumn(column))
-            | (OrderBySource::Vector(source), OrderBy::AscVectorL2Column(column, _)) => {
-                source == column
-            }
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -79,10 +68,12 @@ impl ProjectionRewritePlan {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
     plan: ProjectionRewritePlan,
+    /// Cache syntax rather than parameter-dependent sort values.
+    sort_clause: Owned<CastNodeList<nodes::SortBy>>,
 }
 
 pub(crate) fn finalize_after_route(
@@ -90,18 +81,30 @@ pub(crate) fn finalize_after_route(
     schema: &Schema,
     offset_plan: Option<&OffsetPlan>,
 ) -> Result<(), Error> {
-    if !request.route().is_cross_shard() {
-        return Ok(());
-    }
-
     let Some(ast) = request.ast.as_ref() else {
         return Ok(());
     };
-    let rewrite_offset = offset_plan.is_some_and(|plan| !plan.prepare_execute);
-    let Some(rewrite) = ast
-        .post_route_rewrite
-        .get_or_try_init(|| build(&ast.ast, schema, rewrite_offset))?
-    else {
+    let rewrite = if request.route().is_cross_shard() {
+        let rewrite_offset = offset_plan.is_some_and(|plan| !plan.prepare_execute);
+        ast.post_route_rewrite
+            .get_or_try_init(|| build(&ast.ast, schema, rewrite_offset))?
+            .as_ref()
+    } else {
+        None
+    };
+    let params = request.messages.iter().find_map(|message| match message {
+        ProtocolMessage::Bind(bind) => Some(StatementParameters::Bind(bind)),
+        _ => None,
+    });
+    let order_by = match rewrite {
+        Some(rewrite) => OrderBy::parse(&rewrite.sort_clause, params),
+        None => statement_order_by(ast.ast.stmts().next(), params)?,
+    };
+    if let Some(route) = request.route.as_mut() {
+        route.set_order_by(order_by);
+    }
+
+    let Some(rewrite) = rewrite else {
         return Ok(());
     };
     let base_name = request.messages.iter().find_map(|message| match message {
@@ -148,28 +151,37 @@ pub(crate) fn finalize_after_route(
         && let Some(route) = request.route.as_mut()
     {
         route.projection_rewrite_plan = rewrite.plan.clone();
-        let mut order_by = route.order_by().to_vec();
-        for helper in &rewrite.plan.order_by_helpers {
-            // Prefer the structural position. The source fallback handles a
-            // bind-dependent vector sort omitted from this execution's route.
-            let position = order_by
-                .get(helper.sort_position)
-                .filter(|sort| helper.matches(sort))
-                .map(|_| helper.sort_position)
-                .or_else(|| order_by.iter().position(|sort| helper.matches(sort)));
-            let Some(sort) = position.and_then(|position| order_by.get_mut(position)) else {
-                continue;
-            };
-            *sort = if sort.asc() {
-                OrderBy::AscColumn(helper.alias.clone())
-            } else {
-                OrderBy::DescColumn(helper.alias.clone())
-            };
-        }
-        route.set_order_by(order_by);
     }
 
     Ok(())
+}
+
+/// Statements without a projection variant still need sort keys from their
+/// original AST, including the SELECT behind a simple-protocol EXECUTE.
+fn statement_order_by(
+    statement: Option<Node<'_>>,
+    params: Option<StatementParameters<'_>>,
+) -> Result<Vec<OrderBy>, Error> {
+    match statement {
+        Some(Node::SelectStmt(select)) => Ok(OrderBy::parse(select.sort_clause(), params)),
+        Some(Node::ExplainStmt(explain)) => statement_order_by(Some(explain.query()), params),
+        Some(Node::ExecuteStmt(execute)) => {
+            let name = execute.name().expect("EXECUTE has a statement name");
+            let Some(prepare) = PreparedStatements::global().read().prepare(name) else {
+                // Direct sessions can pass PREPARE/EXECUTE through without
+                // storing the statement in PgDog's prepared statement cache.
+                return Ok(Vec::new());
+            };
+            let ast = Cache::get().record(prepare.query())?;
+            let statement = match ast.ast.ast.stmts().next() {
+                Some(Node::PrepareStmt(prepare)) => Some(prepare.query()),
+                statement => statement,
+            };
+            let params = ExecuteParams::new(execute);
+            statement_order_by(statement, Some(StatementParameters::Execute(&params)))
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn build(
@@ -193,6 +205,9 @@ fn build(
             plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate);
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
+        if aggregate.is_empty() {
+            order_by::rewrite_cases(&mut select.as_mut(), mem, schema, &mut plan);
+        }
         if rewrite_offset {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
@@ -203,7 +218,12 @@ fn build(
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
 
-    Ok(Some(PostRouteRewrite { sql, plan }))
+    let sort_clause = make::owned(|mem| mem.make_unique(rewritten.sort_clause()));
+    Ok(Some(PostRouteRewrite {
+        sql,
+        plan,
+        sort_clause,
+    }))
 }
 
 #[cfg(test)]

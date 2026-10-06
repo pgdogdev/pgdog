@@ -152,7 +152,6 @@ impl QueryEngine {
             Ok(()) => {
                 let command = self.router.command();
                 client_request.route = Some(command.route().clone());
-                trace!("routing {:#?} to {:#?}", client_request.messages, command,);
 
                 projection::finalize_after_route(
                     client_request,
@@ -163,6 +162,12 @@ impl QueryEngine {
                 if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_route(client_request)?;
                 }
+
+                trace!(
+                    "routing {:#?} to {:#?}",
+                    client_request.messages,
+                    client_request.route(),
+                );
             }
 
             Err(RouterError::Parser(ParserError::OmniWriteWithDirective)) => {

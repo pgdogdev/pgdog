@@ -188,14 +188,17 @@ impl QueryParser {
             ));
         }
 
-        let order_by = Self::select_sort(stmt, context.router_context.bind);
         let from_clause_table_name = stmt.from_clause().first().and_then(|node| match node {
             Node::RangeVar(r) => Some(r.relname().expect("RangeVar always has relname")),
             _ => None,
         });
 
         // Shard by vector in ORDER BY clause.
-        for order in &order_by {
+        for order in stmt
+            .sort_clause()
+            .iter()
+            .filter_map(|sort| OrderBy::parse_vector(sort.node(), context.router_context.bind))
+        {
             if let Some((vector, column_name)) = order.vector() {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
@@ -314,7 +317,7 @@ impl QueryParser {
 
         let query = Route::select(
             context.shards_calculator.shard().clone(),
-            order_by,
+            Vec::new(),
             aggregates,
             limit,
             distinct,
@@ -327,82 +330,5 @@ impl QueryParser {
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))
-    }
-
-    /// Handle the `ORDER BY` clause of a `SELECT` statement.
-    ///
-    /// # Arguments
-    ///
-    /// * `nodes`: List of parser-generated nodes from the ORDER BY clause.
-    /// * `params`: Statement parameters, if any.
-    ///
-    fn select_sort(
-        stmt: &nodes::SelectStmt,
-        params: Option<StatementParameters<'_>>,
-    ) -> Vec<OrderBy> {
-        stmt.sort_clause()
-            .into_iter()
-            .filter_map(|sort_by| {
-                use pg_raw_parse::{
-                    ConstValue,
-                    raw::{A_Expr_Kind::*, SortByDir::*},
-                };
-
-                let asc = matches!(sort_by.sortby_dir, SORTBY_DEFAULT | SORTBY_ASC);
-                match sort_by.node() {
-                    Node::A_Const(c) if let Some(ConstValue::Integer(i)) = c.val() => {
-                        if asc {
-                            Some(OrderBy::Asc(i as _))
-                        } else {
-                            Some(OrderBy::Desc(i as _))
-                        }
-                    }
-
-                    Node::ColumnRef(c) => {
-                        // TODO: save the entire column and disambiguate
-                        // when reading data with RowDescription as context.
-                        let col_name = c.fields().into_iter().next_back()?.as_str()?;
-                        if asc {
-                            Some(OrderBy::AscColumn(col_name.into()))
-                        } else {
-                            Some(OrderBy::DescColumn(col_name.into()))
-                        }
-                    }
-
-                    Node::A_Expr(e @ nodes::A_Expr { kind: AEXPR_OP, .. })
-                        if let Some("<->") = e.name().iter().next().and_then(Node::as_str) =>
-                    {
-                        let mut vector: Option<Vector> = None;
-                        let mut column: Option<&str> = None;
-
-                        for e in [e.lexpr(), e.rexpr()] {
-                            if let Ok(vec) = Value::try_from(e) {
-                                match vec {
-                                    Value::Placeholder(p) => {
-                                        if let Ok(param) = params?.parameter((p - 1) as _) {
-                                            vector = param?.vector();
-                                        }
-                                    }
-                                    Value::Vector(vec) => vector = Some(vec),
-                                    _ => (),
-                                }
-                            } else if let Ok(col) = Column::try_from(e) {
-                                column = Some(col.name);
-                            }
-                        }
-
-                        if let Some(vector) = vector
-                            && let Some(column) = column
-                        {
-                            Some(OrderBy::AscVectorL2Column(column.into(), vector))
-                        } else {
-                            None
-                        }
-                    }
-
-                    _ => None,
-                }
-            })
-            .collect()
     }
 }

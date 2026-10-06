@@ -4,6 +4,9 @@ use crate::frontend::router::parser::Column;
 
 use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
 
+mod case;
+pub(super) use case::rewrite_cases;
+
 impl OrderBySource {
     fn name(&self) -> &str {
         match self {
@@ -163,8 +166,9 @@ pub(super) fn rewrite_select<'a>(
     plan: &mut ProjectionRewritePlan,
 ) {
     let mut helpers = Vec::new();
+    let mut sort_rewrites = Vec::new();
     let mut sort_position = 0;
-    for sort in select.sort_clause() {
+    for (position, sort) in select.sort_clause().into_iter().enumerate() {
         let node = sort.node();
         let source = match node {
             Node::ColumnRef(column) => {
@@ -193,15 +197,19 @@ pub(super) fn rewrite_select<'a>(
         match node {
             Node::ColumnRef(column) => match unique_output_name(select, column) {
                 Some(name) if source.as_ref().is_some_and(|source| source.name() == name) => {}
-                Some(name) => push_helper(
-                    plan,
-                    current_sort_position,
-                    source.expect("column sorts always have a source"),
-                    name,
-                    false,
-                ),
+                Some(name) => {
+                    sort_rewrites.push((position, name.clone()));
+                    push_helper(
+                        plan,
+                        current_sort_position,
+                        source.expect("column sorts always have a source"),
+                        name,
+                        false,
+                    );
+                }
                 None => {
                     let alias = format!("__pgdog_order_col{current_sort_position}");
+                    sort_rewrites.push((position, alias.clone()));
                     helpers.push(mem.make_res_target(
                         Some(&alias),
                         mem.empty(),
@@ -218,6 +226,7 @@ pub(super) fn rewrite_select<'a>(
             },
             Node::A_Expr(_) if source.is_some() => {
                 let alias = format!("__pgdog_order_col{current_sort_position}");
+                sort_rewrites.push((position, alias.clone()));
                 helpers.push(mem.make_res_target(
                     Some(&alias),
                     mem.empty(),
@@ -232,6 +241,17 @@ pub(super) fn rewrite_select<'a>(
                 );
             }
             _ => {}
+        }
+    }
+
+    let mut rewrites = sort_rewrites.into_iter().peekable();
+    for (position, mut sort) in select.sort_clause_mut().into_iter().enumerate() {
+        if rewrites.peek().is_some_and(|(index, _)| *index == position) {
+            let (_, alias) = rewrites.next().expect("sort rewrite exists");
+            sort.set_node(
+                mem.make_column_ref(mem.make_list(&[mem.make_string(Some(&alias)).uncast()]))
+                    .uncast(),
+            );
         }
     }
 
