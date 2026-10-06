@@ -66,6 +66,45 @@ fn test_roles_detected_when_primary_found_before_other_targets() {
     assert!(lb.primary().is_some());
 }
 
+#[tokio::test(start_paused = true)]
+async fn test_primary_demotion_waits_for_unknown_target_election() {
+    let lb = auto_pool(&["localhost", "127.0.0.1", "unknown-replica"]);
+    set_lsn_stats(&lb.targets[0], false, 500);
+    set_lsn_stats(&lb.targets[1], true, 500);
+    assert!(lb.redetect_roles());
+
+    let reloaded = auto_pool(&["localhost", "127.0.0.1", "unknown-replica"]);
+    lb.move_conns_to(&reloaded).expect("transfer pools");
+    assert!(
+        reloaded.primary().is_some(),
+        "elected primary survives reload"
+    );
+
+    set_lsn_stats(&reloaded.targets[0], true, 510);
+    assert!(!reloaded.redetect_roles());
+    assert!(reloaded.primary().is_none());
+    assert_eq!(reloaded.targets[0].role(), Role::Replica);
+    assert!(!reloaded.roles_detected());
+
+    let start = Instant::now();
+    assert!(matches!(
+        reloaded.get_primary(&Request::default()).await,
+        Err(Error::CheckoutTimeout)
+    ));
+    assert!(start.elapsed() >= reloaded.checkout_timeout);
+
+    let (primary, ()) = tokio::join!(reloaded.wait_primary(), async {
+        sleep(Duration::from_millis(1)).await;
+        set_lsn_stats(&reloaded.targets[2], false, 520);
+        assert!(reloaded.redetect_roles());
+    });
+    assert_eq!(
+        primary.expect("new primary elected").addr().host,
+        "unknown-replica"
+    );
+    assert!(reloaded.roles_detected());
+}
+
 #[tokio::test]
 async fn test_roles_detected_survives_reload_and_new_targets_remain_unknown() {
     let old = auto_pool(&["localhost", "127.0.0.1"]);
