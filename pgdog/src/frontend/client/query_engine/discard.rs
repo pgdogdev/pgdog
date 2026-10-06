@@ -1,7 +1,7 @@
+use super::fake::FakeResponse;
 use crate::frontend::{
     client::Transaction, client::TransactionType, router::parameter_hints::PGDOG_PIN,
 };
-use crate::net::{CommandComplete, Protocol, ReadyForQuery};
 
 use super::*;
 
@@ -65,14 +65,12 @@ impl QueryEngine {
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
 
-        let bytes_sent = context
-            .stream
-            .send_many(&[
-                CommandComplete::new("DISCARD").message(),
-                ReadyForQuery::in_transaction(context.in_transaction()).message(),
-            ])
-            .await?;
-        self.stats.sent(bytes_sent);
+        self.fake_command_response(
+            context,
+            &client_request.messages,
+            &FakeResponse::command("DISCARD"),
+        )
+        .await?;
         Ok(())
     }
 

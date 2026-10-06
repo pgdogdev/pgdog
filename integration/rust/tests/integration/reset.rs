@@ -1,5 +1,28 @@
 use crate::setup::{admin_sqlx, connections_sqlx};
-use sqlx::Executor;
+use sqlx::{Executor, Row};
+
+#[tokio::test]
+async fn test_npgsql_reset_batch() -> Result<(), sqlx::Error> {
+    let pools = connections_sqlx().await;
+    let mut conn = pools[1].acquire().await?;
+
+    conn.execute("SET statement_timeout TO '5s'; SET lock_timeout TO '3s'")
+        .await?;
+    let row = conn.fetch_one("SHOW statement_timeout").await?;
+    assert_eq!(row.get::<String, _>(0), "5s");
+    let row = conn.fetch_one("SHOW lock_timeout").await?;
+    assert_eq!(row.get::<String, _>(0), "3s");
+
+    conn.execute(
+        "SET SESSION AUTHORIZATION DEFAULT;RESET ALL;CLOSE ALL;UNLISTEN *;SELECT pg_advisory_unlock_all();DISCARD SEQUENCES;DISCARD TEMP",
+    ).await?;
+
+    let row = conn.fetch_one("SHOW statement_timeout").await?;
+    assert_eq!(row.get::<String, _>(0), "0");
+    let row = conn.fetch_one("SHOW lock_timeout").await?;
+    assert_eq!(row.get::<String, _>(0), "0");
+    Ok(())
+}
 
 async fn run_reset_single_param() {
     let pools = connections_sqlx().await;
