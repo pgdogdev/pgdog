@@ -20,11 +20,22 @@ fn test_roles_detected_waits_for_all_replicas() {
     assert!(lb.has_replicas(), "reads can start before role detection");
     assert!(!lb.roles_detected());
     assert!(!lb.redetect_roles());
-    assert!(!lb.roles_detected());
+    assert!(
+        !lb.roles_detected(),
+        "targets without LSN stats remain unknown"
+    );
 
     set_lsn_stats(&lb.targets[0], true, 100);
     assert!(!lb.redetect_roles());
     assert!(!lb.roles_detected(), "the other target could be a primary");
+    assert!(
+        lb.targets[0].role_detected.load(Ordering::Acquire),
+        "valid replica stats resolve its role before other targets"
+    );
+    assert!(
+        !lb.targets[1].role_detected.load(Ordering::Acquire),
+        "target without LSN stats remains unknown"
+    );
 
     set_lsn_stats(&lb.targets[1], true, 100);
     assert!(!lb.redetect_roles());
@@ -74,7 +85,10 @@ async fn test_roles_detected_survives_reload_and_new_targets_remain_unknown() {
         .expect("transfer existing pools");
     assert!(!expanded.roles_detected(), "new target needs detection");
     expanded.redetect_roles();
-    assert!(!expanded.roles_detected());
+    assert!(
+        !expanded.roles_detected(),
+        "new target still needs LSN stats"
+    );
 
     let reloaded = auto_pool(&["localhost", "127.0.0.1", "new-replica"]);
     expanded

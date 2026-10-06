@@ -216,11 +216,14 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
-        } else if targets.iter().all(|target| target.0.valid()) {
+        } else {
             // All targets are replicas until we get a primary.
-            targets.iter().for_each(|target| {
-                target.1.set_role(Role::Replica);
-            });
+            targets
+                .iter()
+                .filter(|target| target.0.valid())
+                .for_each(|target| {
+                    target.1.set_role(Role::Replica);
+                });
         }
 
         self.elected_primary.send_replace(self.primary().cloned());
