@@ -1,6 +1,7 @@
 //! Load balanced connection pool.
 
 use std::{
+    cmp::Reverse,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
@@ -178,49 +179,55 @@ impl LoadBalancer {
     pub(crate) fn redetect_roles(&self) -> bool {
         let mut promoted = false;
 
-        let mut targets = self
+        let targets = self
             .targets
-            .clone()
-            .into_iter()
+            .iter()
             .map(|target| (target.pool.lsn_stats(), target))
             .collect::<Vec<_>>();
 
-        // Pick primary by latest data. The one with the most
-        // up-to-date lsn number and pg_is_in_recovery() = false
-        // is the new primary.
+        // The primary is a server with pg_is_in_recovery() = false. If more
+        // than one says so, e.g. an old primary restarted before it was
+        // turned into a replica, the one on the latest timeline wins, then
+        // the one with the most WAL, then the one with the freshest stats
+        // (Aurora reports neither timeline nor LSN).
         //
-        // The old primary is still part of the config and will be demoted
-        // to replica. If it's down, it will be banned from serving traffic.
-        //
+        // A server that stopped answering keeps its last stats, so a crashed
+        // primary loses to the replica promoted in its place: the promotion
+        // started a new timeline.
         let now = SystemTime::now();
-        targets.sort_by_cached_key(|target| target.0.lsn_age(now));
-
         let primary = targets
             .iter()
-            .position(|target| !target.0.replica && target.0.valid());
+            .filter(|(stats, _)| !stats.replica && stats.valid())
+            .max_by_key(|(stats, _)| (stats.timeline, stats.lsn.lsn, Reverse(stats.lsn_age(now))))
+            .map(|(_, target)| *target);
 
         self.elected_primary.send_replace(None);
 
         if let Some(primary) = primary {
-            promoted = targets[primary].1.set_role(Role::Primary);
+            promoted = primary.set_role(Role::Primary);
 
             if promoted {
-                warn!("new primary chosen: {}", targets[primary].1.pool.addr());
+                warn!("new primary chosen: {}", primary.pool.addr());
             }
 
             // Demote everyone else to replicas.
             targets
                 .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != primary)
+                .filter(|(_, target)| target.pool.id() != primary.pool.id())
                 .for_each(|(_, target)| {
-                    target.1.set_role(Role::Replica);
+                    target.set_role(Role::Replica);
                 });
-        } else if targets.iter().all(|target| target.0.valid()) {
-            // All targets are replicas until we get a primary.
-            targets.iter().for_each(|target| {
-                target.1.set_role(Role::Replica);
-            });
+        } else {
+            // No primary right now, e.g. during a failover. A server that
+            // reports being in recovery is a replica, even if it was the
+            // primary and other servers haven't answered yet, so writes stop
+            // going to it. Servers without stats keep their role until they
+            // answer.
+            for (stats, target) in &targets {
+                if stats.valid() && target.set_role(Role::Replica) {
+                    warn!("primary is in recovery, demoted: {}", target.pool.addr());
+                }
+            }
         }
 
         self.elected_primary.send_replace(self.primary().cloned());
