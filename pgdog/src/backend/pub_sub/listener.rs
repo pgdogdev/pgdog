@@ -271,6 +271,8 @@ impl PubSubListener {
                     result = Self::run(id, &pool, &pool_key, &mut rx, channels.clone()) => {
                         if let Err(err) = result {
                             error!("pub/sub error: {} [{}]", err, pool.addr());
+                            // Request restart of listener.
+                            comms.start.notify_one();
                             // Don't reconnect for another connect attempt delay
                             // to avoid connection storms during incidents.
                             select! {
