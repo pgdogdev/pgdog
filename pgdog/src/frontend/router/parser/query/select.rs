@@ -317,7 +317,6 @@ impl QueryParser {
 
         let query = Route::select(
             context.shards_calculator.shard().clone(),
-            Vec::new(),
             aggregates,
             limit,
             distinct,

@@ -7,7 +7,6 @@ use crate::frontend::{
     PreparedStatements,
     router::parser::{Limit, OrderBy},
 };
-use pgdog_vector::Vector;
 use std::sync::Arc;
 
 use super::prelude::*;
@@ -16,7 +15,6 @@ use super::test_sharded_client;
 fn route(shard: Shard) -> Route {
     Route::select(
         ShardWithPriority::new_table(shard),
-        vec![],
         Default::default(),
         Limit::default(),
         None,
@@ -229,7 +227,6 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
         .unwrap();
     client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
         Default::default(),
         Limit::default(),
         None,
@@ -262,14 +259,13 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
 }
 
 #[test]
-fn cached_projection_does_not_depend_on_first_route_order() {
+fn cached_projection_keeps_all_sort_keys_without_bind_values() {
     let sql = "SELECT id FROM products ORDER BY embedding <-> $1, price";
     let ast = Arc::new(Ast::parse(sql).unwrap());
     let mut first = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
     first.ast = Some(ast.clone());
     first.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
         Default::default(),
         Limit::default(),
         None,
@@ -284,17 +280,16 @@ fn cached_projection_does_not_depend_on_first_route_order() {
     assert!(first_query.query().contains("__pgdog_order_col1"));
     assert_eq!(
         first.route().order_by(),
-        &[OrderBy::AscColumn("__pgdog_order_col1".into())]
+        &[
+            OrderBy::AscColumn("__pgdog_order_col0".into()),
+            OrderBy::AscColumn("__pgdog_order_col1".into())
+        ]
     );
 
     let mut second = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
     second.ast = Some(ast);
     second.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![
-            OrderBy::AscVectorL2Column("embedding".into(), Vector::from(&[1.0, 2.0, 3.0][..])),
-            OrderBy::AscColumn("price".into()),
-        ],
         Default::default(),
         Limit::default(),
         None,
@@ -317,7 +312,6 @@ fn aliased_projected_sort_column_remaps_route() {
     request.ast = Some(Arc::new(Ast::parse(sql).unwrap()));
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
         Default::default(),
         Limit::default(),
         None,
@@ -344,7 +338,6 @@ fn duplicate_sort_column_names_use_injected_helper() {
     request.ast = Some(Arc::new(Ast::parse(sql).unwrap()));
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("price".into())],
         Default::default(),
         Limit::default(),
         None,
@@ -370,10 +363,6 @@ fn helper_replaces_the_matching_duplicate_order_by_position() {
     request.ast = Some(Arc::new(Ast::parse(sql).unwrap()));
     request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![
-            OrderBy::AscColumn("price".into()),
-            OrderBy::AscColumn("price".into()),
-        ],
         Default::default(),
         Limit::default(),
         None,
@@ -405,7 +394,6 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
         .unwrap();
     client_request.route = Some(Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![OrderBy::AscColumn("created_at".into())],
         Default::default(),
         Limit::default(),
         None,

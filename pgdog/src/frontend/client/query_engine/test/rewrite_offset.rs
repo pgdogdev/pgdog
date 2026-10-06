@@ -30,7 +30,6 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Option<OffsetPlan> {
 fn cross_shard_route() -> Route {
     Route::select(
         ShardWithPriority::new_table(Shard::All),
-        vec![],
         Default::default(),
         Limit::default(),
         None,

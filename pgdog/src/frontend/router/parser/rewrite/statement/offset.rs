@@ -269,7 +269,6 @@ mod tests {
     fn cross_shard_route() -> Route {
         Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![],
             Default::default(),
             Limit::default(),
             None,
@@ -279,7 +278,6 @@ mod tests {
     fn single_shard_route() -> Route {
         Route::select(
             ShardWithPriority::new_table(Shard::Direct(0)),
-            vec![],
             Default::default(),
             Limit::default(),
             None,

@@ -153,14 +153,12 @@ impl Route {
     /// Create new route for a `SELECT` query.
     pub(crate) fn select(
         shard: ShardWithPriority,
-        order_by: Vec<OrderBy>,
         aggregate: Aggregate,
         limit: Limit,
         distinct: Option<DistinctBy>,
     ) -> Self {
         Self {
             shard,
-            order_by,
             read: true,
             aggregate,
             limit,
@@ -720,13 +718,13 @@ mod test {
 
     #[test]
     fn test_should_buffer_order_by() {
-        let route = Route::select(
+        let mut route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![OrderBy::Asc(0)],
             Default::default(),
             Limit::default(),
             None,
         );
+        route.set_order_by(vec![OrderBy::Asc(1)]);
         assert!(route.requires_post_processing());
     }
 
@@ -734,7 +732,6 @@ mod test {
     fn test_should_buffer_limit_only() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![],
             Default::default(),
             Limit {
                 limit: Some(10),
@@ -749,7 +746,6 @@ mod test {
     fn test_should_buffer_offset_only() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![],
             Default::default(),
             Limit {
                 limit: None,
@@ -764,7 +760,6 @@ mod test {
     fn test_should_buffer_limit_and_offset() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![],
             Default::default(),
             Limit {
                 limit: Some(10),
@@ -779,7 +774,6 @@ mod test {
     fn test_should_buffer_no_limit_no_offset() {
         let route = Route::select(
             ShardWithPriority::new_table(Shard::All),
-            vec![],
             Default::default(),
             Limit::default(),
             None,

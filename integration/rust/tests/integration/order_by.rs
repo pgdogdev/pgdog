@@ -30,8 +30,8 @@ async fn check_order_by_case(protocol: Protocol) -> Result<(), Box<dyn std::erro
         let inserted = transaction
             .execute(
                 format!(
-                    "/* pgdog_shard: {shard} */ INSERT INTO sharded (id, value)
-                     SELECT batch * 6 + fixture.id, fixture.value
+                    "/* pgdog_shard: {shard} */ INSERT INTO sharded (id, value, enabled)
+                     SELECT batch * 6 + fixture.id, fixture.value, batch % 2 = 0
                      FROM generate_series(0, 9) AS batch
                      CROSS JOIN (VALUES {values}) AS fixture(id, value)"
                 )
@@ -58,12 +58,28 @@ async fn check_order_by_case(protocol: Protocol) -> Result<(), Box<dyn std::erro
         )
         .collect();
 
+    let grouped: Vec<_> = ascending
+        .iter()
+        .copied()
+        .filter(|(id, _)| ((id - 1) / 6) % 2 == 0)
+        .chain(
+            ascending
+                .iter()
+                .copied()
+                .filter(|(id, _)| ((id - 1) / 6) % 2 == 1),
+        )
+        .collect();
+
     let cases = [
         ("CASE value WHEN $1 THEN 0 ELSE 1 END, id", ascending),
         (
             "CASE value WHEN $1 THEN 0 ELSE 1 END DESC,
              CASE value WHEN 'other' THEN 0 ELSE 1 END, id DESC",
             descending,
+        ),
+        (
+            "enabled DESC, CASE value WHEN $1 THEN 0 ELSE 1 END, id",
+            grouped,
         ),
     ];
 
