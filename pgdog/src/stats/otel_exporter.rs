@@ -8,7 +8,9 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use super::otel;
-use super::{Clients, ClientsLocked, Listeners, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use super::{
+    Clients, ClientsLocked, Listeners, Logins, MirrorStatsMetrics, Pools, QueryCache, TwoPc,
+};
 use crate::util::safe_sleep;
 use crate::{config::config, tasks};
 
@@ -47,12 +49,16 @@ pub(crate) async fn run() {
         let listeners = Listeners::load();
         let query_cache = QueryCache::load().metrics();
         let two_pc = TwoPc::load();
+        // Scalar login metrics only: the OTLP renderer speaks gauge/sum, so
+        // the login_duration histogram stays on the OpenMetrics endpoint.
+        let logins = Logins::load();
 
         let mut all: Vec<&super::Metric> = vec![&clients, &clients_locked, &two_pc];
         all.extend(pools.iter());
         all.extend(mirror.iter());
         all.extend(listeners.iter());
         all.extend(query_cache.iter());
+        all.extend(logins.iter());
 
         let now = otel::now_nanos();
 
