@@ -3,6 +3,7 @@
 //! we authenticate to Postgres with.
 //!
 //! This is effectively passthrough auth for RDS IAM, Azure Workload Identity, etc.
+//!
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
