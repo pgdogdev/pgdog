@@ -414,7 +414,7 @@ impl Pool {
                 Ok(true)
             }
             Err(Error::ServerAuth) => Ok(false),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err),
         }
     }
 
