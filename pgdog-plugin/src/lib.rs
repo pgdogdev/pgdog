@@ -80,7 +80,7 @@
 //!     }
 //!
 //!     fn route(context: Context<'_>) -> Route {
-//!         if let Some(Node::SelectStmt(_)) = context.query.stmts().next() {
+//!         if let Node::SelectStmt(_) = context.query.stmt() {
 //!             return Route::new(Shard::Unknown, ReadWrite::Read);
 //!         }
 //!

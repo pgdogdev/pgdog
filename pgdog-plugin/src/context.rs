@@ -51,8 +51,8 @@ pub struct Context<'a> {
     pub in_transaction: bool,
     /// PgDog strongly believes this statement should go to a primary.
     pub write_override: bool,
-    /// The parsed Abstract Syntax Tree of the statement(s).
-    pub query: &'a pg_raw_parse::StmtList,
+    /// The parsed Abstract Syntax Tree of the statement.
+    pub query: &'a pg_raw_parse::nodes::RawStmt,
     /// Bound parameters.
     pub params: Parameters<'a>,
 }
@@ -193,13 +193,18 @@ impl Context<'_> {
 impl Context<'_> {
     #[doc(hidden)]
     pub fn doc_test() -> Self {
+        use pg_raw_parse::{Owned, StmtList};
+        use std::sync::OnceLock;
+        static CELL: OnceLock<Owned<StmtList>> = OnceLock::new();
+        let ast = CELL.get_or_init(|| pg_raw_parse::parse("SELECT 1").unwrap().into_inner());
+
         Context {
             shards: 1,
             has_replicas: true,
             has_primary: true,
             in_transaction: false,
             write_override: false,
-            query: pg_raw_parse::list::empty_list(),
+            query: ast.first().unwrap(),
             params: Parameters::default(),
         }
     }
