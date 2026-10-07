@@ -1,4 +1,4 @@
-use crate::frontend::router::parser::{Cache, Shard};
+use crate::frontend::router::parser::Shard;
 
 use super::setup::*;
 
