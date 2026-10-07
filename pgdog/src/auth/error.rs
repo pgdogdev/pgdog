@@ -7,4 +7,13 @@ pub(crate) enum Error {
 
     #[error("server-side auth can only use one password")]
     ServerSideOnePassword,
+
+    #[error("backend: {0}")]
+    Backend(Box<crate::backend::Error>),
+}
+
+impl From<crate::backend::Error> for Error {
+    fn from(value: crate::backend::Error) -> Self {
+        Self::Backend(Box::new(value))
+    }
 }

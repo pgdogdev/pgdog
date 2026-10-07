@@ -135,9 +135,12 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
             ))
         })?;
 
-    // RDS IAM tokens are valid for 15 minutes.
-    let expires_at = SystemTime::now() + Duration::from_secs(900);
-    Ok((token, expires_at))
+    Ok((token, expires_at()))
+}
+
+// RDS IAM tokens are valid for 15 minutes.
+pub(crate) fn expires_at() -> SystemTime {
+    SystemTime::now() + Duration::from_secs(900)
 }
 
 #[cfg(test)]

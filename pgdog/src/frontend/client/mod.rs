@@ -15,8 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
-use crate::auth::AuthResult;
-use crate::auth::{md5, scram::Server};
+use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
@@ -182,10 +181,11 @@ impl Client {
     async fn check_password(
         stream: &mut Stream,
         user: &str,
+        database: &str,
         auth_type: &AuthType,
         passwords: &[PasswordKind],
     ) -> Result<AuthResult, Error> {
-        if passwords.is_empty() {
+        if passwords.is_empty() && !auth_type.external_token() {
             return Ok(AuthResult::NoPasswordConfig);
         }
 
@@ -241,6 +241,26 @@ impl Client {
             }
 
             AuthType::Trust => AuthResult::Ok,
+
+            AuthType::ExternalToken => {
+                stream
+                    .send_flush(&Authentication::ClearTextPassword)
+                    .await?;
+                // RDS also asks for the token in plaintext. I guess they don't care
+                // since it's short-lived? Also, they assume you connect via TLS. Either
+                // way we don't have a choice since we need to pass it as-is to RDS
+                // so we can't SCRAM it.
+                let response = stream.read().await?;
+                if let Some(password) = Password::from_bytes(response.to_bytes())?.password() {
+                    if AUTH_TOKEN_CACHE.check(user, database, password).await? {
+                        AuthResult::Ok
+                    } else {
+                        AuthResult::NoPasswordMatch
+                    }
+                } else {
+                    AuthResult::NoPasswordMatch
+                }
+            }
         };
 
         Ok(result)
@@ -282,7 +302,7 @@ impl Client {
             // The admin database is virtual and never present in the cluster
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
-            Self::check_password(&mut stream, user, auth_type, &passwords).await?
+            Self::check_password(&mut stream, user, database, auth_type, &passwords).await?
         } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
@@ -328,7 +348,8 @@ impl Client {
                         // entries to plaintext before the auth exchange
                         let passwords =
                             crate::auth::vault::resolve_passwords(cluster.passwords()).await;
-                        Self::check_password(&mut stream, user, auth_type, &passwords).await?
+                        Self::check_password(&mut stream, user, database, auth_type, &passwords)
+                            .await?
                     }
                 }
 

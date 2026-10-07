@@ -16,6 +16,7 @@ pub(crate) enum PasswordSource {
     RdsIam,
     AzureIdentity,
     Vault,
+    ClientToken,
 }
 
 impl Display for PasswordSource {
@@ -25,6 +26,7 @@ impl Display for PasswordSource {
             Self::RdsIam => write!(f, "rds iam"),
             Self::AzureIdentity => write!(f, "azure workload identity"),
             Self::Vault => write!(f, "vault"),
+            Self::ClientToken => write!(f, "client token"),
         }
     }
 }

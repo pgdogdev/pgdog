@@ -6,18 +6,18 @@ use std::time::Duration;
 
 use futures::future::try_join_all;
 use once_cell::sync::{Lazy, OnceCell};
-use parking_lot::RwLock;
-use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use parking_lot::{Mutex, RawMutex, RwLock, lock_api::MutexGuard};
 use pgdog_config::Role;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::{debug, error};
 
-use crate::backend::pool::LsnStats;
-use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions};
+use crate::backend::{ConnectReason, DisconnectReason, Server, ServerOptions, pool::LsnStats};
 use crate::config::PoolerMode;
-use crate::net::messages::{BackendPid, FrontendPid};
-use crate::net::{Liveness, Parameter, Parameters};
+use crate::net::{
+    Liveness, Parameter, Parameters,
+    messages::{BackendPid, FrontendPid},
+};
 
 use super::inner::CheckInResult;
 use super::{
@@ -397,7 +397,25 @@ impl Pool {
 
     /// Create a connection to the pool, untracked by the logic here.
     pub(crate) async fn standalone(&self, reason: ConnectReason) -> Result<Server, Error> {
-        Monitor::create_connection(self, reason).await
+        let args = super::ConnectionArgs::from_pool(self, reason);
+        super::connection_creation::create(args).await
+    }
+
+    /// Validate client token by attempting a connection to Postgres with the given token.
+    pub(crate) async fn validate_token(&self, token: &str) -> Result<bool, Error> {
+        let addr = self.addr().clone().into_client_token(token);
+        let args =
+            super::ConnectionArgs::from_pool(self, ConnectReason::ValidateToken).with_addr(&addr);
+        let result = super::connection_creation::create(args).await;
+
+        match result {
+            Ok(mut server) => {
+                server.disconnect_reason(DisconnectReason::CredentialsCheck);
+                Ok(true)
+            }
+            Err(Error::ServerAuth) => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     /// Mark this pool offline and evict idle connections.

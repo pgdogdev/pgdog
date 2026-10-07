@@ -25,6 +25,7 @@
       "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "$ref": "#/$defs/General",
       "default": {
+        "auth_token_cache_size": 1000,
         "auth_type": "scram",
         "background_workers": 0,
         "ban_replica_lag": 9223372036854775807,
@@ -330,6 +331,11 @@
           "description": "Plaintext password.",
           "type": "string",
           "const": "plain"
+        },
+        {
+          "description": "RDS IAM or Azure Workload identity.",
+          "type": "string",
+          "const": "external_token"
         }
       ]
     },
@@ -694,6 +700,13 @@
       "description": "General settings are relevant to the operations of the pooler itself, or apply to all database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/>",
       "type": "object",
       "properties": {
+        "auth_token_cache_size": {
+          "description": "Size of the client token passthrough cache.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
+        },
         "auth_type": {
           "description": "What kind of authentication mechanism to use for client connections.\n\n_Default:_ `scram`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
           "$ref": "#/$defs/AuthType",

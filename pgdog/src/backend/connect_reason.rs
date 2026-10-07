@@ -8,6 +8,7 @@ pub(crate) enum ConnectReason {
     PubSub,
     Probe,
     Healthcheck,
+    ValidateToken,
     #[default]
     Other,
 }

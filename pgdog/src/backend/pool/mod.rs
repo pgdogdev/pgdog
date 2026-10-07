@@ -6,6 +6,7 @@ pub(crate) mod cluster;
 pub(crate) mod cluster_metrics;
 pub(crate) mod comms;
 pub(crate) mod connection;
+pub(crate) mod connection_creation;
 pub(crate) mod dns_cache;
 pub(crate) mod ee;
 pub(crate) mod error;
@@ -50,6 +51,7 @@ pub(crate) use stats::Stats;
 pub use pgdog_config::pool::PoolConfig as Config;
 
 use comms::Comms;
+use connection_creation::ConnectionArgs;
 use inner::Inner;
 use shard::ShardConfig;
 use taken::Taken;

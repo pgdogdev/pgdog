@@ -37,7 +37,7 @@ impl PassthroughAuth {
 /// See [authentication](https://docs.pgdog.dev/features/authentication/).
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthType {
     /// MD5 password hashing; very quick but not secure.
@@ -49,6 +49,8 @@ pub enum AuthType {
     Trust,
     /// Plaintext password.
     Plain,
+    /// RDS IAM or Azure Workload identity.
+    ExternalToken,
 }
 
 impl Display for AuthType {
@@ -58,6 +60,7 @@ impl Display for AuthType {
             Self::Scram => write!(f, "scram"),
             Self::Trust => write!(f, "trust"),
             Self::Plain => write!(f, "plain"),
+            Self::ExternalToken => write!(f, "external token"),
         }
     }
 }
@@ -74,6 +77,10 @@ impl AuthType {
     pub fn trust(&self) -> bool {
         matches!(self, Self::Trust)
     }
+
+    pub fn external_token(&self) -> bool {
+        matches!(self, Self::ExternalToken)
+    }
 }
 
 impl FromStr for AuthType {
@@ -85,6 +92,7 @@ impl FromStr for AuthType {
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
             "plain" => Ok(Self::Plain),
+            "external token" => Ok(Self::ExternalToken),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }

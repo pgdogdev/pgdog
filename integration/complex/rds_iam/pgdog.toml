@@ -1,0 +1,12 @@
+[general]
+openmetrics_port = 9090
+host = "127.0.0.1"
+port = 6432
+auth_type = "external_token"
+
+[[databases]]
+name = "postgres"
+host = "staging-iam.cluster-c5icciqq4b0q.us-west-2.rds.amazonaws.com"
+
+[admin]
+password = "pgdog"

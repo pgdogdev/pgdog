@@ -2,6 +2,7 @@
 
 use futures::future::try_join_all;
 use parking_lot::Mutex;
+use pgdog_config::AuthType;
 use pgdog_config::{
     LoadSchema, PreparedStatementsLevel, QueryParser, QueryParserLevel, Rewrite, RewriteMode,
     users::PasswordKind,
@@ -91,6 +92,7 @@ pub(crate) struct Cluster {
     read_only: bool,
     failover_signal: ClusterFailoverSignalWatcher,
     cancellation_token: CancellationToken,
+    auth_type: AuthType,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -141,6 +143,7 @@ impl Default for Cluster {
             read_only: Default::default(),
             failover_signal: ClusterFailoverSignalWatcher::default(),
             cancellation_token: Default::default(),
+            auth_type: AuthType::default(),
         }
     }
 }
@@ -229,6 +232,7 @@ pub(crate) struct ClusterConfig<'a> {
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
     read_only: bool,
+    auth_type: AuthType,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -299,6 +303,7 @@ impl<'a> ClusterConfig<'a> {
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
             read_only: user.read_only.unwrap_or(false),
+            auth_type: general.auth_type,
         }
     }
 }
@@ -346,6 +351,7 @@ impl Cluster {
             schema_cache,
             canonicalize_oids,
             read_only,
+            auth_type,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -421,6 +427,7 @@ impl Cluster {
             read_only,
             failover_signal,
             cancellation_token: Default::default(),
+            auth_type,
         }
     }
 
@@ -730,6 +737,11 @@ impl Cluster {
     /// Base delay between replication-subscriber retry attempts.
     pub(crate) fn resharding_replication_retry_min_delay(&self) -> Duration {
         self.resharding_replication_retry_min_delay
+    }
+
+    /// Get auth algorithm used by clients to connect.
+    pub(crate) fn auth_type(&self) -> &AuthType {
+        &self.auth_type
     }
 
     /// Send a cancellation request for all running queries.

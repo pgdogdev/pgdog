@@ -12,6 +12,7 @@ pub(crate) enum DisconnectReason {
     Unhealthy,
     Healthcheck,
     CredentialsRefresh,
+    CredentialsCheck,
     ServerClosed,
     #[default]
     Other,
@@ -32,6 +33,7 @@ impl Display for DisconnectReason {
             Self::Healthcheck => "standalone healthcheck",
             Self::CredentialsRefresh => "credentials refresh",
             Self::ServerClosed => "server closed",
+            Self::CredentialsCheck => "credentials check",
         };
 
         write!(f, "{}", reason)

@@ -19,6 +19,9 @@ pub(crate) enum Error {
     Backend(#[from] crate::backend::Error),
 
     #[error("{0}")]
+    Auth(#[from] crate::auth::Error),
+
+    #[error("{0}")]
     Router(#[from] super::router::Error),
 
     #[error("unexpected message: {0}")]
