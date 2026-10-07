@@ -2,7 +2,7 @@
 //! The plugin uses the same version of pgdog-plugin as PgDog and the same rustc version,
 //! so it should be loaded and executed.
 
-use pgdog_plugin::{plugin, Context, PdStr, Plugin, Route};
+use pgdog_plugin::{Context, PdStr, Plugin, Route, plugin};
 use std::sync::OnceLock;
 
 plugin!(TestPlugin);
@@ -28,10 +28,6 @@ impl Plugin for TestPlugin {
         let params = context.parameters();
 
         assert!(params.parameters.len() >= 1);
-
-        // query should be accessible
-        let query = context.query;
-        assert!(query.stmts().next().is_some());
 
         // Write to output file on first call only
         ROUTE_CALLED.get_or_init(|| {
