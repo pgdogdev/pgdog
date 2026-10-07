@@ -124,7 +124,7 @@ fn expires_at(server_auth: ServerAuth) -> SystemTime {
         ServerAuth::AzureWorkloadIdentity => {
             crate::backend::auth::azure_workload_identity::hardcoded_expires_at()
         }
-        _ => SystemTime::now(), // Not expected.
+        _ => SystemTime::now() + Duration::from_hours(24), // Not expected, but used in tests.
     }
 }
 
@@ -263,4 +263,26 @@ pub(crate) struct TokenCacheStats {
     pub(crate) evictions: u64,
     pub(crate) misses: u64,
     pub(crate) hits: u64,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cache() {
+        crate::logger();
+        crate::config::load_test();
+        let valid = AUTH_TOKEN_CACHE
+            .check("pgdog", "pgdog", "pgdog")
+            .await
+            .unwrap();
+        assert!(valid);
+
+        let err = AUTH_TOKEN_CACHE
+            .check("doesn't_exist", "pgdog", "pgdog")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Backend(_)));
+    }
 }
