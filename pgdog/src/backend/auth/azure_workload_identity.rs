@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use azure_core::credentials::TokenCredential;
 use azure_identity::WorkloadIdentityCredential;
@@ -33,6 +33,13 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
 
     let expires_at = SystemTime::from(access_token.expires_on);
     Ok((access_token.token.secret().to_string(), expires_at))
+}
+
+/// Hardcode token expiration used by frontend token cache to 15min.
+/// Azure docs say their tokens expire after an hour, so this is conservatively secure
+/// and won't cause a connection storm to validate it.
+pub(crate) fn hardcoded_expires_at() -> SystemTime {
+    SystemTime::now() + Duration::from_mins(15)
 }
 
 #[cfg(test)]

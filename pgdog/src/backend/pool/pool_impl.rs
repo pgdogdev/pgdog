@@ -402,15 +402,20 @@ impl Pool {
     }
 
     /// Validate client token by attempting a connection to Postgres with the given token.
-    pub(crate) async fn validate_token(&self, token: &str) -> Result<(), Error> {
+    pub(crate) async fn validate_token(&self, token: &str) -> Result<bool, Error> {
         let addr = self.addr().clone().into_client_token(token);
         let args =
             super::ConnectionArgs::from_pool(self, ConnectReason::ValidateToken).with_addr(&addr);
-        super::connection_creation::create(args)
-            .await?
-            .disconnect_reason(DisconnectReason::CredentialsCheck);
+        let result = super::connection_creation::create(args).await;
 
-        Ok(())
+        match result {
+            Ok(mut server) => {
+                server.disconnect_reason(DisconnectReason::CredentialsCheck);
+                Ok(true)
+            }
+            Err(Error::ServerAuth) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Mark this pool offline and evict idle connections.

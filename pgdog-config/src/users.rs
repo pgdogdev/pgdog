@@ -213,10 +213,10 @@ impl Display for ServerAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Password => "password",
-            Self::RdsIam => "rds_iam",
-            Self::AzureWorkloadIdentity => "azure_workload_identity",
-            Self::VaultDynamic => "vault_dynamic",
-            Self::VaultStatic => "vault_static",
+            Self::RdsIam => "rds iam",
+            Self::AzureWorkloadIdentity => "azure workload identity",
+            Self::VaultDynamic => "vault dynamic",
+            Self::VaultStatic => "vault static",
         };
         write!(f, "{}", s)
     }

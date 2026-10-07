@@ -897,6 +897,10 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// Size of the client token passthrough cache.
+    #[serde(default = "General::auth_token_cache_size")]
+    pub auth_token_cache_size: u64,
 }
 
 impl Default for General {
@@ -1014,6 +1018,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
+            auth_token_cache_size: Self::auth_token_cache_size(),
         }
     }
 }
@@ -1554,6 +1559,10 @@ impl General {
         } else {
             PassthroughAuth::default()
         }
+    }
+
+    fn auth_token_cache_size() -> u64 {
+        Self::env_or_default("PGDOG_AUTH_TOKEN_CACHE_SIZE", 1_000)
     }
 
     /// Get shutdown timeout as a duration.

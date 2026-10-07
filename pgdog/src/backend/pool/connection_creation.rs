@@ -96,7 +96,11 @@ pub(super) async fn create(args: ConnectionArgs<'_>) -> Result<Server, Error> {
                 // We tried all passwords and they were all wrong.
                 if err.is_auth() {
                     pool.lock().stats.counts.auth_attempts += pool.addr().passwords.len();
+                    error = Error::ServerAuth;
+                } else {
+                    error = Error::ServerError;
                 }
+
                 error!(
                     "{}error connecting to server: {} [{}]",
                     if attempt > 0 {
@@ -107,7 +111,6 @@ pub(super) async fn create(args: ConnectionArgs<'_>) -> Result<Server, Error> {
                     err,
                     pool.addr(),
                 );
-                error = Error::ServerError;
             }
 
             Err(_) => {

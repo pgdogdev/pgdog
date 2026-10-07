@@ -15,9 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
-use crate::auth::AuthResult;
-use crate::auth::token_cache::AUTH_TOKEN_CACHE;
-use crate::auth::{md5, scram::Server};
+use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
 use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
@@ -248,6 +246,10 @@ impl Client {
                 stream
                     .send_flush(&Authentication::ClearTextPassword)
                     .await?;
+                // RDS also asks for the token in plaintext. I guess they don't care
+                // since it's short-lived? Also, they assume you connect via TLS. Either
+                // way we don't have a choice since we need to pass it as-is to RDS
+                // so we can't SCRAM it.
                 let response = stream.read().await?;
                 if let Some(password) = Password::from_bytes(response.to_bytes())?.password() {
                     if AUTH_TOKEN_CACHE.check(user, database, password).await? {

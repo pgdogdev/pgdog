@@ -23,10 +23,10 @@ impl Display for PasswordSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config => write!(f, "config"),
-            Self::RdsIam => write!(f, "rds_iam"),
-            Self::AzureIdentity => write!(f, "azure_workload_identity"),
+            Self::RdsIam => write!(f, "rds iam"),
+            Self::AzureIdentity => write!(f, "azure workload identity"),
             Self::Vault => write!(f, "vault"),
-            Self::ClientToken => write!(f, "client_token"),
+            Self::ClientToken => write!(f, "client token"),
         }
     }
 }

@@ -14,6 +14,9 @@ pub(crate) enum Error {
     #[error("server error")]
     ServerError,
 
+    #[error("server auth error")]
+    ServerAuth,
+
     #[error("manual ban")]
     ManualBan,
 

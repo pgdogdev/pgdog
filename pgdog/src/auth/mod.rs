@@ -9,3 +9,4 @@ pub(crate) mod vault;
 
 pub(crate) use auth_result::AuthResult;
 pub(crate) use error::Error;
+pub(crate) use token_cache::AUTH_TOKEN_CACHE;

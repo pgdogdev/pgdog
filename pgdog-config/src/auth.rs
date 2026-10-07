@@ -60,7 +60,7 @@ impl Display for AuthType {
             Self::Scram => write!(f, "scram"),
             Self::Trust => write!(f, "trust"),
             Self::Plain => write!(f, "plain"),
-            Self::ExternalToken => write!(f, "external_token"),
+            Self::ExternalToken => write!(f, "external token"),
         }
     }
 }
@@ -92,6 +92,7 @@ impl FromStr for AuthType {
             "scram" => Ok(Self::Scram),
             "trust" => Ok(Self::Trust),
             "plain" => Ok(Self::Plain),
+            "external token" => Ok(Self::ExternalToken),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }
