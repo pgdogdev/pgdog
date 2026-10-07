@@ -25,15 +25,15 @@ impl Display for DisconnectReason {
             Self::Old => "max age",
             Self::Error => "error",
             Self::Other => "other",
-            Self::ForceClose => "force_close",
-            Self::Offline => "pool_offline",
+            Self::ForceClose => "force close",
+            Self::Offline => "pool offline",
             Self::OutOfSync => "out of sync",
-            Self::ReplicationMode => "in_replication_mode",
+            Self::ReplicationMode => "in replication mode",
             Self::Unhealthy => "unhealthy",
-            Self::Healthcheck => "standalone_healthcheck",
-            Self::CredentialsRefresh => "credentials_refresh",
-            Self::ServerClosed => "server_closed",
-            Self::CredentialsCheck => "credentials_check",
+            Self::Healthcheck => "standalone healthcheck",
+            Self::CredentialsRefresh => "credentials refresh",
+            Self::ServerClosed => "server closed",
+            Self::CredentialsCheck => "credentials check",
         };
 
         write!(f, "{}", reason)
