@@ -140,8 +140,10 @@ impl Cache {
             // subsequent uncommented lookup would hit this entry and receive an
             // already-rewritten plan that was built against the commented
             // (direct-shard) variant.
-            let cacheable =
-                query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty();
+            // SQL PREPARE registers a client-local name. SQL EXECUTE resolves
+            // that name and may materialize values for this execution.
+            let cacheable = ast.rewrite_plan.prepare_rewrites.is_empty()
+                && (query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty());
             if cacheable {
                 guard
                     .queries

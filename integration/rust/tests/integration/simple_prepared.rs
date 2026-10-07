@@ -34,7 +34,6 @@ async fn test_simple_prepared_ttl() {
 }
 
 /// <https://github.com/pgdogdev/pgdog/issues/1383>
-/// TODO: will need to support extended-protocol `Bind`s later for the re-write
 #[tokio::test]
 async fn test_simple_prepared_limit() {
     let mut conn =
@@ -187,4 +186,84 @@ async fn test_simple_prepared_limit() {
         .execute(&mut conn)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_extended_sql_prepare_execute() -> Result<(), sqlx::Error> {
+    let mut conn =
+        sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded").await?;
+    sqlx::raw_sql("TRUNCATE sharded").execute(&mut conn).await?;
+    for id in 1..=55i64 {
+        sqlx::query("INSERT INTO sharded(id) VALUES ($1)")
+            .bind(id)
+            .execute(&mut conn)
+            .await?;
+    }
+
+    for extended_prepare in [false, true] {
+        let name = format!("extended_{}", uuid::Uuid::new_v4().simple());
+        let prepare =
+            format!("PREPARE {name} AS SELECT id FROM sharded ORDER BY id DESC LIMIT $1 OFFSET $2");
+        if extended_prepare {
+            for _ in 0..3 {
+                sqlx::query(&prepare).execute(&mut conn).await?;
+            }
+        } else {
+            sqlx::raw_sql(&prepare).execute(&mut conn).await?;
+        }
+
+        // Exercise cached named statements and repeated unnamed executions.
+        for persistent in [true, false] {
+            for _ in 0..3 {
+                let rows = sqlx::query(&format!("EXECUTE {name}(5, 10)"))
+                    .persistent(persistent)
+                    .fetch_all(&mut conn)
+                    .await?;
+                assert_eq!(
+                    rows.iter()
+                        .map(|row| row.get::<i64, _>("id"))
+                        .collect::<Vec<_>>(),
+                    vec![45, 44, 43, 42, 41]
+                );
+            }
+        }
+
+        let prepare = format!("PREPARE {name}_id AS SELECT pgdog.unique_id()");
+        if extended_prepare {
+            sqlx::query(&prepare).execute(&mut conn).await?;
+        } else {
+            sqlx::raw_sql(&prepare).execute(&mut conn).await?;
+        }
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..3 {
+            let row = sqlx::query(&format!("EXECUTE {name}_id"))
+                .fetch_one(&mut conn)
+                .await?;
+            assert!(
+                ids.insert(row.get::<i64, _>(0)),
+                "each execution needs a fresh ID"
+            );
+        }
+    }
+
+    let error = sqlx::query("PREPARE extended_invalid AS SELECT nonexistent_issue1403_column")
+        .execute(&mut conn)
+        .await
+        .expect_err("the inner SQL PREPARE must fail");
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("42703")
+    );
+    assert_eq!(
+        sqlx::query("SELECT 1")
+            .fetch_one(&mut conn)
+            .await?
+            .get::<i32, _>(0),
+        1
+    );
+    sqlx::raw_sql("TRUNCATE sharded").execute(&mut conn).await?;
+    Ok(())
 }

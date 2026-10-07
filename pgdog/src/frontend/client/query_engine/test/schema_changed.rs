@@ -14,7 +14,7 @@ fn get_pool_ids(engine: &mut QueryEngine) -> Vec<u64> {
 
 /// Helper to run DDL in a transaction and verify schema_changed is set and reload occurs.
 async fn assert_ddl_sets_schema_changed(ddl: &str, expected_cmd: &str, cleanup: Option<&str>) {
-    let mut test_client = TestClient::new_sharded(Parameters::default()).await;
+    let mut test_client = Box::new(TestClient::new_sharded(Parameters::default()).await);
 
     // Capture pool IDs before DDL
     let pool_ids_before = get_pool_ids(&mut test_client.engine);
@@ -51,7 +51,7 @@ async fn assert_ddl_sets_schema_changed(ddl: &str, expected_cmd: &str, cleanup: 
     drop(test_client);
 
     // Create new client to verify reload happened
-    let mut new_client = TestClient::new_sharded(Parameters::default()).await;
+    let mut new_client = Box::new(TestClient::new_sharded(Parameters::default()).await);
     let pool_ids_after = get_pool_ids(&mut new_client.engine);
 
     assert!(
