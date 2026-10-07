@@ -51,9 +51,12 @@ impl Users {
     pub fn check(&mut self, config: &Config) {
         for user in &mut self.users {
             if user.passwords().is_empty() {
-                if !config.general.passthrough_auth() && user.identity.is_none() {
+                if !config.general.passthrough_auth()
+                    && user.identity.is_none()
+                    && !config.general.auth_type.external_token()
+                {
                     warn!(
-                        r#"user "{}" (database "{}") doesn't have a password, passthrough auth and mTLS are disabled"#,
+                        r#"user "{}" (database "{}") doesn't have a password, while passthrough auth, external token, and mTLS auth are disabled"#,
                         user.name, user.database,
                     );
                 }

@@ -470,7 +470,10 @@ impl Databases {
 
         // Launch all clusters
         for cluster in self.all().values() {
-            if cluster.passwords().is_empty() && cluster.identity().is_none() {
+            if cluster.passwords().is_empty()
+                && cluster.identity().is_none()
+                && !cluster.auth_type().external_token()
+            {
                 warn!(
                     r#"disabling pool for user "{}" and database "{}", password not set"#,
                     cluster.user(),

@@ -320,7 +320,11 @@ impl Server {
 
         // Perform authentication.
         let mut scram = Client::new(user, auth_secret);
-        let mut auth_type = AuthType::Trust;
+        let mut auth_type = if addr.server_auth.is_external_identity() {
+            AuthType::ExternalToken
+        } else {
+            AuthType::Trust
+        };
         loop {
             let message = stream.read().await?;
 
@@ -335,6 +339,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
+                            auth_type = AuthType::Plain;
                             let password = Password::new_password(auth_secret.deref());
                             stream.send_flush(&password).await?;
                         }
