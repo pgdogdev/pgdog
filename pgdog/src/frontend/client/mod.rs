@@ -326,7 +326,7 @@ impl Client {
             // won't be able to run queries.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                if passthrough_check::check(&user, &config.config).await {
+                if passthrough_check::check(&user).await {
                     databases::add(user)?
                 } else {
                     AuthResult::NoPassthroughNoUser

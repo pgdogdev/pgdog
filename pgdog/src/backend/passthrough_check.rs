@@ -14,6 +14,7 @@ use crate::backend::Cluster;
 use crate::backend::pool::Request;
 use crate::backend::schema::SchemaCache;
 
+use crate::config::config;
 use crate::util::safe_timeout;
 
 use super::Error;
@@ -73,14 +74,24 @@ impl Drop for ThrottleShutdown {
 /// Check if the credentials provided by the client are correct.
 ///
 /// Protected against a thundering herd by a lock.
-pub async fn check(user: &User, config: &Config) -> bool {
-    let key = Key::new(user);
-    let throttle = ThrottleShutdown { key };
+pub async fn check(user: &User) -> bool {
+    let config = config();
 
+    // TODO(lev): This is a copy/pasta of what databases::add() does
+    // for which we'll pay for later...
+    let user = if let Some(mut existing) = config.users.find(user) {
+        existing.password = user.password.clone();
+        existing
+    } else {
+        user.clone()
+    };
+
+    let key = Key::new(&user);
+    let throttle = ThrottleShutdown { key };
     let entry = THROTTLE.entry(throttle.key.clone()).or_default().clone();
 
     entry
-        .get_or_try_init(async || check_password(user, config).await)
+        .get_or_try_init(async || check_password(&user, &config.config).await)
         .await
         .copied()
         .unwrap_or_default()
