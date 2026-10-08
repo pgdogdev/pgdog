@@ -2,7 +2,6 @@ use std::time::{Duration, SystemTime};
 
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
-use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
 use crate::backend::{Error, pool::Address};
 
@@ -110,12 +109,63 @@ async fn build_aws_sdk_config(addr: &Address, region: &str) -> SdkConfig {
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
     let region = resolve_region(&addr)?;
     let sdk_config = build_aws_sdk_config(&addr, &region).await;
+    let token = sign_token(&addr, &region, &sdk_config).await?;
+
+    Ok((token, expires_at()))
+}
+
+/// FIPS builds sign with AWS-LC; `aws-sdk-rds` signs through `aws-sigv4`,
+/// which uses RustCrypto. Credentials still come from the SDK.
+#[cfg(feature = "fips")]
+async fn sign_token(addr: &Address, region: &str, sdk_config: &SdkConfig) -> Result<String, Error> {
+    use aws_credential_types::provider::ProvideCredentials;
+
+    use super::sigv4::{SigningCredentials, TokenRequest, rds_auth_token};
+
+    let failed = |error: &dyn std::fmt::Display| {
+        Error::RdsIamToken(format!(
+            "failed to generate RDS IAM token for {}@{}:{} in region {}: {}",
+            addr.user, addr.host, addr.port, region, error
+        ))
+    };
+
+    let credentials = sdk_config
+        .credentials_provider()
+        .ok_or_else(|| failed(&"no AWS credentials provider configured"))?
+        .provide_credentials()
+        .await
+        .map_err(|error| failed(&error))?;
+    let now = sdk_config
+        .time_source()
+        .map(|time| time.now())
+        .unwrap_or_else(SystemTime::now);
+
+    rds_auth_token(
+        &TokenRequest {
+            host: &addr.host,
+            port: addr.port,
+            user: &addr.user,
+            region,
+        },
+        &SigningCredentials {
+            access_key_id: credentials.access_key_id(),
+            secret_access_key: credentials.secret_access_key(),
+            session_token: credentials.session_token(),
+        },
+        now,
+    )
+    .map_err(|error| failed(&error))
+}
+
+#[cfg(not(feature = "fips"))]
+async fn sign_token(addr: &Address, region: &str, sdk_config: &SdkConfig) -> Result<String, Error> {
+    use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as AuthTokenConfig};
 
     let config = AuthTokenConfig::builder()
         .hostname(addr.host.as_str())
         .port(addr.port.into())
         .username(addr.user.as_str())
-        .region(Region::new(region.clone()))
+        .region(Region::new(region.to_owned()))
         .build()
         .map_err(|error| {
             Error::RdsIamToken(format!(
@@ -124,8 +174,8 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
             ))
         })?;
 
-    let token = AuthTokenGenerator::new(config)
-        .auth_token(&sdk_config)
+    AuthTokenGenerator::new(config)
+        .auth_token(sdk_config)
         .await
         .map(|token| token.to_string())
         .map_err(|error| {
@@ -133,9 +183,7 @@ pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> 
                 "failed to generate RDS IAM token for {}@{}:{} in region {}: {}",
                 addr.user, addr.host, addr.port, region, error
             ))
-        })?;
-
-    Ok((token, expires_at()))
+        })
 }
 
 // RDS IAM tokens are valid for 15 minutes.
