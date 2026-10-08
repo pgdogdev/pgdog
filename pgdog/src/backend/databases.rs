@@ -362,7 +362,7 @@ impl Databases {
     pub(crate) fn auth_type(&self, user: impl ToUser) -> Option<AuthType> {
         self.databases
             .get(&user.to_user())
-            .map(|cluster| cluster.auth_type().clone())
+            .map(|cluster| *cluster.auth_type())
     }
 
     /// Get a cluster for the user/database pair if it's configured.
