@@ -11,12 +11,12 @@ use crate::{
         round_robin,
         sharding::{self, Centroids, ContextBuilder, ShardOrLookup},
     },
-    net::{messages::Vector, parameter::ParameterValue},
+    net::parameter::ParameterValue,
     plugin::plugins,
 };
 
 #[cfg(test)]
-use crate::net::messages::Bind;
+use crate::net::messages::{Bind, Vector};
 
 use super::{
     explain_trace::{ExplainRecorder, ExplainSummary},

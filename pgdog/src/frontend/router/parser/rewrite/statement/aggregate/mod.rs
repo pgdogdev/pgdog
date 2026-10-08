@@ -14,14 +14,3 @@ pub(crate) enum HelperKind {
     /// `SUM(POWER(column, 2))`.
     SumSquares,
 }
-
-impl HelperKind {
-    /// Suffix used in the projected helper's internal alias.
-    pub(crate) fn alias_suffix(self) -> &'static str {
-        match self {
-            Self::Count => "count",
-            Self::Sum => "sum",
-            Self::SumSquares => "sumsq",
-        }
-    }
-}

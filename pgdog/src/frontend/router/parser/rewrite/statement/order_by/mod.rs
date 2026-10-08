@@ -2,7 +2,12 @@ use pg_raw_parse::{ConstValue, Node, make, nodes};
 
 use crate::frontend::router::parser::Column;
 
-use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
+use super::projection::{
+    HelperColumnKind, OrderByHelper, OrderBySource, ProjectionRewritePlan, helper_column_name,
+};
+
+mod case;
+pub(super) use case::rewrite_cases;
 
 impl OrderBySource {
     fn name(&self) -> &str {
@@ -163,8 +168,9 @@ pub(super) fn rewrite_select<'a>(
     plan: &mut ProjectionRewritePlan,
 ) {
     let mut helpers = Vec::new();
+    let mut sort_rewrites = Vec::new();
     let mut sort_position = 0;
-    for sort in select.sort_clause() {
+    for (position, sort) in select.sort_clause().into_iter().enumerate() {
         let node = sort.node();
         let source = match node {
             Node::ColumnRef(column) => {
@@ -193,15 +199,19 @@ pub(super) fn rewrite_select<'a>(
         match node {
             Node::ColumnRef(column) => match unique_output_name(select, column) {
                 Some(name) if source.as_ref().is_some_and(|source| source.name() == name) => {}
-                Some(name) => push_helper(
-                    plan,
-                    current_sort_position,
-                    source.expect("column sorts always have a source"),
-                    name,
-                    false,
-                ),
+                Some(name) => {
+                    sort_rewrites.push((position, name.clone()));
+                    push_helper(
+                        plan,
+                        current_sort_position,
+                        source.expect("column sorts always have a source"),
+                        name,
+                        false,
+                    );
+                }
                 None => {
-                    let alias = format!("__pgdog_order_col{current_sort_position}");
+                    let alias = helper_column_name(HelperColumnKind::OrderBy);
+                    sort_rewrites.push((position, alias.clone()));
                     helpers.push(mem.make_res_target(
                         Some(&alias),
                         mem.empty(),
@@ -217,7 +227,8 @@ pub(super) fn rewrite_select<'a>(
                 }
             },
             Node::A_Expr(_) if source.is_some() => {
-                let alias = format!("__pgdog_order_col{current_sort_position}");
+                let alias = helper_column_name(HelperColumnKind::OrderBy);
+                sort_rewrites.push((position, alias.clone()));
                 helpers.push(mem.make_res_target(
                     Some(&alias),
                     mem.empty(),
@@ -232,6 +243,17 @@ pub(super) fn rewrite_select<'a>(
                 );
             }
             _ => {}
+        }
+    }
+
+    let mut rewrites = sort_rewrites.into_iter().peekable();
+    for (position, mut sort) in select.sort_clause_mut().into_iter().enumerate() {
+        if rewrites.peek().is_some_and(|(index, _)| *index == position) {
+            let (_, alias) = rewrites.next().expect("sort rewrite exists");
+            sort.set_node(
+                mem.make_column_ref(mem.make_list(&[mem.make_string(Some(&alias)).uncast()]))
+                    .uncast(),
+            );
         }
     }
 
@@ -271,9 +293,13 @@ mod tests {
     fn projects_missing_sort_column() {
         let (sql, plan) = rewrite("SELECT id FROM products ORDER BY price");
 
-        assert!(sql.contains("price AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("price AS {}", plan.order_by_helpers[0].alias)));
         assert_eq!(plan.order_by_helpers.len(), 1);
-        assert_eq!(plan.order_by_helpers[0].alias, "__pgdog_order_col0");
+        assert!(
+            plan.order_by_helpers[0]
+                .alias
+                .starts_with("__pgdog_order_col")
+        );
         assert!(plan.order_by_helpers[0].injected);
     }
 
@@ -308,7 +334,7 @@ mod tests {
         let (sql, plan) =
             rewrite("SELECT a.price, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
 
-        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("b.price AS {}", plan.order_by_helpers[0].alias)));
         assert_eq!(plan.order_by_helpers.len(), 1);
         assert!(plan.order_by_helpers[0].injected);
     }
@@ -330,7 +356,7 @@ mod tests {
         let (sql, plan) =
             rewrite("SELECT a.*, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
 
-        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("b.price AS {}", plan.order_by_helpers[0].alias)));
         assert!(plan.order_by_helpers[0].injected);
     }
 
@@ -338,7 +364,7 @@ mod tests {
     fn injects_helper_for_unqualified_star_join() {
         let (sql, plan) = rewrite("SELECT * FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
 
-        assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("b.price AS {}", plan.order_by_helpers[0].alias)));
         assert!(plan.order_by_helpers[0].injected);
     }
 
@@ -362,7 +388,7 @@ mod tests {
     fn projects_column_not_covered_by_qualified_star() {
         let (sql, plan) = rewrite("SELECT a.* FROM a JOIN b ON a.id = b.a_id ORDER BY b.score");
 
-        assert!(sql.contains("b.score AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("b.score AS {}", plan.order_by_helpers[0].alias)));
         assert_eq!(plan.order_by_helpers.len(), 1);
     }
 
@@ -370,8 +396,12 @@ mod tests {
     fn projects_unqualified_sort_for_qualified_star() {
         let (sql, plan) = rewrite("SELECT p.* FROM products p ORDER BY price");
 
-        assert!(sql.contains("price AS __pgdog_order_col0"));
-        assert_eq!(plan.order_by_helpers[0].alias, "__pgdog_order_col0");
+        assert!(sql.contains(&format!("price AS {}", plan.order_by_helpers[0].alias)));
+        assert!(
+            plan.order_by_helpers[0]
+                .alias
+                .starts_with("__pgdog_order_col")
+        );
     }
 
     #[test]
@@ -379,7 +409,7 @@ mod tests {
         let (sql, plan) =
             rewrite("SELECT a.price FROM a JOIN b ON a.id = b.a_id ORDER BY a.price, b.price");
 
-        assert!(sql.contains("b.price AS __pgdog_order_col1"));
+        assert!(sql.contains(&format!("b.price AS {}", plan.order_by_helpers[0].alias)));
         assert_eq!(plan.order_by_helpers.len(), 1);
         assert_eq!(plan.order_by_helpers[0].sort_position, 1);
     }
@@ -389,7 +419,7 @@ mod tests {
         let (sql, plan) = rewrite("SELECT id FROM products ORDER BY embedding <-> $1 LIMIT 5");
 
         assert!(sql.contains("embedding <-> $1"));
-        assert!(sql.contains("AS __pgdog_order_col0"));
+        assert!(sql.contains(&format!("AS {}", plan.order_by_helpers[0].alias)));
         assert_eq!(plan.order_by_helpers.len(), 1);
         assert!(plan.order_by_helpers[0].injected);
     }

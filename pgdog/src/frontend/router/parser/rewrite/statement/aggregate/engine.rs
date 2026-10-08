@@ -4,7 +4,9 @@ use itertools::*;
 use pg_raw_parse::{Node, make, nodes};
 
 use super::{AggregateHelper, HelperKind};
-use crate::frontend::router::parser::rewrite::statement::projection::ProjectionRewritePlan;
+use crate::frontend::router::parser::rewrite::statement::projection::{
+    HelperColumnKind, ProjectionRewritePlan, helper_column_name,
+};
 
 /// Query rewrite engine. Currently supports injecting helper aggregates for AVG and
 /// variance-related functions that require additional helper aggregates when run
@@ -39,8 +41,7 @@ impl AggregatesRewrite {
                     .map(move |spec| (target, spec))
             })
             .map(|(target, HelperSpec { func, kind })| {
-                let helper_alias =
-                    format!("__pgdog_{}_col{}", kind.alias_suffix(), target.column());
+                let helper_alias = helper_column_name(HelperColumnKind::Aggregate(kind));
                 let node = mem.make_res_target(Some(&helper_alias), mem.empty(), func.uncast());
 
                 plan.aggregate_helpers.push(AggregateHelper {
@@ -195,7 +196,12 @@ mod tests {
         assert_eq!(plan.aggregate_helpers.len(), 1);
         let helper = &plan.aggregate_helpers[0];
         assert_eq!(helper.target_column, 0);
-        assert_eq!(helper.alias, "__pgdog_count_col0");
+        assert!(helper.alias.starts_with("__pgdog_count_col"));
+        assert!(
+            ast.target_list()
+                .iter()
+                .any(|target| target.name() == Some(helper.alias.as_str()))
+        );
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -215,7 +221,12 @@ mod tests {
         assert_eq!(plan.aggregate_helpers.len(), 1);
         let helper = &plan.aggregate_helpers[0];
         assert_eq!(helper.target_column, 1);
-        assert_eq!(helper.alias, "__pgdog_count_col1");
+        assert!(helper.alias.starts_with("__pgdog_count_col"));
+        assert!(
+            ast.target_list()
+                .iter()
+                .any(|target| target.name() == Some(helper.alias.as_str()))
+        );
         assert!(!helper.distinct);
         assert!(matches!(helper.kind, HelperKind::Count));
 
@@ -238,12 +249,22 @@ mod tests {
 
         let helper_price = &plan.aggregate_helpers[0];
         assert_eq!(helper_price.target_column, 0);
-        assert_eq!(helper_price.alias, "__pgdog_count_col0");
+        assert!(helper_price.alias.starts_with("__pgdog_count_col"));
+        assert!(
+            ast.target_list()
+                .iter()
+                .any(|target| target.name() == Some(helper_price.alias.as_str()))
+        );
         assert!(matches!(helper_price.kind, HelperKind::Count));
 
         let helper_discount = &plan.aggregate_helpers[1];
         assert_eq!(helper_discount.target_column, 1);
-        assert_eq!(helper_discount.alias, "__pgdog_count_col1");
+        assert!(helper_discount.alias.starts_with("__pgdog_count_col"));
+        assert!(
+            ast.target_list()
+                .iter()
+                .any(|target| target.name() == Some(helper_discount.alias.as_str()))
+        );
         assert!(matches!(helper_discount.kind, HelperKind::Count));
 
         let aggregate = Aggregate::parse(&ast, &Default::default());

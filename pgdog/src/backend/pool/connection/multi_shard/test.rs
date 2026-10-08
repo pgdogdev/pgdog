@@ -74,11 +74,11 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
     });
     let mut route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
-        vec![OrderBy::AscColumn("__pgdog_order_col0".into())],
         Default::default(),
         Default::default(),
         None,
     );
+    route.set_order_by(vec![OrderBy::AscColumn("__pgdog_order_col0".into())]);
     route.projection_rewrite_plan = plan;
     let mut multi_shard = MultiShard::new(2, &route);
 
@@ -203,7 +203,6 @@ fn test_rd_before_dr() {
 fn test_distinct_state_resets_between_requests() {
     let route = Route::select(
         ShardWithPriority::new_default_unset(Shard::All),
-        vec![],
         Default::default(),
         Default::default(),
         Some(DistinctBy::Row),
