@@ -16,12 +16,12 @@ use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
-use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
+use crate::backend::{maintenance_mode, passthrough_check};
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
@@ -326,7 +326,11 @@ impl Client {
             // won't be able to run queries.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(user)?
+                if passthrough_check::check(&user, &config.config).await {
+                    databases::add(user)?
+                } else {
+                    AuthResult::NoPassthroughNoUser
+                }
             } else {
                 AuthResult::NoPassthroughNoUser
             }

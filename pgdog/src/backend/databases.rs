@@ -584,7 +584,7 @@ fn resolve_table_mapping_deprecated(
 // - `schema_cache`: A cache of database tables, shared between all clusters. This is passed here
 //                   to ensure all clusters share the same schema cache, and to make sure a new one
 //                   is created on each config reload.
-fn new_pool(
+pub(super) fn new_pool(
     user: &crate::config::User,
     config: &crate::config::Config,
     schema_cache: SchemaCache,
