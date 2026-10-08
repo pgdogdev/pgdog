@@ -49,7 +49,7 @@ use super::{Error, Guard, Healtcheck, Pool, Request};
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::backend::{ConnectReason, DisconnectReason};
+use crate::backend::{ConnectReason, DATABASE_HEALTH, DisconnectReason};
 use crate::config::ServerAuth;
 use crate::tasks;
 
@@ -163,7 +163,7 @@ impl Monitor {
                             }
                         };
                         if !ok {
-                            self.pool.inner().health.toggle(false);
+                            self.pool.inner().health.toggle_health(false);
                         }
                     }
                 }
@@ -351,12 +351,20 @@ impl Monitor {
     pub(crate) async fn healthcheck(pool: &Pool) -> Result<bool, Error> {
         match Self::healthcheck_internal(pool).await {
             Ok(result) => {
-                pool.inner().health.toggle(result);
+                pool.inner().health.toggle_health(result);
+                if result {
+                    pool.inner().health.toggle_auth(true);
+                }
                 Ok(result)
             }
 
             Err(err) => {
-                pool.inner().health.toggle(false);
+                if let Error::ServerAuth = err {
+                    pool.inner().health.toggle_auth(false);
+                    DATABASE_HEALTH.notify_bad_auth();
+                }
+
+                pool.inner().health.toggle_health(false);
                 Err(err)
             }
         }
@@ -451,7 +459,7 @@ mod test {
         crate::logger();
         let pool = pool();
 
-        pool.inner().health.toggle(false);
+        pool.inner().health.toggle_health(false);
         assert!(!pool.inner().health.healthy());
 
         let result = Monitor::healthcheck(&pool).await.unwrap();
@@ -465,7 +473,7 @@ mod test {
         crate::logger();
         let pool = pool();
 
-        pool.inner().health.toggle(true);
+        pool.inner().health.toggle_health(true);
         assert!(pool.inner().health.healthy());
 
         pool.shutdown();
@@ -500,7 +508,7 @@ mod test {
         });
         pool.launch();
 
-        pool.inner().health.toggle(true);
+        pool.inner().health.toggle_health(true);
         assert!(pool.inner().health.healthy());
 
         let result = Monitor::healthcheck(&pool).await;

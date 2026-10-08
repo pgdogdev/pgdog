@@ -9,9 +9,9 @@ use tracing::{error, info, warn};
 use crate::sharding::ShardedSchema;
 use crate::util::random_string;
 use crate::{
-    EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth, PreparedStatementsLevel,
-    QueryParser, QueryParserLevel, ReadWriteSplit, RewriteMode, Role, ShardedMappingKey,
-    ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
+    AuthType, EnumeratedDatabase, Memory, OmnishardedTable, PassthroughAuth,
+    PreparedStatementsLevel, QueryParser, QueryParserLevel, ReadWriteSplit, RewriteMode, Role,
+    ShardedMappingKey, ShardedTableConfig, SystemCatalogsBehavior, system_catalogs,
 };
 
 use super::database::Database;
@@ -568,19 +568,14 @@ impl Config {
             );
         }
 
-        // Warn about plain auth and TLS
-        match self.general.passthrough_auth {
-            PassthroughAuth::Enabled if !self.general.tls_client_required => {
-                warn!(
-                    "consider setting \"tls_client_required\" while \"passthrough_auth\" is enabled to prevent clients from exposing plaintext passwords"
-                );
-            }
-            PassthroughAuth::EnabledPlain => {
-                warn!(
-                    "\"passthrough_auth\" is set to \"plain\", network traffic may expose plaintext passwords"
-                )
-            }
-            _ => (),
+        if self.general.auth_type.passthrough() && !self.general.tls_client_required {
+            warn!(
+                "consider setting \"tls_client_required\" while \"auth_type\" is \"passthrough\" to prevent clients from exposing plaintext passwords"
+            );
+        }
+
+        if self.general.passthrough_auth != PassthroughAuth::Disabled {
+            self.general.auth_type = AuthType::Passthrough;
         }
 
         if !self.general.two_phase_commit && self.rewrite.enabled {

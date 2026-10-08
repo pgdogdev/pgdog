@@ -426,7 +426,7 @@ mod tests {
         let now = Instant::now();
 
         ban.ban(Error::ServerError, Duration::from_millis(1));
-        pool.inner().health.toggle(false);
+        pool.inner().health.toggle_health(false);
 
         let future = now + Duration::from_millis(10);
         let unbanned = ban.unban_if_expired(future);

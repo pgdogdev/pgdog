@@ -51,6 +51,8 @@ pub enum AuthType {
     Plain,
     /// RDS IAM or Azure Workload identity.
     ExternalToken,
+    /// Passthrough authentication.
+    Passthrough,
 }
 
 impl Display for AuthType {
@@ -61,6 +63,7 @@ impl Display for AuthType {
             Self::Trust => write!(f, "trust"),
             Self::Plain => write!(f, "plain"),
             Self::ExternalToken => write!(f, "external token"),
+            Self::Passthrough => write!(f, "passthrough"),
         }
     }
 }
@@ -81,6 +84,10 @@ impl AuthType {
     pub fn external_token(&self) -> bool {
         matches!(self, Self::ExternalToken)
     }
+
+    pub fn passthrough(&self) -> bool {
+        matches!(self, Self::Passthrough)
+    }
 }
 
 impl FromStr for AuthType {
@@ -93,6 +100,7 @@ impl FromStr for AuthType {
             "trust" => Ok(Self::Trust),
             "plain" => Ok(Self::Plain),
             "external token" => Ok(Self::ExternalToken),
+            "passthrough" => Ok(Self::Passthrough),
             _ => Err(format!("Invalid auth type: {}", s)),
         }
     }

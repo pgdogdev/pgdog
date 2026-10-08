@@ -261,6 +261,8 @@ impl Client {
                     AuthResult::NoPasswordMatch
                 }
             }
+
+            AuthType::Passthrough => unreachable!("passthrough auth is validated separately"),
         };
 
         Ok(result)
@@ -284,7 +286,6 @@ impl Client {
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
         let auth_type = &config.config.general.auth_type;
-        let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(protocol_version, id);
         let comms = ClientComms::new(id);
@@ -303,7 +304,7 @@ impl Client {
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
             Self::check_password(&mut stream, user, database, auth_type, &passwords).await?
-        } else if passthrough {
+        } else if auth_type.passthrough() {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
             stream
@@ -424,11 +425,7 @@ impl Client {
                 user,
                 database,
                 addr,
-                if passthrough {
-                    "passthrough".into()
-                } else {
-                    auth_type.to_string()
-                },
+                auth_type.to_string(),
                 if stream.is_tls() { "🔒" } else { "" }
             );
         }

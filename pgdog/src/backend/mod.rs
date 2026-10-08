@@ -2,6 +2,7 @@
 
 pub(crate) mod auth;
 pub(crate) mod connect_reason;
+pub(crate) mod database_health;
 pub(crate) mod databases;
 pub(crate) mod disconnect_reason;
 pub(crate) mod error;
@@ -20,6 +21,7 @@ pub(crate) mod stats;
 pub(crate) mod validation;
 
 pub(crate) use connect_reason::ConnectReason;
+pub(in crate::backend) use database_health::DATABASE_HEALTH;
 pub(crate) use disconnect_reason::DisconnectReason;
 pub(crate) use error::Error;
 pub(crate) use pool::{

@@ -304,7 +304,7 @@ async fn test_unban_if_expired_checks_pool_health() {
     ban.ban(Error::ServerError, Duration::from_millis(50));
     assert!(ban.banned());
 
-    pool.inner().health.toggle(false);
+    pool.inner().health.toggle_health(false);
 
     sleep(Duration::from_millis(60)).await;
 
@@ -927,7 +927,7 @@ async fn test_monitor_shuts_down_immediately() {
 async fn test_monitor_bans_unhealthy_target() {
     let replicas = setup_test_replicas();
 
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     sleep(Duration::from_millis(400)).await;
 
@@ -964,7 +964,7 @@ async fn test_monitor_does_not_ban_single_target() {
     );
     replicas.launch();
 
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     sleep(Duration::from_millis(400)).await;
 
@@ -977,8 +977,8 @@ async fn test_monitor_does_not_ban_single_target() {
 async fn test_monitor_unbans_all_when_all_unhealthy() {
     let replicas = setup_test_replicas();
 
-    replicas.targets[0].health().toggle(false);
-    replicas.targets[1].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
+    replicas.targets[1].health().toggle_health(false);
 
     sleep(Duration::from_millis(400)).await;
 
@@ -1033,7 +1033,7 @@ async fn test_monitor_does_not_ban_with_zero_ban_timeout() {
     );
     replicas.launch();
 
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     sleep(Duration::from_millis(400)).await;
 
@@ -1051,9 +1051,9 @@ async fn test_monitor_health_state_race() {
 
     let toggle_task = spawn(async move {
         for _ in 0..50 {
-            target.health().toggle(false);
+            target.health().toggle_health(false);
             sleep(Duration::from_micros(100)).await;
-            target.health().toggle(true);
+            target.health().toggle_health(true);
             sleep(Duration::from_micros(100)).await;
         }
     });
@@ -1629,7 +1629,7 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
     let replicas = setup_test_replicas();
 
     // First target becomes unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     // Wait for monitor to ban the first target
     sleep(Duration::from_millis(400)).await;
@@ -1644,7 +1644,7 @@ async fn test_monitor_unbans_all_when_second_target_becomes_unhealthy_after_firs
     );
 
     // Now second target becomes unhealthy (first is already banned)
-    replicas.targets[1].health().toggle(false);
+    replicas.targets[1].health().toggle_health(false);
 
     // Wait for monitor to process - should unban all since all are unhealthy
     sleep(Duration::from_millis(400)).await;
@@ -1932,7 +1932,7 @@ fn test_ban_check_does_not_clear_expired_ban_when_unhealthy_with_bad_lag() {
     let replicas = setup_test_replicas_no_launch();
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     // Ban with short timeout
     replicas.targets[0]
@@ -1969,7 +1969,7 @@ fn test_ban_check_bans_unhealthy_replica_with_bad_lag() {
     let replicas = setup_test_replicas_no_launch();
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     // Set replica lag on the pool
     replicas.targets[0].pool.lock().replica_lag = ReplicaLag {
@@ -2030,7 +2030,7 @@ fn test_ban_check_bans_with_pool_unhealthy_reason() {
     let replicas = setup_test_replicas_no_launch();
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     // No replica lag set (defaults to zero)
 
@@ -2064,7 +2064,7 @@ fn test_ban_check_does_not_ban_single_target() {
     // Don't launch - we're unit testing ban_check
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     let monitor = Monitor::new_test(&replicas);
     let threshold = ReplicaLag {
@@ -2125,7 +2125,7 @@ fn test_ban_check_does_not_ban_with_zero_ban_timeout() {
     );
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     let monitor = Monitor::new_test(&replicas);
     let threshold = ReplicaLag {
@@ -2154,8 +2154,8 @@ fn test_ban_check_unbans_all_when_all_unhealthy() {
         .ban(Error::ServerError, Duration::from_secs(60));
 
     // Set both as unhealthy
-    replicas.targets[0].health().toggle(false);
-    replicas.targets[1].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
+    replicas.targets[1].health().toggle_health(false);
 
     assert!(replicas.targets[0].ban.banned());
     assert!(replicas.targets[1].ban.banned());
@@ -2312,7 +2312,7 @@ fn test_ban_check_default_threshold_bans_unhealthy_with_pool_unhealthy_reason() 
     };
 
     // Set target as unhealthy
-    replicas.targets[0].health().toggle(false);
+    replicas.targets[0].health().toggle_health(false);
 
     let monitor = Monitor::new_test(&replicas);
     // Use default config thresholds (MAX values)
@@ -2474,7 +2474,7 @@ async fn ban_new_targets_until_health_check() {
     assert_eq!(2345, banned_target.pool.addr().port);
     assert!(!banned_target.health().healthy());
 
-    banned_target.health().toggle(true);
+    banned_target.health().toggle_health(true);
     Monitor::new_test(&new).ban_check(&ReplicaLag {
         duration: Duration::MAX,
         bytes: i64::MAX,

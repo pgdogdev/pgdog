@@ -175,6 +175,12 @@ impl Users {
             .find(|existing| existing.name == user.name && existing.database == user.database)
             .cloned()
     }
+
+    /// Remove a user.
+    pub fn remove(&mut self, name: &str, database: &str) {
+        self.users
+            .retain(|user| user.name != name && user.database != database);
+    }
 }
 
 /// Backend authentication mode used by PgDog for server connections.
