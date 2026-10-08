@@ -144,6 +144,7 @@ impl DataSync<'_> {
             let server = Self::connect_reader(index, address, &stmt, &slot_snapshot).await?;
             set.spawn(publisher::copy::data(server, self.format, rows.clone()));
         }
+        drop(rows);
 
         {
             loop {
