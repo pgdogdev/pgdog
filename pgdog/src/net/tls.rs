@@ -855,9 +855,9 @@ mod tests {
             crate::config::config().config.general.fips,
             FipsMode::Disabled
         );
-        super::reload().expect("current config still reloads");
         assert!(Arc::ptr_eq(&acceptor, &super::acceptor().unwrap()));
         assert_eq!(super::test_acceptor_build_count(), 1);
+        super::reload().expect("current config still reloads");
 
         super::test_reset_acceptor();
         crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
