@@ -6,19 +6,38 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use pgdog_config::Config;
 use pgdog_config::User;
+use pgdog_config::users::PasswordKind;
 use tokio::sync::OnceCell;
 use tracing::error;
 
 use crate::backend::Cluster;
 use crate::backend::pool::Request;
 use crate::backend::schema::SchemaCache;
+
 use crate::util::safe_timeout;
 
 use super::Error;
 use super::databases::*;
 
 // (user, database) -> validator
-static THROTTLE: Lazy<DashMap<(String, String), Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
+static THROTTLE: Lazy<DashMap<Key, Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct Key {
+    user: String,
+    database: String,
+    passwords: Vec<PasswordKind>,
+}
+
+impl Key {
+    fn new(user: &User) -> Self {
+        Self {
+            user: user.name.clone(),
+            database: user.database.clone(),
+            passwords: user.passwords(),
+        }
+    }
+}
 
 // Make sure we shut down the cluster when the check is complete.
 struct ClusterShutdown {
@@ -40,7 +59,7 @@ impl Drop for ClusterShutdown {
 }
 
 struct ThrottleShutdown {
-    key: (String, String),
+    key: Key,
 }
 
 impl Drop for ThrottleShutdown {
@@ -55,9 +74,8 @@ impl Drop for ThrottleShutdown {
 ///
 /// Protected against a thundering herd by a lock.
 pub async fn check(user: &User, config: &Config) -> bool {
-    let throttle = ThrottleShutdown {
-        key: (user.name.clone(), user.database.clone()),
-    };
+    let key = Key::new(user);
+    let throttle = ThrottleShutdown { key };
 
     let entry = THROTTLE.entry(throttle.key.clone()).or_default().clone();
 

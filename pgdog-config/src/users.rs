@@ -232,7 +232,7 @@ impl ServerAuth {
 }
 
 /// The kind of password configured on the user.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PasswordKind {
     Plain(String),
     Hashed(String),
