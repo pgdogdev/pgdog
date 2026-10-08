@@ -10,6 +10,14 @@ cargo build -p pgdog --release --features fips
 
 The `fips` feature links the AWS-LC FIPS module (`aws-lc-fips-sys`) for both Rustls and PgDog's direct use of AWS-LC. Building it needs CMake, Go and a C compiler.
 
+The feature is off by default, and the published binaries and Docker images are built without it. To build a FIPS image:
+
+```sh
+docker build --build-arg FEATURES=fips -t pgdog:fips .
+```
+
+The Dockerfile installs Go in the builder stage when `FEATURES` includes `fips`.
+
 ## Enforcement
 
 The `fips` setting in `[general]` (or the `PGDOG_FIPS` environment variable) controls enforcement. An unrecognized `PGDOG_FIPS` value is treated as `required`, so a typo can't silently turn enforcement off.
