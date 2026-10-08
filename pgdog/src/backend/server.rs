@@ -853,6 +853,11 @@ impl Server {
         self.in_transaction
     }
 
+    /// A statement completed since the last ReadyForQuery.
+    pub(crate) fn statement_executed(&self) -> bool {
+        self.statement_executed
+    }
+
     /// The server connection permanently failed.
     pub(crate) fn error(&self) -> bool {
         self.stats().get_state() == State::Error
@@ -1044,13 +1049,42 @@ impl Server {
         Ok(())
     }
 
-    /// Drain any remaining messages on the server connection,
-    /// attempting to return the connection into a synchronized state.
-    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+    /// Abort a successful extended-protocol execution before synchronizing.
+    ///
+    /// A Sync by itself would commit PostgreSQL's implicit transaction.
+    /// Pending replies must be drained before calling this method.
+    pub(super) async fn rollback_and_synchronize(&mut self) -> Result<(), Error> {
+        let request = ServerRequest::parameterized("ROLLBACK", &[]);
+        self.send(&request.messages.into()).await?;
+
+        while !self.in_sync() {
+            self.read().await?;
+        }
+
+        if !self.done() {
+            return Err(Error::RollbackFailed);
+        }
+
+        self.stats.rollback();
+        self.transaction_params_hook(true);
+        self.re_synced = true;
+
+        Ok(())
+    }
+
+    /// Drain replies already owed by the server without changing transaction state.
+    pub(super) async fn drain_pending(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
             self.read().await?;
         }
 
+        Ok(())
+    }
+
+    /// Drain any remaining messages on the server connection,
+    /// attempting to return the connection into a synchronized state.
+    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+        self.drain_pending().await?;
         self.synchronize().await
     }
 
