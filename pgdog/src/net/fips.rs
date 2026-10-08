@@ -8,7 +8,9 @@
 //!
 //! PgDog does not link OpenSSL, so OpenSSL's own FIPS configuration does not
 //! affect it. The host-wide signal is the kernel flag
-//! `/proc/sys/crypto/fips_enabled`, which FIPS-enabled distributions set.
+//! `/proc/sys/crypto/fips_enabled`, which FIPS-enabled distributions set. It
+//! only produces a warning: deployments that must be FIPS-compliant set
+//! `fips = "required"`.
 
 use std::path::Path;
 
@@ -33,16 +35,12 @@ pub(crate) enum Enforcement {
 }
 
 impl Enforcement {
-    /// Resolve the configured mode against how PgDog was built and the host.
+    /// Resolve the configured mode against how PgDog was built.
     pub(crate) fn resolve(mode: FipsMode) -> Self {
-        Self::resolve_with(mode, *HOST_FIPS)
-    }
-
-    fn resolve_with(mode: FipsMode, host_fips: bool) -> Self {
         let enforced = match mode {
             FipsMode::Disabled => false,
             FipsMode::Required => true,
-            FipsMode::Auto => cfg!(feature = "fips") || host_fips,
+            FipsMode::Auto => cfg!(feature = "fips"),
         };
 
         if enforced {
@@ -107,8 +105,8 @@ pub(crate) fn check(config: &Config) -> Result<Enforcement, Error> {
     let enforcement = Enforcement::resolve(mode);
 
     if !enforcement.enforced() {
-        if *HOST_FIPS {
-            warn!("host is in FIPS mode but FIPS enforcement is disabled (fips = \"{mode}\")");
+        if let Some(warning) = host_warning(mode, *HOST_FIPS) {
+            warn!("{warning}");
         }
         return Ok(enforcement);
     }
@@ -123,6 +121,20 @@ pub(crate) fn check(config: &Config) -> Result<Enforcement, Error> {
     info!("🔒 FIPS 140-3 mode enforced (fips = \"{mode}\")");
 
     Ok(enforcement)
+}
+
+/// Warning for a FIPS host running without enforcement.
+fn host_warning(mode: FipsMode, host_fips: bool) -> Option<String> {
+    if !host_fips {
+        return None;
+    }
+
+    Some(match mode {
+        FipsMode::Disabled => {
+            "host is in FIPS mode but FIPS enforcement is disabled (fips = \"disabled\")".into()
+        }
+        _ => "host is in FIPS mode but PgDog was built without the `fips` feature and is not using validated cryptography; set fips = \"required\" to refuse to start instead".into(),
+    })
 }
 
 /// Settings that weaken a FIPS deployment without using non-approved crypto.
@@ -176,23 +188,13 @@ mod tests {
 
     #[test]
     fn test_resolve_explicit_modes() {
-        for host in [true, false] {
-            assert_eq!(
-                Enforcement::resolve_with(FipsMode::Required, host),
-                Enforcement::Enforced
-            );
-            assert_eq!(
-                Enforcement::resolve_with(FipsMode::Disabled, host),
-                Enforcement::NotEnforced
-            );
-        }
-    }
-
-    #[test]
-    fn test_resolve_auto_follows_host() {
         assert_eq!(
-            Enforcement::resolve_with(FipsMode::Auto, true),
+            Enforcement::resolve(FipsMode::Required),
             Enforcement::Enforced
+        );
+        assert_eq!(
+            Enforcement::resolve(FipsMode::Disabled),
+            Enforcement::NotEnforced
         );
     }
 
@@ -203,7 +205,21 @@ mod tests {
         } else {
             Enforcement::NotEnforced
         };
-        assert_eq!(Enforcement::resolve_with(FipsMode::Auto, false), expected);
+        assert_eq!(Enforcement::resolve(FipsMode::Auto), expected);
+    }
+
+    #[test]
+    fn test_host_warning() {
+        // A FIPS host only warns; it never enforces on its own.
+        for mode in [FipsMode::Auto, FipsMode::Disabled, FipsMode::Required] {
+            assert!(host_warning(mode, false).is_none());
+        }
+
+        let auto = host_warning(FipsMode::Auto, true).unwrap();
+        assert!(auto.contains("set fips = \"required\""), "{auto}");
+
+        let disabled = host_warning(FipsMode::Disabled, true).unwrap();
+        assert!(disabled.contains("fips = \"disabled\""), "{disabled}");
     }
 
     #[test]

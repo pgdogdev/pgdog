@@ -52,15 +52,17 @@ impl std::fmt::Display for TlsVerifyMode {
 
 /// FIPS 140-3 enforcement.
 ///
-/// When enforced, PgDog refuses to start (or to reload) unless its
-/// cryptographic module is running in FIPS mode, every TLS configuration it
-/// builds reports FIPS compliance, and no non-approved algorithm (MD5) is used
-/// for authentication.
+/// When enforced, PgDog refuses to start (or to apply a configuration) unless
+/// its cryptographic module is running in FIPS mode, every TLS configuration
+/// it builds reports FIPS compliance, and no non-approved algorithm (MD5) is
+/// used for authentication. Deployments that must be FIPS-compliant should set
+/// `required`.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FipsMode {
-    /// Enforce when PgDog was built with the `fips` feature or the host kernel
-    /// is in FIPS mode (`/proc/sys/crypto/fips_enabled` is `1`) (default).
+    /// Enforce when PgDog was built with the `fips` feature. On a FIPS host
+    /// (`/proc/sys/crypto/fips_enabled` is `1`) without it, log a warning
+    /// (default).
     #[default]
     Auto,
     /// Always enforce; refuse to start if FIPS mode is unavailable.

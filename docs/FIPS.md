@@ -16,13 +16,15 @@ The `fips` setting in `[general]` (or the `PGDOG_FIPS` environment variable) con
 
 | Value | Enforced |
 |-------|----------|
-| `auto` (default) | When PgDog was built with `--features fips`, or the host kernel is in FIPS mode (`/proc/sys/crypto/fips_enabled` is `1`). |
-| `required` | Always. |
+| `auto` (default) | When PgDog was built with `--features fips`. A non-FIPS build on a FIPS host (`/proc/sys/crypto/fips_enabled` is `1`) logs a warning but runs. |
+| `required` | Always. **Set this for FIPS/FedRAMP deployments.** |
 | `disabled` | Never. A warning is logged if the host is in FIPS mode. |
 
 When enforced, PgDog:
 
-- **Refuses any configuration that fails enforcement** unless PgDog was built with the `fips` feature and AWS-LC reports FIPS mode. The check runs whenever configuration is applied: at startup, `pgdog configcheck`, `RELOAD`/SIGHUP and admin `SET`. A refused change never goes live. At startup this is a kill switch: on a FIPS host, a non-FIPS build exits instead of running unvalidated crypto.
+- **Refuses any configuration that fails enforcement** unless PgDog was built with the `fips` feature and AWS-LC reports FIPS mode. The check runs whenever configuration is applied: at startup, `pgdog configcheck`, `RELOAD`/SIGHUP and admin `SET`. A refused change never goes live. With `fips = "required"` this is a kill switch: a non-FIPS build exits instead of running unvalidated crypto.
+
+The host flag is the node kernel's, so a container sees its node's setting. Configuring a base image for FIPS (for example OpenSSL's FIPS provider or a FIPS crypto-policy) doesn't set it.
 - **Checks every TLS configuration** it builds (the client-facing acceptor and every upstream connector, at startup, on reload, and on certificate rotation) with Rustls' `ServerConfig::fips()` / `ClientConfig::fips()`, and refuses ones that aren't FIPS-compliant. A failed reload keeps the previous TLS configuration.
 - **Refuses MD5 authentication**: `auth_type = "md5"` is refused like any other failing configuration, and an MD5 challenge from a Postgres server fails the connection.
 - **Logs a warning** for settings that weaken a FIPS deployment without using non-approved crypto: client TLS not configured or not required, passthrough authentication enabled, or server TLS that isn't `verify_full`.

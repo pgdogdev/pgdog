@@ -138,8 +138,9 @@ tls_verify = "disabled"
 # Default: auto
 #
 # Available options:
-# - auto (enforce on FIPS builds and when /proc/sys/crypto/fips_enabled is 1)
-# - required (always enforce)
+# - auto (enforce on FIPS builds; on a FIPS host, i.e.
+#   /proc/sys/crypto/fips_enabled is 1, a non-FIPS build only logs a warning)
+# - required (always enforce; set this for FIPS/FedRAMP deployments)
 # - disabled (never enforce)
 # fips = "auto"
 # How long to wait for active connections to finish transactions

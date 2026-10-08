@@ -302,8 +302,9 @@ pub struct General {
     /// `fips` feature and its crypto module is in FIPS mode, and rejects TLS
     /// configurations that are not FIPS-compliant.
     ///
-    /// _Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts). An
-    /// unrecognized `PGDOG_FIPS` value is treated as `required`.
+    /// _Default:_ `auto` (enforced on FIPS builds; warns on a FIPS host
+    /// otherwise). An unrecognized `PGDOG_FIPS` value is treated as
+    /// `required`.
     #[serde(default = "General::fips")]
     pub fips: FipsMode,
 
