@@ -90,7 +90,7 @@ dyn-clone = "1.0.20"
 libc = "0.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.7"
+tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
 tikv-jemalloc-ctl = "0.7"
 
 
