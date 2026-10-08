@@ -125,6 +125,8 @@ pub struct PoolConfig {
     pub resharding_only: bool,
     /// LB weight.
     pub lb_weight: u8,
+    /// Passthrough auth.
+    pub passthrough_auth: bool,
 }
 
 impl PoolConfig {
@@ -228,6 +230,7 @@ impl PoolConfig {
             role_detection: database.is_role_auto(),
             resharding_only: database.resharding_only,
             lb_weight: database.lb_weight,
+            passthrough_auth: general.auth_type.passthrough(),
             ..Default::default()
         }
     }
@@ -293,6 +296,7 @@ impl Default for PoolConfig {
             role_detection: false,
             resharding_only: false,
             lb_weight: 255,
+            passthrough_auth: false,
         }
     }
 }

@@ -104,6 +104,10 @@ impl Pool {
         self.inner.health.healthy()
     }
 
+    pub(in crate::backend) fn auth_ok(&self) -> bool {
+        self.inner.health.auth_ok()
+    }
+
     /// Launch the maintenance loop, bringing the pool online.
     pub(crate) fn launch(&self) {
         let mut guard = self.lock();
@@ -118,12 +122,12 @@ impl Pool {
         match safe_timeout(self.config().checkout_timeout, self.get_internal(request)).await {
             Ok(Ok(conn)) => Ok(conn),
             Err(_) => {
-                self.inner.health.toggle(false);
+                self.inner.health.toggle_health(false);
                 self.lock().stats.counts.checkout_timeouts += 1;
                 Err(Error::CheckoutTimeout)
             }
             Ok(Err(err)) => {
-                self.inner.health.toggle(false);
+                self.inner.health.toggle_health(false);
                 Err(err)
             }
         }
@@ -245,10 +249,10 @@ impl Pool {
         if let Err(err) = healthcheck.healthcheck().await {
             conn.disconnect_reason(DisconnectReason::Unhealthy);
             drop(conn);
-            self.inner.health.toggle(false);
+            self.inner.health.toggle_health(false);
             return Err(err);
         } else if !self.inner.health.healthy() {
-            self.inner.health.toggle(true);
+            self.inner.health.toggle_health(true);
         }
 
         Ok(conn)
@@ -284,7 +288,7 @@ impl Pool {
                 "pool received broken server connection, closing [{}]",
                 self.addr()
             );
-            self.inner.health.toggle(false);
+            self.inner.health.toggle_health(false);
         }
 
         // Notify maintenance that we need a new connection because

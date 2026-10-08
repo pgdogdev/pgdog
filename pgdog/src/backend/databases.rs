@@ -242,6 +242,19 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 }
 
+/// Remove a user, disabling its connection pool.
+pub(crate) fn remove(user: &str, database: &str) -> Result<(), Error> {
+    let _lock = lock();
+    let mut config = (*config()).clone();
+
+    config.users.remove(user, database);
+
+    set(config)?;
+    reload_from_existing()?;
+
+    Ok(())
+}
+
 /// Swap database configs between source and destination.
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.

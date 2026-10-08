@@ -490,7 +490,7 @@ impl LoadBalancer {
                 // Still waiting for its first health check, keep it banned.
                 Some(old) if old.ban.error() == Some(Error::InitialHealthCheck) => {
                     target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                    target.health().toggle(old.health().healthy());
+                    target.health().toggle_health(old.health().healthy());
                 }
 
                 // Existing target that is already serving traffic. Banning it
@@ -499,7 +499,7 @@ impl LoadBalancer {
 
                 None if target.pool.config().require_healthcheck_on_discovery => {
                     target.ban.ban(Error::InitialHealthCheck, Duration::ZERO);
-                    target.health().toggle(false);
+                    target.health().toggle_health(false);
                 }
 
                 None => (),
