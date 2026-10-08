@@ -2,7 +2,7 @@ use lru::LruCache;
 use once_cell::sync::Lazy;
 use pg_raw_parse::normalize::normalize;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use pg_raw_parse::{Error as ParseError, deparse, nodes};
@@ -43,13 +43,80 @@ impl Stats {
     }
 }
 
+/// Query cache entry: the AST plus bookkeeping for the memory budget
+/// (`size`) and the idle-expiry sweep (`accessed`).
+#[derive(Debug, Clone)]
+struct Entry {
+    ast: Arc<Ast>,
+    accessed: Instant,
+    size: usize,
+}
+
 /// Mutex-protected query cache.
 #[derive(Debug)]
 pub(super) struct Inner {
-    /// Least-recently-used cache.
-    queries: LruCache<Arc<str>, Arc<Ast>>,
+    /// Least-recently-used cache. Kept unbounded; the count and memory limits
+    /// are enforced together in `enforce`.
+    queries: LruCache<Arc<str>, Entry>,
+    /// Maximum number of cached entries (0 = unlimited).
+    count_limit: usize,
+    /// Memory budget in bytes (0 = unlimited).
+    byte_limit: usize,
+    bytes: usize,
+    /// Idle expiry: entries untouched for longer than this are swept (None = off).
+    idle_timeout: Option<Duration>,
     /// Cache global stats.
     pub(super) stats: Stats,
+}
+
+impl Inner {
+    fn insert(&mut self, key: Arc<str>, ast: Arc<Ast>) {
+        let size = ast.stats.lock().memory_allocated;
+        if let Some(old) = self.queries.put(
+            key,
+            Entry {
+                ast,
+                accessed: Instant::now(),
+                size,
+            },
+        ) {
+            self.bytes = self.bytes.saturating_sub(old.size);
+        }
+        self.bytes = self.bytes.saturating_add(size);
+        self.enforce();
+    }
+
+    fn enforce(&mut self) {
+        while (self.count_limit > 0 && self.queries.len() > self.count_limit)
+            || (self.byte_limit > 0 && self.bytes > self.byte_limit)
+        {
+            match self.queries.pop_lru() {
+                Some((_, evicted)) => self.bytes = self.bytes.saturating_sub(evicted.size),
+                None => break,
+            }
+        }
+    }
+
+    fn sweep(&mut self) {
+        let Some(idle_timeout) = self.idle_timeout else {
+            return;
+        };
+        let now = Instant::now();
+        // Two-pass: the LRU cache can't be mutated while iterating. `collect`
+        // into an empty Vec does not allocate, so a sweep with nothing idle
+        // (the common case) is allocation-free.
+        let stale: Vec<Arc<str>> = self
+            .queries
+            .iter()
+            .filter(|(_, e)| now.duration_since(e.accessed) >= idle_timeout)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in stale {
+            if let Some(e) = self.queries.pop(&key) {
+                self.bytes = self.bytes.saturating_sub(e.size);
+            }
+        }
+    }
 }
 
 /// AST cache.
@@ -64,24 +131,35 @@ impl Cache {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 queries: LruCache::unbounded(),
+                count_limit: 0,
+                byte_limit: 0,
+                bytes: 0,
+                idle_timeout: None,
                 stats: Stats::default(),
             })),
         }
     }
 
-    /// Resize cache to capacity, evicting any statements exceeding the capacity.
-    ///
-    /// Minimum capacity is 1.
-    pub(crate) fn resize(capacity: usize) {
-        let capacity = if capacity == 0 { 1 } else { capacity };
+    /// Apply cache limits from configuration, evicting anything over the new
+    /// caps. A `count`, `bytes`, or `idle_timeout_ms` of 0 disables that limit.
+    pub(crate) fn configure(count: usize, bytes: usize, idle_timeout_ms: usize) {
+        let mut guard = CACHE.inner.lock();
+        guard.count_limit = count;
+        guard.byte_limit = bytes;
+        guard.idle_timeout = if idle_timeout_ms == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(idle_timeout_ms as u64))
+        };
+        guard.enforce();
+        debug!(
+            "ast cache limits: count={} bytes={} idle_timeout={}ms",
+            count, bytes, idle_timeout_ms
+        );
+    }
 
-        CACHE
-            .inner
-            .lock()
-            .queries
-            .resize(capacity.try_into().unwrap());
-
-        debug!("ast cache size set to {}", capacity);
+    pub fn sweep() {
+        CACHE.inner.lock().sweep();
     }
 
     /// Handle parsing a query.
@@ -113,9 +191,11 @@ impl Cache {
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
         let ast = {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get(query_and_comment.query).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                Ok::<_, Error>(Arc::clone(entry))
+            let now = Instant::now();
+            let ast = guard.queries.get_mut(query_and_comment.query).map(|entry| {
+                entry.accessed = now;
+                entry.ast.stats.lock().hits += 1; // No contention on this.
+                Ok::<_, Error>(Arc::clone(&entry.ast))
             });
             if ast.is_some() {
                 guard.stats.hits += 1;
@@ -143,9 +223,7 @@ impl Cache {
             let cacheable =
                 query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty();
             if cacheable {
-                guard
-                    .queries
-                    .put(ast.query_without_comment.clone(), Arc::clone(&ast));
+                guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast));
             }
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
@@ -192,15 +270,16 @@ impl Cache {
     pub(crate) fn record(&self, query: &str) -> Result<ClientQuery, ParseError> {
         let ast = {
             let mut guard = self.inner.lock();
-            guard.queries.get(query).map(|ast| {
-                ast.stats.lock().hits += 1;
-                Ok::<_, ParseError>(Arc::clone(ast))
+            guard.queries.get_mut(query).map(|entry| {
+                entry.accessed = Instant::now();
+                entry.ast.stats.lock().hits += 1;
+                Ok::<_, ParseError>(Arc::clone(&entry.ast))
             })
         }
         .unwrap_or_else(|| {
             let ast = Arc::new(Ast::parse(query)?);
             let mut guard = self.inner.lock();
-            guard.queries.put(query.into(), Arc::clone(&ast));
+            guard.insert(query.into(), Arc::clone(&ast));
             guard.stats.misses += 1;
             Ok(ast)
         })?;
@@ -228,8 +307,10 @@ impl Cache {
 
         {
             let mut guard = self.inner.lock();
-            if let Some(entry) = guard.queries.get(normalized) {
-                entry.update_stats(route);
+            let now = Instant::now();
+            if let Some(entry) = guard.queries.get_mut(normalized) {
+                entry.accessed = now;
+                entry.ast.update_stats(route);
                 guard.stats.hits += 1;
                 return Ok(());
             }
@@ -239,7 +320,7 @@ impl Cache {
         entry.update_stats(route);
 
         let mut guard = self.inner.lock();
-        guard.queries.put(normalized.into(), Arc::new(entry));
+        guard.insert(normalized.into(), Arc::new(entry));
         guard.stats.misses += 1;
 
         Ok(())
@@ -260,7 +341,7 @@ impl Cache {
                 guard
                     .queries
                     .iter()
-                    .map(|c| *c.1.stats.lock())
+                    .map(|c| *c.1.ast.stats.lock())
                     .collect::<Vec<_>>(),
                 guard.stats,
             )
@@ -280,7 +361,7 @@ impl Cache {
             .lock()
             .queries
             .iter()
-            .map(|i| (i.0.clone(), i.1.clone()))
+            .map(|i| (i.0.clone(), i.1.ast.clone()))
             .collect()
     }
 
@@ -290,7 +371,201 @@ impl Cache {
         let cache = Self::get();
         let mut guard = cache.inner.lock();
         guard.queries.clear();
+        guard.bytes = 0;
         guard.stats.hits = 0;
         guard.stats.misses = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ast(size: usize) -> Arc<Ast> {
+        let ast = Ast::parse("SELECT 1").expect("parse");
+        ast.stats.lock().memory_allocated = size;
+        Arc::new(ast)
+    }
+
+    fn inner(count_limit: usize, byte_limit: usize, idle_timeout: Option<Duration>) -> Inner {
+        Inner {
+            queries: LruCache::unbounded(),
+            count_limit,
+            byte_limit,
+            bytes: 0,
+            idle_timeout,
+            stats: Stats::default(),
+        }
+    }
+
+    #[test]
+    fn count_limit_caps_and_evicts_lru() {
+        let mut c = inner(3, 0, None);
+        for i in 0..5 {
+            c.insert(format!("q{i}").into(), ast(10));
+        }
+        assert_eq!(c.queries.len(), 3);
+        assert!(c.queries.peek("q4").is_some(), "newest kept");
+        assert!(c.queries.peek("q2").is_some());
+        assert!(c.queries.peek("q1").is_none(), "oldest evicted");
+        assert_eq!(c.bytes, 30, "byte total tracks surviving entries");
+    }
+
+    #[test]
+    fn count_limit_zero_is_unlimited() {
+        let mut c = inner(0, 0, None);
+        for i in 0..1000 {
+            c.insert(format!("q{i}").into(), ast(1));
+        }
+        assert_eq!(c.queries.len(), 1000);
+        assert_eq!(c.bytes, 1000);
+    }
+
+    #[test]
+    fn byte_limit_caps_and_evicts_lru() {
+        let mut c = inner(0, 25, None);
+        for i in 0..5 {
+            c.insert(format!("q{i}").into(), ast(10));
+        }
+        assert!(c.bytes <= 25, "stays within byte budget");
+        assert_eq!(c.queries.len(), 2);
+        assert!(c.queries.peek("q4").is_some(), "newest kept");
+        assert!(c.queries.peek("q0").is_none(), "oldest evicted");
+    }
+
+    #[test]
+    fn entry_larger_than_byte_budget_is_not_cached() {
+        let mut c = inner(0, 25, None);
+        c.insert("big".into(), ast(100));
+        assert_eq!(
+            c.queries.len(),
+            0,
+            "an entry over the whole budget is evicted"
+        );
+        assert_eq!(c.bytes, 0);
+    }
+
+    #[test]
+    fn replacing_a_key_updates_byte_total() {
+        let mut c = inner(0, 0, None);
+        c.insert("q".into(), ast(10));
+        assert_eq!(c.bytes, 10);
+        c.insert("q".into(), ast(30));
+        assert_eq!(c.queries.len(), 1);
+        assert_eq!(c.bytes, 30, "old size subtracted, new size added");
+    }
+
+    #[test]
+    fn byte_total_saturates_instead_of_overflowing() {
+        let mut c = inner(0, 0, None);
+        c.insert("q1".into(), ast(usize::MAX));
+        c.insert("q2".into(), ast(usize::MAX));
+        assert_eq!(c.bytes, usize::MAX);
+        assert_eq!(c.queries.len(), 2);
+    }
+
+    #[test]
+    fn entry_size_is_the_parse_tree_allocation() {
+        let mut c = inner(0, 0, None);
+        let ast = Arc::new(Ast::parse("SELECT 1").expect("parse"));
+        let allocated = ast.stats.lock().memory_allocated;
+        assert!(allocated > 0);
+        c.insert("q".into(), ast);
+        assert_eq!(c.bytes, allocated);
+    }
+
+    #[test]
+    fn no_limits_keeps_everything() {
+        let mut c = inner(0, 0, None);
+        for i in 0..50 {
+            c.insert(format!("q{i}").into(), ast(7));
+        }
+        assert_eq!(c.queries.len(), 50);
+        assert_eq!(c.bytes, 350);
+    }
+
+    #[test]
+    fn sweep_is_noop_when_idle_timeout_disabled() {
+        let mut c = inner(0, 0, None);
+        for i in 0..3 {
+            c.insert(format!("q{i}").into(), ast(5));
+        }
+        c.sweep();
+        assert_eq!(c.queries.len(), 3);
+        assert_eq!(c.bytes, 15);
+    }
+
+    #[test]
+    fn sweep_keeps_fresh_entries() {
+        let mut c = inner(0, 0, Some(Duration::from_secs(3600)));
+        for i in 0..3 {
+            c.insert(format!("q{i}").into(), ast(5));
+        }
+        c.sweep();
+        assert_eq!(c.queries.len(), 3);
+        assert_eq!(c.bytes, 15);
+    }
+
+    #[test]
+    fn sweep_drops_idle_entries_and_updates_bytes() {
+        let mut c = inner(0, 0, Some(Duration::ZERO));
+        for i in 0..3 {
+            c.insert(format!("q{i}").into(), ast(5));
+        }
+        c.sweep();
+        assert_eq!(c.queries.len(), 0);
+        assert_eq!(c.bytes, 0);
+    }
+
+    #[test]
+    fn configure_applies_limits_to_global_cache() {
+        // The cache is a process-wide singleton, so save the live limits and
+        // put them back at the end; assertions on entry counts are `<=` since
+        // other tests may share the cache.
+        let (count, bytes, idle) = {
+            let guard = CACHE.inner.lock();
+            (guard.count_limit, guard.byte_limit, guard.idle_timeout)
+        };
+        let keys: Vec<Arc<str>> = (0..5).map(|i| format!("__configure_q{i}").into()).collect();
+
+        Cache::configure(3, 500, 30_000);
+        {
+            let mut guard = CACHE.inner.lock();
+            assert_eq!(guard.count_limit, 3);
+            assert_eq!(guard.byte_limit, 500);
+            assert_eq!(guard.idle_timeout, Some(Duration::from_millis(30_000)));
+            for key in &keys {
+                guard.insert(key.clone(), ast(10));
+            }
+            assert!(guard.queries.len() <= 3, "configure() caps are enforced");
+        }
+
+        Cache::configure(1, 0, 0);
+        {
+            let guard = CACHE.inner.lock();
+            assert_eq!(guard.count_limit, 1);
+            assert!(
+                guard.queries.len() <= 1,
+                "a smaller count limit evicts down to it"
+            );
+        }
+
+        Cache::configure(
+            count,
+            bytes,
+            idle.map(|d| d.as_millis() as usize).unwrap_or(0),
+        );
+        {
+            let mut guard = CACHE.inner.lock();
+            assert_eq!(
+                guard.idle_timeout, idle,
+                "restored, including the None branch"
+            );
+            for key in &keys {
+                if let Some(entry) = guard.queries.pop(key.as_ref()) {
+                    guard.bytes = guard.bytes.saturating_sub(entry.size);
+                }
+            }
+        }
     }
 }
