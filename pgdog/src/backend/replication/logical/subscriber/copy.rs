@@ -3,8 +3,12 @@
 
 use futures::future::join_all;
 use pg_raw_parse::Node;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tracing::debug;
 
+use crate::backend::replication::data_sync::CopyProgress;
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
@@ -26,14 +30,96 @@ use super::connect_primary;
 // Not really needed, but we're currently
 // sharding 3 CopyData messages at a time.
 // This reduces memory allocations.
+// TODO: This should be tested and optimized.
 static BUFFER_SIZE: usize = 3;
+
+pub(crate) struct BackgroundSubscriber {
+    recv_progress: watch::Receiver<CopyProgress>,
+    handle: JoinHandle<Result<CopySubscriber, Error>>,
+}
+
+impl BackgroundSubscriber {
+    /// Moves a `CopySubscriber` into a background task that shards and flushes
+    /// every row sent on the `Sender<CopyData>` channel returned.
+    ///
+    /// This avoids co-mingling the occasional flushes the subscriber has to do,
+    /// so that it doesn't slow down the reads...
+    ///
+    /// TODO: I wrote this early on before the current design. I'm not sure this is
+    /// necesary anymore since we theoretically can't easily get multiple writers
+    /// due to table-level locks Postgres imposes. HOWEVER, there are hacks
+    /// to get around that, e.g., writing, in parallel, to separate 'temporary'
+    /// tables on the destination, and then aggregating them together on the dest
+    /// (making use of fast disk speeds vs network). This could potentially be
+    /// future work, which is why I left it as-is. I found this to not affect
+    /// serial execution speed vs. the main branch in a benchmark.
+    ///
+    /// The task ends once every sender is dropped; then, `get_back_subscriber`
+    /// returns the `CopySubscriber` back to the main thread.
+    pub(crate) fn start_bg_task(mut sub: CopySubscriber) -> (Self, Sender<CopyData>) {
+        // Using a watch as we only need to know the recent progress update
+        // (if, for some reason, we haven't fetched the most-recent one yet,
+        // makes sense to replace it)
+        let (send_progress, recv_progress) = watch::channel(CopyProgress::default());
+
+        // There's a chance this could hit the bound, in which case, the
+        // publishers would be throttled by the source sends. Something which
+        // could be alleviated by a potential parallelization for publishers.
+        let (send_data, mut recv_data) = mpsc::channel::<CopyData>(BUFFER_SIZE);
+
+        let handle = tokio::spawn(async move {
+            let mut copied: CopyProgress = CopyProgress::default();
+
+            loop {
+                let mut buffer = Vec::new();
+                if recv_data.recv_many(&mut buffer, BUFFER_SIZE).await == 0 {
+                    break;
+                }
+
+                let (rows, bytes) = sub.flush(buffer).await?;
+
+                copied.rows += rows as u64;
+                copied.bytes += bytes as u64;
+
+                let _ = send_progress.send(copied);
+            }
+
+            Ok(sub)
+        });
+
+        (
+            Self {
+                recv_progress,
+                handle,
+            },
+            send_data,
+        )
+    }
+
+    /// Waits until there's a `CopyProgress` available (and returns it)
+    pub(crate) async fn fetch_copy_progress(&mut self) -> Option<CopyProgress> {
+        self.recv_progress.changed().await.ok()?;
+        Some(self.progress())
+    }
+
+    /// Latest `CopyProgress` available (sync)
+    /// Used on completion in the main thread
+    pub(crate) fn progress(&mut self) -> CopyProgress {
+        *self.recv_progress.borrow_and_update()
+    }
+
+    /// Return the `CopySubscriber` back to the main thread, now that we're
+    /// done sending to it (cancellation or finished)
+    pub(crate) async fn get_back_subscriber(&mut self) -> Result<CopySubscriber, Error> {
+        (&mut self.handle).await?
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct CopySubscriber {
     copy: CopyParser,
     /// Destination cluster.
     cluster: Cluster,
-    buffer: Vec<CopyData>,
     connections: Vec<ParallelConnection>,
     stmt: CopyStatement,
 }
@@ -63,12 +149,10 @@ impl CopySubscriber {
         Ok(Self {
             copy,
             cluster: cluster.clone(),
-            buffer: vec![],
             connections: vec![],
             stmt: copy_stmt.clone(),
         })
     }
-
     /// Connect to all shards. One connection per primary.
     pub(crate) async fn connect(&mut self) -> Result<(), Error> {
         let mut servers = vec![];
@@ -185,8 +269,6 @@ impl CopySubscriber {
 
     /// Finish COPY on all shards.
     pub(crate) async fn copy_done(&mut self) -> Result<(), Error> {
-        self.flush().await?;
-
         // Stage pass: send CopyDone to every shard and read CommandComplete + ReadyForQuery.
         // Because each shard is inside an explicit transaction, CopyDone only finalises the
         // COPY (writes pages, builds indexes, checks constraints) — it does NOT commit.
@@ -290,19 +372,8 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Send data to subscriber, buffered.
-    pub(crate) async fn copy_data(&mut self, data: CopyData) -> Result<(usize, usize), Error> {
-        self.buffer.push(data);
-        if self.buffer.len() == BUFFER_SIZE {
-            return self.flush().await;
-        }
-
-        Ok((0, 0))
-    }
-
-    async fn flush(&mut self) -> Result<(usize, usize), Error> {
-        let result = self.copy.shard(&self.buffer).await?;
-        self.buffer.clear();
+    pub(crate) async fn flush(&mut self, buffer: Vec<CopyData>) -> Result<(usize, usize), Error> {
+        let result = self.copy.shard(buffer.as_slice()).await?;
 
         let rows = result.len();
         let bytes = result.iter().map(|row| row.len()).sum::<usize>();
@@ -371,6 +442,7 @@ mod test {
             &table,
             &["id".into(), "value".into()],
             pgdog_config::CopyFormat::Binary,
+            Default::default(),
         );
         let cluster = Cluster::new_test(&config());
         cluster.launch();
@@ -390,20 +462,20 @@ mod test {
         subscriber.start_copy().await.unwrap();
 
         let header = CopyData::new(&Header::default().to_bytes());
-        subscriber.copy_data(header).await.unwrap();
+        subscriber.flush(vec![header]).await.unwrap();
 
         for i in 0..25_i64 {
             let id = Data::Column(Bytes::copy_from_slice(&i.to_be_bytes()));
             let email = Data::Column(Bytes::copy_from_slice("test@test.com".as_bytes()));
             let tuple = Tuple::new(&[id, email]);
             subscriber
-                .copy_data(CopyData::new(&tuple.to_bytes()))
+                .flush(vec![CopyData::new(&tuple.to_bytes())])
                 .await
                 .unwrap();
         }
 
         subscriber
-            .copy_data(CopyData::new(&Tuple::new_end().to_bytes()))
+            .flush(vec![CopyData::new(&Tuple::new_end().to_bytes())])
             .await
             .unwrap();
 

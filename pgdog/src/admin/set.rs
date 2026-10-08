@@ -202,6 +202,13 @@ impl Command for Set {
                 config.config.general.dry_run = Self::from_json(&self.value)?;
             }
 
+            "resharding_parallel_within_table_copies" => {
+                config
+                    .config
+                    .general
+                    .resharding_parallel_within_table_copies = self.value.parse()?;
+            }
+
             _ => return Ok(vec![]),
         }
 

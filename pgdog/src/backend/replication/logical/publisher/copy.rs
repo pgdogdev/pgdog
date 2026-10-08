@@ -1,73 +1,74 @@
 use crate::{
     backend::Server,
+    frontend::router::parser::binary::header::HEADER_SIZE,
     net::{CopyData, ErrorResponse, FromBytes, Protocol, Query, ToBytes},
 };
 use pgdog_config::CopyFormat;
-use tracing::{debug, trace};
+use tokio::sync::mpsc::Sender;
+use tracing::debug;
 
-use super::{
-    super::{CopyStatement, Error},
-    Table,
-};
+use super::super::{CopyStatement, Error};
 
-#[derive(Debug, Clone)]
-pub(crate) struct Copy {
-    stmt: CopyStatement,
+/// Send the initial COPY OUT statement (whether serial or parallel)
+pub(crate) async fn start(
+    server: &mut Server,
+    stmt: &CopyStatement,
+    index: usize,
+) -> Result<(), Error> {
+    if !server.in_transaction() {
+        return Err(Error::TransactionNotStarted);
+    }
+
+    let query = Query::new(stmt.copy_out(index));
+    debug!("[PUBLISHER] {} [{}]", query.query(), server.addr());
+
+    server.send(&vec![query.into()].into()).await?;
+    let result = server.read().await?;
+    match result.code() {
+        'E' => return Err(ErrorResponse::from_bytes(result.to_bytes())?.into()),
+        'H' => (),
+        c => return Err(Error::OutOfSync(c)),
+    }
+    Ok(())
 }
 
-impl Copy {
-    pub(crate) fn new(table: &Table, copy_format: CopyFormat) -> Self {
-        let stmt = CopyStatement::new(
-            &table.table,
-            &table
-                .columns
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>(),
-            copy_format,
-        );
+/// Read COPY rows from the server and send them to the subscriber until the COPY ends.
+pub(crate) async fn data(
+    mut server: Server,
+    format: CopyFormat,
+    rows: Sender<CopyData>,
+) -> Result<(), Error> {
+    let mut first = true;
 
-        Self { stmt }
-    }
+    loop {
+        let msg = server.read().await?;
 
-    pub(crate) async fn start(&self, server: &mut Server) -> Result<(), Error> {
-        if !server.in_transaction() {
-            return Err(Error::TransactionNotStarted);
-        }
+        match msg.code() {
+            'd' => {
+                let mut data = CopyData::from_bytes(msg.to_bytes())?;
 
-        let query = Query::new(self.stmt.copy_out());
-        debug!("{} [{}]", query.query(), server.addr());
+                if format == CopyFormat::Binary {
+                    if std::mem::take(&mut first) {
+                        // Skip header.
+                        let row = data.data().get(HEADER_SIZE..).ok_or(Error::MissingData)?;
+                        data = CopyData::new(row);
+                    }
 
-        server.send(&vec![query.into()].into()).await?;
-        let result = server.read().await?;
-        match result.code() {
-            'E' => return Err(ErrorResponse::from_bytes(result.to_bytes())?.into()),
-            'H' => (),
+                    // Skip EOF.
+                    if data.data() == [255, 255] {
+                        continue;
+                    }
+                }
+
+                if rows.send(data).await.is_err() {
+                    return Ok(());
+                }
+            }
+            'C' => (),
+            'c' => (), // CopyDone.
+            'Z' => return Ok(()),
+            'E' => return Err(ErrorResponse::from_bytes(msg.to_bytes())?.into()),
             c => return Err(Error::OutOfSync(c)),
         }
-        Ok(())
-    }
-
-    pub(crate) async fn data(&self, server: &mut Server) -> Result<Option<CopyData>, Error> {
-        loop {
-            let msg = server.read().await?;
-
-            match msg.code() {
-                'd' => {
-                    let data = CopyData::from_bytes(msg.to_bytes())?;
-                    trace!("[{}] --> {:?}", server.addr().addr().await?, data);
-                    return Ok(Some(data));
-                }
-                'C' => (),
-                'c' => (), // CopyDone.
-                'Z' => return Ok(None),
-                'E' => return Err(ErrorResponse::from_bytes(msg.to_bytes())?.into()),
-                c => return Err(Error::OutOfSync(c)),
-            }
-        }
-    }
-
-    pub(crate) fn statement(&self) -> &CopyStatement {
-        &self.stmt
     }
 }

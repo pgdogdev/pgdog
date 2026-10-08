@@ -793,6 +793,17 @@ pub struct General {
     #[serde(default = "General::resharding_parallel_copies")]
     pub resharding_parallel_copies: usize,
 
+    /// How many source copies we'll launch for a singular table copy.
+    /// Recommended when dealing with TOAST-heavy tables, which usually
+    /// cost multiple disk reads and bound the stream by read latency,
+    /// especially with a cold cache.
+    ///
+    /// When used effectively, this will massively speed up table copies
+    /// by a factor of what this is set to (e.g., 30x, depending on disk IOPS),
+    /// fully utilizing the disk IOPS.
+    #[serde(default = "General::resharding_parallel_within_table_copies")]
+    pub resharding_parallel_within_table_copies: usize,
+
     /// Maximum number of retries for a failed table copy during resharding (per-table).
     /// Retries use exponential backoff starting at `resharding_copy_retry_min_delay`.
     /// _Default:_ `5`
@@ -1003,6 +1014,8 @@ impl Default for General {
             sharding_lookup_cache_size: Self::sharding_lookup_cache_size(),
             sharding_lookup_timeout: Self::sharding_lookup_timeout(),
             resharding_parallel_copies: Self::resharding_parallel_copies(),
+            resharding_parallel_within_table_copies: Self::resharding_parallel_within_table_copies(
+            ),
             resharding_copy_retry_max_attempts: Self::resharding_copy_retry_max_attempts(),
             resharding_copy_retry_min_delay: Self::resharding_copy_retry_min_delay(),
             resharding_replication_retry_max_attempts:
@@ -1278,6 +1291,10 @@ impl General {
     }
 
     fn resharding_parallel_copies() -> usize {
+        1
+    }
+
+    fn resharding_parallel_within_table_copies() -> usize {
         1
     }
 
