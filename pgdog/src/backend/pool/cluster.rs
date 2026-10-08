@@ -303,7 +303,7 @@ impl<'a> ClusterConfig<'a> {
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
             read_only: user.read_only.unwrap_or(false),
-            auth_type: general.auth_type,
+            auth_type: user.auth_type.unwrap_or(general.auth_type),
         }
     }
 }

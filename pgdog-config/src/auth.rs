@@ -37,7 +37,9 @@ impl PassthroughAuth {
 /// See [authentication](https://docs.pgdog.dev/features/authentication/).
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, Copy, Eq, Ord, PartialOrd,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthType {
     /// MD5 password hashing; very quick but not secure.

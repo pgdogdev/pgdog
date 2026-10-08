@@ -7,8 +7,8 @@ use tracing::warn;
 
 use super::core::Config;
 use super::pooling::PoolerMode;
-use crate::RoleConfig;
 use crate::util::random_string;
+use crate::{AuthType, RoleConfig};
 use schemars::JsonSchema;
 
 /// Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.
@@ -420,6 +420,9 @@ pub struct User {
     ///
     #[serde(flatten, default)]
     pub role_config: RoleConfig,
+
+    /// Client auth type, overrides the same setting in [general].
+    pub auth_type: Option<AuthType>,
 }
 
 impl User {

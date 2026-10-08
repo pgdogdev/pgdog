@@ -10,8 +10,9 @@ use pgdog_config::pool::ShardNodes;
 use pgdog_config::users::PasswordKind;
 use pgdog_config::util::normalize_identifier;
 use pgdog_config::{
-    EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey, ShardedMappingKeyRef,
-    ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange, ShardedTableConfig,
+    AuthType, EnumeratedDatabase, QueryParser, ShardedMappingConfig, ShardedMappingKey,
+    ShardedMappingKeyRef, ShardedMappingKindDeprecated, ShardedMappingList, ShardedMappingRange,
+    ShardedTableConfig,
 };
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -355,6 +356,13 @@ impl Databases {
         } else {
             None
         }
+    }
+
+    /// Get a configured auth type for this user, if the user exists.
+    pub(crate) fn auth_type(&self, user: impl ToUser) -> Option<AuthType> {
+        self.databases
+            .get(&user.to_user())
+            .map(|cluster| cluster.auth_type().clone())
     }
 
     /// Get a cluster for the user/database pair if it's configured.
