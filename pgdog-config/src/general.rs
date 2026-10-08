@@ -296,15 +296,16 @@ pub struct General {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>
     pub tls_client_ca_certificate: Option<PathBuf>,
 
-    /// FIPS 140-3 enforcement: `auto`, `required` or `disabled`.
+    /// FIPS 140-3 enforcement: when enforced, refuse to start or apply a
+    /// configuration unless PgDog runs the validated AWS-LC FIPS module, and
+    /// reject non-FIPS TLS configurations, MD5 authentication and cross-account
+    /// RDS IAM (`server_iam_assume_role`).
     ///
-    /// When enforced, PgDog refuses to start unless it was built with the
-    /// `fips` feature and its crypto module is in FIPS mode, and rejects TLS
-    /// configurations that are not FIPS-compliant.
+    /// **Note:** `auto` enforces only on builds with `--features fips`; set
+    /// `required` for deployments that must be FIPS-compliant. An unrecognized
+    /// `PGDOG_FIPS` value is treated as `required`.
     ///
-    /// _Default:_ `auto` (enforced on FIPS builds; warns on a FIPS host
-    /// otherwise). An unrecognized `PGDOG_FIPS` value is treated as
-    /// `required`.
+    /// _Default:_ `auto`
     #[serde(default = "General::fips")]
     pub fips: FipsMode,
 

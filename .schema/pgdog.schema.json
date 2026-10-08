@@ -680,10 +680,10 @@
       ]
     },
     "FipsMode": {
-      "description": "FIPS 140-3 enforcement.\n\nWhen enforced, PgDog refuses to start (or to apply a configuration) unless\nits cryptographic module is running in FIPS mode, every TLS configuration\nit builds reports FIPS compliance, and no non-approved algorithm (MD5) is\nused for authentication. Deployments that must be FIPS-compliant should set\n`required`.",
+      "description": "FIPS 140-3 enforcement mode.",
       "oneOf": [
         {
-          "description": "Enforce when PgDog was built with the `fips` feature. On a FIPS host\n(`/proc/sys/crypto/fips_enabled` is `1`) without it, log a warning\n(default).",
+          "description": "Enforce on `fips` builds; warn on a FIPS host otherwise (default).",
           "type": "string",
           "const": "auto"
         },
@@ -912,7 +912,7 @@
           "default": false
         },
         "fips": {
-          "description": "FIPS 140-3 enforcement: `auto`, `required` or `disabled`.\n\nWhen enforced, PgDog refuses to start unless it was built with the\n`fips` feature and its crypto module is in FIPS mode, and rejects TLS\nconfigurations that are not FIPS-compliant.\n\n_Default:_ `auto` (enforced on FIPS builds; warns on a FIPS host\notherwise). An unrecognized `PGDOG_FIPS` value is treated as\n`required`.",
+          "description": "FIPS 140-3 enforcement: when enforced, refuse to start or apply a\nconfiguration unless PgDog runs the validated AWS-LC FIPS module, and\nreject non-FIPS TLS configurations, MD5 authentication and cross-account\nRDS IAM (`server_iam_assume_role`).\n\n**Note:** `auto` enforces only on builds with `--features fips`; set\n`required` for deployments that must be FIPS-compliant. An unrecognized\n`PGDOG_FIPS` value is treated as `required`.\n\n_Default:_ `auto`",
           "$ref": "#/$defs/FipsMode",
           "default": "auto"
         },
