@@ -18,7 +18,7 @@ use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use once_cell::sync::Lazy;
 use tracing::{info, warn};
 
-use crate::config::{AuthType, Config, FipsMode, TlsVerifyMode};
+use crate::config::{AuthType, Config, ConfigAndUsers, FipsMode, ServerAuth, TlsVerifyMode};
 
 use super::Error;
 
@@ -76,6 +76,23 @@ impl Enforcement {
 
         Ok(())
     }
+
+    /// Reject cross-account RDS IAM (`server_iam_assume_role`): the AWS SDK
+    /// signs the STS AssumeRole request with RustCrypto, not AWS-LC.
+    pub(crate) fn check_iam_assume_role(
+        self,
+        role: Option<&str>,
+        user: &str,
+        database: &str,
+    ) -> Result<(), Error> {
+        if self.enforced() && role.is_some_and(|role| !role.is_empty()) {
+            return Err(Error::Fips(format!(
+                "user \"{user}\" (database \"{database}\") sets server_iam_assume_role, but the AWS SDK signs the STS AssumeRole request with non-FIPS cryptography"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 /// `true` if the kernel flag at `path` reports FIPS mode.
@@ -100,7 +117,8 @@ fn module_status() -> Result<(), Error> {
 /// Fails when FIPS is enforced but the crypto module isn't in FIPS mode, or
 /// the configuration uses a non-approved algorithm. Deployment settings that
 /// weaken a FIPS deployment without using non-approved crypto are logged.
-pub(crate) fn check(config: &Config) -> Result<Enforcement, Error> {
+pub(crate) fn check(config_and_users: &ConfigAndUsers) -> Result<Enforcement, Error> {
+    let config = &config_and_users.config;
     let mode = config.general.fips;
     let enforcement = Enforcement::resolve(mode);
 
@@ -113,6 +131,16 @@ pub(crate) fn check(config: &Config) -> Result<Enforcement, Error> {
 
     module_status()?;
     enforcement.check_auth(config.general.auth_type)?;
+    for user in &config_and_users.users.users {
+        // The assume-role is ignored for other server auth types.
+        if user.server_auth == ServerAuth::RdsIam {
+            enforcement.check_iam_assume_role(
+                user.server_iam_assume_role.as_deref(),
+                &user.name,
+                &user.database,
+            )?;
+        }
+    }
 
     for finding in audit(config) {
         warn!("FIPS: {finding}");
@@ -265,17 +293,21 @@ mod tests {
 
     #[test]
     fn test_check_disabled_never_fails() {
-        let mut config = Config::default();
-        config.general.fips = FipsMode::Disabled;
-        config.general.auth_type = AuthType::Md5;
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Disabled;
+        config.config.general.auth_type = AuthType::Md5;
+        config
+            .users
+            .users
+            .push(assume_role_user(ServerAuth::RdsIam));
 
         assert_eq!(check(&config).unwrap(), Enforcement::NotEnforced);
     }
 
     #[test]
     fn test_check_required_matches_module_status() {
-        let mut config = Config::default();
-        config.general.fips = FipsMode::Required;
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
 
         let result = check(&config);
         if cfg!(feature = "fips") {
@@ -290,12 +322,67 @@ mod tests {
     #[cfg(feature = "fips")]
     #[test]
     fn test_check_required_rejects_md5() {
-        let mut config = Config::default();
-        config.general.fips = FipsMode::Required;
-        config.general.auth_type = AuthType::Md5;
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Md5;
 
         let err = check(&config).unwrap_err();
         assert!(err.to_string().contains("MD5"));
+    }
+
+    fn assume_role_user(server_auth: ServerAuth) -> crate::config::User {
+        crate::config::User {
+            name: "app".into(),
+            database: "prod".into(),
+            server_auth,
+            server_iam_assume_role: Some("arn:aws:iam::111122223333:role/pgdog".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_check_iam_assume_role() {
+        let role = Some("arn:aws:iam::111122223333:role/pgdog");
+
+        let err = Enforcement::Enforced
+            .check_iam_assume_role(role, "app", "prod")
+            .unwrap_err();
+        assert!(matches!(err, Error::Fips(_)));
+        assert!(
+            err.to_string().contains("\"app\" (database \"prod\")"),
+            "{err}"
+        );
+
+        assert!(
+            Enforcement::NotEnforced
+                .check_iam_assume_role(role, "app", "prod")
+                .is_ok()
+        );
+        for role in [None, Some("")] {
+            assert!(
+                Enforcement::Enforced
+                    .check_iam_assume_role(role, "app", "prod")
+                    .is_ok()
+            );
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn test_check_required_rejects_iam_assume_role() {
+        let mut config = ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config
+            .users
+            .users
+            .push(assume_role_user(ServerAuth::RdsIam));
+
+        let err = check(&config).unwrap_err();
+        assert!(err.to_string().contains("server_iam_assume_role"), "{err}");
+
+        // Ignored (and allowed) unless the user signs in with RDS IAM.
+        config.users.users = vec![assume_role_user(ServerAuth::Password)];
+        assert_eq!(check(&config).unwrap(), Enforcement::Enforced);
     }
 
     #[test]

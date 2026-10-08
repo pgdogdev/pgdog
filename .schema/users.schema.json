@@ -373,7 +373,7 @@
           "default": "password"
         },
         "server_iam_assume_role": {
-          "description": "IAM role ARN to assume (in the backend database's AWS account) before\ngenerating the RDS IAM auth token. Enables cross-account RDS IAM: the token\nis signed with the assumed role's credentials instead of PgDog's own\nambient identity. Only used when `server_auth = \"rds_iam\"`.",
+          "description": "IAM role ARN to assume (in the backend database's AWS account) before\ngenerating the RDS IAM auth token. Enables cross-account RDS IAM: the token\nis signed with the assumed role's credentials instead of PgDog's own\nambient identity. Only used when `server_auth = \"rds_iam\"`.\n\n**Note:** Refused when FIPS is enforced (`fips` in `pgdog.toml`): the AWS\nSDK signs the STS AssumeRole request with non-FIPS cryptography.",
           "type": [
             "string",
             "null"

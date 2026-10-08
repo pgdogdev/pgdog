@@ -4,6 +4,8 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 
 use crate::backend::{Error, pool::Address};
+use crate::config::config;
+use crate::net::fips::Enforcement;
 
 /// STS session name used when PgDog assumes a role to mint a cross-account RDS
 /// IAM token.
@@ -107,6 +109,13 @@ async fn build_aws_sdk_config(addr: &Address, region: &str) -> SdkConfig {
 /// called by the monitor's refresh loop. Callers should never invoke it
 /// directly — go through [`TokenCache::global`] instead.
 pub(crate) async fn token(addr: Address) -> Result<(String, SystemTime), Error> {
+    // Also refused when the config is applied; checked again before any AWS
+    // call is made.
+    Enforcement::resolve(config().config.general.fips).check_iam_assume_role(
+        addr.server_iam_assume_role.as_deref(),
+        &addr.user,
+        &addr.database_name,
+    )?;
     let region = resolve_region(&addr)?;
     let sdk_config = build_aws_sdk_config(&addr, &region).await;
     let token = sign_token(&addr, &region, &sdk_config).await?;
@@ -317,6 +326,28 @@ mod tests {
             ..Default::default()
         };
         assert!(resolve_region(&addr).is_err());
+    }
+
+    // Only a FIPS build can hold `fips = "required"`.
+    #[cfg(feature = "fips")]
+    #[tokio::test]
+    async fn test_token_refuses_assume_role_when_fips_enforced() {
+        let mut config = crate::config::ConfigAndUsers::default();
+        config.config.general.fips = crate::config::FipsMode::Required;
+        crate::config::set(config).unwrap();
+
+        let mut addr = make_addr();
+        addr.server_iam_assume_role =
+            Some("arn:aws:iam::111122223333:role/pgdog-rds-connect".into());
+        // Refused before any AWS call: no credentials or network needed.
+        let result = token(addr).await;
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        assert!(
+            matches!(result, Err(Error::Net(crate::net::Error::Fips(_)))),
+            "{:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
