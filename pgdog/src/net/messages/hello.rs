@@ -510,7 +510,7 @@ mod test {
     #[tokio::test]
     async fn test_cancel_roundtrip_extended_secret() {
         let cancel = Startup::Cancel {
-            id: BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new()),
+            id: BackendKeyData::new_frontend(ProtocolVersion::V3_2, FrontendPid::new()).unwrap(),
         };
         let bytes = cancel.to_bytes();
 

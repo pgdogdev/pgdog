@@ -772,7 +772,7 @@ mod test {
         inner.taken.take(
             FrontendPid::new(),
             BackendPid::for_test(1),
-            BackendKeyData::random_legacy(),
+            BackendKeyData::random_legacy().unwrap(),
         );
 
         assert_eq!(inner.idle(), 2);
@@ -856,7 +856,7 @@ mod test {
         inner.taken.take(
             FrontendPid::new(),
             BackendPid::for_test(1),
-            BackendKeyData::random_legacy(),
+            BackendKeyData::random_legacy().unwrap(),
         );
         assert_eq!(inner.total(), 1);
         assert_eq!(inner.checked_out(), 1);
@@ -1086,12 +1086,12 @@ mod test {
         inner.taken.take(
             FrontendPid::new(),
             BackendPid::for_test(1),
-            BackendKeyData::random_legacy(),
+            BackendKeyData::random_legacy().unwrap(),
         );
         inner.taken.take(
             FrontendPid::new(),
             BackendPid::for_test(2),
-            BackendKeyData::random_legacy(),
+            BackendKeyData::random_legacy().unwrap(),
         );
 
         // Add a waiting client

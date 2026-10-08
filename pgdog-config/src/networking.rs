@@ -39,6 +39,59 @@ impl FromStr for TlsVerifyMode {
     }
 }
 
+impl std::fmt::Display for TlsVerifyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("disabled"),
+            Self::Prefer => f.write_str("prefer"),
+            Self::VerifyCa => f.write_str("verify_ca"),
+            Self::VerifyFull => f.write_str("verify_full"),
+        }
+    }
+}
+
+/// FIPS 140-3 enforcement.
+///
+/// When enforced, PgDog refuses to start (or to reload) unless its
+/// cryptographic module is running in FIPS mode, every TLS configuration it
+/// builds reports FIPS compliance, and no non-approved algorithm (MD5) is used
+/// for authentication.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FipsMode {
+    /// Enforce when PgDog was built with the `fips` feature or the host kernel
+    /// is in FIPS mode (`/proc/sys/crypto/fips_enabled` is `1`) (default).
+    #[default]
+    Auto,
+    /// Always enforce; refuse to start if FIPS mode is unavailable.
+    Required,
+    /// Never enforce, even on a FIPS-enabled host.
+    Disabled,
+}
+
+impl FromStr for FipsMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "required" => Ok(Self::Required),
+            "disabled" => Ok(Self::Disabled),
+            _ => Err(format!("Invalid FIPS mode: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for FipsMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Required => f.write_str("required"),
+            Self::Disabled => f.write_str("disabled"),
+        }
+    }
+}
+
 /// TCP settings for client and server connections.
 ///
 /// Optimal TCP settings are necessary to quickly recover from database incidents.

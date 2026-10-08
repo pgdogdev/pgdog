@@ -159,7 +159,7 @@ async fn handshake(stream: &mut Stream) -> Result<(), Error> {
             )))
             .await?;
     }
-    stream.send(&BackendKeyData::random_legacy()).await?;
+    stream.send(&BackendKeyData::random_legacy()?).await?;
     stream.send_flush(&ReadyForQuery::idle()).await?;
 
     Ok(())

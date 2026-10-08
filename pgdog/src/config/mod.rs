@@ -21,7 +21,7 @@ pub(crate) use database::{Database, Role};
 pub(crate) use error::Error;
 pub(crate) use general::General;
 pub(crate) use memory::*;
-pub(crate) use networking::{MultiTenant, TlsVerifyMode};
+pub(crate) use networking::{FipsMode, MultiTenant, TlsVerifyMode};
 pub(crate) use overrides::Overrides;
 use pgdog_config::LookupResult;
 pub(crate) use pgdog_config::auth::AuthType;

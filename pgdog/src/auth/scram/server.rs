@@ -2,6 +2,7 @@
 
 use crate::frontend::Error;
 use crate::net::Stream;
+use crate::net::fips;
 use crate::net::messages::*;
 use crate::util::maybe_spawn_blocking;
 
@@ -9,7 +10,6 @@ use pgdog_config::users::PasswordKind;
 use scram::server::ClientFinal;
 use tracing::error;
 
-use rand::Rng;
 use scram::{
     AuthenticationProvider, AuthenticationStatus, PasswordInfo, ScramServer, hash_password,
 };
@@ -132,26 +132,28 @@ pub(crate) struct Server {
 impl Server {
     /// Create new SCRAM server. Any of the given plain text passwords will be
     /// accepted.
-    pub(crate) fn new(passwords: &[PasswordKind]) -> Self {
+    pub(crate) fn new(passwords: &[PasswordKind]) -> Result<Self, crate::net::Error> {
         let hash = passwords
             .iter()
             .find(|p| matches!(p, PasswordKind::Hashed(_)));
         if let Some(hash) = hash {
-            return Self {
+            return Ok(Self {
                 provider: Provider::Hashed(HashedPassword {
                     hash: hash.to_string(),
                 }),
-            };
+            });
         }
 
-        let salt = rand::rng().random::<[u8; 16]>().to_vec();
-        Self {
+        // PBKDF2 salt; SP 800-132 wants it from an approved RBG.
+        let mut salt = vec![0u8; 16];
+        fips::fill_random(&mut salt)?;
+        Ok(Self {
             provider: Provider::Plain(UserPassword {
                 passwords: passwords.iter().map(|s| s.to_string()).collect(),
                 salt,
                 iterations: 4096,
             }),
-        }
+        })
     }
 
     /// Read the next password message from the client, ignoring error
@@ -269,7 +271,7 @@ mod tests {
 
     #[test]
     fn user_password_provider_generates_info() {
-        let server = Server::new(&[PasswordKind::Plain("secret".to_string())]);
+        let server = Server::new(&[PasswordKind::Plain("secret".to_string())]).unwrap();
         let provider = match server.provider {
             Provider::Plain(ref inner) => inner.hash(),
             _ => unreachable!(),
@@ -290,7 +292,8 @@ mod tests {
                 .iter()
                 .map(|p| PasswordKind::Plain(p.to_string()))
                 .collect::<Vec<_>>(),
-        );
+        )
+        .unwrap();
         let provider = match server.provider {
             Provider::Plain(ref inner) => inner.hash(),
             _ => unreachable!(),
@@ -480,7 +483,7 @@ mod tests {
         let passwords = (0..128)
             .map(|i| PasswordKind::Plain(format!("password_{}", i)))
             .collect::<Vec<_>>();
-        let server = Server::new(&passwords);
+        let server = Server::new(&passwords).unwrap();
 
         // Measure how long the derivation takes on this machine.
         let plain = match server.provider {
@@ -584,7 +587,7 @@ mod tests {
     }
 
     fn hashed_server() -> Server {
-        Server::new(&[PasswordKind::Hashed(SCRAM_HASH.to_string())])
+        Server::new(&[PasswordKind::Hashed(SCRAM_HASH.to_string())]).unwrap()
     }
 
     async fn read_auth(stream: &mut Stream) -> Authentication {
@@ -847,7 +850,7 @@ mod tests {
         let cb_data = b"tls-server-end-point-bytes";
         let (mut server_stream, mut client_stream) = connected_pair().await;
         server_stream.set_tls_server_end_point(cb_data.to_vec());
-        let server = Server::new(&[PasswordKind::Plain("pgdog".to_string())]);
+        let server = Server::new(&[PasswordKind::Plain("pgdog".to_string())]).unwrap();
         let task = tokio::spawn(async move { server.handle(&mut server_stream).await });
 
         let scram_client = scram::ScramClient::new_with_channel_binding(

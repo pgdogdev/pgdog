@@ -11,7 +11,9 @@ readme = "README.md"
 default-run = "pgdog"
 
 [features]
-fips = ["tokio-rustls/fips"]
+# FIPS 140-3: Rustls and PgDog's direct AWS-LC use both go through the
+# validated AWS-LC FIPS module.
+fips = ["tokio-rustls/fips", "aws-lc-rs/fips"]
 bench = ["foldhash"]
 
 [dependencies]

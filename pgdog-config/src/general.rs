@@ -18,7 +18,7 @@ use crate::{
 
 use super::auth::{AuthType, PassthroughAuth};
 use super::database::{LoadBalancingStrategy, ReadWriteSplit, ReadWriteStrategy};
-use super::networking::TlsVerifyMode;
+use super::networking::{FipsMode, TlsVerifyMode};
 use super::pooling::{PoolerMode, PreparedStatementsLevel};
 
 /// Format to use for PgDog application logs.
@@ -295,6 +295,16 @@ pub struct General {
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate>
     pub tls_client_ca_certificate: Option<PathBuf>,
+
+    /// FIPS 140-3 enforcement: `auto`, `required` or `disabled`.
+    ///
+    /// When enforced, PgDog refuses to start unless it was built with the
+    /// `fips` feature and its crypto module is in FIPS mode, and rejects TLS
+    /// configurations that are not FIPS-compliant.
+    ///
+    /// _Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts)
+    #[serde(default = "General::fips")]
+    pub fips: FipsMode,
 
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
@@ -1041,6 +1051,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             unique_id_function: Self::unique_id_function(),
             auth_token_cache_size: Self::auth_token_cache_size(),
+            fips: Self::fips(),
         }
     }
 }
@@ -1598,6 +1609,10 @@ impl General {
         Self::env_or_default("PGDOG_PASSTHROUGH_AUTH_DEBOUNCE_DELAY", 1_000)
     }
 
+    fn fips() -> FipsMode {
+        Self::env_enum_or_default("PGDOG_FIPS")
+    }
+
     fn auth_token_cache_size() -> u64 {
         Self::env_or_default("PGDOG_AUTH_TOKEN_CACHE_SIZE", 1_000)
     }
@@ -1737,6 +1752,25 @@ mod tests {
 
         let general: General = toml::from_str("sharding_lookup_cache_size = 1048576").unwrap();
         assert_eq!(general.sharding_lookup_cache_size, 1048576);
+    }
+
+    #[test]
+    fn test_fips_mode() {
+        assert_eq!(General::default().fips, FipsMode::Auto);
+
+        for (value, mode) in [
+            ("auto", FipsMode::Auto),
+            ("required", FipsMode::Required),
+            ("disabled", FipsMode::Disabled),
+        ] {
+            let general: General = toml::from_str(&format!("fips = \"{value}\"")).unwrap();
+            assert_eq!(general.fips, mode);
+            assert_eq!(value.parse::<FipsMode>().unwrap(), mode);
+            assert_eq!(mode.to_string(), value);
+        }
+
+        assert!(toml::from_str::<General>("fips = \"maybe\"").is_err());
+        assert!("maybe".parse::<FipsMode>().is_err());
     }
 
     #[test]

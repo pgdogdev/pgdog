@@ -130,6 +130,18 @@ tls_verify = "disabled"
 # tls_server_certificate = "relative/or/absolute/path/to/certificate.pem"
 # Path to the PEM-encoded private key for tls_server_certificate.
 # tls_server_private_key = "relative/or/absolute/path/to/private_key.pem"
+# FIPS 140-3 enforcement. When enforced, PgDog refuses to start or reload
+# unless it was built with `--features fips` and AWS-LC is in FIPS mode,
+# rejects TLS configurations that aren't FIPS-compliant, and refuses MD5
+# authentication. See docs/FIPS.md.
+#
+# Default: auto
+#
+# Available options:
+# - auto (enforce on FIPS builds and when /proc/sys/crypto/fips_enabled is 1)
+# - required (always enforce)
+# - disabled (never enforce)
+# fips = "auto"
 # How long to wait for active connections to finish transactions
 # when shutting down PgDog.
 #

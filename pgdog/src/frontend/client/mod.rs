@@ -29,7 +29,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream};
+use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream, fips::Enforcement};
 use crate::parameters::{ParameterStore, Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
@@ -191,6 +191,9 @@ impl Client {
 
         let result = match auth_type {
             AuthType::Md5 => {
+                // Also checked at startup and reload; a reload that fails
+                // after swapping config must not leave MD5 usable.
+                Enforcement::resolve(config().config.general.fips).check_auth(*auth_type)?;
                 let md5 = md5::Client::new(
                     user,
                     &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -212,7 +215,7 @@ impl Client {
                 let challenge = scram_challenge(stream.tls_server_end_point());
                 stream.send_flush(&challenge).await?;
 
-                let scram = Server::new(passwords);
+                let scram = Server::new(passwords)?;
                 let res = scram.handle(stream).await;
                 if matches!(res, Ok(true)) {
                     AuthResult::Ok
@@ -289,7 +292,7 @@ impl Client {
             .unwrap_or(config.config.general.auth_type);
         let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
-        let key = BackendKeyData::new_frontend(protocol_version, id);
+        let key = BackendKeyData::new_frontend(protocol_version, id)?;
         let comms = ClientComms::new(id);
         let log_connections = config.config.general.log_connections;
         // Without a client CA, no certificate is ever requested, so requiring one
@@ -490,7 +493,7 @@ impl Client {
         }
 
         let id = FrontendPid::new();
-        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id);
+        let key = BackendKeyData::new_frontend(ProtocolVersion::V3_0, id).unwrap();
         let mut prepared_statements = PreparedStatements::new();
         prepared_statements.level = config().config.general.prepared_statements;
 

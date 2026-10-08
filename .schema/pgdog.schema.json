@@ -53,6 +53,7 @@
         "dns_ttl": null,
         "dry_run": false,
         "expanded_explain": false,
+        "fips": "auto",
         "healthcheck_interval": 30000,
         "healthcheck_port": null,
         "healthcheck_timeout": 5000,
@@ -678,6 +679,26 @@
         "nanos"
       ]
     },
+    "FipsMode": {
+      "description": "FIPS 140-3 enforcement.\n\nWhen enforced, PgDog refuses to start (or to reload) unless its\ncryptographic module is running in FIPS mode, every TLS configuration it\nbuilds reports FIPS compliance, and no non-approved algorithm (MD5) is used\nfor authentication.",
+      "oneOf": [
+        {
+          "description": "Enforce when PgDog was built with the `fips` feature or the host kernel\nis in FIPS mode (`/proc/sys/crypto/fips_enabled` is `1`) (default).",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Always enforce; refuse to start if FIPS mode is unavailable.",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Never enforce, even on a FIPS-enabled host.",
+          "type": "string",
+          "const": "disabled"
+        }
+      ]
+    },
     "FlexibleType": {
       "description": "A sharding key value that can be an integer, UUID, or string.",
       "anyOf": [
@@ -889,6 +910,11 @@
           "description": "Enable expanded (`\\x`) output for `EXPLAIN` results returned by PgDog's built-in query plan aggregation.",
           "type": "boolean",
           "default": false
+        },
+        "fips": {
+          "description": "FIPS 140-3 enforcement: `auto`, `required` or `disabled`.\n\nWhen enforced, PgDog refuses to start unless it was built with the\n`fips` feature and its crypto module is in FIPS mode, and rejects TLS\nconfigurations that are not FIPS-compliant.\n\n_Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts)",
+          "$ref": "#/$defs/FipsMode",
+          "default": "auto"
         },
         "healthcheck_interval": {
           "description": "Frequency of healthchecks performed by PgDog to ensure connections provided to clients from the pool are working.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#healthcheck_interval>",

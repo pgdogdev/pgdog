@@ -19,7 +19,10 @@ use super::{
 };
 use crate::parameters::{KnownParameter, ParameterStore, Parameters};
 use crate::{
-    auth::{md5, scram::Client},
+    auth::{
+        md5,
+        scram::{Client, Error as ScramError},
+    },
     backend::pool::stats::MemoryStats,
     config::AuthType,
     frontend::{ClientRequest, SetParam},
@@ -38,6 +41,7 @@ use crate::{
     config::{ConfigAndUsers, ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
+        fips::Enforcement,
         messages::{DataRow, NoticeResponse},
         tls::UpstreamTlsSettings,
     },
@@ -325,8 +329,10 @@ impl Server {
             .await?;
         stream.flush().await?;
 
-        // Perform authentication.
-        let mut scram = Client::new(user, auth_secret);
+        // Perform authentication. SCRAM state (and its nonce) is created only
+        // if the server asks for SASL, so token and password logins never
+        // touch it.
+        let mut scram: Option<Client> = None;
         let mut auth_type = if addr.server_auth.is_external_identity() {
             AuthType::ExternalToken
         } else {
@@ -352,10 +358,13 @@ impl Server {
                         }
                         Authentication::Sasl(_) => {
                             auth_type = AuthType::Scram;
+                            let scram = scram.insert(Client::new(user, auth_secret));
                             let initial = Password::sasl_initial(&scram.first()?);
                             stream.send_flush(&initial).await?;
                         }
                         Authentication::SaslContinue(data) => {
+                            #[allow(clippy::unnecessary_lazy_evaluations)]
+                            let scram = scram.as_mut().ok_or_else(|| ScramError::OutOfOrder)?;
                             scram.server_first(&data)?;
                             let response = Password::PasswordMessage {
                                 response: scram.last()?,
@@ -363,10 +372,14 @@ impl Server {
                             stream.send_flush(&response).await?;
                         }
                         Authentication::SaslFinal(data) => {
+                            #[allow(clippy::unnecessary_lazy_evaluations)]
+                            let scram = scram.as_mut().ok_or_else(|| ScramError::OutOfOrder)?;
                             scram.server_last(&data)?;
                         }
                         Authentication::Md5(salt) => {
                             auth_type = AuthType::Md5;
+                            Enforcement::resolve(config.config.general.fips)
+                                .check_auth(auth_type)?;
                             let client =
                                 md5::Client::new_salt(user, &[auth_secret.to_string()], &salt)?;
                             stream.send_flush(&client.response()?).await?;
@@ -416,7 +429,10 @@ impl Server {
         // so they don't send BackendKeyData.
         // Generating a random one is fine, it just won't work when we try to
         // cancel a query with this secret.
-        let key = key_data.unwrap_or_else(BackendKeyData::random_legacy);
+        let key = match key_data {
+            Some(key) => key,
+            None => BackendKeyData::random_legacy()?,
+        };
         let params = Arc::new(Parameters::from(params));
 
         info!(
@@ -1459,7 +1475,7 @@ pub(crate) mod test {
 
     impl Default for Server {
         fn default() -> Self {
-            let key = BackendKeyData::random_legacy();
+            let key = BackendKeyData::random_legacy().unwrap();
             let id = BackendPid::from(&key);
             let addr = Address::default();
             Self {
@@ -1605,7 +1621,7 @@ pub(crate) mod test {
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::random_legacy().to_bytes())
+                    .write_all(&BackendKeyData::random_legacy().unwrap().to_bytes())
                     .await
                     .unwrap();
                 socket
@@ -1637,6 +1653,86 @@ pub(crate) mod test {
 
         let server = result.unwrap();
         drop(server);
+        server_task.await.unwrap();
+    }
+
+    /// Mock Postgres that answers the startup with a single auth request
+    /// and then waits for PgDog to hang up.
+    async fn mock_auth_backend(auth: Authentication) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+
+            let startup = Startup::from_stream(&mut socket).await.unwrap();
+            if matches!(startup, Startup::Ssl) {
+                socket.write_all(b"N").await.unwrap();
+                Startup::from_stream(&mut socket).await.unwrap();
+            }
+
+            socket.write_all(&auth.to_bytes()).await.unwrap();
+            let mut rest = vec![];
+            let _ = socket.read_to_end(&mut rest).await;
+        });
+
+        (port, task)
+    }
+
+    #[tokio::test]
+    async fn test_connect_sasl_continue_without_sasl_is_out_of_order() {
+        // SCRAM state is only created on AuthenticationSASL, so a server that
+        // skips it gets a protocol error instead of a pre-built nonce.
+        let (port, server_task) = mock_auth_backend(Authentication::SaslContinue(
+            "r=nonce,s=c2FsdA==,i=4096".into(),
+        ))
+        .await;
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        let result = Server::connect(
+            &addr,
+            ServerOptions::default(),
+            ConnectReason::Other,
+            Default::default(),
+        )
+        .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(Error::ScramAuth(crate::auth::scram::Error::OutOfOrder))
+            ),
+            "{:?}",
+            result.err()
+        );
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connect_md5_refused_when_fips_required() {
+        let mut config = crate::config::ConfigAndUsers::default();
+        config.config.general.fips = crate::config::FipsMode::Required;
+        crate::config::set(config).unwrap();
+
+        let (port, server_task) =
+            mock_auth_backend(Authentication::Md5(Bytes::from_static(b"salt"))).await;
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        let result = Server::connect(
+            &addr,
+            ServerOptions::default(),
+            ConnectReason::Other,
+            Default::default(),
+        )
+        .await;
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        assert!(
+            matches!(result, Err(Error::Net(crate::net::Error::Fips(_)))),
+            "{:?}",
+            result.err()
+        );
         server_task.await.unwrap();
     }
 
@@ -1672,7 +1768,7 @@ pub(crate) mod test {
                     .await
                     .unwrap();
                 socket
-                    .write_all(&BackendKeyData::random_legacy().to_bytes())
+                    .write_all(&BackendKeyData::random_legacy().unwrap().to_bytes())
                     .await
                     .unwrap();
                 socket

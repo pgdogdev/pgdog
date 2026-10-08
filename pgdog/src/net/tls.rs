@@ -28,6 +28,7 @@ use x509_parser::prelude::FromDer;
 use crate::config::config;
 
 use super::Error;
+use super::fips::{self, Enforcement};
 
 /// TLS acceptor plus the `tls-server-end-point` binding for the leaf
 /// certificate it will present. Kept together so a reload cannot pair a
@@ -286,6 +287,10 @@ pub(crate) fn reload() -> Result<(), Error> {
     let config = config();
     let general = &config.config.general;
 
+    // FIPS kill switch: refuse to (re)load when FIPS is enforced but the
+    // crypto module isn't in FIPS mode.
+    let fips = fips::check(&config.config)?;
+
     // Rebuild the connector for every TLS configuration the current config
     // references, reading certificates fresh from disk so in-place rotations
     // (e.g. re-mounted Kubernetes secrets) are picked up. Building into a new
@@ -302,7 +307,7 @@ pub(crate) fn reload() -> Result<(), Error> {
 
     for settings in std::iter::once(general_settings).chain(database_settings) {
         if let Entry::Vacant(entry) = connectors.entry(settings.cache_key()) {
-            let client_config = build_connector(entry.key())?;
+            let client_config = build_connector(entry.key(), fips)?;
             entry.insert(client_config);
         }
     }
@@ -310,7 +315,7 @@ pub(crate) fn reload() -> Result<(), Error> {
     let tls_paths = general.tls();
     let client_ca = general.tls_client_ca_certificate.as_deref();
     let new_acceptor = tls_paths
-        .map(|(cert, key)| build_acceptor(cert, key, client_ca))
+        .map(|(cert, key)| build_acceptor(cert, key, client_ca, fips))
         .transpose()?;
 
     *CONNECTORS.write() = connectors;
@@ -366,7 +371,12 @@ fn load_certificate_chain(path: &Path, label: &str) -> Result<Vec<CertificateDer
     Ok(certificates)
 }
 
-fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<TlsListener, Error> {
+fn build_acceptor(
+    cert: &Path,
+    key: &Path,
+    client_ca: Option<&Path>,
+    fips: Enforcement,
+) -> Result<TlsListener, Error> {
     let certificates = load_certificate_chain(cert, "certificate")?;
     let server_end_point = certificates.first().and_then(tls_server_end_point);
     let key = PrivateKeyDer::from_pem_file(key)?;
@@ -380,6 +390,8 @@ fn build_acceptor(cert: &Path, key: &Path, client_ca: Option<&Path>) -> Result<T
         None => builder.with_no_client_auth(),
     }
     .with_single_cert(certificates, key)?;
+
+    fips.check_tls(config.fips(), "client-facing")?;
 
     ACCEPTOR_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
@@ -444,7 +456,10 @@ fn invalid_data(msg: impl Into<String>) -> Error {
     ))
 }
 
-fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>, Error> {
+fn build_connector(
+    config_key: &ConnectorConfigKey,
+    fips: Enforcement,
+) -> Result<Arc<ClientConfig>, Error> {
     let roots = if let Some(ca_path) = config_key.ca_path.as_ref() {
         load_ca_bundle(ca_path, "server CA")?
     } else if matches!(
@@ -515,6 +530,8 @@ fn build_connector(config_key: &ConnectorConfigKey) -> Result<Arc<ClientConfig>,
             client_auth,
         )?,
     };
+
+    fips.check_tls(config.fips(), "server")?;
 
     increment_connector_build_count();
 
@@ -627,7 +644,8 @@ fn connector_with_verify_mode(
         return Ok(TlsConnector::from(config));
     }
 
-    let client_config = build_connector(&config_key)?;
+    let fips = Enforcement::resolve(config().config.general.fips);
+    let client_config = build_connector(&config_key, fips)?;
     let connector = TlsConnector::from(client_config.clone());
     CONNECTORS.write().insert(config_key, client_config);
 
@@ -721,9 +739,122 @@ impl ServerCertVerifier for NoHostnameVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::TlsVerifyMode;
+    use crate::config::{FipsMode, TlsVerifyMode};
     use rustls::pki_types::ServerName;
     use std::{sync::Arc, time::Duration};
+
+    /// Enforced in `fips` builds, so every test that builds TLS through this
+    /// also asserts the result is FIPS-compliant there.
+    fn build_fips() -> Enforcement {
+        if cfg!(feature = "fips") {
+            Enforcement::Enforced
+        } else {
+            Enforcement::NotEnforced
+        }
+    }
+
+    fn fips_test_paths() -> (PathBuf, PathBuf) {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls");
+        (dir.join("cert.pem"), dir.join("key.pem"))
+    }
+
+    fn all_verify_modes() -> [TlsVerifyMode; 4] {
+        [
+            TlsVerifyMode::Disabled,
+            TlsVerifyMode::Prefer,
+            TlsVerifyMode::VerifyCa,
+            TlsVerifyMode::VerifyFull,
+        ]
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn fips_build_tls_configs_are_fips() {
+        crate::logger();
+        let (cert, key) = fips_test_paths();
+
+        let listener = build_acceptor(&cert, &key, Some(&cert), Enforcement::Enforced)
+            .expect("FIPS acceptor builds");
+        drop(listener);
+
+        for mode in all_verify_modes() {
+            let config_key = ConnectorConfigKey::new(mode, Some(&cert), Some(&cert), Some(&key));
+            let config =
+                build_connector(&config_key, Enforcement::Enforced).expect("FIPS connector builds");
+            assert!(config.fips(), "{mode} connector must be FIPS");
+            assert!(config.crypto_provider().fips());
+        }
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn fips_build_reload_with_required_succeeds() {
+        crate::logger();
+        super::test_reset_acceptor();
+        let (cert, key) = fips_test_paths();
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.general.fips = FipsMode::Required;
+        cfg.config.general.tls_certificate = Some(cert);
+        cfg.config.general.tls_private_key = Some(key);
+        crate::config::set(cfg).unwrap();
+
+        super::reload().expect("FIPS build reloads with fips = required");
+        assert!(super::acceptor().is_some());
+
+        super::test_reset_acceptor();
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
+
+    #[cfg(not(feature = "fips"))]
+    #[test]
+    fn non_fips_tls_configs_rejected_when_enforced() {
+        crate::logger();
+        let (cert, key) = fips_test_paths();
+
+        let err = build_acceptor(&cert, &key, None, Enforcement::Enforced)
+            .err()
+            .expect("non-FIPS acceptor rejected");
+        assert!(matches!(err, Error::Fips(_)), "{err}");
+
+        for mode in all_verify_modes() {
+            let config_key = ConnectorConfigKey::new(mode, Some(&cert), None, None);
+            let err = build_connector(&config_key, Enforcement::Enforced)
+                .expect_err("non-FIPS connector rejected");
+            assert!(matches!(err, Error::Fips(_)), "{mode}: {err}");
+
+            let config = build_connector(&config_key, Enforcement::NotEnforced)
+                .expect("connector builds when FIPS isn't enforced");
+            assert!(!config.fips());
+        }
+    }
+
+    #[cfg(not(feature = "fips"))]
+    #[test]
+    fn non_fips_reload_with_required_keeps_previous_tls() {
+        crate::logger();
+        super::test_reset_acceptor();
+        let (cert, key) = fips_test_paths();
+
+        let mut cfg = crate::config::ConfigAndUsers::default();
+        cfg.config.general.fips = FipsMode::Disabled;
+        cfg.config.general.tls_certificate = Some(cert);
+        cfg.config.general.tls_private_key = Some(key);
+        crate::config::set(cfg.clone()).unwrap();
+        super::reload().expect("TLS loads with fips = disabled");
+        let acceptor = super::acceptor().expect("acceptor installed");
+
+        // The kill switch: a non-FIPS build refuses fips = required.
+        cfg.config.general.fips = FipsMode::Required;
+        crate::config::set(cfg).unwrap();
+        let err = super::reload().expect_err("non-FIPS build refuses fips = required");
+        assert!(matches!(err, Error::Fips(_)), "{err}");
+        assert!(Arc::ptr_eq(&acceptor, &super::acceptor().unwrap()));
+        assert_eq!(super::test_acceptor_build_count(), 1);
+
+        super::test_reset_acceptor();
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+    }
 
     #[tokio::test]
     async fn certificate_chains_are_sent_to_tls_peers() {
@@ -735,8 +866,13 @@ mod tests {
         let leaf = CertificateDer::from_pem_file(&chain).expect("leaf certificate");
 
         for mutual_tls in [false, true] {
-            let listener = build_acceptor(&chain, &key, mutual_tls.then_some(root.as_path()))
-                .expect("server TLS configuration");
+            let listener = build_acceptor(
+                &chain,
+                &key,
+                mutual_tls.then_some(root.as_path()),
+                build_fips(),
+            )
+            .expect("server TLS configuration");
             assert_eq!(
                 listener.server_end_point(),
                 tls_server_end_point(&leaf).as_deref(),
@@ -791,7 +927,7 @@ mod tests {
         std::fs::write(&empty, "").expect("empty certificate bundle");
         let key = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/tls/chain/leaf-key.pem");
         assert_invalid_certificate_error(
-            build_acceptor(&empty, &key, None)
+            build_acceptor(&empty, &key, None, build_fips())
                 .err()
                 .expect("empty server chain rejected"),
             &format!(
