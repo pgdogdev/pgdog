@@ -283,7 +283,9 @@ impl Client {
         let (user, database) = user_database_from_params(&params);
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
-        let auth_type = &config.config.general.auth_type;
+        let auth_type = databases::databases()
+            .auth_type((user, database))
+            .unwrap_or(config.config.general.auth_type);
         let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
         let key = BackendKeyData::new_frontend(protocol_version, id);
@@ -302,7 +304,14 @@ impl Client {
             // The admin database is virtual and never present in the cluster
             // map, so authenticate directly against the configured admin password.
             let passwords = [PasswordKind::Plain(admin_password.clone())];
-            Self::check_password(&mut stream, user, database, auth_type, &passwords).await?
+            Self::check_password(
+                &mut stream,
+                user,
+                database,
+                &config.config.general.auth_type, // Admin auth uses general auth_type on purpose, which defaults to scram.
+                &passwords,
+            )
+            .await?
         } else if passthrough {
             // Get the password. We always need it because we need to check if
             // it's current and hasn't been changed.
@@ -348,7 +357,7 @@ impl Client {
                         // entries to plaintext before the auth exchange
                         let passwords =
                             crate::auth::vault::resolve_passwords(cluster.passwords()).await;
-                        Self::check_password(&mut stream, user, database, auth_type, &passwords)
+                        Self::check_password(&mut stream, user, database, &auth_type, &passwords)
                             .await?
                     }
                 }
