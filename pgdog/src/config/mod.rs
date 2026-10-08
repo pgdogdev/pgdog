@@ -71,6 +71,9 @@ pub(crate) fn load(config: &Path, users: &Path) -> Result<ConfigAndUsers, Error>
 
 pub(crate) fn set(mut config: ConfigAndUsers) -> Result<ConfigAndUsers, Error> {
     config.check()?;
+    // Every config change (startup, RELOAD, admin SET) passes through here,
+    // so a config that fails FIPS enforcement never goes live.
+    crate::net::fips::check(&config.config).map_err(|err| Error::Fips(err.to_string()))?;
     validate_lookup_queries(&config)?;
     for table in config.config.sharded_tables.iter_mut() {
         // TODO: synchronous io operations inside that could be parallelized.

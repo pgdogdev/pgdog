@@ -283,6 +283,25 @@ mod tests {
     }
 
     #[test]
+    fn test_config_set_refuses_failing_config() {
+        crate::config::set(crate::config::ConfigAndUsers::default()).unwrap();
+
+        // Fails on every build: non-FIPS builds can't satisfy `required`, and
+        // FIPS builds refuse MD5.
+        let mut config = crate::config::ConfigAndUsers::default();
+        config.config.general.fips = FipsMode::Required;
+        config.config.general.auth_type = AuthType::Md5;
+
+        let err = crate::config::set(config).unwrap_err();
+        assert!(err.to_string().starts_with("FIPS:"), "{err}");
+        assert!(!crate::config::config().config.general.auth_type.md5());
+        assert_ne!(
+            crate::config::config().config.general.fips,
+            FipsMode::Required
+        );
+    }
+
+    #[test]
     fn test_audit_compliant_deployment() {
         let config = Config {
             general: General {

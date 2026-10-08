@@ -28,7 +28,7 @@ use x509_parser::prelude::FromDer;
 use crate::config::config;
 
 use super::Error;
-use super::fips::{self, Enforcement};
+use super::fips::Enforcement;
 
 /// TLS acceptor plus the `tls-server-end-point` binding for the leaf
 /// certificate it will present. Kept together so a reload cannot pair a
@@ -287,9 +287,8 @@ pub(crate) fn reload() -> Result<(), Error> {
     let config = config();
     let general = &config.config.general;
 
-    // FIPS kill switch: refuse to (re)load when FIPS is enforced but the
-    // crypto module isn't in FIPS mode.
-    let fips = fips::check(&config.config)?;
+    // `config::set` already refused configs that fail FIPS enforcement.
+    let fips = Enforcement::resolve(general.fips);
 
     // Rebuild the connector for every TLS configuration the current config
     // references, reading certificates fresh from disk so in-place rotations
@@ -831,7 +830,7 @@ mod tests {
 
     #[cfg(not(feature = "fips"))]
     #[test]
-    fn non_fips_reload_with_required_keeps_previous_tls() {
+    fn non_fips_build_refuses_required_and_keeps_previous_tls() {
         crate::logger();
         super::test_reset_acceptor();
         let (cert, key) = fips_test_paths();
@@ -844,11 +843,19 @@ mod tests {
         super::reload().expect("TLS loads with fips = disabled");
         let acceptor = super::acceptor().expect("acceptor installed");
 
-        // The kill switch: a non-FIPS build refuses fips = required.
+        // The kill switch: a non-FIPS build refuses fips = required before
+        // the config goes live, so nothing is swapped.
         cfg.config.general.fips = FipsMode::Required;
-        crate::config::set(cfg).unwrap();
-        let err = super::reload().expect_err("non-FIPS build refuses fips = required");
-        assert!(matches!(err, Error::Fips(_)), "{err}");
+        let err = crate::config::set(cfg).expect_err("non-FIPS build refuses fips = required");
+        assert!(
+            err.to_string().contains("without the `fips` feature"),
+            "{err}"
+        );
+        assert_eq!(
+            crate::config::config().config.general.fips,
+            FipsMode::Disabled
+        );
+        super::reload().expect("current config still reloads");
         assert!(Arc::ptr_eq(&acceptor, &super::acceptor().unwrap()));
         assert_eq!(super::test_acceptor_build_count(), 1);
 

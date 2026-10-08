@@ -350,7 +350,14 @@ impl Server {
                     let auth = Authentication::from_bytes(message.payload())?;
 
                     match auth {
-                        Authentication::Ok => break,
+                        Authentication::Ok => {
+                            // Accepting Ok mid-exchange would skip verifying
+                            // the server's signature (mutual authentication).
+                            if scram.as_ref().is_some_and(|scram| !scram.complete()) {
+                                return Err(ScramError::Incomplete.into());
+                            }
+                            break;
+                        }
                         Authentication::ClearTextPassword => {
                             auth_type = AuthType::Plain;
                             let password = Password::new_password(auth_secret.deref());
@@ -1708,6 +1715,57 @@ pub(crate) mod test {
         server_task.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn test_connect_rejects_ok_before_scram_completes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+
+            let startup = Startup::from_stream(&mut socket).await.unwrap();
+            if matches!(startup, Startup::Ssl) {
+                socket.write_all(b"N").await.unwrap();
+                Startup::from_stream(&mut socket).await.unwrap();
+            }
+
+            // Start SCRAM, then claim success without proving the password.
+            socket
+                .write_all(&Authentication::scram().to_bytes())
+                .await
+                .unwrap();
+            read_password_message(&mut socket).await;
+            socket
+                .write_all(&Authentication::Ok.to_bytes())
+                .await
+                .unwrap();
+            let mut rest = vec![];
+            let _ = socket.read_to_end(&mut rest).await;
+        });
+
+        let mut addr = Address::new_test();
+        addr.port = port;
+        let result = Server::connect(
+            &addr,
+            ServerOptions::default(),
+            ConnectReason::Other,
+            Default::default(),
+        )
+        .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(Error::ScramAuth(crate::auth::scram::Error::Incomplete))
+            ),
+            "{:?}",
+            result.err()
+        );
+        server_task.await.unwrap();
+    }
+
+    // Only a FIPS build can hold `fips = "required"`; `config::set` refuses it
+    // elsewhere.
+    #[cfg(feature = "fips")]
     #[tokio::test]
     async fn test_connect_md5_refused_when_fips_required() {
         let mut config = crate::config::ConfigAndUsers::default();

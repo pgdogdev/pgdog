@@ -912,7 +912,7 @@
           "default": false
         },
         "fips": {
-          "description": "FIPS 140-3 enforcement: `auto`, `required` or `disabled`.\n\nWhen enforced, PgDog refuses to start unless it was built with the\n`fips` feature and its crypto module is in FIPS mode, and rejects TLS\nconfigurations that are not FIPS-compliant.\n\n_Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts)",
+          "description": "FIPS 140-3 enforcement: `auto`, `required` or `disabled`.\n\nWhen enforced, PgDog refuses to start unless it was built with the\n`fips` feature and its crypto module is in FIPS mode, and rejects TLS\nconfigurations that are not FIPS-compliant.\n\n_Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts). An\nunrecognized `PGDOG_FIPS` value is treated as `required`.",
           "$ref": "#/$defs/FipsMode",
           "default": "auto"
         },

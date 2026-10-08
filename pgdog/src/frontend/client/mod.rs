@@ -29,7 +29,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream, fips::Enforcement};
+use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream};
 use crate::parameters::{ParameterStore, Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
@@ -191,9 +191,6 @@ impl Client {
 
         let result = match auth_type {
             AuthType::Md5 => {
-                // Also checked at startup and reload; a reload that fails
-                // after swapping config must not leave MD5 usable.
-                Enforcement::resolve(config().config.general.fips).check_auth(*auth_type)?;
                 let md5 = md5::Client::new(
                     user,
                     &passwords.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -212,10 +209,12 @@ impl Client {
             }
 
             AuthType::Scram => {
+                // Built before the challenge so an RNG failure doesn't strand
+                // a client mid-handshake.
+                let scram = Server::new(passwords)?;
                 let challenge = scram_challenge(stream.tls_server_end_point());
                 stream.send_flush(&challenge).await?;
 
-                let scram = Server::new(passwords)?;
                 let res = scram.handle(stream).await;
                 if matches!(res, Ok(true)) {
                     AuthResult::Ok

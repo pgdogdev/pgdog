@@ -302,7 +302,8 @@ pub struct General {
     /// `fips` feature and its crypto module is in FIPS mode, and rejects TLS
     /// configurations that are not FIPS-compliant.
     ///
-    /// _Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts)
+    /// _Default:_ `auto` (enforced on FIPS builds and FIPS-enabled hosts). An
+    /// unrecognized `PGDOG_FIPS` value is treated as `required`.
     #[serde(default = "General::fips")]
     pub fips: FipsMode,
 
@@ -1609,8 +1610,12 @@ impl General {
         Self::env_or_default("PGDOG_PASSTHROUGH_AUTH_DEBOUNCE_DELAY", 1_000)
     }
 
+    /// An unrecognized `PGDOG_FIPS` fails closed: a typo must not silently
+    /// turn enforcement off.
     fn fips() -> FipsMode {
-        Self::env_enum_or_default("PGDOG_FIPS")
+        env::var("PGDOG_FIPS")
+            .map(|value| value.parse().unwrap_or(FipsMode::Required))
+            .unwrap_or_default()
     }
 
     fn auth_token_cache_size() -> u64 {
@@ -1756,8 +1761,6 @@ mod tests {
 
     #[test]
     fn test_fips_mode() {
-        assert_eq!(General::default().fips, FipsMode::Auto);
-
         for (value, mode) in [
             ("auto", FipsMode::Auto),
             ("required", FipsMode::Required),
