@@ -78,9 +78,6 @@ fn explicit_output_name(
     name: &str,
     unqualified: bool,
 ) -> Option<String> {
-    if unqualified && target.name() == Some(name) {
-        return Some(name.to_owned());
-    }
     let Node::ColumnRef(projected) = target.val() else {
         return None;
     };
@@ -102,6 +99,10 @@ fn unique_output_name(
 ) -> Option<String> {
     let name = column_name(column)?;
     let unqualified = column.fields().len() == 1;
+
+    if unqualified && select.target_list().iter().any(|t| t.name() == Some(name)) {
+        return Some(name.to_owned());
+    }
 
     let mut star_match = false;
     let mut output = None;
@@ -298,6 +299,27 @@ mod tests {
     #[test]
     fn skips_sort_by_output_alias() {
         let (sql, plan) = rewrite("SELECT price AS item_price FROM products ORDER BY item_price");
+
+        assert!(!sql.contains("__pgdog_order_col"));
+        assert!(plan.is_noop());
+    }
+
+    #[test]
+    fn skips_sort_by_output_alias_in_star_select() {
+        for star in ["*", "persons.*"] {
+            let (sql, plan) = rewrite(&format!(
+                "SELECT {star}, length(email) AS score FROM persons ORDER BY score"
+            ));
+
+            assert!(!sql.contains("__pgdog_order_col"));
+            assert!(plan.is_noop());
+        }
+    }
+
+    #[test]
+    fn skips_sort_by_output_alias_shadowing_input_column() {
+        let (sql, plan) =
+            rewrite("SELECT price AS item_price, x AS price FROM products ORDER BY price");
 
         assert!(!sql.contains("__pgdog_order_col"));
         assert!(plan.is_noop());
