@@ -1083,6 +1083,7 @@ impl Server {
 
     /// Drain any remaining messages on the server connection,
     /// attempting to return the connection into a synchronized state.
+    #[cfg(test)]
     pub(super) async fn drain(&mut self) -> Result<(), Error> {
         self.drain_pending().await?;
         self.synchronize().await
