@@ -21,7 +21,7 @@ use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
-use crate::backend::{maintenance_mode, passthrough_check};
+use crate::backend::{maintenance_mode, passthrough_auth};
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
@@ -322,11 +322,7 @@ impl Client {
             let password = Password::from_bytes(password.to_bytes())?;
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                if passthrough_check::check(&user).await {
-                    databases::add(user)?
-                } else {
-                    AuthResult::NoPassthroughDatabaseCheck
-                }
+                passthrough_auth::check_or_add(user).await?
             } else {
                 AuthResult::NoPassthroughNoUser
             }

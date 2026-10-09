@@ -17,8 +17,8 @@ use crate::backend::schema::SchemaCache;
 use crate::config::config;
 use crate::util::safe_timeout;
 
-use super::Error;
-use super::databases::*;
+use super::super::Error;
+use super::super::databases::*;
 
 // (user, database) -> validator
 static THROTTLE: Lazy<DashMap<Key, Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
@@ -74,7 +74,7 @@ impl Drop for ThrottleShutdown {
 /// Check if the credentials provided by the client are correct.
 ///
 /// Protected against a thundering herd by a lock.
-pub async fn check(user: &User) -> bool {
+pub(super) async fn check_db(user: &User) -> bool {
     let config = config();
 
     // TODO(lev): This is a copy/pasta of what databases::add() does
