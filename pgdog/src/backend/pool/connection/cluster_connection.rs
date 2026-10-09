@@ -1,7 +1,7 @@
 use super::Error;
 use crate::{
     backend::{
-        Cluster, databases,
+        Cluster, databases, passthrough_auth,
         pool::{
             Error as PoolError, Guard, Request,
             connection::mirror::{Mirror, MirrorHandler},
@@ -217,7 +217,11 @@ impl ClusterConnection {
                 }
             }
 
-            databases::add(user)?;
+            // Auth result is ignored because the user
+            // has already authenticated. We could kick them
+            // if the password changed, but that's not how
+            // Postgres does it so we won't either.
+            passthrough_auth::restore_after_reload(user)?;
         }
 
         Ok(())

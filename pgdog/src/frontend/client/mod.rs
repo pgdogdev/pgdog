@@ -16,12 +16,12 @@ use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
 use crate::auth::{AUTH_TOKEN_CACHE, AuthResult, md5, scram::Server};
-use crate::backend::maintenance_mode;
 use crate::backend::pool::stats::MemoryStats;
 use crate::backend::{
     databases,
     pool::{Connection, Request},
 };
+use crate::backend::{maintenance_mode, passthrough_auth};
 use crate::config::convert::user_from_params;
 use crate::config::{self, AuthType, ConfigAndUsers, config};
 use crate::frontend::ClientComms;
@@ -320,13 +320,9 @@ impl Client {
                 .await?;
             let password = stream.read().await?;
             let password = Password::from_bytes(password.to_bytes())?;
-            // Passthrough authentication assumes the client password is good
-            // and lets Postgres perform the authentication instead. If Postgres
-            // returns an error, the connection pool will be banned and the client
-            // won't be able to run queries.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(user)?
+                passthrough_auth::check_or_add(user).await?
             } else {
                 AuthResult::NoPassthroughNoUser
             }

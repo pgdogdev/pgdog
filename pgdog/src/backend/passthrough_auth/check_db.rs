@@ -1,0 +1,164 @@
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::Duration;
+
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use pgdog_config::Config;
+use pgdog_config::User;
+use pgdog_config::users::PasswordKind;
+use tokio::sync::OnceCell;
+use tracing::error;
+
+use crate::backend::Cluster;
+use crate::backend::pool::Request;
+use crate::backend::schema::SchemaCache;
+
+use crate::config::config;
+use crate::util::safe_timeout;
+
+use super::super::Error;
+use super::super::databases::*;
+
+#[cfg(test)]
+mod test;
+
+// (user, database) -> validator
+static THROTTLE: Lazy<DashMap<Key, Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct Key {
+    inner: Arc<KeyInner>,
+}
+
+impl Deref for Key {
+    type Target = KeyInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct KeyInner {
+    user: String,
+    database: String,
+    passwords: Vec<PasswordKind>,
+}
+
+impl Key {
+    fn new(user: &User) -> Self {
+        Self {
+            inner: Arc::new(KeyInner {
+                user: user.name.clone(),
+                database: user.database.clone(),
+                passwords: user.passwords(),
+            }),
+        }
+    }
+}
+
+// Make sure we shut down the cluster when the check is complete.
+struct ClusterShutdown {
+    cluster: Cluster,
+}
+
+impl Deref for ClusterShutdown {
+    type Target = Cluster;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cluster
+    }
+}
+
+impl Drop for ClusterShutdown {
+    fn drop(&mut self) {
+        self.cluster.shutdown();
+    }
+}
+
+struct ThrottleShutdown {
+    key: Key,
+}
+
+impl Drop for ThrottleShutdown {
+    //
+    fn drop(&mut self) {
+        use tokio::{spawn, time::sleep};
+        let key = self.key.clone();
+        spawn(async move {
+            sleep(Duration::from_millis(
+                config().config.general.passthrough_auth_debounce_delay,
+            ))
+            .await;
+            THROTTLE.remove(&key);
+        });
+    }
+}
+
+/// Check if the credentials provided by the client are correct.
+///
+/// Protected against a thundering herd by a lock. The result of the check is preserved
+/// for up to `passthrough_auth_debounce_delay`.
+///
+pub(super) async fn check_db(user: &User) -> bool {
+    let config = config();
+
+    // TODO(lev): This is a copy/pasta of what databases::add() does
+    // for which we'll pay for later...
+    let user = if let Some(mut existing) = config.users.find(user) {
+        existing.password = user.password.clone();
+        existing
+    } else {
+        user.clone()
+    };
+
+    let key = Key::new(&user);
+    let throttle = ThrottleShutdown { key };
+    let entry = THROTTLE.entry(throttle.key.clone()).or_default().clone();
+
+    entry
+        .get_or_try_init(async || check_password(&user, &config.config).await)
+        .await
+        .copied()
+        .unwrap_or_default()
+}
+
+async fn check_password(user: &User, config: &Config) -> Result<bool, Error> {
+    // We're okay using an empty schema cache here because we won't be fetching the schema
+    // on cluster startup.
+    let cluster = if let Some((_, cluster)) = new_pool(user, config, SchemaCache::default()) {
+        ClusterShutdown { cluster }
+    } else {
+        return Ok(false);
+    };
+
+    // Only launch the pools and try to connect.
+    // Don't fetch schema or gate access to the cluster in any way.
+    cluster.launch_pools();
+
+    // A connection checkout is sufficient, the pool can only
+    // return a connection if it can connect to the database.
+    match safe_timeout(
+        Duration::from_millis(config.general.checkout_timeout),
+        cluster
+            .shards()
+            .iter()
+            .next()
+            .expect("cluster to have at least one shard")
+            .primary_or_replica(&Request::default()),
+    )
+    .await
+    {
+        Err(_) | Ok(Err(_)) => {
+            error!(
+                r#"user "{}" could not connect to database "{}" to validate passthrough auth"#,
+                cluster.user(),
+                cluster.name(),
+            );
+            Ok(false)
+        }
+
+        Ok(_) => Ok(true),
+    }
+}

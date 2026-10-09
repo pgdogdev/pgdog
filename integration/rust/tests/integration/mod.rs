@@ -28,6 +28,7 @@ pub mod notify;
 mod numeric_infinity;
 pub mod offset;
 pub mod partial_req;
+mod passthrough_debounce;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod protocol_version;
