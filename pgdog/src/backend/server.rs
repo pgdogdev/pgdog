@@ -34,7 +34,7 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{PoolerMode, TlsVerifyMode, config},
+    config::{ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
@@ -858,6 +858,11 @@ impl Server {
         self.in_transaction
     }
 
+    /// A statement completed since the last ReadyForQuery.
+    pub(crate) fn statement_executed(&self) -> bool {
+        self.statement_executed
+    }
+
     /// The server connection permanently failed.
     pub(crate) fn error(&self) -> bool {
         self.stats().get_state() == State::Error
@@ -1049,13 +1054,80 @@ impl Server {
         Ok(())
     }
 
-    /// Drain any remaining messages on the server connection,
-    /// attempting to return the connection into a synchronized state.
-    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+    /// Abort a successful extended-protocol execution before synchronizing.
+    ///
+    /// A Sync by itself would commit PostgreSQL's implicit transaction.
+    /// Pending replies must be drained before calling this method.
+    pub(super) async fn rollback_and_synchronize(&mut self) -> Result<(), Error> {
+        let request = ServerRequest::parameterized("ROLLBACK", &[]);
+        self.send(&request.messages.into()).await?;
+
+        while !self.in_sync() {
+            self.read().await?;
+        }
+
+        if !self.done() {
+            return Err(Error::RollbackFailed);
+        }
+
+        self.stats.rollback();
+        self.transaction_params_hook(true);
+        self.re_synced = true;
+
+        Ok(())
+    }
+
+    /// Drain replies already owed by the server without changing transaction state.
+    pub(super) async fn drain_pending(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
             self.read().await?;
         }
 
+        Ok(())
+    }
+
+    /// Return an unfinished extended-protocol exchange to a reusable state.
+    ///
+    /// Returns false when the configured recovery policy cannot safely recover
+    /// the connection.
+    pub(super) async fn recover_protocol(
+        &mut self,
+        recovery: ConnectionRecovery,
+    ) -> Result<bool, Error> {
+        if self.has_more_messages() {
+            if !recovery.can_recover() || self.is_sending_request() {
+                return Ok(false);
+            }
+
+            debug!(
+                "[cleanup] draining data from \"{}\" server [{}]",
+                self.stats().get_state(),
+                self.addr()
+            );
+            self.drain_pending().await?;
+        }
+
+        if self.out_of_sync() || !self.statement_executed() {
+            self.synchronize().await?;
+        } else if recovery.can_rollback() {
+            debug!(
+                "[cleanup] rolling back extended transaction, in \"{}\" state [{}]",
+                self.stats().get_state(),
+                self.addr(),
+            );
+            self.rollback_and_synchronize().await?;
+        } else {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Drain any remaining messages on the server connection,
+    /// attempting to return the connection into a synchronized state.
+    #[cfg(test)]
+    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+        self.drain_pending().await?;
         self.synchronize().await
     }
 
