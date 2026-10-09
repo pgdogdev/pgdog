@@ -21,6 +21,57 @@ fn shard_count(client: &mut TestClient) -> usize {
 }
 
 #[tokio::test]
+async fn test_set_local_default_outside_transaction() {
+    for extended in [false, true] {
+        let mut client = TestClient::new_sharded(Parameters::default()).await;
+        client
+            .send_simple(Query::new("SET statement_timeout TO '5s'"))
+            .await;
+        client.read_until('Z').await.expect("SET completed");
+
+        if extended {
+            client
+                .send(Parse::named(
+                    "local_default",
+                    "SET LOCAL statement_timeout TO DEFAULT",
+                ))
+                .await;
+            client.send(Bind::new_statement("local_default")).await;
+            client.send(Execute::new()).await;
+            client.send(Sync).await;
+            client.try_process().await.expect("request processed");
+            expect_message!(client.read().await, ParseComplete);
+            expect_message!(client.read().await, BindComplete);
+        } else {
+            client
+                .send_simple(Query::new("SET LOCAL statement_timeout TO DEFAULT"))
+                .await;
+        }
+
+        let notice = expect_message!(client.read().await, NoticeResponse);
+        assert_eq!(notice.message.severity, "WARNING");
+        assert_eq!(notice.message.code, "25P01");
+        assert_eq!(
+            notice.message.message,
+            "SET LOCAL can only be used in transaction blocks"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, CommandComplete).command(),
+            "SET"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
+        assert_eq!(
+            client.client().params.get("statement_timeout"),
+            Some(&ParameterValue::String("5s".into()))
+        );
+        assert!(!client.backend_connected());
+    }
+}
+
+#[tokio::test]
 async fn test_set() {
     let mut test_client = TestClient::new_sharded(Parameters::default()).await;
 
