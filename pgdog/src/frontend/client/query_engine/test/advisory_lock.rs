@@ -1,5 +1,9 @@
 use super::prelude::*;
-use crate::{frontend::router::parser::statement::AdvisoryLockId, net::DataRow};
+use crate::{
+    expect_message,
+    frontend::router::parser::statement::AdvisoryLockId,
+    net::{BindComplete, CommandComplete, DataRow, Format, ParseComplete, ReadyForQuery},
+};
 
 #[tokio::test]
 async fn test_pg_catalog_advisory_lock_pins_until_qualified_unlock() {
@@ -430,5 +434,85 @@ async fn test_xact_lock_released_on_rollback() {
 
     let locks = client.engine.advisory_locks();
     assert_eq!(locks.len(), 0);
+    assert!(!client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_failed_try_lock_does_not_pin() {
+    let mut holder = TestClient::new_sharded(Parameters::default()).await;
+    let mut client = TestClient::new(Parameters::default()).await;
+
+    holder
+        .send_simple(Query::new("SELECT pg_advisory_lock(2026100501)"))
+        .await;
+    holder.read_until('Z').await.unwrap();
+
+    client
+        .send_simple(Query::new("SELECT pg_try_advisory_lock(2026100501)"))
+        .await;
+    let messages = client.read_until('Z').await.unwrap();
+    let row = messages
+        .iter()
+        .find(|m| m.code() == 'D')
+        .map(|m| DataRow::try_from(m.clone()).unwrap())
+        .unwrap();
+    assert_eq!(row.get_text(0).as_deref(), Some("f"));
+
+    assert_eq!(client.engine.advisory_locks().len(), 0);
+    assert!(!client.backend_locked());
+
+    // Lock is free now, so it should pin.
+    holder
+        .send_simple(Query::new("SELECT pg_advisory_unlock(2026100501)"))
+        .await;
+    holder.read_until('Z').await.unwrap();
+
+    client
+        .send_simple(Query::new("SELECT pg_try_advisory_lock(2026100501)"))
+        .await;
+    client.read_until('Z').await.unwrap();
+
+    assert!(
+        client
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(2026100501))
+    );
+    assert!(client.backend_locked());
+}
+
+#[tokio::test]
+async fn test_failed_try_lock_binary_does_not_pin() {
+    let mut holder = TestClient::new_sharded(Parameters::default()).await;
+    let mut client = TestClient::new(Parameters::default()).await;
+
+    holder
+        .send_simple(Query::new("SELECT pg_advisory_lock(2026100502)"))
+        .await;
+    holder.read_until('Z').await.unwrap();
+
+    client
+        .send(Parse::named("try_lock", "SELECT pg_try_advisory_lock($1)"))
+        .await;
+    client
+        .send(Bind::new_params_codes_results(
+            "try_lock",
+            &[Parameter::new(&2026100502_i64.to_be_bytes())],
+            &[Format::Binary],
+            &[1],
+        ))
+        .await;
+    client.send(Execute::new()).await;
+    client.send(Sync).await;
+    client.try_process().await.unwrap();
+
+    expect_message!(client.read().await, ParseComplete);
+    expect_message!(client.read().await, BindComplete);
+    let row = expect_message!(client.read().await, DataRow);
+    assert_eq!(row.get::<bool>(0, Format::Binary), Some(false));
+    expect_message!(client.read().await, CommandComplete);
+    expect_message!(client.read().await, ReadyForQuery);
+
+    assert_eq!(client.engine.advisory_locks().len(), 0);
     assert!(!client.backend_locked());
 }

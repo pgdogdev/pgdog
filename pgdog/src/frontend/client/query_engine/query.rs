@@ -193,6 +193,11 @@ impl QueryEngine {
             self.emit_explain_rows(context).await?;
         }
 
+        if code == 'D' {
+            self.advisory_locks
+                .data_row(self.router.command().route().advisory_locks(), &message)?;
+        }
+
         if code == 'E' {
             if let Some(state) = self.pending_explain.as_mut() {
                 state.annotated = true;
