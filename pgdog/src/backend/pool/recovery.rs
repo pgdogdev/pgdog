@@ -137,11 +137,9 @@ impl Recovery {
                 server.stats().get_state(),
                 server.addr()
             );
+            // The cache is dropped by the DEALLOCATE ALL / DISCARD ALL
+            // response, so there is nothing to clear here.
             server.execute_batch(cleanup.queries()).await?;
-
-            if cleanup.is_deallocate() {
-                server.prepared_statements_mut().clear();
-            }
             server.cleaned();
 
             debug!(
@@ -165,19 +163,6 @@ impl Recovery {
         }
     }
 
-    async fn load_server_prepared_statements(server: &mut Server) -> Result<(), Error> {
-        if server.sync_prepared() {
-            debug!(
-                "[cleanup] syncing prepared statements, server in \"{}\" state [{}]",
-                server.stats().get_state(),
-                server.addr()
-            );
-            server.sync_prepared_statements().await?;
-        }
-
-        Ok(())
-    }
-
     pub(super) async fn cleanup_internal(
         server: &mut Box<Server>,
         cleanup: Cleanup,
@@ -193,7 +178,6 @@ impl Recovery {
 
         Self::sync_params_and_prepared_statements(server, &cleanup).await?;
         Self::cleanup_state(server, &cleanup);
-        Self::load_server_prepared_statements(server).await?;
 
         Ok(())
     }

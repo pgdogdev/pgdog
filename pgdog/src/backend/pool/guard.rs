@@ -648,7 +648,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_cleanup_syncs_prepared_statements() {
+    async fn test_cleanup_deallocates_client_prepared_statements() {
         crate::logger();
 
         let mut server = Guard::new(
@@ -688,9 +688,15 @@ mod test {
         );
 
         assert!(
-            server.prepared_statements_mut().contains("test_stmt"),
-            "Statement should be in local cache after sync"
+            !server.prepared_statements_mut().contains("test_stmt"),
+            "statement prepared by a client must not outlive its checkin"
         );
+
+        // The next client can use the same name, which is what pg_dump does.
+        server
+            .execute("PREPARE test_stmt AS SELECT $1::bigint")
+            .await
+            .unwrap();
 
         let one: Vec<i32> = server.fetch_all("SELECT 1").await.unwrap();
         assert_eq!(one[0], 1);
