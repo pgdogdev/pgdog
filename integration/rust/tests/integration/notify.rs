@@ -164,6 +164,32 @@ async fn test_notify() {
     }
 }
 
+#[tokio::test]
+async fn test_notify_payload_with_quote() {
+    let test_id = Uuid::new_v4().simple().to_string();
+    let channel = format!("test_notify_quote_{test_id}");
+
+    let mut listener = PgListener::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    listener.listen(&channel).await.unwrap();
+
+    let mut notifier = PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .unwrap();
+    notifier
+        .execute(format!("NOTIFY {channel}, 'it''s here'").as_str())
+        .await
+        .expect("NOTIFY with an escaped quote in the payload");
+
+    let notification = timeout(Duration::from_secs(10), listener.recv())
+        .await
+        .expect("notification within ten seconds")
+        .unwrap();
+    assert_eq!(notification.channel(), channel);
+    assert_eq!(notification.payload(), "it's here");
+}
+
 #[derive(Debug)]
 struct ListenerStats {
     listeners: i64,

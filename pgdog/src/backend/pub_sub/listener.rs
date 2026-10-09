@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use super::{Stats, StatsSnapshot, channel_size};
-use crate::util::safe_sleep;
+use crate::util::{escape_identifier, safe_sleep, sql::quote_literal};
 use crate::{
     backend::{self, ConnectReason, DisconnectReason, Pool, databases::User, pool::Error},
     config::config,
@@ -41,11 +41,18 @@ enum Request {
 impl From<Request> for ProtocolMessage {
     fn from(val: Request) -> Self {
         match val {
-            Request::Unsubscribe(channel) => Query::new(format!("UNLISTEN \"{}\"", channel)).into(),
-            Request::Subscribe(channel) => Query::new(format!("LISTEN \"{}\"", channel)).into(),
-            Request::Notify { channel, payload } => {
-                Query::new(format!("NOTIFY \"{}\", '{}'", channel, payload)).into()
+            Request::Unsubscribe(channel) => {
+                Query::new(format!("UNLISTEN \"{}\"", escape_identifier(&channel))).into()
             }
+            Request::Subscribe(channel) => {
+                Query::new(format!("LISTEN \"{}\"", escape_identifier(&channel))).into()
+            }
+            Request::Notify { channel, payload } => Query::new(format!(
+                "NOTIFY \"{}\", {}",
+                escape_identifier(&channel),
+                quote_literal(&payload)
+            ))
+            .into(),
         }
     }
 }
@@ -541,6 +548,34 @@ mod test {
                 payload: "payload".into(),
             },
             "NOTIFY \"events\", 'payload'",
+        );
+    }
+
+    #[test]
+    fn requests_escape_quotes_in_channel_and_payload() {
+        // `NOTIFY chan, 'it''s here'` reaches the listener decoded by the
+        // parser, so the rebuilt query has to escape it again.
+        assert_request_query(
+            Request::Notify {
+                channel: "events".into(),
+                payload: "it's here".into(),
+            },
+            "NOTIFY \"events\", 'it''s here'",
+        );
+        assert_request_query(
+            Request::Notify {
+                channel: "my\"events".into(),
+                payload: "payload".into(),
+            },
+            "NOTIFY \"my\"\"events\", 'payload'",
+        );
+        assert_request_query(
+            Request::Subscribe("my\"events".into()),
+            "LISTEN \"my\"\"events\"",
+        );
+        assert_request_query(
+            Request::Unsubscribe("my\"events".into()),
+            "UNLISTEN \"my\"\"events\"",
         );
     }
 
