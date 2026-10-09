@@ -20,11 +20,27 @@ use crate::util::safe_timeout;
 use super::super::Error;
 use super::super::databases::*;
 
+#[cfg(test)]
+mod test;
+
 // (user, database) -> validator
 static THROTTLE: Lazy<DashMap<Key, Arc<OnceCell<bool>>>> = Lazy::new(DashMap::default);
 
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Key {
+    inner: Arc<KeyInner>,
+}
+
+impl Deref for Key {
+    type Target = KeyInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct KeyInner {
     user: String,
     database: String,
     passwords: Vec<PasswordKind>,
@@ -33,9 +49,11 @@ struct Key {
 impl Key {
     fn new(user: &User) -> Self {
         Self {
-            user: user.name.clone(),
-            database: user.database.clone(),
-            passwords: user.passwords(),
+            inner: Arc::new(KeyInner {
+                user: user.name.clone(),
+                database: user.database.clone(),
+                passwords: user.passwords(),
+            }),
         }
     }
 }
@@ -64,16 +82,25 @@ struct ThrottleShutdown {
 }
 
 impl Drop for ThrottleShutdown {
-    // This makes it cancel-safe, so the throttle result is always removed.
-    // We don't need to store it forever, just to prevent a thundering herd.
+    //
     fn drop(&mut self) {
-        THROTTLE.remove(&self.key);
+        use tokio::{spawn, time::sleep};
+        let key = self.key.clone();
+        spawn(async move {
+            sleep(Duration::from_millis(
+                config().config.general.passthrough_auth_debounce_delay,
+            ))
+            .await;
+            THROTTLE.remove(&key);
+        });
     }
 }
 
 /// Check if the credentials provided by the client are correct.
 ///
-/// Protected against a thundering herd by a lock.
+/// Protected against a thundering herd by a lock. The result of the check is preserved
+/// for up to `passthrough_auth_debounce_delay`.
+///
 pub(super) async fn check_db(user: &User) -> bool {
     let config = config();
 

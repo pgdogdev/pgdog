@@ -457,6 +457,10 @@ pub struct General {
     #[serde(default = "General::default_passthrough_auth")]
     pub passthrough_auth: PassthroughAuth,
 
+    /// Passthrough auth debounce delay.
+    #[serde(default = "General::passthrough_auth_debounce_delay")]
+    pub passthrough_auth_debounce_delay: u64,
+
     /// Maximum amount of time to allow for PgDog to create a connection to Postgres.
     ///
     /// _Default:_ `5000`
@@ -958,6 +962,7 @@ impl Default for General {
             prepared_statements_ttl_jitter: Self::default_prepared_statements_ttl_jitter(),
             query_cache_limit: Self::query_cache_limit(),
             passthrough_auth: Self::default_passthrough_auth(),
+            passthrough_auth_debounce_delay: Self::passthrough_auth_debounce_delay(),
             connect_timeout: Self::default_connect_timeout(),
             connect_attempt_delay: Self::default_connect_attempt_delay(),
             connect_attempts: Self::connect_attempts(),
@@ -1559,6 +1564,10 @@ impl General {
         } else {
             PassthroughAuth::default()
         }
+    }
+
+    fn passthrough_auth_debounce_delay() -> u64 {
+        Self::env_or_default("PGDOG_PASSTHROUGH_AUTH_DEBOUNCE_DELAY", 1_000)
     }
 
     fn auth_token_cache_size() -> u64 {

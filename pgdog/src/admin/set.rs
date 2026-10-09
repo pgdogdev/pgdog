@@ -79,6 +79,10 @@ impl Command for Set {
                 config.config.general.passthrough_auth = Self::from_json(&self.value)?;
             }
 
+            "passthrough_auth_debounce_delay" => {
+                config.config.general.passthrough_auth_debounce_delay = self.value.parse()?;
+            }
+
             "read_write_strategy" => {
                 config.config.general.read_write_strategy = Self::from_json(&self.value)?;
             }

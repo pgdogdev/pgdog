@@ -124,6 +124,15 @@ async fn test_bad_passthrough_auth_does_not_block_good_auth() {
         .execute("SET passthrough_auth TO 'enabled_plain'")
         .await
         .expect("enable passthrough auth");
+    // Failed validation waits for checkout to time out.
+    admin
+        .execute("SET checkout_timeout TO 250")
+        .await
+        .expect("shorten failed validation wait");
+    admin
+        .execute("SET connect_timeout TO 250")
+        .await
+        .expect("shorten validation connection timeout");
 
     // Cover a new user and a configured user with a backend username override.
     for user in ["pgdog1", "pgdog_pass"] {
