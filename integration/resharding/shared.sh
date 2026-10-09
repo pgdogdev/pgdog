@@ -36,7 +36,7 @@ cleanup() {
     kill -TERM "${MIGRATION_PID:-}" 2>/dev/null || true
     kill -TERM "${PGBENCH_PID:-}" 2>/dev/null || true
     kill -TERM "${PGDOG_PID:-}" 2>/dev/null || true
-    (cd "${SCRIPT_DIR}" && docker compose down) || true
+    (cd "${SCRIPT_DIR}" && docker compose down -v) || true
 
     # Signal every process in this script's process group except ourselves.
     pkill -TERM -P $$ 2> /dev/null || true
@@ -132,7 +132,7 @@ run_finished_admin_task() {
 
 initialize_resharding() {
     pushd "${SCRIPT_DIR}"
-    docker compose down && docker compose up -d
+    docker compose down -v && docker compose up -d
 
     # Give it a second to boot up.
     # It restarts the DB during initialization.
