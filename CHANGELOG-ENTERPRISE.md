@@ -3,6 +3,28 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-10-09
+
+**OS version**: [v0.1.61](CHANGELOG.md#v0161)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-10-09`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-10-09` |
+
+#### Features
+
+- Show the current value of all globally distributed sequences in the control plane
+- Allow to supply the control plane authentication token via environment variable (`helm-ee` chart supports this, too)
+- Show replication state during resharding in the control plane
+
+#### Bug fixes
+
+- Pool autoscaling would reload the configuration unnecessarily when pool sizes didn't change
+- PgDog better handles shutdown during resharding by sending final updates to the control plane
+- Better preserve resharding tasks state across PgDog restarts so the information in control plane information isn't lost
+- Autodiscovery would use delayed interval, causing `check_interval` to be larger than configured
+
 ### v2026-09-17
 
 **OS version**: [v0.1.59](CHANGELOG.md#v0159)
@@ -19,7 +41,6 @@ the most optimal way to share those changes.
 - Add staging banner to the control plane UI, to let operators know they are _not_ using the production deployment of the control plane
 - Show `COPY_DATA` (resharding) tasks in the control plane UI
 - Add checkout timeout metric graph and Incident.io alert trigger
-
 
 #### Bug fixes
 
