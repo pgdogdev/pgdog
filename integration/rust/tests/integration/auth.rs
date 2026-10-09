@@ -75,6 +75,16 @@ async fn test_passthrough_auth() {
 
     assert_setting_str("passthrough_auth", "enabled_plain").await;
 
+    let bad_password = PgConnection::connect("postgres://pgdog1:wrong@127.0.0.1:6432/pgdog")
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        bad_password
+            .to_string()
+            .contains("password for user \"pgdog1\" and database \"pgdog\" is wrong")
+    );
+
     // First connection after auth changed to passthrough.
     let mut original = PgConnection::connect("postgres://pgdog1:pgdog@127.0.0.1:6432/pgdog")
         .await

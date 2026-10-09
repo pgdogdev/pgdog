@@ -320,13 +320,11 @@ impl Client {
                 .await?;
             let password = stream.read().await?;
             let password = Password::from_bytes(password.to_bytes())?;
-            // Passthrough authentication assumes the client password is good
-            // and lets Postgres perform the authentication instead. If Postgres
-            // returns an error, the connection pool will be banned and the client
-            // won't be able to run queries.
+            // Let Postgres validate new or changed credentials before publishing
+            // them to the shared connection pools.
             let user = user_from_params(&params, &password).ok();
             if let Some(user) = user {
-                databases::add(user)?
+                databases::validate_and_add(user).await?
             } else {
                 AuthResult::NoPassthroughNoUser
             }

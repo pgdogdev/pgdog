@@ -243,6 +243,46 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 }
 
+/// Validate a passthrough password with Postgres before adding it to shared state.
+pub(crate) async fn validate_and_add(user: ConfigUser) -> Result<AuthResult, Error> {
+    let config = config();
+    let existing = config.users.find(&user);
+    let password_changed = existing
+        .as_ref()
+        .and_then(|existing| existing.password.as_deref())
+        != user.password.as_deref();
+    let needs_validation = existing
+        .as_ref()
+        .is_none_or(|existing| existing.password.is_none())
+        || (password_changed && config.config.general.passthrough_auth.allows_change());
+
+    if needs_validation {
+        let Some(password) = user.password.as_deref() else {
+            return Ok(AuthResult::NoPasswordMatch);
+        };
+        let Some((identity, cluster)) = new_pool(&user, &config.config, SchemaCache::default())
+        else {
+            return Err(Error::NoDatabase(
+                (&user.name[..], &user.database[..]).to_user(),
+            ));
+        };
+        let Some(pool) = cluster
+            .shards()
+            .iter()
+            .flat_map(|shard| shard.pool_iter())
+            .next()
+        else {
+            return Err(Error::NoDatabase(identity));
+        };
+
+        if !pool.validate_token(password).await? {
+            return Ok(AuthResult::NoPasswordMatch);
+        }
+    }
+
+    add(user)
+}
+
 /// Swap database configs between source and destination.
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.
