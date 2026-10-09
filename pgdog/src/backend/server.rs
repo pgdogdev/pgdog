@@ -818,7 +818,18 @@ impl Server {
             .unwrap_or(false)
     }
 
+    /// Whether the connection can take a statement: the server sent nothing
+    /// we haven't read, and didn't close it.
+    ///
+    /// Bytes already read and not taken count too. A backend that dies right
+    /// after answering, e.g. when its postmaster is killed, sends its FATAL
+    /// at once, and the read that took the answer's ReadyForQuery often took
+    /// the FATAL into our buffer, where the socket no longer shows it.
     pub(crate) fn liveness(&mut self) -> Liveness {
+        if !self.stream_buffer.is_empty() {
+            return Liveness::DataPending;
+        }
+
         self.stream
             .as_mut()
             .map(|stream| stream.liveness())
@@ -1534,6 +1545,32 @@ pub(crate) mod test {
         drop(peer);
 
         wait_for_liveness(&mut server, Liveness::Closed).await;
+    }
+
+    #[tokio::test]
+    async fn test_liveness_sees_fatal_read_with_the_last_answer() {
+        let (mut server, mut peer) = server_with_peer().await;
+
+        server
+            .send(&vec![ProtocolMessage::from(Query::new("SELECT 1"))].into())
+            .await
+            .unwrap();
+
+        // The backend answers, then dies: its FATAL follows ReadyForQuery
+        // in the same packet.
+        let mut packet = BytesMut::new();
+        packet.put(CommandComplete::new("SELECT 1").to_bytes());
+        packet.put(ReadyForQuery::idle().to_bytes());
+        packet.put(ErrorResponse::admin_termination().to_bytes());
+        peer.write_all(&packet).await.unwrap();
+        peer.flush().await.unwrap();
+
+        assert_eq!(server.read().await.unwrap().code(), 'C');
+        assert_eq!(server.read().await.unwrap().code(), 'Z');
+        assert!(server.done());
+
+        // The FATAL is in our buffer, not on the socket.
+        assert_eq!(server.liveness(), Liveness::DataPending);
     }
 
     #[tokio::test]
