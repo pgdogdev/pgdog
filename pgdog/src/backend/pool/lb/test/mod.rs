@@ -1592,17 +1592,128 @@ async fn test_election_channel_no_race_condition() {
     // make sure there is no primary
     assert!(lb.primary().is_none());
 
-    // initialize the primary before the wait_primary is called
+    // initialize the primary before get_primary is called
     set_lsn_stats(&lb.targets[0], false, 100);
     assert!(lb.redetect_roles());
 
-    let elected = timeout(Duration::ZERO, lb.wait_primary())
+    let primary = timeout(Duration::from_secs(1), lb.get_primary(&Request::default()))
         .await
-        .expect("wait_primary should resolve")
+        .expect("an election that already happened is not waited for")
         .expect("primary should be elected");
-    assert_eq!(elected.addr().host, "127.0.0.1");
+    assert_eq!(primary.pool.addr().host, "127.0.0.1");
+    drop(primary);
 
     lb.shutdown();
+}
+
+/// Auto targets that wait up to 2s for a connection. Port 1 refuses
+/// connections: a primary that went down.
+fn auto_lb_with_checkout_timeout(ports: &[u16]) -> LoadBalancer {
+    let configs: Vec<_> = ports
+        .iter()
+        .map(|port| {
+            let mut config = create_auto_test_pool_config("127.0.0.1", *port);
+            config.config.checkout_timeout = Duration::from_secs(2);
+            config.config.connect_timeout = Duration::from_millis(100);
+            config
+        })
+        .collect();
+
+    LoadBalancer::new(
+        &None,
+        &configs,
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::IncludePrimary,
+        Default::default(),
+    )
+}
+
+#[tokio::test]
+async fn test_waiting_write_moves_to_new_primary() {
+    let lb = auto_lb_with_checkout_timeout(&[1, 5432]);
+    lb.launch();
+
+    // The elected primary is down: a write waits on its pool.
+    set_lsn_stats(&lb.targets[0], false, 500);
+    set_lsn_stats(&lb.targets[1], true, 500);
+    assert!(lb.redetect_roles());
+
+    let started = Instant::now();
+    let write = {
+        let lb = lb.clone();
+        tokio::spawn(async move { lb.get_primary(&Request::default()).await })
+    };
+
+    sleep(Duration::from_millis(300)).await;
+    assert!(!write.is_finished(), "the write waits for the primary");
+
+    // Failover: the replica is promoted.
+    set_lsn_stats(&lb.targets[1], false, 600);
+    set_lsn_stats(&lb.targets[0], true, 500);
+    assert!(lb.redetect_roles());
+
+    let primary = timeout(Duration::from_secs(1), write)
+        .await
+        .expect("the write moves to the new primary at once")
+        .unwrap()
+        .expect("a connection to the new primary");
+    assert_eq!(primary.pool.addr().port, 5432);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(primary);
+
+    lb.shutdown();
+}
+
+#[tokio::test]
+async fn test_unchanged_election_does_not_wake_waiting_writes() {
+    let lb = auto_lb_with_checkout_timeout(&[5432, 1]);
+    set_lsn_stats(&lb.targets[0], false, 500);
+    set_lsn_stats(&lb.targets[1], true, 500);
+
+    let mut elections = lb.elected_primary.subscribe();
+    assert!(lb.redetect_roles());
+    assert!(
+        elections.has_changed().unwrap(),
+        "a new primary is published"
+    );
+    elections.borrow_and_update();
+
+    // The LSN check runs again and nothing changed. Waiting writes keep
+    // their place in the primary's queue.
+    set_lsn_stats(&lb.targets[0], false, 700);
+    assert!(!lb.redetect_roles());
+    assert!(!elections.has_changed().unwrap());
+
+    // The primary is gone: that is a change.
+    set_lsn_stats(&lb.targets[0], true, 700);
+    lb.redetect_roles();
+    assert!(elections.has_changed().unwrap());
+    assert!(elections.borrow_and_update().is_none());
+}
+
+#[tokio::test]
+async fn test_write_after_reload_goes_to_elected_primary() {
+    let old = auto_lb_with_checkout_timeout(&[5432, 1]);
+    set_lsn_stats(&old.targets[0], false, 500);
+    set_lsn_stats(&old.targets[1], true, 500);
+    assert!(old.redetect_roles());
+
+    let new = auto_lb_with_checkout_timeout(&[5432, 1]);
+    old.move_conns_to(&new).unwrap();
+    new.launch();
+
+    // The new load balancer knows the primary before its first election.
+    let primary = timeout(
+        Duration::from_millis(500),
+        new.get_primary(&Request::default()),
+    )
+    .await
+    .expect("no wait for an election after a reload")
+    .expect("a connection to the primary");
+    assert_eq!(primary.pool.addr().port, 5432);
+    drop(primary);
+
+    new.shutdown();
 }
 
 #[tokio::test]
