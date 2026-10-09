@@ -132,8 +132,7 @@ async fn test_bad_passthrough_auth_does_not_block_good_auth() {
             let bad = format!("postgres://{user}:wrong@127.0.0.1:6432/pgdog");
             let err = PgConnection::connect(&bad)
                 .await
-                .err()
-                .expect("bad passthrough password must be rejected");
+                .expect_err("bad passthrough password must be rejected");
             assert!(
                 err.to_string().contains(&format!(
                     "password for user \"{user}\" and database \"pgdog\" is wrong"

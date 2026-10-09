@@ -329,7 +329,7 @@ impl Client {
                 if passthrough_check::check(&user).await {
                     databases::add(user)?
                 } else {
-                    AuthResult::NoPassthroughNoUser
+                    AuthResult::NoPassthroughDatabaseCheck
                 }
             } else {
                 AuthResult::NoPassthroughNoUser
