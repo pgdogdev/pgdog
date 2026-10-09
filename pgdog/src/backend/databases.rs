@@ -17,9 +17,8 @@ use pgdog_config::{
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
-use crate::auth::AuthResult;
 use crate::backend::replication::ShardedSchemas;
 use crate::backend::schema::SchemaCache;
 use crate::config::PoolerMode;
@@ -29,7 +28,7 @@ use crate::frontend::router::parser::Cache;
 use crate::frontend::router::sharding::{Mapping, ShardedTable};
 use crate::{
     backend::pool::PoolConfig,
-    config::{ConfigAndUsers, ShardedMappingDeprecated, User as ConfigUser, config, load, set},
+    config::{ConfigAndUsers, ShardedMappingDeprecated, config, load},
     net::{messages::FrontendPid, tls},
 };
 
@@ -185,62 +184,6 @@ pub(crate) fn reload(force: bool) -> Result<(), Error> {
     Cache::resize(new_config.config.general.query_cache_limit);
 
     Ok(())
-}
-
-/// Add new user to pool via passthrough authentication.
-///
-/// Return true if user can login, false otherwise.
-///
-pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
-    fn add_user(user: ConfigUser) -> Result<(), Error> {
-        debug!(
-            r#"adding user "{}" to database "{}" via passthrough auth"#,
-            user.name, user.database
-        );
-
-        let _lock = lock();
-        let mut config = (*config()).clone();
-        config.users.add_or_replace(user);
-        set(config)?;
-
-        Ok(())
-    }
-
-    let config = config();
-    let existing = config.users.find(&user);
-
-    // User already exists in users.toml.
-    if let Some(mut existing) = existing {
-        // Password hasn't been set yet.
-        if existing.password.is_none() {
-            existing.password = user.password;
-            add_user(existing)?;
-            reload_from_existing()?;
-            Ok(AuthResult::Ok)
-        } else if existing
-            .password
-            .as_deref()
-            .zip(user.password.as_deref())
-            .is_some_and(|(stored, provided)| {
-                crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
-            })
-        {
-            // Passwords match.
-            Ok(AuthResult::Ok)
-        } else if config.config.general.passthrough_auth.allows_change() {
-            // Passwords don't match but we can change it.
-            existing.password = user.password;
-            add_user(existing)?;
-            reload_from_existing()?;
-            Ok(AuthResult::Ok)
-        } else {
-            Ok(AuthResult::NoPassthroughPasswordChange)
-        }
-    } else {
-        add_user(user)?;
-        reload_from_existing()?;
-        Ok(AuthResult::Ok)
-    }
 }
 
 /// Swap database configs between source and destination.
@@ -793,141 +736,10 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
 
 #[cfg(test)]
 mod tests {
-    use pgdog_config::{General, Mirroring, PassthroughAuth};
+    use pgdog_config::Mirroring;
 
     use super::*;
     use crate::config::{Config, ConfigAndUsers, Database, Role};
-
-    fn setup_config(passthrough_auth: PassthroughAuth, users: Vec<ConfigUser>) {
-        let _lock = lock();
-        let config = Config {
-            databases: vec![Database {
-                name: "db1".to_string(),
-                host: "localhost".to_string(),
-                port: 5432,
-                role: Role::Primary,
-                ..Default::default()
-            }],
-            general: General {
-                passthrough_auth,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let users = crate::config::Users {
-            users,
-            ..Default::default()
-        };
-
-        let cu = ConfigAndUsers {
-            config,
-            users,
-            config_path: std::path::PathBuf::new(),
-            users_path: std::path::PathBuf::new(),
-            ..Default::default()
-        };
-
-        crate::config::set(cu).expect("set config");
-        let databases = from_config(&crate::config::config());
-        replace_databases(databases, false).expect("replace databases");
-    }
-
-    fn make_user(name: &str, password: Option<&str>) -> ConfigUser {
-        ConfigUser {
-            name: name.to_string(),
-            database: "db1".to_string(),
-            password: password.map(|p| p.to_string()),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn test_add_new_user() {
-        setup_config(PassthroughAuth::EnabledPlain, vec![]);
-
-        let result = add(make_user("new_user", Some("secret")));
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
-
-        let config = crate::config::config();
-        let found = config.users.find(&make_user("new_user", None));
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().password, Some("secret".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_add_existing_user_matching_password() {
-        setup_config(
-            PassthroughAuth::EnabledPlain,
-            vec![make_user("alice", Some("pass123"))],
-        );
-
-        let result = add(make_user("alice", Some("pass123")));
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_add_existing_user_no_password_set() {
-        setup_config(PassthroughAuth::EnabledPlain, vec![make_user("bob", None)]);
-
-        let result = add(make_user("bob", Some("new_pass")));
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
-
-        let config = crate::config::config();
-        let found = config.users.find(&make_user("bob", None));
-        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_add_existing_user_wrong_password_no_change_allowed() {
-        setup_config(
-            PassthroughAuth::EnabledPlain,
-            vec![make_user("charlie", Some("old_pass"))],
-        );
-
-        let result = add(make_user("charlie", Some("wrong_pass")));
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_add_existing_user_wrong_password_change_allowed() {
-        setup_config(
-            PassthroughAuth::EnabledPlainAllowChange,
-            vec![make_user("dave", Some("old_pass"))],
-        );
-
-        let result = add(make_user("dave", Some("new_pass")));
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
-
-        let config = crate::config::config();
-        let found = config.users.find(&make_user("dave", None));
-        assert_eq!(found.unwrap().password, Some("new_pass".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_password_change_preserves_user_config() {
-        let mut erin = make_user("erin", Some("old_pass"));
-        erin.statement_timeout = Some(100);
-        erin.pool_size = Some(7);
-        erin.server_password = Some("server_secret".to_string());
-
-        setup_config(PassthroughAuth::EnabledPlainAllowChange, vec![erin]);
-
-        let result = add(make_user("erin", Some("new_pass")));
-        assert!(result.unwrap().is_ok());
-
-        let config = crate::config::config();
-        let found = config.users.find(&make_user("erin", None)).unwrap();
-        assert_eq!(found.password, Some("new_pass".to_string()));
-        assert_eq!(found.statement_timeout, Some(100));
-        assert_eq!(found.pool_size, Some(7));
-        assert_eq!(found.server_password, Some("server_secret".to_string()));
-    }
 
     #[test]
     fn test_mirror_user_isolation() {
@@ -2036,6 +1848,8 @@ password = "testpass"
 
     #[tokio::test]
     async fn test_cutover_swaps_back_on_the_second_call() {
+        use pgdog_config::User as ConfigUser;
+
         let mut config = ConfigAndUsers::default();
         config.config.databases.push(Database {
             name: "single".into(),
