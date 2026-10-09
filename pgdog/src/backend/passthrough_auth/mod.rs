@@ -49,7 +49,9 @@ async fn handle_existing_with_check(
     existing: User,
     config: &General,
 ) -> Result<AuthResult, Error> {
-    if existing.password.is_none() {
+    if existing.password.is_none()
+        || (config.passthrough_auth.allows_change() && !passwords_match(&new, &existing))
+    {
         if check_db(&new).await {
             update_user(new, existing)?;
             Ok(AuthResult::Ok)
@@ -66,15 +68,7 @@ fn handle_existing(new: User, existing: User, config: &General) -> Result<AuthRe
         update_user(new, existing)?;
         Ok(AuthResult::Ok)
     } else {
-        let password_match = existing
-            .password
-            .as_deref()
-            .zip(new.password.as_deref())
-            .is_some_and(|(stored, provided)| {
-                crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
-            });
-
-        if password_match {
+        if passwords_match(&new, &existing) {
             Ok(AuthResult::Ok)
         } else if config.passthrough_auth.allows_change() {
             update_user(new, existing)?;
@@ -83,6 +77,16 @@ fn handle_existing(new: User, existing: User, config: &General) -> Result<AuthRe
             Ok(AuthResult::NoPassthroughPasswordChange)
         }
     }
+}
+
+fn passwords_match(new: &User, existing: &User) -> bool {
+    existing
+        .password
+        .as_deref()
+        .zip(new.password.as_deref())
+        .is_some_and(|(stored, provided)| {
+            crate::util::constant_time_eq(stored.as_bytes(), provided.as_bytes())
+        })
 }
 
 fn update_user(new: User, mut existing: User) -> Result<(), Error> {
