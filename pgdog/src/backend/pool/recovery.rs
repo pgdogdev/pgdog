@@ -90,34 +90,9 @@ impl Recovery {
         server: &mut Server,
         recovery: ConnectionRecovery,
     ) -> Result<bool, Error> {
-        if server.needs_drain() {
-            if server.has_more_messages() && recovery.can_recover() && !server.is_sending_request()
-            {
-                debug!(
-                    "[cleanup] draining data from \"{}\" server [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-
-                server.drain_pending().await?;
-            } else if server.has_more_messages() {
-                server.force_close();
-                return Ok(false);
-            }
-
-            if server.out_of_sync() || !server.statement_executed() {
-                server.synchronize().await?;
-            } else if recovery.can_rollback() {
-                debug!(
-                    "[cleanup] rolling back extended transaction, in \"{}\" state [{}]",
-                    server.stats().get_state(),
-                    server.addr(),
-                );
-                server.rollback_and_synchronize().await?;
-            } else {
-                server.force_close();
-                return Ok(false);
-            }
+        if server.needs_drain() && !server.recover_protocol(recovery).await? {
+            server.force_close();
+            return Ok(false);
         }
 
         Ok(true)

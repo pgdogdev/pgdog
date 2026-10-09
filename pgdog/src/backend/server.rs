@@ -34,7 +34,7 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{PoolerMode, TlsVerifyMode, config},
+    config::{ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
@@ -1079,6 +1079,43 @@ impl Server {
         }
 
         Ok(())
+    }
+
+    /// Return an unfinished extended-protocol exchange to a reusable state.
+    ///
+    /// Returns false when the configured recovery policy cannot safely recover
+    /// the connection.
+    pub(super) async fn recover_protocol(
+        &mut self,
+        recovery: ConnectionRecovery,
+    ) -> Result<bool, Error> {
+        if self.has_more_messages() {
+            if !recovery.can_recover() || self.is_sending_request() {
+                return Ok(false);
+            }
+
+            debug!(
+                "[cleanup] draining data from \"{}\" server [{}]",
+                self.stats().get_state(),
+                self.addr()
+            );
+            self.drain_pending().await?;
+        }
+
+        if self.out_of_sync() || !self.statement_executed() {
+            self.synchronize().await?;
+        } else if recovery.can_rollback() {
+            debug!(
+                "[cleanup] rolling back extended transaction, in \"{}\" state [{}]",
+                self.stats().get_state(),
+                self.addr(),
+            );
+            self.rollback_and_synchronize().await?;
+        } else {
+            return Ok(false);
+        }
+
+        Ok(true)
     }
 
     /// Drain any remaining messages on the server connection,
