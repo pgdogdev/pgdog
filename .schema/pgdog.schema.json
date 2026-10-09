@@ -108,6 +108,7 @@
         "resharding_copy_retry_max_attempts": 5,
         "resharding_copy_retry_min_delay": 1000,
         "resharding_parallel_copies": 1,
+        "resharding_parallel_within_table_copies": 1,
         "resharding_replication_retry_max_attempts": 5,
         "resharding_replication_retry_min_delay": 1000,
         "rollback_timeout": 5000,
@@ -1234,6 +1235,13 @@
         },
         "resharding_parallel_copies": {
           "description": "How many parallel copies to launch, irrespective of the number of available replicas.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "resharding_parallel_within_table_copies": {
+          "description": "How many source copies we'll launch for a singular table copy.\nRecommended when dealing with TOAST-heavy tables, which usually\ncost multiple disk reads and bound the stream by read latency,\nespecially with a cold cache.\n\nWhen used effectively, this will massively speed up table copies\nby a factor of what this is set to (e.g., 30x, depending on disk IOPS),\nfully utilizing the disk IOPS.",
           "type": "integer",
           "format": "uint",
           "default": 1,
