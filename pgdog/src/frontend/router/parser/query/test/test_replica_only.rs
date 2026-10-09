@@ -86,6 +86,22 @@ fn test_replica_only_transactions_after_role_detection() {
         shard.redetect_roles();
         assert!(!cluster.read_only(), "one role is still unknown");
 
+        set_replica(&pools[0], false);
+        shard.redetect_roles();
+        assert!(!cluster.read_only(), "a primary was elected");
+
+        set_replica(&pools[0], true);
+        shard.redetect_roles();
+        assert!(
+            shard.has_primary(),
+            "primary routing remains pending while another target is unknown"
+        );
+        assert!(
+            !cluster.read_only(),
+            "demotion does not resolve the unknown role"
+        );
+        assert_transaction_route(&cluster, false);
+
         set_replica(&pools[1], true);
         shard.redetect_roles();
         assert!(cluster.read_only(), "all configured servers are replicas");

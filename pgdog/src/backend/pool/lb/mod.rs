@@ -69,7 +69,7 @@ impl Target {
         self.role.role()
     }
 
-    /// Set a known role, including when detection confirms the initial replica role.
+    /// Set a role and mark detection resolved for this target.
     pub(super) fn set_role(&self, role: Role) -> bool {
         let lb = self.role.set_role(role);
         let pool = self.pool.set_role(role);
@@ -81,6 +81,13 @@ impl Target {
         );
 
         lb && pool
+    }
+
+    /// The role for this target is no longer known, e.g.,
+    /// we never received its LSN stats and we haven't detected
+    /// a primary either.
+    pub(super) fn unset_role(&self) {
+        self.role_detected.store(false, Ordering::Release)
     }
 
     pub(super) fn health(&self) -> &TargetHealth {
@@ -216,11 +223,14 @@ impl LoadBalancer {
                 .for_each(|(_, target)| {
                     target.1.set_role(Role::Replica);
                 });
-        } else if targets.iter().all(|target| target.0.valid()) {
-            // All targets are replicas until we get a primary.
-            targets.iter().for_each(|target| {
-                target.1.set_role(Role::Replica);
-            });
+        } else {
+            for (stats, target) in &targets {
+                if stats.valid() {
+                    target.set_role(Role::Replica);
+                } else if self.role_detection_enabled() {
+                    target.unset_role();
+                }
+            }
         }
 
         self.elected_primary.send_replace(self.primary().cloned());
@@ -305,7 +315,7 @@ impl LoadBalancer {
                 .all(|target| target.pool.config().role_detection)
     }
 
-    /// True once every target has a configured or detected role.
+    /// True if every target has a configured or detected role.
     pub(crate) fn roles_detected(&self) -> bool {
         self.targets
             .iter()
