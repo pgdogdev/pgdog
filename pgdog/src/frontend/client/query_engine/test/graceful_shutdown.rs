@@ -59,3 +59,63 @@ async fn test_graceful_shutdown_waits_for_transaction() {
         .await
         .expect("client loop did not exit after shutdown");
 }
+
+/// Test that a request whose bytes already arrived when shutdown starts
+/// is served before the shutdown error. `yield_now` lets the I/O driver
+/// observe the readable socket, so the client loop sees the request and the
+/// shutdown signal ready in the same poll.
+#[tokio::test]
+async fn test_graceful_shutdown_serves_received_request_first() {
+    let mut client = SpawnedClient::new_default(Parameters::default()).await;
+
+    client.send(Query::new("SELECT 1")).await;
+    tokio::task::yield_now().await;
+    comms().shutdown();
+
+    let codes: Vec<char> = client
+        .read_until('Z')
+        .await
+        .iter()
+        .map(|message| message.code())
+        .collect();
+    assert_eq!(codes, vec!['T', 'D', 'C', 'Z']);
+
+    let err = expect_message!(client.read().await, ErrorResponse);
+    assert_eq!(err.code, "57P01");
+
+    timeout(Duration::from_secs(2), client.join())
+        .await
+        .expect("client loop did not exit after shutdown");
+}
+
+/// Test that a partially received extended-protocol request is completed
+/// before the client receives the shutdown error.
+#[tokio::test]
+async fn test_graceful_shutdown_waits_for_partial_extended_request() {
+    let mut client = SpawnedClient::new_default(Parameters::default()).await;
+
+    client.send(Parse::named("shutdown_test", "SELECT 1")).await;
+    client.send(Bind::new_statement("shutdown_test")).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    comms().shutdown();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    client.send(Execute::new()).await;
+    client.send(Sync::new()).await;
+
+    let codes: Vec<char> = client
+        .read_until('Z')
+        .await
+        .iter()
+        .map(|message| message.code())
+        .collect();
+    assert_eq!(codes, vec!['1', '2', 'D', 'C', 'Z']);
+
+    let err = expect_message!(client.read().await, ErrorResponse);
+    assert_eq!(err.code, "57P01");
+
+    timeout(Duration::from_secs(2), client.join())
+        .await
+        .expect("client loop did not exit after shutdown");
+}
