@@ -41,7 +41,7 @@ pg_psql() {
 
 cleanup() {
     stop_pgdog
-    docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down > /dev/null 2>&1 || true
+    docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down -v > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 # cleanup already stops PgDog; keep run_pgdog from replacing this trap
@@ -57,7 +57,7 @@ mkdir -p "${CERTS_DIR}"
 cp ${SCRIPT_DIR}/../server.crt ${SCRIPT_DIR}/../server.key ${SCRIPT_DIR}/../ca.crt "${CERTS_DIR}/"
 chmod 644 "${CERTS_DIR}"/*
 
-docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down > /dev/null 2>&1 || true
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" down -v > /dev/null 2>&1 || true
 docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d
 
 echo "Waiting for Postgres"

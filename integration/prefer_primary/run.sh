@@ -12,7 +12,7 @@ export PGPASSWORD=postgres
 
 echo "[prefer_primary] Using PGDOG_BIN=${PGDOG_BIN:-}"
 
-docker compose down 2>/dev/null || true
+docker compose down -v 2>/dev/null || true
 
 for p in 45000 45001 45002; do
     container=$(docker ps -q --filter "publish=${p}")
@@ -55,5 +55,5 @@ deactivate
 
 stop_pgdog
 
-docker compose down
+docker compose down -v
 popd

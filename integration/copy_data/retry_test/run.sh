@@ -26,7 +26,7 @@ cleanup() {
         kill "${PGDOG_PID}" 2>/dev/null || true
         wait "${PGDOG_PID}" 2>/dev/null || true
     fi
-    cd "${COMPOSE_DIR}" && docker compose down 2>/dev/null || true
+    cd "${COMPOSE_DIR}" && docker compose down -v 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -307,5 +307,5 @@ kill "${PGDOG_PID}" 2>/dev/null || true
 wait "${PGDOG_PID}" 2>/dev/null || true
 PGDOG_PID=""
 
-docker compose down
+docker compose down -v
 popd
