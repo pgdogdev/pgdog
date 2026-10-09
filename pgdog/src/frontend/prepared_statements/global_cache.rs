@@ -310,6 +310,18 @@ impl GlobalCache {
         // unused will hold the remaining elements that was not extracted above
         self.unused = unused;
 
+        // Shrink when the map is less than 25% full.
+        let shrink = self.statements.len() < self.statements.capacity() / 4;
+
+        // Give the allocator a chance to clean up,
+        // especially after large bursts of new statements.
+        if shrink {
+            self.unused.shrink_to_fit();
+            self.statements.shrink_to_fit();
+            self.cross_shard_variants.shrink_to_fit();
+            self.names.shrink_to_fit();
+        }
+
         removed
     }
 
