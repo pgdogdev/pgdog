@@ -83,6 +83,7 @@
         "openmetrics_namespace": null,
         "openmetrics_port": null,
         "passthrough_auth": "disabled",
+        "passthrough_auth_debounce_delay": 1000,
         "pooler_mode": "transaction",
         "port": 6432,
         "prepared_statements": "extended",
@@ -1079,6 +1080,13 @@
           "description": "Toggle automatic creation of connection pools given the user name, database and password.\n\n_Default:_ `disabled`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
           "$ref": "#/$defs/PassthroughAuth",
           "default": "disabled"
+        },
+        "passthrough_auth_debounce_delay": {
+          "description": "Passthrough auth debounce delay.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1000,
+          "minimum": 0
         },
         "pooler_mode": {
           "description": "Default pooler mode to use for database pools.\n\n_Default:_ `transaction`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>",
