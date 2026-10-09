@@ -243,6 +243,15 @@ pub(crate) fn add(user: ConfigUser) -> Result<AuthResult, Error> {
     }
 }
 
+fn passthrough_candidate(user: &ConfigUser, existing: Option<ConfigUser>) -> ConfigUser {
+    if let Some(mut existing) = existing {
+        existing.password.clone_from(&user.password);
+        existing
+    } else {
+        user.clone()
+    }
+}
+
 /// Validate a passthrough password with Postgres before adding it to shared state.
 pub(crate) async fn validate_and_add(user: ConfigUser) -> Result<AuthResult, Error> {
     let config = config();
@@ -260,7 +269,9 @@ pub(crate) async fn validate_and_add(user: ConfigUser) -> Result<AuthResult, Err
         let Some(password) = user.password.as_deref() else {
             return Ok(AuthResult::NoPasswordMatch);
         };
-        let Some((identity, cluster)) = new_pool(&user, &config.config, SchemaCache::default())
+        let candidate = passthrough_candidate(&user, existing);
+        let Some((identity, cluster)) =
+            new_pool(&candidate, &config.config, SchemaCache::default())
         else {
             return Err(Error::NoDatabase(
                 (&user.name[..], &user.database[..]).to_user(),
@@ -880,6 +891,33 @@ mod tests {
             password: password.map(|p| p.to_string()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_passthrough_candidate_preserves_configured_user() {
+        let mut configured = make_user("frontend_user", None);
+        configured.server_user = Some("backend_user".to_string());
+        configured.statement_timeout = Some(100);
+        configured.pool_size = Some(7);
+        let supplied = make_user("frontend_user", Some("secret"));
+
+        let candidate = passthrough_candidate(&supplied, Some(configured));
+
+        assert_eq!(candidate.password.as_deref(), Some("secret"));
+        assert_eq!(candidate.server_user.as_deref(), Some("backend_user"));
+        assert_eq!(candidate.statement_timeout, Some(100));
+        assert_eq!(candidate.pool_size, Some(7));
+    }
+
+    #[test]
+    fn test_passthrough_candidate_uses_unconfigured_user() {
+        let supplied = make_user("new_user", Some("secret"));
+
+        let candidate = passthrough_candidate(&supplied, None);
+
+        assert_eq!(candidate.name, supplied.name);
+        assert_eq!(candidate.database, supplied.database);
+        assert_eq!(candidate.password, supplied.password);
     }
 
     #[tokio::test]
