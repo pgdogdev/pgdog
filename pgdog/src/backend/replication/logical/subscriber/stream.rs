@@ -4,13 +4,12 @@
 //! into idempotent prepared statements.
 //!
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Display,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 use futures::future::try_join_all;
-use itertools::Itertools;
 use once_cell::sync::Lazy;
 use pgdog_postgres_types::Oid;
 use pgdog_stats::MissedRows;
@@ -21,19 +20,17 @@ use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
 use super::StreamContext;
-use super::{PipelinedConnection, connect_primary};
-use crate::net::messages::replication::logical::update::Update as XLogUpdate;
-use crate::{
-    backend::replication::subscriber::pipeline::TransactionAwaitingCommit,
-    net::messages::replication::logical::tuple_data::{Identifier, TupleData},
+use super::{
+    PipelinedConnection, connect_primary, pipeline::ProgressCheck,
+    replication_origin::ReplicationOrigin,
 };
-use pgdog_stats::Lsn;
-
+use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
+use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
     backend::{Cluster, Server},
     frontend::router::parser::Shard,
     net::{
-        Bind, CopyData, DataRow, ErrorResponse, Format, FromBytes, Parse, Protocol, Sync, ToBytes,
+        Bind, CopyData, ErrorResponse, FromBytes, Parse, Protocol, Sync, ToBytes,
         replication::{
             Commit as XLogCommit, Delete as XLogDelete, Insert as XLogInsert, Relation,
             StatusUpdate, UpdateIdentity, xlog_data::XLogPayload,
@@ -102,6 +99,10 @@ pub(crate) struct StreamSubscriber {
     /// Destination cluster.
     cluster: Cluster,
 
+    /// Origins on the destination shards, one per shard, created by the
+    /// caller and bound again on every connect.
+    origins: Vec<ReplicationOrigin>,
+
     // Relation markers sent by the publisher.
     // Happens once per connection.
     relations: HashMap<Oid, Relation>,
@@ -114,23 +115,23 @@ pub(crate) struct StreamSubscriber {
     // Mapping of table keys to their oid.
     keys: HashMap<Key, Oid>,
 
-    // LSNs for each table
+    // Watermark of each table: changes of transactions that begin at or before
+    // it are skipped. Starts at the table copy point and is raised to every
+    // confirmed commit, so an already applied transaction is not applied again.
     table_lsns: HashMap<Oid, i64>,
-
-    // Tables changed in the current transaction. We advance their replay
-    // watermark on commit so equal-LSN rows in the same transaction are not skipped.
-    changed_tables: HashSet<Oid>,
 
     // Pipelined connections to shards. DML is pushed without waiting per event;
     // a background task per connection reads responses and reconciles them.
     connections: Vec<PipelinedConnection>,
-    /// These connections are used to constantly query the `pg_current_wal_flush_lsn()` and
-    /// `pg_current_wal_insert_lsn()` to get an accurate, current view of each shard's WAL
-    /// and determine when it's safe for the source to discard WAL
-    wal_position_connections: Vec<Server>,
-    /// We only want to advance the LSN in keep-alive if we aren't in a transaction,
-    /// which requires knowing which ones we haven't received a response for or flushed yet,
-    in_flight: usize,
+    /// Shards that received changes or statements in the current transaction.
+    /// Only they commit it and record it in their replication origin.
+    changed_shards: Vec<bool>,
+    /// Source LSN recorded in the origin of each destination shard and
+    /// flushed to disk.
+    applied_lsns: Vec<i64>,
+    /// Source LSN of the last commit sent to the shards. Commits up to it
+    /// that are not confirmed yet are in flight.
+    sent_lsn: i64,
     // Last commit LSN acked to Postgres. Reported in status updates; never
     // advances mid-transaction so KeepAlive replies can't skip an open transaction.
     committed_lsn: i64,
@@ -147,14 +148,20 @@ pub(crate) struct StreamSubscriber {
 }
 
 impl StreamSubscriber {
-    pub(crate) fn new(cluster: &Cluster, tables: Vec<Table>) -> Self {
+    pub(crate) fn new(
+        cluster: &Cluster,
+        tables: Vec<Table>,
+        origins: Vec<ReplicationOrigin>,
+    ) -> Self {
         let cluster = cluster.logical_stream();
+        let applied_lsns = vec![0; origins.len()];
         Self {
             cluster,
+            origins,
             relations: HashMap::new(),
             statements: HashMap::new(),
             table_lsns: HashMap::new(),
-            changed_tables: HashSet::new(),
+            sent_lsn: 0,
             tables: tables
                 .into_iter()
                 .map(|table| {
@@ -168,6 +175,8 @@ impl StreamSubscriber {
                 })
                 .collect(),
             connections: vec![],
+            changed_shards: vec![],
+            applied_lsns,
             committed_lsn: 0,
             lsn: 0, // Unknown,
             bytes_sharded: 0,
@@ -176,57 +185,19 @@ impl StreamSubscriber {
             in_transaction: false,
             keys: HashMap::default(),
             missed_rows: MissedRows::default(),
-            wal_position_connections: vec![],
-            in_flight: 0,
         }
     }
 
-    /// Are we currently awaiting any transactions to finished being flushed to all shards?
+    /// Are there commits sent to the shards but not confirmed to the source yet?
     pub(crate) fn has_in_flight(&self) -> bool {
-        self.in_flight > 0
+        self.committed_lsn < self.sent_lsn
     }
 
-    /// For each destination shard, we connect (if not already) separately from
-    /// our replication connections, and query for the current wal_insert_lsn and wal_flush_lsn,
-    /// setting those positions on each `PipelinedConnection` to have a true source
-    /// of knowledge of the current Postgres database progress.
-    ///
-    /// This is run before `check_for_committed_transaction` to compare
-    /// these numbers (for each shard)  against transactions we haven't
-    /// confirmed flushed yet. Lets us see if the wal_flush_lsn has advanced
-    /// past the transaction's insert LSN for each shard.
-    pub(crate) async fn refresh_wal_positions(&mut self) -> Result<(), Error> {
-        if self.wal_position_connections.len() != self.connections.len() {
-            self.wal_position_connections.clear();
-            for shard in self.cluster.shards() {
-                self.wal_position_connections
-                    .push(connect_primary(shard).await?);
-            }
-        }
-
-        for (server, conn) in self
-            .wal_position_connections
-            .iter_mut()
-            .zip(&self.connections)
-        {
-            let rows: Vec<DataRow> = server
-                .fetch_all("SELECT pg_current_wal_insert_lsn(), pg_current_wal_flush_lsn()")
-                .await?;
-
-            let row = rows.first().ok_or(Error::PipelineClosed)?;
-
-            let insert_lsn = row
-                .get::<Lsn>(0, Format::Text)
-                .ok_or(Error::PipelineClosed)?
-                .lsn;
-            let flush_lsn = row
-                .get::<Lsn>(1, Format::Text)
-                .ok_or(Error::PipelineClosed)?
-                .lsn;
-
-            conn.set_wal_positions(insert_lsn, flush_lsn);
-        }
-
+    /// Bind the origin of `shard` to `server` and read what it already has.
+    async fn setup_origin(&mut self, shard: usize, server: &mut Server) -> Result<(), Error> {
+        let origin = &self.origins[shard];
+        origin.setup_session(server).await?;
+        self.applied_lsns[shard] = origin.progress(server, true).await?.lsn;
         Ok(())
     }
 
@@ -242,8 +213,12 @@ impl StreamSubscriber {
         for shard in self.cluster.shards() {
             conns.push(connect_primary(shard).await?);
         }
+        for (shard, server) in conns.iter_mut().enumerate() {
+            self.setup_origin(shard, server).await?;
+        }
 
-        // Transaction control statements.
+        // Transaction control statements, and the statement that records
+        // the source commit in the replication origin.
         //
         // TODO: Figure out if we need to use them?
         for server in &mut conns {
@@ -251,9 +226,17 @@ impl StreamSubscriber {
             let commit = Parse::named("__pgdog_repl_commit", "COMMIT");
 
             server
-                .send(&vec![begin.clone().into(), commit.clone().into(), Sync.into()].into())
+                .send(
+                    &vec![
+                        begin.into(),
+                        commit.into(),
+                        ReplicationOrigin::xact_setup_parse().into(),
+                        Sync.into(),
+                    ]
+                    .into(),
+                )
                 .await?;
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let msg = server.read().await?;
                 trace!("[{}] --> {:?}", server.addr(), msg);
                 match msg.code() {
@@ -283,9 +266,15 @@ impl StreamSubscriber {
         }
 
         // Hand each connection to its background pipelining task.
+        self.changed_shards = vec![false; conns.len()];
+        let check = ProgressCheck::builder()
+            .retry_attempts(self.cluster.resharding_replication_retry_max_attempts())
+            .retry_delay(self.cluster.resharding_replication_retry_min_delay())
+            .build();
         self.connections = conns
             .into_iter()
-            .map(PipelinedConnection::new)
+            .zip(&self.origins)
+            .map(|(server, origin)| PipelinedConnection::new(server, origin.clone(), check))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
@@ -314,9 +303,12 @@ impl StreamSubscriber {
                 Shard::Multi(multi) => multi.contains(&shard),
                 _ => true,
             };
-            if !target {
+            // The transaction is already on this shard: its commit, at
+            // `self.lsn`, comes before the last commit the origin recorded.
+            if !target || self.lsn < self.applied_lsns[shard] {
                 continue;
             }
+            self.changed_shards[shard] = true;
             if let Some(previous) = pending.replace(shard) {
                 self.connections[previous]
                     .execute(bind.clone(), is_direct)
@@ -352,8 +344,6 @@ impl StreamSubscriber {
             }
         }
 
-        self.mark_table_changed(insert.oid);
-
         Ok(())
     }
 
@@ -363,7 +353,6 @@ impl StreamSubscriber {
         }
 
         if !self.statements.contains_key(&update.oid) {
-            self.mark_table_changed(update.oid);
             return Ok(());
         }
 
@@ -400,7 +389,6 @@ impl StreamSubscriber {
                 // REPLICA IDENTITY FULL: old row is fully materialised.
                 // If every NEW column is unchanged-TOAST there is nothing to do.
                 if update.new.all_toasted() {
-                    self.mark_table_changed(update.oid);
                     return Ok(());
                 }
                 self.update_full_identity(update.oid, update).await
@@ -444,7 +432,6 @@ impl StreamSubscriber {
             let (shard, bind) = ctx.into_parts();
             self.send(&shard, bind).await?;
         }
-        self.mark_table_changed(oid);
         Ok(())
     }
 
@@ -457,8 +444,7 @@ impl StreamSubscriber {
 
         if present.no_non_identity_present() {
             // All non-identity columns are unchanged-TOAST — destination already
-            // has every value. No-op; still advance the watermark.
-            self.mark_table_changed(oid);
+            // has every value. No-op.
             return Ok(());
         }
 
@@ -471,7 +457,6 @@ impl StreamSubscriber {
             let (shard, bind) = ctx.into_parts();
             self.send(&shard, bind).await?;
         }
-        self.mark_table_changed(oid);
         Ok(())
     }
 
@@ -501,6 +486,11 @@ impl StreamSubscriber {
     /// not in a transaction).
     async fn prepare_statements(&mut self, parses: &[Parse]) -> Result<(), Error> {
         let in_txn = self.in_transaction;
+        if in_txn {
+            // make sure during transaction we'll send the Sync message
+            // to all shards.
+            self.changed_shards.fill(true);
+        }
         for server in &self.connections {
             for p in parses {
                 debug!("preparing \"{}\" [{}]", p.query(), server.addr());
@@ -609,7 +599,6 @@ impl StreamSubscriber {
 
             let insert_bind = complete_new.to_bind(insert_parse.name());
             self.send(&new_shard, insert_bind).await?;
-            self.mark_table_changed(oid);
             return Ok(());
         }
 
@@ -620,7 +609,6 @@ impl StreamSubscriber {
             // Slow path: at least one unchanged-TOAST (`'u'`) column in new.
             let present = NonIdentityColumnsPresence::from_tuple(&update.new, &table)?;
             if present.no_non_identity_present() {
-                self.mark_table_changed(oid);
                 return Ok(());
             }
             let partial_new = update.partial_new();
@@ -635,7 +623,6 @@ impl StreamSubscriber {
         let bind =
             XLogUpdate::full_identity_bind_tuple(&where_tuple, &set_tuple).to_bind(parse.name());
         self.send(&new_shard, bind).await?;
-        self.mark_table_changed(oid);
         Ok(())
     }
 
@@ -647,7 +634,6 @@ impl StreamSubscriber {
         // Extract statement info upfront to release the shared borrow before
         // async calls and the subsequent &mut self borrows in send().
         let Some(stmts) = self.statements.get(&delete.oid) else {
-            self.mark_table_changed(delete.oid);
             return Ok(());
         };
         let full_identity = stmts.full_identity;
@@ -670,8 +656,7 @@ impl StreamSubscriber {
             old
         } else {
             let Some(key) = delete.key_non_null() else {
-                // No key columns present — nothing to send, watermark still advances.
-                self.mark_table_changed(oid);
+                // No key columns present — nothing to send.
                 return Ok(());
             };
             key
@@ -681,15 +666,12 @@ impl StreamSubscriber {
         let bind = tuple.to_bind(delete_parse.name());
 
         self.send(&shard, bind).await?;
-
-        self.mark_table_changed(oid);
         Ok(())
     }
 
     pub(crate) fn lsn_applied(&self, oid: &Oid) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
-            // Don't apply change if the table has already been copied or replayed
-            // through this transaction boundary.
+            // Don't apply change if the table copy or a confirmed commit already has it.
             if self.lsn <= *table_lsn {
                 return true;
             }
@@ -698,39 +680,17 @@ impl StreamSubscriber {
         false
     }
 
-    fn mark_table_changed(&mut self, oid: Oid) {
-        if self.in_transaction {
-            self.changed_tables.insert(oid);
-        } else {
-            self.table_lsns.insert(oid, self.lsn);
-        }
-    }
-
     // Handle Commit message.
-    //
-    // This is sent asynchronously to each shard, and we add to our
-    // internal queue expecting a response, later on, for when it has Sync'd.
-    //
-    // After we get that response, we further wait for a separate confirmation of it
-    // being flushed, via `refresh_wal_positions` and `check_for_committed_transaction`
-    //
-    // TODO: This is not cross-shard atomic (see todo below)
-    // TODO: use 2PC (see the `two_pc` path) for true cross-shard atomicity.
     async fn commit(&mut self, commit: XLogCommit) -> Result<(), Error> {
-        let transaction_awaiting_commit = TransactionAwaitingCommit {
-            transaction_lsn: self.lsn,
-            current_lsn: commit.end_lsn,
-            changed_tables: std::mem::take(&mut self.changed_tables),
-            durable_bound: None,
-            missed: MissedRows::default(),
-        };
-
-        for server in &self.connections {
-            server
-                .sync(Some(transaction_awaiting_commit.clone()))
-                .await?;
+        for (shard, conn) in self.connections.iter().enumerate() {
+            // commit only shards that were changed
+            if self.changed_shards[shard] {
+                conn.commit(ReplicationOrigin::xact_setup_bind(&commit), commit.end_lsn)
+                    .await?;
+            }
         }
-        self.in_flight += 1;
+        self.changed_shards.fill(false);
+        self.sent_lsn = commit.end_lsn;
 
         Ok(())
     }
@@ -848,7 +808,9 @@ impl StreamSubscriber {
             // This `table_lsns` map is what we check in the `lsn_applied()` method, where we
             // SKIP changes AT or below. If we stored 100, it would skip 100 (losing the change)
             // So, we store one less (99)
-            self.table_lsns.insert(relation.oid, table.lsn.lsn - 1);
+            let copied = table.lsn.lsn - 1;
+            let watermark = self.table_lsns.entry(relation.oid).or_insert(copied);
+            *watermark = (*watermark).max(copied);
             self.relations.insert(relation.oid, relation);
         }
 
@@ -859,12 +821,10 @@ impl StreamSubscriber {
     /// transaction on each shard. Caches are repopulated from Relation messages on re-delivery.
     pub(crate) async fn reconnect(&mut self) -> Result<(), Error> {
         self.connections.clear();
-        self.wal_position_connections.clear();
-        self.in_flight = 0;
+        self.sent_lsn = self.committed_lsn;
         self.relations.clear();
         self.statements.clear();
         self.keys.clear();
-        self.changed_tables.clear();
         self.in_transaction = false;
         self.connect().await
     }
@@ -874,8 +834,7 @@ impl StreamSubscriber {
     /// that may have buffered stale handshake responses.
     pub(crate) fn reset_connections(&mut self) {
         self.connections.clear();
-        self.wal_position_connections.clear();
-        self.in_flight = 0;
+        self.sent_lsn = self.committed_lsn;
     }
 
     /// `docs/REPLICATION.md` → "Error rollback".
@@ -886,80 +845,53 @@ impl StreamSubscriber {
                 // Drop sockets → backend FATAL → implicit transaction rolled back.
                 // `Sync` would commit Rust-side errors. See docs/REPLICATION.md.
                 self.connections.clear();
-                self.wal_position_connections.clear();
-                self.in_flight = 0;
+                self.sent_lsn = self.committed_lsn;
                 // Per-session state — repopulated from Relation messages on reconnect.
                 self.relations.clear();
                 self.statements.clear();
                 self.keys.clear();
-                self.changed_tables.clear();
                 self.in_transaction = false;
                 Err(err)
             }
         }
     }
 
-    /// Works with `refresh_wal_positions` (ran beforehand) to check, for each
-    /// transaction we have confirmed committed (but not yet confirmed flushed), to see if
-    /// the shard's `wal_flush_lsn` has advanced past the `wal_insert_lsn` we previously
-    /// confirmed that the transaction was committed before/at. If it has,
-    /// for all shards, we know that the transaction has been flushed, and we can
-    /// discard the WAL on the source database.
-    pub(crate) async fn check_for_committed_transaction(&mut self) -> Result<bool, Error> {
+    /// Check if the lsn was flushed on all destination shards to later point
+    /// than [`Self::sent_lsn`]. Returns true if all the seen updates are
+    /// durable, false otherwise.
+    pub(crate) async fn check_confirmed_sent_lsn(&mut self) -> Result<bool, Error> {
         for conn in &self.connections {
             if let Some(err) = conn.take_error() {
                 return Err(err);
             }
         }
 
-        let fronts: Vec<_> = self
+        let confirmed = self
             .connections
             .iter()
-            .map(|conn| conn.peek_finished_commits_lsn())
-            .collect();
-        let current_lsns_equal = fronts
-            .iter()
-            .map(|transaction| transaction.map(|transaction| transaction.0))
-            .all_equal_value();
+            .filter_map(PipelinedConnection::durable_lsn_progress)
+            .fold(self.sent_lsn, i64::min);
 
-        if let Ok(Some(_)) = current_lsns_equal {
-            let mut all_transactions_flushed = true;
-            for (conn, front) in self.connections.iter().zip(&fronts) {
-                let (last_flushed_lsn, last_insert) = conn.get_flushed_and_insert_lsn();
-                if let Some((_, dur)) = front {
-                    if !matches!(dur, Some(d) if *d <= last_flushed_lsn) {
-                        all_transactions_flushed = false;
-                    }
-
-                    conn.set_durable_bound_if_not_set(last_insert);
-                }
-            }
-
-            if all_transactions_flushed {
-                let mut finished_transaction = None;
-
-                for conn in &self.connections {
-                    if let Some(popped) = conn.pop_finished_commit() {
-                        self.missed_rows.merge(popped.missed);
-                        finished_transaction.get_or_insert(popped);
-                    }
-                }
-
-                if let Some(finished_transaction) = finished_transaction {
-                    self.in_flight = self.in_flight.saturating_sub(1);
-
-                    for oid in finished_transaction.changed_tables {
-                        self.table_lsns
-                            .insert(oid, finished_transaction.transaction_lsn);
-                    }
-                    self.set_committed_lsn(finished_transaction.current_lsn);
-
-                    return Ok(true);
-                }
-            }
+        if confirmed <= self.committed_lsn {
+            return Ok(false);
         }
 
-        Ok(false)
+        for conn in &self.connections {
+            self.missed_rows
+                .merge(conn.take_confirmed_missed(confirmed));
+        }
+        // Update watermark on every table - the table is either before
+        // shared watermark and it will be updated, or after
+        // and it will use the current value.
+        // After all tables synchronized all the tables will be updated
+        // here at once.
+        // PERF: we probably don't need to update it after all tables synced..
+        for watermark in self.table_lsns.values_mut() {
+            *watermark = (*watermark).max(confirmed - 1);
+        }
+        self.set_committed_lsn(confirmed);
+
+        Ok(true)
     }
 
     async fn handle_inner(&mut self, data: CopyData) -> Result<Option<StatusUpdate>, Error> {
@@ -968,7 +900,6 @@ impl StreamSubscriber {
             self.connect().await?;
         }
 
-        self.check_for_committed_transaction().await?;
         let mut status_update = None;
 
         if let Some(xlog) = data.xlog_data()
@@ -994,7 +925,7 @@ impl StreamSubscriber {
                 }
                 XLogPayload::Relation(relation) => self.relation(relation).await?,
                 XLogPayload::Begin(begin) => {
-                    self.changed_tables.clear();
+                    self.changed_shards.fill(false);
                     self.set_working_lsn(begin.final_transaction_lsn);
                     self.in_transaction = true;
                 }
@@ -1102,20 +1033,20 @@ impl StreamSubscriber {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{begin_copy_data, commit_copy_data};
+    use super::super::tests::{begin_copy_data, commit_copy_data, test_origins};
     use super::*;
     use crate::config::config;
 
-    fn make_subscriber() -> StreamSubscriber {
+    async fn make_subscriber() -> StreamSubscriber {
         let cluster = Cluster::new_test(&config());
-        StreamSubscriber::new(&cluster, vec![])
+        StreamSubscriber::new(&cluster, vec![], test_origins(&cluster).await)
     }
 
     #[tokio::test]
     async fn apply_begin_no_status_update() {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, vec![]);
+        let mut stream = StreamSubscriber::new(&cluster, vec![], test_origins(&cluster).await);
         stream.connect().await.unwrap();
 
         let result = stream.handle(begin_copy_data(1)).await;
@@ -1131,7 +1062,7 @@ mod tests {
     async fn apply_commit_emits_status_update() {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
-        let mut stream = StreamSubscriber::new(&cluster, vec![]);
+        let mut stream = StreamSubscriber::new(&cluster, vec![], test_origins(&cluster).await);
         stream.connect().await.unwrap();
 
         let result = stream.handle(commit_copy_data(1)).await;
@@ -1145,47 +1076,39 @@ mod tests {
 
     #[tokio::test]
     async fn table_watermarks_advance_on_commit() {
-        let mut sub = make_subscriber();
+        let mut sub = make_subscriber().await;
         sub.connect().await.unwrap();
         let oid = Oid(42);
 
         sub.table_lsns.insert(oid, 50);
-        sub.in_transaction = true;
-        sub.set_current_lsn(100);
-        sub.mark_table_changed(oid);
+        sub.handle(begin_copy_data(100)).await.unwrap();
 
         // Rows from the current transaction must remain eligible until commit.
         assert!(!sub.lsn_applied(&oid));
 
-        sub.commit(XLogCommit {
-            flags: 0,
-            commit_lsn: 0,
-            end_lsn: 200,
-            commit_timestamp: 0,
-        })
-        .await
-        .unwrap();
-
-        assert!(sub.changed_tables.is_empty());
+        sub.handle(commit_copy_data(200)).await.unwrap();
         assert_eq!(sub.table_lsns.get(&oid), Some(&50));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut completed = false;
-        while std::time::Instant::now() < deadline && !completed {
-            sub.refresh_wal_positions().await.unwrap();
-            completed = sub.check_for_committed_transaction().await.unwrap();
+        while sub.committed_lsn() < 200 {
+            assert!(std::time::Instant::now() < deadline);
+            sub.check_confirmed_sent_lsn().await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(completed);
 
-        assert_eq!(sub.table_lsns.get(&oid), Some(&100));
-        assert_eq!(sub.lsn(), 200);
+        // The confirmed transaction is skipped if it arrives again.
+        sub.handle(begin_copy_data(100)).await.unwrap();
+        assert!(sub.lsn_applied(&oid));
+
+        // A transaction that begins exactly at the confirmed LSN is not confirmed.
+        sub.handle(begin_copy_data(200)).await.unwrap();
+        assert!(!sub.lsn_applied(&oid));
     }
 
     /// Begin message sets in_transaction and records the LSN.
     #[tokio::test]
     async fn begin_sets_transaction_state() {
-        let mut sub = make_subscriber();
+        let mut sub = make_subscriber().await;
         assert!(!sub.in_transaction());
         assert_eq!(sub.lsn(), 0);
 
@@ -1198,9 +1121,9 @@ mod tests {
     }
 
     /// set_current_lsn returns true only when the LSN changes.
-    #[test]
-    fn lsn_changed_tracking() {
-        let mut sub = make_subscriber();
+    #[tokio::test]
+    async fn lsn_changed_tracking() {
+        let mut sub = make_subscriber().await;
 
         assert!(sub.set_current_lsn(100));
         assert!(sub.lsn_changed);

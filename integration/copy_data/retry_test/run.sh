@@ -14,8 +14,8 @@ USERS_CONFIG="${SCRIPT_DIR}/users.toml"
 PGDOG_PORT=${PGDOG_PORT:-6440}
 export PGPASSWORD=pgdog
 
-# Replication retry is fixed 500ms x 8 attempts (resharding_replication_retry_* in pgdog.toml),
-# a ~4s budget per failure; a CI shard restart completes well within it. 120s covers the COPY of
+# Replication retry is fixed 1000ms x 20 attempts (resharding_replication_retry_* in pgdog.toml),
+# a ~20s budget per failure, so a slow shard restart (stop, start, crash recovery) fits. 120s covers the COPY of
 # ~100k rows + replication catch-up with headroom on slow CI.
 REPLICATION_TIMEOUT=120
 

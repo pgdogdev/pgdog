@@ -351,8 +351,8 @@ single `n+k`-parameter bind that matches the SQL emitted by `Table::update_full_
 WAL events dispatch `Bind/Execute/Flush` (no `Sync`), leaving Postgres in an implicit
 transaction that holds row locks. On `Err`, `StreamSubscriber::handle` in
 [`subscriber/stream.rs`](../pgdog/src/backend/replication/logical/subscriber/stream.rs)
-clears `self.connections` and resets per-session state (`relations`, `statements`, `keys`,
-`changed_tables`, `in_transaction`). Dropping each `Server` closes its TCP socket;
+clears `self.connections`, resets per-session state (`relations`, `statements`, `keys`,
+`in_transaction`), and moves `sent_lsn` back to `committed_lsn`. Dropping each `Server` closes its TCP socket;
 Postgres FATALs the backend and rolls back the implicit transaction. The next call to
 `handle()` lazily reconnects and rebuilds prepared statements from the Relation messages
 Postgres re-emits after reconnect.
@@ -395,9 +395,11 @@ A single retry runs two reconnects **in parallel** (`try_join!`):
 
 - **`stream.reconnect()`** — tears down every destination `Server` handle.
   Dropping each handle sends `Terminate`; Postgres rolls back any open implicit transaction
-  on that shard. Clears `in_transaction`, `changed_tables`, and the per-session caches
-  (`relations`, `statements`, `keys`). Then calls `connect()` to open fresh connections and
-  re-prepare named statements.
+  on that shard. Clears `in_transaction`, moves `sent_lsn` back to `committed_lsn`, and clears
+  the per-session caches (`relations`, `statements`, `keys`). Then calls `connect()` to open fresh connections,
+  bind each shard's replication origin again, and re-prepare named statements. The old backend
+  may still hold the origin until it exits, so binding it is retried while the origin is in use
+  (10 × 100 ms). If it is still in use after that, the error counts as one more retry attempt.
 
 The destination reconnect is essential when a failure occurs mid-transaction. Without it, destination shards hold
 an open implicit transaction containing partial DML. Postgres re-delivers the same `Begin` +
@@ -409,9 +411,39 @@ back into the retry loop; a non-retryable reconnect error aborts the replication
 
 ### LSN tracking
 
-`StreamSubscriber` keeps two positions. `lsn` advances on `Begin` (to the future commit LSN) and is used for in-flight deduplication. `committed_lsn` advances only after `commit()` confirms all destination shards — this is what `status_update()` reports to Postgres.
+`StreamSubscriber` keeps two positions. `lsn` advances on `Begin` (to the future commit LSN) and is used for deduplication. `committed_lsn` advances only once the commit is durable on every destination shard that received changes — this is what `status_update()` reports to Postgres.
 
 The split matters for KeepAlive: if the reply used `lsn`, Postgres would record a future commit LSN as `confirmed_flush_lsn` while the transaction is still open. On reconnect that would skip the open transaction entirely. `committed_lsn` ensures re-delivery always starts from the last safely committed position.
+
+### Durability with replication origins
+
+Apply connections run with `synchronous_commit = off`, so a commit returns before it is on
+disk. Each destination shard has a replication origin, `__pgdog_origin_{slot}_{shard}`
+([`subscriber/replication_origin.rs`](../pgdog/src/backend/replication/logical/subscriber/replication_origin.rs)),
+bound to its apply connection.
+
+- **Commit.** A shard that received changes in the transaction, or statements prepared inside it,
+  runs `pg_replication_origin_xact_setup(end_lsn, ts)` and `pg_current_xact_id()` before `Sync`,
+  so its commit record carries the source LSN, even when no row changed. Other shards get nothing.
+- **Confirmation.** Each `PipelinedConnection` runs a background task. Every 100 ms, while the shard
+  has commits that are not durable yet, it reads `pg_replication_origin_progress(origin, true)` on a
+  separate connection. It flushes the WAL up to the origin's last commit first. The shard's durable
+  LSN is the lower of that value and the last acknowledged commit. A retryable read error is
+  retried with a new connection, up to `resharding_replication_retry_max_attempts` times in a row
+  (`0`: no limit), `resharding_replication_retry_min_delay` apart. After that, or on an error that
+  is not retryable, the task latches the error on the shard, like a failed apply.
+  `check_for_committed_transaction` confirms up to the lowest durable LSN of the shards that
+  still have changes not durable; shards without changes do not hold it back.
+- **Replay.** On every connect, each shard reads its origin progress, again with a flush, into
+  `applied_lsns`. After a reconnect, a re-delivered transaction whose commit LSN is below that
+  value is already durable on the shard and is skipped there; the other shards apply it. Shards
+  commit independently, so a transaction can be on some shards before others, but they converge.
+- **Lifecycle.** `ReshardingState::prepare_replication` creates the origins on every shard of the
+  destination cluster before the streams start. After a cutover, the destination is the old source,
+  so the reverse direction gets its origins in the same place. A new origin always starts from
+  zero. When the replication restarts after a catch-up timeout, the existing origins are kept, so
+  their progress is kept too. They are dropped whenever the slots are dropped or detached, also
+  when a reused slot is kept.
 
 ### Full retry flow
 
@@ -438,8 +470,8 @@ sequenceDiagram
     SS->>DS: Bind/Execute row DML
     PG->>PUB: Commit (end_lsn=200)
     PUB->>SS: handle(Commit)
-    SS->>DS: Sync
+    SS->>DS: origin xact setup (changed shards) + Sync
     DS-->>SS: ReadyForQuery
-    SS->>PUB: StatusUpdate(committed_lsn=200)
+    SS->>PUB: StatusUpdate(committed_lsn=200) once origin progress is durable
     PUB->>PG: StandbyStatusUpdate(last_flushed=200)
 ```

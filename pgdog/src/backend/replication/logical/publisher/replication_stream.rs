@@ -10,9 +10,11 @@ use super::replication_progress::{ReplicationProgressShardUpdater, ReplicationSh
 use super::{Lsn, ReplicationData, ReplicationSlotGuard, Table};
 use crate::backend::Cluster;
 use crate::backend::replication::logical::Error;
+use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
-use crate::util::{safe_interval, safe_sleep};
+use crate::util::retry::{Retry, RetryConfig};
+use crate::util::safe_interval;
 
 /// How long a draining stream reads before it stops without the full source WAL.
 pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -58,8 +60,9 @@ impl ReplicationStream {
         &self,
         slot: &mut ReplicationSlotGuard,
         tables: Vec<Table>,
+        origins: Vec<ReplicationOrigin>,
     ) -> Result<(), Error> {
-        let mut stream = StreamSubscriber::new(&self.dest_cluster, tables);
+        let mut stream = StreamSubscriber::new(&self.dest_cluster, tables, origins);
         stream.set_current_lsn(slot.lsn().lsn);
         self.updater.update(|p| {
             p.advance_applied_lsn(slot.lsn());
@@ -67,10 +70,7 @@ impl ReplicationStream {
         });
         let result = self.replicate(slot, &mut stream).await;
 
-        if let Err(err) = stream.refresh_wal_positions().await {
-            warn!("[replication] final wal position refresh failed: {err}");
-        }
-        if let Err(err) = stream.check_for_committed_transaction().await {
+        if let Err(err) = stream.check_confirmed_sent_lsn().await {
             warn!("[replication] final completion check failed: {err}");
         }
         let final_lsn = Lsn::from_i64(stream.status_update().last_applied);
@@ -79,8 +79,7 @@ impl ReplicationStream {
             p.advance_applied_lsn(final_lsn);
             p.missed_rows.merge(missed);
         });
-        result?;
-        Ok(())
+        result
     }
 
     async fn update_progress(
@@ -124,12 +123,17 @@ impl ReplicationStream {
         check_durable.set_missed_tick_behavior(MissedTickBehavior::Delay);
         slot.start_replication().await?;
 
-        let max_attempts = self
-            .dest_cluster
-            .resharding_replication_retry_max_attempts();
-        let delay = self.dest_cluster.resharding_replication_retry_min_delay();
+        let mut retry = Retry::new(
+            RetryConfig::builder()
+                .name("[replication]")
+                .max_attempts(
+                    self.dest_cluster
+                        .resharding_replication_retry_max_attempts(),
+                )
+                .delay(self.dest_cluster.resharding_replication_retry_min_delay())
+                .build(),
+        );
 
-        let mut attempt = 0usize;
         let mut last_reported = stream.status_update().last_flushed;
         let mut stop = self.stop.subscribe();
         // Handle a stop requested before the loop started.
@@ -174,8 +178,7 @@ impl ReplicationStream {
 
                 _ = check_durable.tick() => {
                     async {
-                        stream.refresh_wal_positions().await?;
-                        if stream.check_for_committed_transaction().await? {
+                        if stream.check_confirmed_sent_lsn().await? {
                             let missed = stream.missed_rows();
                             self.updater.update(|p| p.missed_rows.merge(missed));
                         }
@@ -219,7 +222,7 @@ impl ReplicationStream {
                                     data.replication_meta()
                                 {
                                     let completed =
-                                        stream.check_for_committed_transaction().await?;
+                                        stream.check_confirmed_sent_lsn().await?;
 
                                     // Advance the lsn if we are not in the transaction currently
                                     // (we don't use transactions actually without streaming on protocol version 4,
@@ -259,7 +262,7 @@ impl ReplicationStream {
                                         last_reported = su.last_flushed;
                                         slot.status_update(su).await?;
                                     }
-                                    attempt = 0;
+                                    retry.reset();
                                 }
                                 Ok(false)
                             }
@@ -274,20 +277,14 @@ impl ReplicationStream {
                 Ok(true) => break,
                 Ok(false) => {}
                 Err(mut err) => loop {
-                    if *self.stop.borrow() == Some(false)
-                        || !err.is_retryable()
-                        || (max_attempts != 0 && attempt >= max_attempts)
-                    {
+                    if *self.stop.borrow() == Some(false) || !err.is_retryable() {
                         return Err(err);
                     }
-                    attempt += 1;
-                    warn!(
-                        "[replication] error ({attempt}/{max_attempts}): {err}, reconnecting in {}ms",
-                        delay.as_millis()
-                    );
                     let mut stop_now = self.stop.subscribe();
                     select! {
-                        _ = safe_sleep(delay) => {}
+                        retried = retry.delay_retry(&err) => if !retried {
+                            return Err(err);
+                        },
                         _ = stop_now.wait_for(|stop| *stop == Some(false)) => return Err(err),
                     }
                     let missed = stream.missed_rows();
@@ -391,16 +388,24 @@ mod tests {
                 0,
             );
             slot.create().await?;
+            let origin = ReplicationOrigin::builder()
+                .name(slot.name())
+                .address(self.server.addr())
+                .shard(0)
+                .build();
+            origin.recreate_origin().await?;
             let mut guard = slot.get_existing().await?;
             if self.replication.progress().replication_lag.is_some() {
                 return Err("lag was measured before replication started".into());
             }
             let replication = Arc::clone(&self.replication);
             self.worker = Some(tokio::spawn(async move {
-                let result = Box::pin(replication.run(&mut guard, tables)).await;
+                let result =
+                    Box::pin(replication.run(&mut guard, tables, vec![origin.clone()])).await;
                 drop(guard);
                 let dropped = slot.drop_slot().await;
-                result.and(dropped)
+                let removed = origin.drop_origin().await;
+                result.and(dropped).and(removed)
             }));
             Ok(())
         }
@@ -457,6 +462,10 @@ mod tests {
             for query in [
                 format!(
                     "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = '{}_0'",
+                    self.slot_base
+                ),
+                format!(
+                    "SELECT pg_replication_origin_drop(roname) FROM pg_replication_origin WHERE roname = '__pgdog_origin_{}_0_0'",
                     self.slot_base
                 ),
                 format!("DROP PUBLICATION IF EXISTS {}", self.publication),
@@ -654,6 +663,9 @@ mod tests {
                 .await?;
 
             missed_rows_cause_missed_update(fixture, 1, 2).await?;
+            fixture
+                .wait_for(dest_query.clone(), |_, info| info.missed_rows.updates > 0)
+                .await?;
             missed_rows_kill_walsender(fixture).await?;
 
             fixture
