@@ -4471,6 +4471,130 @@ pub(crate) mod test {
     }
 
     #[tokio::test]
+    async fn test_cached_parse_in_aborted_transaction() -> Result<(), Error> {
+        for flush_first in [false, true] {
+            let mut server = test_server().await;
+            let parse = Parse::named("aborted_cached_parse", "SELECT 1");
+            server
+                .send(&vec![parse.clone().into(), Sync.into()].into())
+                .await?;
+            assert_eq!(server.read().await?.code(), '1');
+            assert_eq!(server.read().await?.code(), 'Z');
+
+            server.execute_checked("BEGIN").await?;
+            server
+                .execute_checked("SELECT 1/0")
+                .await
+                .expect_err("aborted transaction");
+            let end: ProtocolMessage = if flush_first {
+                Flush.into()
+            } else {
+                Sync.into()
+            };
+            server.send(&vec![parse.clone().into(), end].into()).await?;
+            let message = server.read().await?;
+            assert_eq!(
+                message.code(),
+                'E',
+                "cached Parse must reach Postgres in an aborted transaction"
+            );
+            let error = ErrorResponse::try_from(message)?;
+            assert_eq!(error.code, "25P02");
+            assert!(!server.prepared_statements.contains(parse.name()));
+            if flush_first {
+                assert!(server.out_of_sync());
+                server.send(&vec![Sync.into()].into()).await?;
+            }
+            let ready = ReadyForQuery::try_from(server.read().await?)?;
+            assert!(ready.is_transaction_aborted());
+            assert!(server.in_sync());
+
+            server.execute_checked("ROLLBACK").await?;
+            server.send(&vec![parse.into(), Sync.into()].into()).await?;
+            assert_eq!(server.read().await?.code(), '1');
+            assert_eq!(server.read().await?.code(), 'Z');
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cached_parse_error_preserves_skipped_statements() -> Result<(), Error> {
+        let mut server = test_server().await;
+        let first = Parse::named("first_cached_parse", "SELECT 1");
+        let skipped = Parse::named("skipped_cached_parse", "SELECT 2");
+        for parse in [&first, &skipped] {
+            server
+                .send(&vec![parse.clone().into(), Sync.into()].into())
+                .await?;
+            assert_eq!(server.read().await?.code(), '1');
+            assert_eq!(server.read().await?.code(), 'Z');
+        }
+        server.execute_checked("BEGIN").await?;
+        server
+            .execute_checked("SELECT 1/0")
+            .await
+            .expect_err("aborted transaction");
+        server
+            .send(&vec![first.into(), skipped.clone().into(), Sync.into()].into())
+            .await?;
+        assert_eq!(ErrorResponse::try_from(server.read().await?)?.code, "25P02");
+        assert!(ReadyForQuery::try_from(server.read().await?)?.is_transaction_aborted());
+        assert!(server.prepared_statements.contains(skipped.name()));
+        server.execute_checked("ROLLBACK").await?;
+
+        server
+            .send(
+                &vec![
+                    Bind::new_statement(skipped.name()).into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await?;
+        for code in ['2', 'D', 'C', 'Z'] {
+            assert_eq!(server.read().await?.code(), code);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cached_rollback_parse_recovers_aborted_transaction() -> Result<(), Error> {
+        let mut server = test_server().await;
+        let parse = Parse::named("cached_rollback", "ROLLBACK");
+        server
+            .send(&vec![parse.clone().into(), Sync.into()].into())
+            .await?;
+        assert_eq!(server.read().await?.code(), '1');
+        assert_eq!(server.read().await?.code(), 'Z');
+        server.execute_checked("BEGIN").await?;
+        server
+            .execute_checked("SELECT 1/0")
+            .await
+            .expect_err("aborted transaction");
+
+        server
+            .send(
+                &vec![
+                    parse.clone().into(),
+                    Bind::new_statement(parse.name()).into(),
+                    Execute::new().into(),
+                    Sync.into(),
+                ]
+                .into(),
+            )
+            .await?;
+        for code in ['1', '2', 'C'] {
+            assert_eq!(server.read().await?.code(), code);
+        }
+        let ready = ReadyForQuery::try_from(server.read().await?)?;
+        assert_eq!(ready.status, 'I');
+        assert!(server.in_sync());
+        assert!(server.prepared_statements.contains(parse.name()));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_prepare_in_transaction_error() {
         let mut server = test_server().await;
 
