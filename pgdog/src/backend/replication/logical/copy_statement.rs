@@ -342,16 +342,7 @@ mod test {
             CopyFormat::Binary,
             TableColumnSplit::default(),
         );
-        assert_eq!(
-            copy.copy_in(),
-            r#"COPY "my""schema"."my""table" ("my""col", "email") FROM STDIN WITH (FORMAT binary)"#
-        );
-        assert_eq!(
-            copy.copy_out(0),
-            r#"COPY "my""schema"."my""table" ("my""col", "email") TO STDOUT WITH (FORMAT binary)"#
-        );
-
-        let copy = CopyStatement::new(
+        let parallel = CopyStatement::new(
             &table,
             &columns,
             CopyFormat::Binary,
@@ -360,12 +351,30 @@ mod test {
                 split_statement_count: 2,
             },
         );
+
+        assert_eq!(
+            copy.copy_in(),
+            r#"COPY "my""schema"."my""table" ("my""col", "email") FROM STDIN WITH (FORMAT binary)"#
+        );
+        assert_eq!(
+            copy.copy_out(0),
+            r#"COPY "my""schema"."my""table" ("my""col", "email") TO STDOUT WITH (FORMAT binary)"#
+        );
         assert!(
-            copy.copy_out(0).starts_with(
+            parallel.copy_out(0).starts_with(
                 r#"COPY (SELECT "my""col", "email" FROM "my""schema"."my""table" WHERE "#
             ),
             "{}",
-            copy.copy_out(0)
+            parallel.copy_out(0)
         );
+
+        for sql in [
+            copy.copy_in(),
+            copy.copy_out(0),
+            parallel.copy_out(0),
+            parallel.copy_out(1),
+        ] {
+            assert!(pg_raw_parse::parse(&sql).is_ok(), "invalid SQL: {sql}");
+        }
     }
 }
