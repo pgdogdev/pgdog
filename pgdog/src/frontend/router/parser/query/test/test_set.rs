@@ -312,3 +312,19 @@ fn test_single_shard_set() {
         _ => panic!("not a set"),
     }
 }
+
+#[test]
+fn test_set_from_current_passthrough() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("SET work_mem FROM CURRENT").into()]);
+    assert!(
+        matches!(command, Command::Query(_)),
+        "expected Command::Query, got {command:#?}",
+    );
+
+    let command = test.execute(vec![
+        Query::new("SET statement_timeout TO 1; SET work_mem FROM CURRENT").into(),
+    ]);
+    assert!(matches!(command, Command::Split(queries) if queries.len() == 2));
+}
