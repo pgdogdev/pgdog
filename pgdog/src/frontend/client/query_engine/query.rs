@@ -161,136 +161,138 @@ impl QueryEngine {
         Ok(self.backend.read().await?)
     }
 
+    /// Handle a message received from Postgres.
     pub(crate) async fn process_server_message(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         mut message: Message,
     ) -> Result<(), Error> {
         self.streaming = message.streaming();
-
         let code = message.code();
-        let payload = if code == 'T' {
-            Some(message.payload())
-        } else {
-            None
-        };
-        let has_more_messages = self.backend.has_more_messages();
 
-        if let Some(bytes) = payload
-            && let Some(state) = self.pending_explain.as_mut()
-        {
-            match RowDescription::from_bytes(bytes) {
-                Ok(row_description) => {
-                    state.capture_row_description(row_description);
+        match code {
+            'T' => {
+                if let Some(ref mut state) = self.pending_explain {
+                    if let Ok(rd) = RowDescription::from_bytes(message.payload()) {
+                        state.capture_row_description(rd);
+                    } else {
+                        state.annotated = true;
+                    }
                 }
-                _ => {
+            }
+
+            'D' => {
+                // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
+                // the router and the command state.
+                self.handle_advisory_locks(&message);
+                self.result_row_counter += 1;
+            }
+
+            'C' => {
+                self.emit_explain_rows(context).await?;
+                self.result_row_counter = 0;
+            }
+
+            'E' => {
+                self.result_row_counter = 0;
+                if let Some(ref mut state) = self.pending_explain {
                     state.annotated = true;
                 }
-            }
-        }
 
-        if code == 'C' {
-            self.emit_explain_rows(context).await?;
-        }
-
-        if code == 'E' {
-            if let Some(state) = self.pending_explain.as_mut() {
-                state.annotated = true;
+                self.pending_explain = None;
             }
-            self.pending_explain = None;
+
+            'Z' => {
+                self.pending_explain = None;
+                self.stats.query();
+
+                let mut two_pc_auto = false;
+                let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
+
+                match state {
+                    TransactionState::Error => {
+                        let error_state = match context.transaction.map(|t| t.transaction_type()) {
+                            Some(TransactionType::ReadOnly) => {
+                                Some(Transaction::new(TransactionType::ErrorReadOnly))
+                            }
+                            Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
+                                Some(Transaction::new(TransactionType::ErrorReadWrite))
+                            }
+                            _ => None,
+                        };
+                        context.transaction = error_state;
+                        if self.two_pc.auto() {
+                            self.end_two_pc(true).await?;
+                            // TODO: this records a 2pc transaction in client
+                            // stats anyway but not on the servers. Is this what we want?
+                            two_pc_auto = true;
+                        }
+                    }
+
+                    TransactionState::Idle => {
+                        context.transaction = None;
+                        self.backend.end_transaction();
+                    }
+
+                    TransactionState::InTrasaction => {
+                        if self.two_pc.auto() {
+                            self.end_two_pc(false).await?;
+                            two_pc_auto = true;
+                        }
+                        match context.transaction.map(|t| t.transaction_type()) {
+                            // Query parser is disabled, so the server is responsible for telling us
+                            // we started a transaction.
+                            None => {
+                                context.transaction =
+                                    Some(Transaction::new(TransactionType::ReadWrite));
+                            }
+
+                            // Restore transaction state after rollback to savepoint.
+                            Some(TransactionType::ErrorReadOnly) => {
+                                context.transaction =
+                                    Some(Transaction::new(TransactionType::ReadOnly));
+                            }
+
+                            Some(TransactionType::ErrorReadWrite) => {
+                                context.transaction =
+                                    Some(Transaction::new(TransactionType::ReadWrite));
+                            }
+
+                            _ => (),
+                        }
+                    }
+                }
+
+                if two_pc_auto {
+                    // In auto mode, 2pc transaction was started automatically
+                    // without the client's knowledge. We need to return a regular RFQ
+                    // message and close the transaction.
+                    context.transaction = None;
+                    message = ReadyForQuery::in_transaction(false).message();
+                }
+
+                self.stats.idle(context.in_transaction());
+
+                if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
+                    self.temp_tables.update(change, context.in_transaction());
+                }
+
+                // In case the advisory lock was inside a INSERT/UPDATE CTE which didn't return a row.
+                self.handle_advisory_locks(&message);
+
+                if !context.in_transaction() {
+                    self.stats.transaction(two_pc_auto);
+                }
+            }
+
+            _ => (),
         }
 
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
-            || !has_more_messages
+            || !self.backend.has_more_messages()
             || message.streaming();
-
-        // Server finished executing a query.
-        // ReadyForQuery (B)
-        if code == 'Z' {
-            self.stats.query();
-
-            let mut two_pc_auto = false;
-            let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
-
-            match state {
-                TransactionState::Error => {
-                    let error_state = match context.transaction.map(|t| t.transaction_type()) {
-                        Some(TransactionType::ReadOnly) => {
-                            Some(Transaction::new(TransactionType::ErrorReadOnly))
-                        }
-                        Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                            Some(Transaction::new(TransactionType::ErrorReadWrite))
-                        }
-                        _ => None,
-                    };
-                    context.transaction = error_state;
-                    if self.two_pc.auto() {
-                        self.end_two_pc(true).await?;
-                        // TODO: this records a 2pc transaction in client
-                        // stats anyway but not on the servers. Is this what we want?
-                        two_pc_auto = true;
-                    }
-                }
-
-                TransactionState::Idle => {
-                    context.transaction = None;
-                    self.backend.end_transaction();
-                }
-
-                TransactionState::InTrasaction => {
-                    if self.two_pc.auto() {
-                        self.end_two_pc(false).await?;
-                        two_pc_auto = true;
-                    }
-                    match context.transaction.map(|t| t.transaction_type()) {
-                        // Query parser is disabled, so the server is responsible for telling us
-                        // we started a transaction.
-                        None => {
-                            context.transaction =
-                                Some(Transaction::new(TransactionType::ReadWrite));
-                        }
-
-                        // Restore transaction state after rollback to savepoint.
-                        Some(TransactionType::ErrorReadOnly) => {
-                            context.transaction = Some(Transaction::new(TransactionType::ReadOnly));
-                        }
-
-                        Some(TransactionType::ErrorReadWrite) => {
-                            context.transaction =
-                                Some(Transaction::new(TransactionType::ReadWrite));
-                        }
-
-                        _ => (),
-                    }
-                }
-            }
-
-            if two_pc_auto {
-                // In auto mode, 2pc transaction was started automatically
-                // without the client's knowledge. We need to return a regular RFQ
-                // message and close the transaction.
-                context.transaction = None;
-                message = ReadyForQuery::in_transaction(false).message();
-            }
-
-            self.stats.idle(context.in_transaction());
-            // N.B. Call this before self.cleanup_backend(), since `cleanup_backend()` resets
-            // the router and the command state.
-            self.advisory_locks
-                .merge(self.router.command().route().advisory_locks());
-
-            if let Some(change) = self.router.command().route().temp_table_change.as_ref() {
-                self.temp_tables.update(change, context.in_transaction());
-            }
-
-            self.check_lock();
-
-            if !context.in_transaction() {
-                self.stats.transaction(two_pc_auto);
-            }
-        }
 
         self.stats.sent(message.len());
 
@@ -303,6 +305,7 @@ impl QueryEngine {
             && !context.pipeline.is_done()
             && context.pipeline.is_simple()
             && !context.in_error(); // On error, pipeline is done executing.
+
         if !drop_message {
             trace!("{:#?} >>> {:?}", message, context.stream.peer_addr());
 
@@ -313,9 +316,6 @@ impl QueryEngine {
             }
         }
 
-        if code == 'Z' {
-            self.pending_explain = None;
-        }
         self.hooks.on_server_message(context, &message)?;
 
         Ok(())

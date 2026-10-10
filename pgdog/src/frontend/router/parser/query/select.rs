@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::router::parser::statement::AdvisoryLockId;
+use crate::frontend::router::parser::advisory_lock::AdvisoryLockId;
 use pg_raw_parse::walk;
 use pg_raw_parse::{Node, nodes};
 use pgdog_config::system_catalogs;

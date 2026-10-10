@@ -42,7 +42,7 @@ impl QueryEngine {
                 self.execute(context, client_request, None).await?;
                 if !context.in_error() {
                     self.temp_tables.discard(context.in_transaction());
-                    self.check_lock();
+                    self.sync_lock();
                     // execute() cleaned up before temp tracking was cleared.
                     // Try again now that the backend is unpinned.
                     self.cleanup_backend(context).await?;
@@ -59,7 +59,7 @@ impl QueryEngine {
                 context.prepared_statements.close_all();
                 self.backend.unlisten_all();
                 self.reset_session_params(context);
-                self.check_lock();
+                self.sync_lock();
                 self.cleanup_backend(context).await?;
             }
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}

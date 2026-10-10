@@ -1,5 +1,6 @@
 //! Query parser.
 
+pub(crate) mod advisory_lock;
 pub(crate) mod aggregate;
 pub(crate) mod binary;
 pub(crate) mod cache;
