@@ -1,8 +1,8 @@
 use std::{fmt::Display, ops::Deref};
 
 use super::{
-    Aggregate, DistinctBy, Limit, OrderBy, StatementType, explain_trace::ExplainTrace,
-    rewrite::statement::projection::ProjectionRewritePlan, statement::AdvisoryLocks,
+    Aggregate, DistinctBy, Limit, OrderBy, StatementType, advisory_lock::AdvisoryLocks,
+    explain_trace::ExplainTrace, rewrite::statement::projection::ProjectionRewritePlan,
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;

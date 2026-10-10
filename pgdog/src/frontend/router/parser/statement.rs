@@ -1,322 +1,42 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ptr;
 use std::sync::Arc;
 
-use super::StatementParameters;
-use crate::frontend::router::sharding::{varchar_extended, varchar_not_extended};
+use super::{
+    StatementParameters,
+    advisory_lock::{AdvisoryLocks, advisory_locks_from_func_call, collect_values_columns},
+};
 use crate::util::ResultControlFlowExt;
 use itertools::*;
 use pg_raw_parse::walk::Recurse;
-use pg_raw_parse::{ConstValue, Node, list, nodes, walk};
+use pg_raw_parse::{Node, list, nodes, walk};
 use std::ops::ControlFlow;
-
-fn advisory_locks_from_func_call(
-    func: &nodes::FuncCall,
-    bind: Option<StatementParameters<'_>>,
-    values_columns: Option<&ValuesColumns<'_>>,
-) -> Vec<AdvisoryLock> {
-    let mut name_parts = func.funcname().into_iter().filter_map(Node::as_str);
-
-    let name = match (name_parts.next(), name_parts.next(), name_parts.next()) {
-        (Some(name), None, None) | (Some("pg_catalog"), Some(name), None) => name,
-        _ => return Vec::new(),
-    };
-
-    let (unlock, scope) = match name {
-        "pg_advisory_lock"
-        | "pg_advisory_lock_shared"
-        | "pg_try_advisory_lock"
-        | "pg_try_advisory_lock_shared" => (false, LockScope::Session),
-        "pg_advisory_xact_lock"
-        | "pg_advisory_xact_lock_shared"
-        | "pg_try_advisory_xact_lock"
-        | "pg_try_advisory_xact_lock_shared" => (false, LockScope::Transaction),
-        // Session-scoped unlocks. xact locks can't be released by name;
-        // Postgres drops them automatically at COMMIT/ROLLBACK.
-        "pg_advisory_unlock" => (true, LockScope::Session),
-        "pg_advisory_unlock_all" => {
-            return vec![AdvisoryLock {
-                id: None,
-                unlock: true,
-                unlock_all: true,
-                scope: LockScope::Session,
-            }];
-        }
-        _ => return Vec::new(),
-    };
-
-    // TODO: I came across this as another kind of pg_advisory_lock arg: 'users'::regclass::integer
-    // that we don't handle right now (resolving to None) here as the id
-    let mut arg_iterator = func.args().iter();
-
-    let Some(arg) = arg_iterator.next() else {
-        return vec![AdvisoryLock {
-            id: None,
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    };
-
-    let second_arg = arg_iterator.next();
-
-    // Fast path: the key is a literal / param / cast we can resolve directly.
-    if let Some(id) = integer_arg(arg, bind)
-        && second_arg.is_none()
-    {
-        return vec![AdvisoryLock {
-            id: Some(AdvisoryLockId::OneParameter(id)),
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    } else if let Some(first_id) = integer_arg(arg, bind)
-        && let Some(second_arg) = second_arg
-        && let Some(second_id) = integer_arg(second_arg, bind)
-    {
-        return vec![AdvisoryLock {
-            id: Some(AdvisoryLockId::TwoParameters(
-                first_id as i32,
-                second_id as i32,
-            )),
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    }
-
-    // If the argument is a parameter placeholder ($1) and we have no Bind message,
-    // this is just a prepared statement being parsed — the lock isn't actually
-    // being taken yet. Return empty so we don't route as if a lock is held.
-    if bind.is_none()
-        && (is_param_ref(arg) || (second_arg.map(|s_arg| is_param_ref(s_arg)).unwrap_or(false)))
-    {
-        return Vec::new();
-    }
-
-    // TODO: If we have a second arg that isn't numeric,
-    //  e.g., two functions, this isn't handled yet.
-    if second_arg.is_some() {
-        return vec![AdvisoryLock {
-            id: None,
-            unlock,
-            unlock_all: false,
-            scope,
-        }];
-    }
-
-    // SELECT pg_advisory_lock(hashtext('some text!'))
-    // Parse & evaluate a hashtext / hashtextended function within a pg_advisory_lock query.
-    // The purpose is to understand what ID the func resolves to, so we can set on `AdvisoryLock`
-    if let Node::FuncCall(call) = arg
-        && let Some(Node::String(name)) = call.funcname().first()
-        && let Some(function_name) = name.sval()
-    {
-        let args = call.args();
-        let hash_func_evaluated_to_num = if function_name.eq("hashtext")
-            && args.len() == 1
-            && let Some(Node::A_Const(arg1)) = args.first()
-            && let Some(ConstValue::String(hash_text)) = arg1.val()
-        {
-            Some(varchar_not_extended(hash_text.as_bytes()) as i64)
-        } else if function_name.eq("hashtextextended")
-            && args.len() == 2
-            && let Some(Node::A_Const(arg1)) = args.first()
-            && let Some(Node::A_Const(arg2)) = args.get(1)
-            && let Some(ConstValue::String(hash_text)) = arg1.val()
-            && let Some(ConstValue::Integer(seed)) = arg2.val()
-        {
-            // This is a u64 -> i64 cast (bitwise reinterpretation wrap-around)
-            // Postgres does this same thing.
-            Some(varchar_extended(hash_text.as_bytes(), seed as u64) as i64)
-        } else {
-            // TODO: There's likely some other funcs that are used;
-            // however, hashtext and hashtextended are the most common
-
-            // I'm really not a fan of silently routing everything else to 0.
-            // I tried re-working all this to return an Error, and it was like
-            // 200 LOC of changes though
-            None
-        };
-
-        if hash_func_evaluated_to_num.is_some() {
-            return vec![AdvisoryLock {
-                id: hash_func_evaluated_to_num.map(AdvisoryLockId::OneParameter),
-                unlock,
-                unlock_all: false,
-                scope,
-            }];
-        }
-    }
-
-    // Slow path: `SELECT pg_advisory_lock(value) FROM (VALUES (1),(2)) AS t(value)`.
-    // The function is called once per row, so we emit one lock per resolved value.
-    if let Node::ColumnRef(cref) = arg
-        // FIXME: Don't assume the name is unqualified
-        && let Some(col) = last_column_name(cref.fields())
-        && let Some(rows) = values_columns.and_then(|m| m.get(col))
-    {
-        return rows
-            .iter()
-            // Skip unresolvable param refs when there is no Bind.
-            .filter(|v| bind.is_some() || !is_param_ref(**v))
-            .map(|v| AdvisoryLock {
-                id: integer_arg(*v, bind).map(AdvisoryLockId::OneParameter),
-                unlock,
-                unlock_all: false,
-                scope,
-            })
-            .collect();
-    }
-
-    vec![AdvisoryLock {
-        id: None,
-        unlock,
-        unlock_all: false,
-        scope,
-    }]
-}
-
-fn last_column_name<'a>(fields: impl IntoIterator<Item = Node<'a>>) -> Option<&'a str> {
-    fields.into_iter().last().and_then(Node::as_str)
-}
-
-/// Map from unqualified VALUES column alias to the list of value nodes — one
-/// per row — introduced by a `FROM (VALUES (...), ...) AS t(col, ...)` in the
-/// current SELECT's FROM clause.
-type ValuesColumns<'a> = std::collections::HashMap<Cow<'a, str>, Vec<Node<'a>>>;
-
-fn collect_values_columns(stmt: &nodes::SelectStmt) -> Option<ValuesColumns<'_>> {
-    let Node::RangeSubselect(rs) = stmt.from_clause().into_iter().exactly_one().ok()? else {
-        return None;
-    };
-    let alias = rs.alias();
-    let Node::SelectStmt(s) = rs.subquery() else {
-        return None;
-    };
-    if s.values_lists().is_empty() {
-        return None;
-    }
-    let colnames = alias
-        .map(|a| {
-            a.colnames()
-                .into_iter()
-                .filter_map(Node::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let values = s
-        .values_lists()
-        .into_iter()
-        .map(|values| values.expect_node_list())
-        .flat_map(|row| row.into_iter().enumerate())
-        .map(|(i, v)| {
-            let colname = colnames
-                .get(i)
-                .map(|&s| Cow::Borrowed(s))
-                .unwrap_or_else(|| format!("column{}", i + 1).into());
-            (colname, v)
-        })
-        .into_group_map();
-    Some(values)
-}
-
-fn integer_arg(node: Node<'_>, bind: Option<StatementParameters<'_>>) -> Option<i64> {
-    match node {
-        Node::A_Const(a) => a.val()?.numeric_value(),
-        Node::TypeCast(c) => integer_arg(c.arg(), bind),
-        Node::ParamRef(param_ref) => {
-            let index = (param_ref.number as usize).checked_sub(1)?;
-            let param = bind?.parameter(index).ok()??;
-            param.decode::<i64>()
-        }
-        _ => None,
-    }
-}
-
-/// Check whether a node is (or wraps) a parameter placeholder (`$N`).
-fn is_param_ref(node: Node<'_>) -> bool {
-    match node {
-        Node::ParamRef(_) => true,
-        Node::TypeCast(cast) => is_param_ref(cast.arg()),
-        _ => false,
-    }
-}
 
 use super::{
     super::sharding::Value as ShardingValue, Column, Error, Table, Value,
     explain_trace::ExplainEntry,
 };
 
-/// Lifetime of an advisory lock.
-///
-/// Used by the query engine to decide whether the lock should survive
-/// COMMIT/ROLLBACK (`Session`) or be dropped along with the transaction
-/// (`Transaction` — the `pg_advisory_xact_lock*` family).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) enum LockScope {
-    Session,
-    Transaction,
-}
-
-/// A pg_advisory_lock / pg_advisory_unlock call observed in a statement.
-/// if `unlock_all`, it's a pg_advisory_unlock_all call
-///
-///  `id` is `None` when the key isn't a literal we can resolve (parameter placeholder,
-/// subquery, etc.) or when the call takes no key at all (`pg_advisory_unlock_all()`).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) struct AdvisoryLock {
-    pub(crate) id: Option<AdvisoryLockId>,
-    pub(crate) unlock: bool,
-    pub(crate) unlock_all: bool,
-    pub(crate) scope: LockScope,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub(crate) enum AdvisoryLockId {
-    /// pg_advisory_lock(ID)
-    OneParameter(i64),
-    /// pg_advisory_lock(ID_1, ID_2)
-    TwoParameters(i32, i32),
-}
-
-impl AdvisoryLockId {
-    /// Return the first parameter of the ID
-    /// OneParameter(x) => x
-    /// TwoParameters(x, y) => x
-    pub(crate) fn get_first_parameter(self) -> i64 {
-        match self {
-            Self::OneParameter(x) => x,
-            Self::TwoParameters(x, _) => x as i64,
-        }
-    }
-}
-
-/// Set of advisory locks discovered while walking a statement.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct AdvisoryLocks {
-    locks: HashSet<AdvisoryLock>,
-}
-
-impl AdvisoryLocks {
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &AdvisoryLock> {
-        self.locks.iter()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.locks.is_empty()
-    }
-}
-
 /// Accumulator shared across statement walkers — lets a single traversal
 /// collect tables and advisory locks without walking the AST twice.
 #[derive(Debug, Clone, Default)]
 struct Walk<'a> {
     tables: Vec<Table<'a>>,
-    advisory_locks: HashSet<AdvisoryLock>,
+    advisory_locks: AdvisoryLocks,
+    projection: Option<ProjectionState<'a>>,
     /// Names introduced by `WITH` clauses. An unqualified reference to one
     /// of these is the CTE, not a table.
     cte_names: HashSet<&'a str>,
+}
+
+/// Cursor over the client-visible SELECT targets, before any star expansion.
+#[derive(Debug, Clone)]
+struct ProjectionState<'a> {
+    targets: &'a list::CastNodeList<nodes::ResTarget>,
+    /// Unknown after a target expands into multiple output columns.
+    next_column: Option<usize>,
+    /// Match this exact node so nested expressions cannot inherit its index.
+    direct_call: Option<(&'a nodes::FuncCall, usize)>,
 }
 use crate::{
     backend::{Schema, ShardingSchema},
@@ -758,14 +478,22 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.
     pub(crate) fn extract_advisory_locks(&mut self) -> AdvisoryLocks {
-        AdvisoryLocks {
-            locks: self.walk().advisory_locks.clone(),
-        }
+        self.walk().advisory_locks.clone()
     }
 
     // Are we running? Or walking? MAKE UP YOUR MIND DAMMIT
     fn run_walk(&self) -> Walk<'a> {
-        let mut walk = Walk::default();
+        let mut walk = Walk {
+            projection: match self.stmt {
+                Node::SelectStmt(select) => Some(ProjectionState {
+                    targets: select.target_list(),
+                    next_column: Some(0),
+                    direct_call: None,
+                }),
+                _ => None,
+            },
+            ..Walk::default()
+        };
         self.walk_stmt(self.stmt, &mut walk);
 
         // A CTE name shadows an unqualified table of the same name for the
@@ -791,19 +519,62 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // Walk the select statement separately, as it may have its own
             // set of VALUES columns.
             Node::SelectStmt(_) => {
+                let projection = walk.projection.take();
                 self.walk_stmt(node, walk);
+                walk.projection = projection;
                 Recurse::no()
+            }
+
+            Node::ResTarget(target) => {
+                if let Some(projection) = walk.projection.as_mut()
+                    && let Some(index) = projection.next_column
+                    && projection
+                        .targets
+                        .get(index)
+                        .is_some_and(|expected| ptr::eq(expected, target))
+                {
+                    let value = target.val();
+                    // SELECT t.*, pg_try_advisory_lock(42) FROM t;
+                    // The lock's output column depends on how many columns t.*
+                    // expands into, so subsequent indexes become unknown.
+                    let expands = match value {
+                        Node::ColumnRef(column) => {
+                            matches!(
+                                column.fields().into_iter().next_back(),
+                                Some(Node::A_Star(_))
+                            )
+                        }
+                        Node::A_Indirection(indirection) => matches!(
+                            indirection.indirection().into_iter().next_back(),
+                            Some(Node::A_Star(_))
+                        ),
+                        _ => false,
+                    };
+                    projection.next_column = (!expands).then_some(index + 1);
+                    projection.direct_call = match value {
+                        Node::FuncCall(func) => Some((func, index)),
+                        _ => None,
+                    };
+                }
+                Recurse::yes()
             }
 
             // Extract any advisory locks that this function call may
             // represent, using the values clause of the current statement
             Node::FuncCall(func) => {
+                let column_index = walk
+                    .projection
+                    .as_ref()
+                    .and_then(|projection| projection.direct_call)
+                    .filter(|(direct_call, _)| ptr::eq(*direct_call, func))
+                    .map(|(_, index)| index);
                 walk.advisory_locks.extend(advisory_locks_from_func_call(
                     func,
                     self.bind,
                     values_columns.as_ref(),
+                    column_index,
                 ));
-                Recurse::no()
+                Recurse::yes()
             }
 
             Node::RangeVar(r) => {
@@ -3119,439 +2890,5 @@ mod test {
             !result,
             "DELETE from omnisharded table should not be sharded"
         );
-    }
-
-    mod advisory_locks {
-        use super::*;
-
-        fn locks(query: &str) -> Vec<AdvisoryLock> {
-            locks_with_bind(query, None)
-        }
-
-        fn locks_with_bind(query: &str, bind: Option<&Bind>) -> Vec<AdvisoryLock> {
-            let schema = ShardingSchema::default();
-            let raw = pg_raw_parse::parse(query).unwrap();
-            let stmt = raw.stmts().next().unwrap();
-            let mut parser = StatementParser::new(stmt, bind.map(Into::into), &schema);
-            let mut v: Vec<_> = parser.extract_advisory_locks().iter().copied().collect();
-            v.sort_by_key(|l| {
-                let id = match l.id {
-                    Some(AdvisoryLockId::OneParameter(id)) => Some((id, None)),
-                    Some(AdvisoryLockId::TwoParameters(a, b)) => Some((a as i64, Some(b))),
-                    None => None,
-                };
-                (id, l.unlock)
-            });
-            v
-        }
-
-        fn session(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
-            AdvisoryLock {
-                id,
-                unlock,
-                unlock_all: false,
-                scope: LockScope::Session,
-            }
-        }
-
-        fn xact(id: Option<AdvisoryLockId>, unlock: bool) -> AdvisoryLock {
-            AdvisoryLock {
-                id,
-                unlock,
-                unlock_all: false,
-                scope: LockScope::Transaction,
-            }
-        }
-
-        fn unlock_all() -> AdvisoryLock {
-            AdvisoryLock {
-                id: None,
-                unlock: true,
-                unlock_all: true,
-                scope: LockScope::Session,
-            }
-        }
-
-        #[test]
-        fn unresolved_unlock_is_distinct_from_unlock_all() {
-            let null_bind = Bind::new_params("", &[Parameter::new_null()]);
-            for query in [
-                "SELECT pg_advisory_unlock(NULL::bigint)",
-                "SELECT pg_advisory_unlock($1::bigint)",
-                "SELECT pg_advisory_unlock(1, NULL::integer)",
-                "SELECT pg_advisory_unlock((SELECT 42))",
-                "SELECT pg_advisory_unlock(value) FROM (VALUES (NULL::bigint)) AS t(value)",
-            ] {
-                assert_eq!(
-                    locks_with_bind(query, Some(&null_bind)),
-                    vec![session(None, true)],
-                    "{query}"
-                );
-            }
-            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()]);
-        }
-
-        #[test]
-        fn lock_and_unlock() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(42)"),
-                vec![session(Some(AdvisoryLockId::OneParameter(42)), false)],
-            );
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock(42)"),
-                vec![session(Some(AdvisoryLockId::OneParameter(42)), true)],
-            );
-        }
-
-        #[test]
-        fn lock_with_two_param() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(1, 2)"),
-                vec![session(Some(AdvisoryLockId::TwoParameters(1, 2)), false)]
-            );
-        }
-
-        #[test]
-        fn lock_with_hashtext_both() {
-            // Try out hashtext and hashtextended; compared against the numbers Postgres outputs!
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(hashtext('hello world'))"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(1021725223)),
-                    false
-                )]
-            );
-
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(hashtextextended('hello world', 123))"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(3896024775453578562)),
-                    false
-                )]
-            );
-        }
-
-        #[test]
-        fn pg_catalog_qualified_advisory_calls() {
-            let bind = Bind::new_params("", &[Parameter::new(b"123")]);
-            for function in [
-                "pg_advisory_lock",
-                "pg_advisory_lock_shared",
-                "pg_try_advisory_lock",
-                "pg_try_advisory_lock_shared",
-                "pg_advisory_xact_lock",
-                "pg_advisory_xact_lock_shared",
-                "pg_try_advisory_xact_lock",
-                "pg_try_advisory_xact_lock_shared",
-                "pg_advisory_unlock",
-            ] {
-                for argument in ["123", "$1::bigint"] {
-                    let unqualified = format!("SELECT {function}({argument})");
-                    let expected = locks_with_bind(&unqualified, Some(&bind));
-                    assert!(!expected.is_empty(), "{unqualified}");
-                    for schema in ["pg_catalog", "\"pg_catalog\""] {
-                        let qualified = format!("SELECT {schema}.{function}({argument})");
-                        assert_eq!(
-                            locks_with_bind(&qualified, Some(&bind)),
-                            expected,
-                            "{qualified}"
-                        );
-                    }
-                    let custom = format!("SELECT other.{function}({argument})");
-                    assert!(locks_with_bind(&custom, Some(&bind)).is_empty(), "{custom}");
-                }
-            }
-            assert_eq!(
-                locks("SELECT pg_catalog.pg_advisory_unlock_all()"),
-                vec![unlock_all()],
-            );
-        }
-
-        #[test]
-        fn bigint_argument() {
-            // Values larger than i32 are encoded as Float in PG internally.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(9000000000)"),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
-                    false
-                )],
-            );
-        }
-
-        #[test]
-        fn all_session_lock_variants() {
-            for q in [
-                "SELECT pg_try_advisory_lock(7)",
-                "SELECT pg_advisory_lock_shared(7)",
-                "SELECT pg_try_advisory_lock_shared(7)",
-            ] {
-                assert_eq!(
-                    locks(q),
-                    vec![session(Some(AdvisoryLockId::OneParameter(7)), false)],
-                    "{q}"
-                );
-            }
-        }
-
-        #[test]
-        fn xact_variants_have_transaction_scope() {
-            // xact locks must still pin the backend for the lifetime of the transaction,
-            // but the engine drops them at COMMIT/ROLLBACK.
-            for q in [
-                "SELECT pg_advisory_xact_lock(7)",
-                "SELECT pg_advisory_xact_lock_shared(7)",
-                "SELECT pg_try_advisory_xact_lock(7)",
-                "SELECT pg_try_advisory_xact_lock_shared(7)",
-            ] {
-                assert_eq!(
-                    locks(q),
-                    vec![xact(Some(AdvisoryLockId::OneParameter(7)), false)],
-                    "{q}"
-                );
-            }
-        }
-
-        #[test]
-        fn multiple_and_dedup() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(5), pg_advisory_lock(5), pg_advisory_lock(6)"),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(5)), false),
-                    session(Some(AdvisoryLockId::OneParameter(6)), false)
-                ],
-            );
-        }
-
-        #[test]
-        fn cast_and_cte() {
-            assert_eq!(
-                locks("SELECT pg_try_advisory_lock(9)::bool"),
-                vec![session(Some(AdvisoryLockId::OneParameter(9)), false)],
-            );
-            assert_eq!(
-                locks("WITH x AS (SELECT pg_advisory_lock(11)) SELECT * FROM x"),
-                vec![session(Some(AdvisoryLockId::OneParameter(11)), false)],
-            );
-        }
-
-        #[test]
-        fn param_without_bind_is_ignored() {
-            // Without a Bind message, a parameter placeholder means the prepared
-            // statement is only being parsed — no lock is actually taken.
-            assert!(locks("SELECT pg_advisory_lock($1)").is_empty());
-        }
-
-        #[test]
-        fn two_params_without_bind_is_ignored() {
-            assert!(locks("SELECT pg_advisory_lock($1, $2)").is_empty());
-            assert!(locks("SELECT pg_advisory_lock($1, 1)").is_empty());
-            assert!(locks("SELECT pg_adivsory_lock(1, $2)").is_empty());
-        }
-
-        #[test]
-        fn unlock_all_without_bind() {
-            // unlock_all takes no arguments, so it always applies.
-            assert_eq!(locks("SELECT pg_advisory_unlock_all()"), vec![unlock_all()],);
-        }
-
-        #[test]
-        fn ignored_cases() {
-            // Schema-qualified — not the builtin.
-            assert!(locks("SELECT other.pg_advisory_lock(1)").is_empty());
-            // Unrelated functions.
-            assert!(locks("SELECT 1, now()").is_empty());
-        }
-
-        #[test]
-        fn key_from_values_subquery_no_bind() {
-            // Without a Bind, parameter-based VALUES rows are skipped — the
-            // prepared statement is only being parsed, no lock is taken.
-            assert!(
-                locks("SELECT pg_advisory_lock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
-            );
-            assert!(
-                locks("SELECT pg_advisory_unlock(value) FROM (VALUES ($1)) AS t(value)").is_empty()
-            );
-            assert!(
-                locks("SELECT pg_try_advisory_lock(value) FROM (VALUES ($1)) AS t(value)")
-                    .is_empty()
-            );
-        }
-
-        #[test]
-        fn xact_lock_with_param_no_bind() {
-            // Without a Bind the prepared statement is just being parsed.
-            assert!(locks("SELECT pg_advisory_xact_lock($1)").is_empty());
-        }
-
-        #[test]
-        fn param_resolved_from_bind() {
-            let bind = Bind::new_params("", &[Parameter::new(b"4242")]);
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(Some(AdvisoryLockId::OneParameter(4242)), false)],
-            );
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_xact_lock($1)", Some(&bind)),
-                vec![xact(Some(AdvisoryLockId::OneParameter(4242)), false)],
-            );
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_unlock($1)", Some(&bind)),
-                vec![session(Some(AdvisoryLockId::OneParameter(4242)), true)],
-            );
-        }
-
-        #[test]
-        fn bind_bigint_value() {
-            // Keys wider than i32 are encoded as text on the wire but still
-            // decode cleanly through FromDataType<i64>.
-            let bind = Bind::new_params("", &[Parameter::new(b"9000000000")]);
-            assert_eq!(
-                locks_with_bind("SELECT pg_advisory_lock($1)", Some(&bind)),
-                vec![session(
-                    Some(AdvisoryLockId::OneParameter(9_000_000_000)),
-                    false
-                )],
-            );
-        }
-
-        #[test]
-        fn multiple_locks_in_one_query_with_bind() {
-            // Single query taking multiple advisory locks from distinct bind params.
-            let bind = Bind::new_params(
-                "",
-                &[
-                    Parameter::new(b"11"),
-                    Parameter::new(b"22"),
-                    Parameter::new(b"33"),
-                ],
-            );
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock($1), pg_advisory_xact_lock($2), pg_advisory_unlock($3)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(11)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(22)), false),
-                    session(Some(AdvisoryLockId::OneParameter(33)), true),
-                ],
-            );
-        }
-
-        #[test]
-        fn multiple_literal_locks_in_one_query() {
-            assert_eq!(
-                locks(
-                    "SELECT pg_advisory_lock(10), pg_advisory_xact_lock(20), \
-                     pg_advisory_unlock(30), pg_advisory_unlock_all()",
-                ),
-                vec![
-                    unlock_all(),
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), true),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multiple_rows_expand_to_multiple_locks() {
-            // `pg_advisory_lock(value) FROM (VALUES (1),(2),(3)) AS t(value)` is
-            // called once per row, so the parser should emit one lock per row.
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(value) FROM (VALUES (10), (20), (30)) AS t(value)",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn advisory_lock_from_values_without_explicit_column_name() {
-            assert_eq!(
-                locks("SELECT pg_advisory_lock(column1) FROM (VALUES (10), (20), (30))",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn advisory_lock_when_client_is_sadistic() {
-            assert_eq!(
-                locks(
-                    "SELECT pg_advisory_lock(column1), (SELECT pg_advisory_lock(c) FROM (VALUES (20), (30)) AS t(c)) FROM (VALUES (10))",
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(10)), false),
-                    session(Some(AdvisoryLockId::OneParameter(20)), false),
-                    session(Some(AdvisoryLockId::OneParameter(30)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multiple_rows_with_bind() {
-            let bind = Bind::new_params(
-                "",
-                &[
-                    Parameter::new(b"41"),
-                    Parameter::new(b"42"),
-                    Parameter::new(b"43"),
-                ],
-            );
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock(value) FROM (VALUES ($1), ($2), ($3)) AS t(value)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(41)), false),
-                    session(Some(AdvisoryLockId::OneParameter(42)), false),
-                    session(Some(AdvisoryLockId::OneParameter(43)), false),
-                ],
-            );
-        }
-
-        #[test]
-        fn values_multi_rows_unlock_and_xact() {
-            // Same multi-row expansion for unlock and xact variants.
-            assert_eq!(
-                locks("SELECT pg_advisory_unlock(value) FROM (VALUES (1), (2)) AS t(value)",),
-                vec![
-                    session(Some(AdvisoryLockId::OneParameter(1)), true),
-                    session(Some(AdvisoryLockId::OneParameter(2)), true)
-                ],
-            );
-            assert_eq!(
-                locks("SELECT pg_advisory_xact_lock(value) FROM (VALUES (5), (6)) AS t(value)",),
-                vec![
-                    xact(Some(AdvisoryLockId::OneParameter(5)), false),
-                    xact(Some(AdvisoryLockId::OneParameter(6)), false)
-                ],
-            );
-        }
-
-        #[test]
-        fn param_out_of_range_fallback() {
-            // $2 has no bound value — we should still record the lock but leave id=None.
-            let bind = Bind::new_params("", &[Parameter::new(b"99")]);
-            assert_eq!(
-                locks_with_bind(
-                    "SELECT pg_advisory_lock($1), pg_advisory_lock($2)",
-                    Some(&bind),
-                ),
-                vec![
-                    session(None, false),
-                    session(Some(AdvisoryLockId::OneParameter(99)), false)
-                ],
-            );
-        }
     }
 }
