@@ -87,13 +87,63 @@ async fn test_offset_limit_no_offset_no_plan() {
 }
 
 #[tokio::test]
-async fn test_offset_limit_no_limit_no_plan() {
-    let offset = run_test(vec![ProtocolMessage::Query(Query::new(
-        "SELECT * FROM test OFFSET 5",
-    ))])
-    .await;
+async fn test_offset_no_limit_moves_offset_to_proxy() {
+    for messages in [
+        vec![ProtocolMessage::Query(Query::new(
+            "SELECT * FROM test OFFSET 5",
+        ))],
+        vec![
+            ProtocolMessage::Parse(Parse::new_anonymous("SELECT * FROM test OFFSET $1")),
+            ProtocolMessage::Bind(Bind::new_params("", &[Parameter::new(b"5")])),
+            ProtocolMessage::Execute(Execute::new()),
+            ProtocolMessage::Sync(Sync),
+        ],
+    ] {
+        let mut client = test_sharded_client();
+        client.client_request = ClientRequest::from(messages);
 
-    assert!(offset.is_none());
+        let engine = QueryEngine::from_client(&client).unwrap();
+        let (mut context, client_request) = QueryEngineContext::new(&mut client);
+
+        let rewrite_result = engine
+            .parse_and_rewrite(&mut context, client_request)
+            .await
+            .unwrap();
+
+        client_request.route = Some(cross_shard_route());
+        projection::finalize_after_route(
+            client_request,
+            &Schema::default(),
+            rewrite_result.as_ref().and_then(RewriteResult::offset_plan),
+        )
+        .unwrap();
+        rewrite_result
+            .as_ref()
+            .unwrap()
+            .apply_after_route(client_request)
+            .unwrap();
+
+        // Shards return every row, the proxy applies the OFFSET once.
+        let final_sql = match &client_request.messages[0] {
+            ProtocolMessage::Query(q) => q.query().to_owned(),
+            ProtocolMessage::Parse(p) => p.query().to_owned(),
+            _ => panic!("expected Query or Parse"),
+        };
+        assert!(
+            final_sql.contains("LIMIT NULL::bigint + "),
+            "shards should not apply the offset: {final_sql}"
+        );
+        assert!(!final_sql.contains("OFFSET"), "{final_sql}");
+
+        let route = client_request.route.as_ref().unwrap();
+        assert_eq!(
+            route.limit(),
+            &Limit {
+                limit: None,
+                offset: Some(5)
+            }
+        );
+    }
 }
 
 #[tokio::test]
