@@ -2,6 +2,98 @@ use crate::setup::{admin_sqlx, connections_sqlx};
 use sqlx::{Executor, Row};
 
 #[tokio::test]
+async fn set_local_default_outside_transaction_preserves_timeout()
+-> Result<(), Box<dyn std::error::Error>> {
+    use futures_util::future::poll_fn;
+    use tokio_postgres::{AsyncMessage, Config, NoTls};
+
+    let postgres_port = std::env::var("PGPORT")
+        .unwrap_or_else(|_| "5432".into())
+        .parse::<u16>()?;
+    for (port, database) in [
+        (postgres_port, "pgdog"),
+        (6432, "pgdog"),
+        (6432, "pgdog_sharded"),
+    ] {
+        for extended in [false, true] {
+            let (client, mut connection) = Config::new()
+                .host("127.0.0.1")
+                .port(port)
+                .user("pgdog")
+                .password("pgdog")
+                .dbname(database)
+                .connect(NoTls)
+                .await?;
+            let (send_notice, mut notices) = tokio::sync::mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                while let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await {
+                    if let AsyncMessage::Notice(notice) = message? {
+                        let _ = send_notice.send(notice);
+                    }
+                }
+                Ok::<_, tokio_postgres::Error>(())
+            });
+
+            // Use separate requests so LOCAL is genuinely outside a transaction.
+            client
+                .batch_execute("SET statement_timeout TO '5s'")
+                .await?;
+            if extended {
+                client
+                    .execute("SET LOCAL statement_timeout TO DEFAULT", &[])
+                    .await?;
+            } else {
+                client
+                    .batch_execute("SET LOCAL statement_timeout TO DEFAULT")
+                    .await?;
+            }
+            let row = client.query_one("SHOW statement_timeout", &[]).await?;
+            assert_eq!(
+                row.get::<_, String>(0),
+                "5s",
+                "port={port}, database={database}, extended={extended}"
+            );
+            let notice = tokio::time::timeout(std::time::Duration::from_secs(2), notices.recv())
+                .await?
+                .expect("warning received");
+            assert_eq!(notice.severity(), "WARNING");
+            assert_eq!(notice.code().code(), "25P01");
+            assert_eq!(
+                notice.message(),
+                "SET LOCAL can only be used in transaction blocks"
+            );
+
+            // Session-scoped resets must still take effect in both protocols.
+            for reset in [
+                "SET statement_timeout TO DEFAULT",
+                "SET SESSION statement_timeout = DEFAULT",
+                "RESET statement_timeout",
+            ] {
+                client
+                    .batch_execute("SET statement_timeout TO '5s'")
+                    .await?;
+                if extended {
+                    client.execute(reset, &[]).await?;
+                } else {
+                    client.batch_execute(reset).await?;
+                }
+                let row = client.query_one("SHOW statement_timeout", &[]).await?;
+                assert_eq!(
+                    row.get::<_, String>(0),
+                    "0",
+                    "port={port}, database={database}, extended={extended}, reset={reset}"
+                );
+                assert!(notices.try_recv().is_err(), "session reset must not warn");
+            }
+
+            drop(client);
+            task.await??;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_npgsql_reset_batch() -> Result<(), sqlx::Error> {
     let pools = connections_sqlx().await;
     let mut conn = pools[1].acquire().await?;
