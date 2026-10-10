@@ -9,6 +9,7 @@ use pgdog_config::CopyFormat;
 use crate::backend::{
     ConnectReason, Server, ServerOptions, pool::Address, replication::logical::Error,
 };
+use crate::util::escape_identifier;
 
 use super::publisher::PublicationTable;
 
@@ -157,17 +158,21 @@ impl CopyStatement {
         }
     }
 
+    fn column_list(&self) -> String {
+        self.columns
+            .iter()
+            .map(|c| format!(r#""{}""#, escape_identifier(c)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Generate a serial COPY statement.
     fn copy(&self, out: bool) -> String {
         format!(
             r#"COPY "{}"."{}" ({}) {} WITH (FORMAT {})"#,
-            self.schema_name(out),
-            self.table_name(out),
-            self.columns
-                .iter()
-                .map(|c| format!(r#""{}""#, c))
-                .collect::<Vec<_>>()
-                .join(", "),
+            escape_identifier(self.schema_name(out)),
+            escape_identifier(self.table_name(out)),
+            self.column_list(),
             if out { "TO STDOUT" } else { "FROM STDIN" },
             self.copy_format
         )
@@ -180,13 +185,9 @@ impl CopyStatement {
         let range_modifier = self.table_col_split.get_range_modifier(index);
         let stmt_out = format!(
             r#"COPY (SELECT {} FROM "{}"."{}" WHERE {}) TO STDOUT WITH (FORMAT {})"#,
-            self.columns
-                .iter()
-                .map(|c| format!(r#""{}""#, c))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.schema_name(true),
-            self.table_name(true),
+            self.column_list(),
+            escape_identifier(self.schema_name(true)),
+            escape_identifier(self.table_name(true)),
             range_modifier,
             self.copy_format
         );
@@ -323,6 +324,48 @@ mod test {
         assert_eq!(
             copy.copy_out(0),
             r#"COPY "public"."test_0" ("id", "email") TO STDOUT WITH (FORMAT binary)"#
+        );
+    }
+
+    #[test]
+    fn test_copy_stmt_escapes_identifiers() {
+        let table = PublicationTable {
+            schema: r#"my"schema"#.into(),
+            name: r#"my"table"#.into(),
+            ..Default::default()
+        };
+        let columns = [r#"my"col"#.into(), "email".into()];
+
+        let copy = CopyStatement::new(
+            &table,
+            &columns,
+            CopyFormat::Binary,
+            TableColumnSplit::default(),
+        );
+        assert_eq!(
+            copy.copy_in(),
+            r#"COPY "my""schema"."my""table" ("my""col", "email") FROM STDIN WITH (FORMAT binary)"#
+        );
+        assert_eq!(
+            copy.copy_out(0),
+            r#"COPY "my""schema"."my""table" ("my""col", "email") TO STDOUT WITH (FORMAT binary)"#
+        );
+
+        let copy = CopyStatement::new(
+            &table,
+            &columns,
+            CopyFormat::Binary,
+            TableColumnSplit {
+                blocks: 10,
+                split_statement_count: 2,
+            },
+        );
+        assert!(
+            copy.copy_out(0).starts_with(
+                r#"COPY (SELECT "my""col", "email" FROM "my""schema"."my""table" WHERE "#
+            ),
+            "{}",
+            copy.copy_out(0)
         );
     }
 }
