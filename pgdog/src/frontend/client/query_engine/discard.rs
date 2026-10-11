@@ -65,10 +65,17 @@ impl QueryEngine {
             DiscardTarget::Plans | DiscardTarget::Sequences | DiscardTarget::Temp => {}
         }
 
+        let command = match target {
+            DiscardTarget::All => "DISCARD ALL",
+            DiscardTarget::Plans => "DISCARD PLANS",
+            DiscardTarget::Sequences => "DISCARD SEQUENCES",
+            DiscardTarget::Temp => "DISCARD TEMP",
+        };
+
         self.fake_command_response(
             context,
             &client_request.messages,
-            &FakeResponse::command("DISCARD"),
+            &FakeResponse::command(command),
         )
         .await?;
         Ok(())
