@@ -209,7 +209,7 @@ impl State {
             State::Avg(state) => Ok(state.finalize()?),
             State::Cmp(state) => Ok(state.finalize()),
             State::Count(state) => state.finalize().map_err(Into::into),
-            State::Sum(state) => Ok(state.finalize()),
+            State::Sum(state) => state.finalize().map_err(Into::into),
             State::Variance(state) => Ok(state.finalize()?),
         }
     }

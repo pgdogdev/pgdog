@@ -25,6 +25,9 @@ pub(crate) enum Error {
 
     #[error("net error: {0}")]
     Net(#[from] crate::net::Error),
+
+    #[error("type: {0}")]
+    Type(#[from] pgdog_postgres_types::Error),
 }
 
 impl From<crate::backend::Error> for Error {
@@ -32,6 +35,7 @@ impl From<crate::backend::Error> for Error {
         // Convert backend error to net error if it contains one, otherwise wrap as IO error
         match value {
             crate::backend::Error::Net(net_err) => Self::Net(net_err),
+            crate::backend::Error::Type(type_err) => Self::Type(type_err),
             other => Self::Net(crate::net::Error::Io(std::io::Error::other(format!(
                 "{}",
                 other
