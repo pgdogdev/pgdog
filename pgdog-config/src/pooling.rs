@@ -5,7 +5,9 @@ use std::str::FromStr;
 /// prepared statement support mode.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, Copy, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PreparedStatementsLevel {
     /// Prepared statements are disabled.

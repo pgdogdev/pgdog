@@ -279,7 +279,10 @@ impl<'a> ClusterConfig<'a> {
                 .unwrap_or(general.two_phase_commit_auto.unwrap_or(false)), // Disable by default.
             sharded_schemas,
             rewrite,
-            prepared_statements: &general.prepared_statements,
+            prepared_statements: user
+                .prepared_statements
+                .as_ref()
+                .unwrap_or(&general.prepared_statements),
             dry_run: general.dry_run,
             expanded_explain: general.expanded_explain,
             query_parser: query_parser.level,
