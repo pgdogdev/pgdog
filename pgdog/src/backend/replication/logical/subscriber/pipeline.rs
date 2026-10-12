@@ -33,7 +33,7 @@ const ROWS_PER_FLUSH: u32 = 100;
 /// This represents backpressure (if the Shard can't keep up)
 const COMMAND_CHANNEL_SIZE: usize = 4096;
 
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, bon::Builder)]
 pub(crate) struct ProgressCheck {
@@ -489,8 +489,10 @@ impl Progress {
             None => server.insert(connect_address(&self.address).await?),
         };
         // PERF: the progress will cause actual flush on destination, that could
-        // lower the performance in theory. But the effect is unknown and it's
-        // not very simple to get the what is actually flushed otherwise.
+        // negatively affect performance.
+        // But it is run once a while on interval and that should be
+        // relatively rare to the actual replication work, so the effect
+        // is expected to be low.
         let progress = self.origin.progress(server, true).await?;
         let mut shared = self.shared.lock();
         shared.source_lsn_durable = shared.source_lsn_acked.min(progress.lsn);
