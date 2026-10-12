@@ -1,6 +1,6 @@
 /// Parameters that we don't care if the client changes
 /// or if they are different from the server parameters.
-pub(super) const UNTRACKED_PARAMS: &[&str] = &[
+const UNTRACKED_PARAMS: &[&str] = &[
     "database",
     "user",
     "client_encoding",
@@ -15,3 +15,9 @@ pub(super) const UNTRACKED_PARAMS: &[&str] = &[
     "pgdog.shard",
     "pgdog.sharding_key",
 ];
+
+pub(super) fn is_untracked(name: &str) -> bool {
+    UNTRACKED_PARAMS
+        .iter()
+        .any(|untracked| name.eq_ignore_ascii_case(untracked))
+}

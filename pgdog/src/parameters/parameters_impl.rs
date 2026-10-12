@@ -5,16 +5,16 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 
-use super::{ParameterValue, UNTRACKED_PARAMS, hash_parameters};
+use super::{ParameterName, ParameterNameRef, ParameterValue, hash_parameters, is_untracked};
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct Parameters {
-    parameters: BTreeMap<String, ParameterValue>,
+    parameters: BTreeMap<ParameterName, ParameterValue>,
     hash: u64,
 }
 
 impl Deref for Parameters {
-    type Target = BTreeMap<String, ParameterValue>;
+    type Target = BTreeMap<ParameterName, ParameterValue>;
 
     fn deref(&self) -> &Self::Target {
         &self.parameters
@@ -22,6 +22,17 @@ impl Deref for Parameters {
 }
 
 impl Parameters {
+    /// Look up a parameter by name without allocating.
+    pub(crate) fn get(&self, name: impl AsRef<str>) -> Option<&ParameterValue> {
+        self.parameters.get(ParameterNameRef::new(name.as_ref()))
+    }
+
+    /// Check whether a parameter exists without allocating.
+    pub(crate) fn contains_key(&self, name: impl AsRef<str>) -> bool {
+        self.parameters
+            .contains_key(ParameterNameRef::new(name.as_ref()))
+    }
+
     /// Get a string parameter, or report that it is missing.
     pub(crate) fn get_required(&self, name: &str) -> Result<&str, Error> {
         self.get(name)
@@ -44,7 +55,7 @@ impl Parameters {
     pub(crate) fn new(values: impl IntoIterator<Item = (String, ParameterValue)>) -> Self {
         let parameters: BTreeMap<_, _> = values
             .into_iter()
-            .map(|(name, value)| (name.to_lowercase(), value))
+            .map(|(name, value)| (ParameterName::new(name), value))
             .collect();
         let hash = hash_parameters(parameters.iter());
 
@@ -58,7 +69,7 @@ impl Parameters {
         name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
     ) -> Option<ParameterValue> {
-        let name = name.as_ref().to_lowercase();
+        let name = ParameterName::new(name.as_ref());
         let existing = self.parameters.insert(name, value.into());
         self.hash = hash_parameters(self.parameters.iter());
         existing
@@ -66,8 +77,7 @@ impl Parameters {
 
     /// Remove a parameter from the store, recomputing the hash if necessary.
     pub(crate) fn remove(&mut self, name: impl AsRef<str>) -> Option<ParameterValue> {
-        let name = name.as_ref().to_lowercase();
-        if let Some(exists) = self.parameters.remove(&name) {
+        if let Some(exists) = self.parameters.remove(ParameterNameRef::new(name.as_ref())) {
             self.hash = hash_parameters(self.parameters.iter());
             Some(exists)
         } else {
@@ -78,7 +88,7 @@ impl Parameters {
     /// Remove multiple parameters from the store.
     pub(crate) fn remove_many<'a>(&'a mut self, names: impl IntoIterator<Item = &'a str>) {
         for name in names.into_iter() {
-            self.parameters.remove(name);
+            self.parameters.remove(ParameterNameRef::new(name));
         }
         self.hash = hash_parameters(self.parameters.iter());
     }
@@ -108,10 +118,10 @@ impl Parameters {
 
     /// Get parameters we should be updating on the server/client
     /// during synchronization.
-    pub(super) fn tracked(&self) -> impl IntoIterator<Item = (&String, &ParameterValue)> {
+    pub(super) fn tracked(&self) -> impl IntoIterator<Item = (&ParameterName, &ParameterValue)> {
         self.parameters
             .iter()
-            .filter(|(name, _)| !UNTRACKED_PARAMS.contains(&name.as_str()))
+            .filter(|(name, _)| !is_untracked(name.as_str()))
     }
 
     /// Delete all parameters and copy parameters from other,
@@ -161,7 +171,7 @@ impl From<&Parameters> for Vec<Parameter> {
         params
             .iter()
             .map(|(name, value)| Parameter {
-                name: name.clone(),
+                name: name.as_str().to_owned(),
                 value: value.clone(),
             })
             .collect()

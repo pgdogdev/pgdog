@@ -84,7 +84,7 @@ impl ParameterStore {
     /// Handle a parameter reset, while respecting transactional
     /// semantics.
     pub(crate) fn reset(&mut self, name: impl AsRef<str>) {
-        let name = name.as_ref().to_lowercase();
+        let name = name.as_ref();
 
         if let Some(exists) = self.params.remove(&name) {
             // If the client had this value in its params,
@@ -110,7 +110,7 @@ impl ParameterStore {
             .params
             .keys()
             .chain(self.startup.keys())
-            .filter(|name| !UNTRACKED_PARAMS.contains(&name.as_str()))
+            .filter(|name| !is_untracked(name.as_str()))
             .cloned()
             .collect();
         for name in names {
@@ -194,8 +194,8 @@ impl ParameterStore {
                 .params
                 .tracked()
                 .into_iter()
-                .filter(|(name, value)| self.get(name) != Some(*value)) // Only set parameters that are different.
-                .map(|(name, value)| param_to_sql(name, value, false))
+                .filter(|(name, value)| self.get(name.as_str()) != Some(*value)) // Only set parameters that are different.
+                .map(|(name, value)| param_to_sql(name.as_str(), value, false))
                 .collect();
 
             (reset.into_iter().chain(set).collect(), reset_names)
@@ -228,11 +228,11 @@ impl ParameterStore {
     pub(crate) fn transaction_sync(&self) -> Vec<Query> {
         self.transaction_params
             .iter()
-            .map(|(name, value)| param_to_sql(name, value, false))
+            .map(|(name, value)| param_to_sql(name.as_str(), value, false))
             .chain(
                 self.transaction_local_params
                     .iter()
-                    .map(|(name, value)| param_to_sql(name, value, true)),
+                    .map(|(name, value)| param_to_sql(name.as_str(), value, true)),
             )
             .collect()
     }

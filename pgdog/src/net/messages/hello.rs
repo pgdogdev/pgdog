@@ -205,7 +205,7 @@ impl super::ToBytes for Startup {
 
                 for (name, value) in params.deref() {
                     if let ParameterValue::String(value) = value {
-                        params_buf.put_slice(name.as_bytes());
+                        params_buf.put_slice(name.as_str().as_bytes());
                         params_buf.put_u8(0);
 
                         params_buf.put(value.as_bytes());
