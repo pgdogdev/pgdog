@@ -32,7 +32,10 @@ use crate::{
     },
 };
 
-use super::{Error, connect_primary, stream::StreamSubscriber};
+use super::{
+    Error, connect_primary, primary, replication_origin::ReplicationOrigin,
+    stream::StreamSubscriber,
+};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
@@ -344,28 +347,41 @@ fn x_update(u: XLogUpdate) -> CopyData {
     xlog_copy_data(u.to_bytes())
 }
 
-fn make_subscriber() -> StreamSubscriber {
+pub(super) async fn test_origins(cluster: &Cluster) -> Vec<ReplicationOrigin> {
+    let mut origins = vec![];
+    for (shard, pools) in cluster.shards().iter().enumerate() {
+        let origin = ReplicationOrigin::builder()
+            .name("test")
+            .address(primary(pools).unwrap().addr())
+            .shard(shard)
+            .build();
+        origin.recreate_origin().await.unwrap();
+        origins.push(origin);
+    }
+    origins
+}
+
+async fn make_subscriber() -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, tables)
+    StreamSubscriber::new(&cluster, tables, test_origins(&cluster).await)
 }
 
-fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
+async fn make_subscriber_with_tables(tables: Vec<Table>) -> StreamSubscriber {
     let cluster = Cluster::new_test(&config());
-    StreamSubscriber::new(&cluster, tables)
+    StreamSubscriber::new(&cluster, tables, test_origins(&cluster).await)
 }
 
-fn make_subscriber_single_shard() -> StreamSubscriber {
+async fn make_subscriber_single_shard() -> StreamSubscriber {
     let cluster = Cluster::new_test_single_shard(&config());
     let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
-    StreamSubscriber::new(&cluster, tables)
+    StreamSubscriber::new(&cluster, tables, test_origins(&cluster).await)
 }
 
 async fn wait_for_commit(sub: &mut StreamSubscriber, lsn: i64) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        sub.refresh_wal_positions().await.unwrap();
-        sub.check_for_committed_transaction().await.unwrap();
+        sub.check_confirmed_sent_lsn().await.unwrap();
         if sub.status_update().last_flushed >= lsn {
             return;
         }
@@ -502,7 +518,7 @@ async fn cleanup(server: &mut Server, table: &str, ids: &[&str]) {
 /// Commit clears in_transaction, advances LSN, and returns a StatusUpdate.
 #[tokio::test]
 async fn commit_returns_status_and_clears_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     sub.handle(begin_copy_data(100)).await.unwrap();
@@ -524,7 +540,7 @@ async fn commit_returns_status_and_clears_transaction() {
 /// handle() returns None for non-commit messages.
 #[tokio::test]
 async fn begin_returns_no_status_update() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     let result = sub.handle(begin_copy_data(100)).await.unwrap();
@@ -534,7 +550,7 @@ async fn begin_returns_no_status_update() {
 /// bytes_sharded accumulates across messages.
 #[tokio::test]
 async fn bytes_sharded_accumulates() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     assert_eq!(sub.bytes_sharded(), 0);
@@ -554,7 +570,7 @@ async fn bytes_sharded_accumulates() {
 /// reconnect to skip the in-flight transaction and lose data.
 #[tokio::test]
 async fn status_update_stays_at_committed_lsn_during_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     // Nothing committed yet: ack pointer is at 0.
@@ -588,7 +604,7 @@ async fn status_update_stays_at_committed_lsn_during_transaction() {
 /// Relation inside a transaction uses Flush — stays in transaction.
 #[tokio::test]
 async fn relation_inside_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     sub.handle(begin_copy_data(100)).await.unwrap();
@@ -601,7 +617,7 @@ async fn relation_inside_transaction() {
 /// Relation outside a transaction uses Sync.
 #[tokio::test]
 async fn relation_outside_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     assert!(!sub.in_transaction());
@@ -615,7 +631,7 @@ async fn relation_outside_transaction() {
 /// subsequent inserts to both tables must succeed within the same commit.
 #[tokio::test]
 async fn relation_after_insert_inside_transaction() {
-    let mut sub = make_subscriber_single_shard();
+    let mut sub = make_subscriber_single_shard().await;
     let mut verify = test_server().await;
 
     // Ensure the second table exists (CI only creates sharded/sharded_omni).
@@ -693,7 +709,8 @@ async fn partition_leaves_share_destination() {
     leaf_b.table.parent_name = "sharded".to_string();
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![leaf_a, leaf_b]);
+    let mut sub =
+        StreamSubscriber::new(&cluster, vec![leaf_a, leaf_b], test_origins(&cluster).await);
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -743,7 +760,7 @@ async fn partition_leaves_share_destination() {
 /// Full transaction: Begin → Relation → Insert → Commit, verified in Postgres.
 #[tokio::test]
 async fn full_insert_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -774,7 +791,7 @@ async fn full_insert_transaction() {
 /// Insert then delete within two transactions, verify Postgres state after each.
 #[tokio::test]
 async fn full_delete_transaction() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -808,7 +825,7 @@ async fn full_delete_transaction() {
 /// Multiple transactions reuse prepared statements, both rows persisted.
 #[tokio::test]
 async fn multiple_transactions() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -849,7 +866,7 @@ async fn multiple_transactions() {
 /// LSN gating: inserts with already-applied LSN are skipped.
 #[tokio::test]
 async fn lsn_gating_skips_old_inserts() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -859,7 +876,7 @@ async fn lsn_gating_skips_old_inserts() {
 
     cleanup(&mut verify, "public.sharded", &[&id, &id2]).await;
 
-    // First transaction sets table LSN to 100.
+    // First transaction is confirmed at 200.
     sub.handle(begin_copy_data(100)).await.unwrap();
     sub.handle(relation_copy_data(oid)).await.unwrap();
     sub.handle(insert_copy_data(oid, &id, "first"))
@@ -868,7 +885,7 @@ async fn lsn_gating_skips_old_inserts() {
     sub.handle(commit_copy_data(200)).await.unwrap();
     wait_for_commit(&mut sub, 200).await;
 
-    // Second transaction at LSN 50 (behind table LSN 100) — insert skipped.
+    // Second transaction at LSN 50 (before the confirmed 200) — insert skipped.
     sub.handle(begin_copy_data(50)).await.unwrap();
     assert!(sub.lsn_applied(&oid));
     sub.handle(insert_copy_data(oid, &id2, "replayed"))
@@ -996,7 +1013,7 @@ async fn copy_boundary_attempt() -> Result<bool, Box<dyn std::error::Error>> {
     tables[0].lsn = copy_lsn;
 
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut subscriber = StreamSubscriber::new(&cluster, tables);
+    let mut subscriber = StreamSubscriber::new(&cluster, tables, test_origins(&cluster).await);
     subscriber.connect().await?;
     replication_stream.start_replication().await?;
 
@@ -1045,14 +1062,13 @@ async fn copy_boundary_attempt() -> Result<bool, Box<dyn std::error::Error>> {
             .execute("DELETE FROM copy_boundary_dest WHERE id = 4")
             .await?;
         for message in last_transaction_messages {
+            if let Some(XLogPayload::Insert(insert)) = message
+                .xlog_data()
+                .and_then(|xlog_data| xlog_data.payload())
+            {
+                assert!(subscriber.lsn_applied(&insert.oid));
+            }
             subscriber.handle(message).await?;
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !subscriber.check_for_committed_transaction().await? {
-            assert!(Instant::now() < deadline);
-            subscriber.refresh_wal_positions().await?;
-            sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -1095,7 +1111,7 @@ async fn copy_boundary_attempt() -> Result<bool, Box<dyn std::error::Error>> {
 /// Multiple rows in the same transaction must still be applied after inclusive LSN gating.
 #[tokio::test]
 async fn multiple_inserts_same_transaction_are_applied() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1304,7 +1320,7 @@ async fn fetch_posts_row(server: &mut Server, id: &str) -> Option<(String, Strin
 #[tokio::test]
 async fn toast_update_preserves_unchanged_column() {
     let oid = Oid(16384);
-    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]).await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1357,7 +1373,7 @@ async fn toast_update_preserves_unchanged_column() {
 #[tokio::test]
 async fn toast_update_shape_reuse() {
     let oid = Oid(16384);
-    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]).await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1401,7 +1417,7 @@ async fn toast_update_shape_reuse() {
 #[tokio::test]
 async fn toast_update_all_toasted_is_noop() {
     let oid = Oid(16384);
-    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]).await;
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1467,7 +1483,7 @@ async fn toast_update_all_toasted_is_noop() {
 /// PK-change UPDATE with 'u' in the new tuple fails with ToastedRowMigration.
 #[tokio::test]
 async fn toast_pk_change_with_u_rejects() {
-    let mut sub = make_subscriber();
+    let mut sub = make_subscriber().await;
     sub.connect().await.unwrap();
 
     let oid = Oid(16384);
@@ -1500,7 +1516,7 @@ async fn toast_pk_change_with_u_rejects() {
 #[tokio::test]
 async fn update_rejects_toasted_identity_no_key() {
     let oid = Oid(16384);
-    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]).await;
     sub.connect().await.unwrap();
 
     sub.handle(begin_copy_data(100)).await.unwrap();
@@ -1532,7 +1548,7 @@ async fn update_rejects_toasted_identity_no_key() {
 #[tokio::test]
 async fn update_rejects_toasted_identity_with_key() {
     let oid = Oid(16384);
-    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]);
+    let mut sub = make_subscriber_with_tables(vec![make_posts_table()]).await;
     sub.connect().await.unwrap();
 
     sub.handle(begin_copy_data(100)).await.unwrap();
@@ -1825,7 +1841,11 @@ fn omni_insert_copy_data(oid: Oid, a: &str, b: &str) -> CopyData {
 #[tokio::test]
 async fn full_identity_nothing_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_replica_identity_nothing_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_replica_identity_nothing_table()],
+        test_origins(&cluster).await,
+    );
     sub.connect().await.unwrap();
 
     let oid = Oid(16390);
@@ -1859,7 +1879,11 @@ async fn full_identity_nothing_rejected() {
 #[tokio::test]
 async fn full_identity_omni_no_unique_index_rejected() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_omni_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_omni_table()],
+        test_origins(&cluster).await,
+    );
 
     // Enforce precondition: the table must exist but have no qualifying unique index.
     // A stale unique index from a prior run would make tables_missing_unique_index() return empty,
@@ -1898,7 +1922,11 @@ async fn full_identity_omni_no_unique_index_rejected() {
 #[tokio::test]
 async fn full_identity_insert_sharded() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1925,7 +1953,11 @@ async fn full_identity_insert_sharded() {
 #[tokio::test]
 async fn full_identity_update_fast_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -1982,7 +2014,11 @@ async fn full_identity_update_fast_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -2044,7 +2080,11 @@ async fn full_identity_update_slow_path() {
 #[tokio::test]
 async fn full_identity_update_slow_path_realistic_old_tuple() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -2102,7 +2142,11 @@ async fn full_identity_update_slow_path_realistic_old_tuple() {
 #[tokio::test]
 async fn full_identity_update_all_toasted_is_noop() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -2146,7 +2190,11 @@ async fn full_identity_update_all_toasted_is_noop() {
 #[tokio::test]
 async fn full_identity_delete() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_sharded_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_sharded_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
     sub.connect().await.unwrap();
 
@@ -2186,7 +2234,11 @@ async fn full_identity_delete() {
 #[tokio::test]
 async fn full_identity_insert_omni_dedup() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_omni_dedup_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_omni_dedup_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
 
     // Ensure destination table exists with unique index before relation() runs.
@@ -2248,7 +2300,11 @@ async fn full_identity_insert_omni_dedup() {
 #[tokio::test]
 async fn full_identity_update_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_dup_rows_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -2316,7 +2372,11 @@ async fn full_identity_update_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_delete_duplicate_rows() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_dup_rows_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -2385,7 +2445,11 @@ async fn full_identity_delete_duplicate_rows() {
 #[tokio::test]
 async fn full_identity_update_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_dup_rows_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
 
     // full_dup_rows has no NOT NULL on value — we can seed a NULL row.
@@ -2448,7 +2512,11 @@ async fn full_identity_update_matches_null_column() {
 #[tokio::test]
 async fn full_identity_delete_matches_null_column() {
     let cluster = Cluster::new_test_single_shard(&config());
-    let mut sub = StreamSubscriber::new(&cluster, vec![make_full_identity_dup_rows_table()]);
+    let mut sub = StreamSubscriber::new(
+        &cluster,
+        vec![make_full_identity_dup_rows_table()],
+        test_origins(&cluster).await,
+    );
     let mut verify = test_server().await;
 
     ensure_table(&mut verify, "public.full_dup_rows").await;
@@ -2497,4 +2565,209 @@ async fn full_identity_delete_matches_null_column() {
         0,
         "FULL identity DELETE must match NULL via IS NOT DISTINCT FROM"
     );
+}
+
+/// Source LSN recorded in the replication origin of each destination shard,
+/// `None` while the origin has no commit.
+async fn origin_progress(server: &mut Server) -> Vec<Option<Lsn>> {
+    let mut progress = vec![];
+    for shard in 0..2 {
+        let rows: Vec<String> = server
+            .fetch_all(format!(
+                "SELECT COALESCE(pg_replication_origin_progress('__pgdog_origin_test_{shard}', false)::text, '')"
+            ))
+            .await
+            .unwrap();
+        progress.push(rows[0].parse().ok());
+    }
+    progress
+}
+
+/// A transaction that changes only one of two shards is confirmed: the
+/// shard without changes does not block it, and only the changed shard
+/// records the commit in its origin.
+#[tokio::test]
+async fn transaction_on_one_shard_is_confirmed() {
+    let mut sub = make_subscriber().await;
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(insert_copy_data(oid, &id, "one shard"))
+        .await
+        .unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
+
+    let mut progress = origin_progress(&mut verify).await;
+    progress.sort();
+    assert_eq!(progress, [None, Some(Lsn::from_i64(200))]);
+
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+}
+
+/// A transaction whose change hits no row, and a transaction without
+/// changes, are both confirmed.
+#[tokio::test]
+async fn transactions_without_written_rows_are_confirmed() {
+    let mut sub = make_subscriber().await;
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let id = random_id();
+    cleanup(&mut verify, "public.sharded", &[&id]).await;
+
+    sub.handle(begin_copy_data(100)).await.unwrap();
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    sub.handle(delete_copy_data(oid, &id)).await.unwrap();
+    sub.handle(commit_copy_data(200)).await.unwrap();
+    wait_for_commit(&mut sub, 200).await;
+    assert!(
+        origin_progress(&mut verify)
+            .await
+            .contains(&Some(Lsn::from_i64(200)))
+    );
+
+    sub.handle(begin_copy_data(300)).await.unwrap();
+    sub.handle(commit_copy_data(400)).await.unwrap();
+    wait_for_commit(&mut sub, 400).await;
+}
+
+/// One check confirms every transaction that is durable, not one at a time.
+#[tokio::test]
+async fn one_check_confirms_several_transactions() {
+    let mut sub = make_subscriber().await;
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let ids = [random_id(), random_id(), random_id()];
+    let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
+
+    sub.handle(relation_copy_data(oid)).await.unwrap();
+    for (n, id) in ids.iter().enumerate() {
+        let lsn = 200 * (n as i64 + 1);
+        sub.handle(begin_copy_data(lsn - 100)).await.unwrap();
+        sub.handle(insert_copy_data(oid, id, "batch"))
+            .await
+            .unwrap();
+        sub.handle(commit_copy_data(lsn)).await.unwrap();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut applied = 0;
+        for id in &ids {
+            applied += count_row(&mut verify, "public.sharded", id).await;
+        }
+        if applied == ids.len() as i64 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rows were not applied");
+        sleep(Duration::from_millis(10)).await;
+    }
+    sleep(Duration::from_millis(500)).await;
+
+    assert!(sub.check_confirmed_sent_lsn().await.unwrap());
+    assert_eq!(sub.status_update().last_flushed, 600);
+
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
+}
+
+/// After a reconnect the source sends again the transactions that were
+/// applied but not confirmed. Each shard skips what its origin already has.
+#[tokio::test]
+async fn replay_after_reconnect_skips_applied_transactions() {
+    let mut sub = make_subscriber().await;
+    let mut verify = test_server().await;
+    sub.connect().await.unwrap();
+
+    let oid = Oid(16384);
+    let ids = [random_id(), random_id()];
+    let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
+
+    let transaction = [
+        begin_copy_data(100),
+        relation_copy_data(oid),
+        insert_copy_data(oid, &ids[0], "replayed"),
+        insert_copy_data(oid, &ids[1], "replayed"),
+        commit_copy_data(200),
+    ];
+    for message in transaction.clone() {
+        sub.handle(message).await.unwrap();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut applied = 0;
+        for id in &ids {
+            applied += count_row(&mut verify, "public.sharded", id).await;
+        }
+        if applied == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rows were not applied");
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(sub.status_update().last_flushed, 0, "not confirmed yet");
+
+    sub.reconnect().await.unwrap();
+    for message in transaction {
+        sub.handle(message).await.unwrap();
+    }
+    wait_for_commit(&mut sub, 200).await;
+
+    for id in &ids {
+        assert_eq!(count_row(&mut verify, "public.sharded", id).await, 1);
+    }
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
+}
+
+#[tokio::test]
+async fn new_stream_with_the_same_origins_skips_applied_transactions() {
+    let cluster = Cluster::new_test(&config());
+    let tables = vec![make_sharded_table(), make_sharded_test_b_table()];
+    let origins = test_origins(&cluster).await;
+    let mut verify = test_server().await;
+
+    let oid = Oid(16384);
+    let ids = [random_id(), random_id()];
+    let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
+
+    let transaction = [
+        begin_copy_data(100),
+        relation_copy_data(oid),
+        insert_copy_data(oid, &ids[0], "restarted"),
+        insert_copy_data(oid, &ids[1], "restarted"),
+        commit_copy_data(200),
+    ];
+
+    let mut first = StreamSubscriber::new(&cluster, tables.clone(), origins.clone());
+    first.connect().await.unwrap();
+    for message in transaction.clone() {
+        first.handle(message).await.unwrap();
+    }
+    wait_for_commit(&mut first, 200).await;
+    drop(first);
+
+    let mut second = StreamSubscriber::new(&cluster, tables, origins);
+    second.connect().await.unwrap();
+    for message in transaction {
+        second.handle(message).await.unwrap();
+    }
+    wait_for_commit(&mut second, 200).await;
+
+    for id in &ids {
+        assert_eq!(count_row(&mut verify, "public.sharded", id).await, 1);
+    }
+    cleanup(&mut verify, "public.sharded", &id_refs).await;
 }
