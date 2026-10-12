@@ -2,6 +2,7 @@ mod builder;
 mod hash;
 mod parameters_impl;
 mod store;
+mod sync;
 mod to_sql;
 mod untracked;
 mod value;
@@ -12,6 +13,7 @@ use untracked::UNTRACKED_PARAMS;
 
 pub(crate) use parameters_impl::Parameters;
 pub(crate) use store::ParameterStore;
+pub(crate) use sync::ParametersSync;
 pub(crate) use value::ParameterValue;
 
 #[cfg(test)]

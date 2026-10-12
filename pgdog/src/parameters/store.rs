@@ -174,8 +174,8 @@ impl ParameterStore {
     ///
     /// Returns a list of queries that need to be executed on the
     /// server to make this sync actually stick.
-    pub(crate) fn sync(&mut self, other: &Self) -> Vec<Query> {
-        let queries = if !self.params.identical(&other.params) {
+    pub(crate) fn sync<'a>(&self, other: &'a Self) -> ParametersSync<'a> {
+        let (queries, reset) = if !self.params.identical(&other.params) {
             // Get all parameters that we have, but other does not.
             // We don't want our value to persist, so we are resetting
             // them to their default server values.
@@ -198,23 +198,29 @@ impl ParameterStore {
                 .map(|(name, value)| param_to_sql(name, value, false))
                 .collect();
 
-            self.params.extend(other.params.clone());
-            // Remove parameters that are being reset.
-            self.params
-                .remove_many(reset_names.iter().map(|name| name.as_str()));
-
-            reset.into_iter().chain(set).collect()
+            (reset.into_iter().chain(set).collect(), reset_names)
         } else {
-            vec![]
+            (vec![], vec![])
         };
 
-        self.transaction_local_params
-            .restore_from(&other.transaction_local_params);
-        self.transaction_params
-            .restore_from(&other.transaction_params);
-        self.in_transaction = other.in_transaction;
+        ParametersSync {
+            reset,
+            queries,
+            target_store: other,
+        }
+    }
 
-        queries
+    /// Complete parameter synchronization.
+    pub(crate) fn sync_complete(&mut self, sync: ParametersSync) {
+        self.params.extend(sync.target_store.params.clone());
+        // Remove parameters that were reset.
+        self.params
+            .remove_many(sync.reset.iter().map(|name| name.as_str()));
+        self.transaction_local_params
+            .restore_from(&sync.target_store.transaction_local_params);
+        self.transaction_params
+            .restore_from(&sync.target_store.transaction_params);
+        self.in_transaction = sync.target_store.in_transaction;
     }
 
     /// Generate the queries we need to sync the server transaction

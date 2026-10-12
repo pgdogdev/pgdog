@@ -718,51 +718,49 @@ impl Server {
         params: &ParameterStore,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
-        // Sync application_name parameter
-        // and update it in the stats.
+        let mut executed = 0;
+
+        // Sync application_name parameter and update it in the stats.
         let server_name = self.client_params.get_default("application_name", "PgDog");
         let client_name = params.get_default("application_name", "PgDog");
 
         self.stats.link_client(client_name, server_name, id);
 
-        // Clear any params previously tracked by SET.
-        self.changed_params.clear();
-        let mut clear_params = false;
+        let sync = self.client_params.sync(params);
 
-        // Plan synchronization on a copy: RESET responses invalidate the cached store,
-        // and a failed batch must not mark unexecuted changes as synchronized.
-        let mut synced = self.client_params.clone();
-        let queries = synced.sync(params);
-        let mut executed = queries.len();
-        if !queries.is_empty() {
-            debug!("syncing {} params", queries.len());
-            self.execute_batch(&queries).await?;
-            clear_params = true;
+        if !sync.is_empty() {
+            // If sync fails, the client will drop this server, and the
+            // Guard cleanup routine will reset parameters back to their original state.
+            self.mark_dirty(true);
+
+            debug!("syncing {} params", sync.len());
+            self.execute_batch(sync.deref()).await?;
+
+            executed += sync.len();
         }
 
-        // Sync any parameters set inside the transaction. These will
-        // need to be revered on rollback or commited on commit.
+        // Sync any parameters set inside the transaction. These will be
+        // automatically reverted on rollback or committed on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let transaction_sets = synced.transaction_sync();
+            let queries = sync.transaction_sync();
 
-            if !transaction_sets.is_empty() {
-                debug!("syncing {} in-transaction params", transaction_sets.len());
-
-                self.execute_batch(&transaction_sets).await?;
-                clear_params = true;
+            if !queries.is_empty() {
+                debug!("syncing {} in-transaction params", queries.len());
+                self.execute_batch(&queries).await?;
+                executed += queries.len();
             }
-
-            executed += transaction_sets.len();
         }
 
-        self.client_params = synced;
+        // Sync completed successfully.
+        self.client_params.sync_complete(sync);
 
-        if clear_params {
-            // We can receive ParameterStatus messages here,
-            // but we should ignore them since we are managing the session state.
-            self.changed_params.clear();
-        }
+        // Executing `SET` will trigger the server to send `ParameterStatus` for some of them,
+        // which will not be relevant for clients syncing params.
+        self.changed_params.clear();
+
+        // The server synced successfully, so we disarm the Guard cleanup routine.
+        self.mark_dirty(false);
 
         Ok(executed)
     }

@@ -72,7 +72,8 @@ async fn test_reset_with_server() {
     assert_eq!(timeout.first().unwrap(), "5s");
 
     // Synchronize to an empty store to reset tracked parameters.
-    let reset_queries = params.sync(&ParameterStore::default());
+    let other = ParameterStore::default();
+    let reset_queries = params.sync(&other);
     assert_eq!(reset_queries.len(), 2);
 
     // Execute reset queries on server
@@ -112,7 +113,8 @@ async fn test_reset_all_with_server() {
     assert_eq!(timeout.first().unwrap(), "5s");
 
     // Get reset queries and execute on server
-    let reset_queries = params.sync(&ParameterStore::default());
+    let other = ParameterStore::default();
+    let reset_queries = params.sync(&other);
     for query in reset_queries {
         server.execute(query).await.unwrap();
     }
