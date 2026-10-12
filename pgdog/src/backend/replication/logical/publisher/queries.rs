@@ -23,6 +23,10 @@ pub(crate) async fn server_version(server: &mut Server) -> Result<Option<i64>, B
 }
 
 /// Get list of tables in publication.
+///
+/// Without the tables `setup.sql` installs, which a publication of all tables has.
+/// They describe the database they're in: the destination has its own shard
+/// configuration and its own key to sign DDL with, or doesn't have our schema at all.
 static TABLES: &str = "SELECT DISTINCT
   n.nspname,
   c.relname,
@@ -40,6 +44,10 @@ JOIN (
 LEFT JOIN pg_inherits i     ON i.inhrelid = c.oid           -- only present if c is a child partition
 LEFT JOIN pg_class    p     ON p.oid = i.inhparent          -- immediate parent partitioned table
 LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
+WHERE NOT (
+  n.nspname = 'pgdog'
+  AND c.relname IN ('config', 'validator_bigint', 'validator_uuid', 'ddl_replication_key')
+)
 ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.

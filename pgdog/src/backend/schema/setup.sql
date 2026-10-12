@@ -91,6 +91,212 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+-- Key the DDL written to the WAL is signed with. Only pgdog.log_ddl_to_wal() and
+-- the owner of this table can read it, so no other role can write DDL to replay.
+CREATE TABLE IF NOT EXISTS pgdog.ddl_replication_key (
+    id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+    key TEXT NOT NULL
+);
+
+REVOKE ALL ON TABLE pgdog.ddl_replication_key FROM PUBLIC;
+
+INSERT INTO pgdog.ddl_replication_key (key)
+VALUES (replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''))
+ON CONFLICT DO NOTHING;
+
+-- Saves the session's search_path for pgdog.log_ddl_to_wal(), which runs with its own.
+CREATE OR REPLACE FUNCTION pgdog.save_ddl_search_path() RETURNS event_trigger AS $body$
+BEGIN
+    PERFORM pg_catalog.set_config('pgdog.ddl_search_path', pg_catalog.current_setting('search_path'), true);
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Writes DDL to the WAL, signed, for PgDog to replay where it replicates to.
+--
+-- Runs as its owner to read the signing key, with a search_path
+-- the calling role can't use to replace what it calls.
+CREATE OR REPLACE FUNCTION pgdog.log_ddl_to_wal() RETURNS event_trigger
+SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $body$
+DECLARE
+    query TEXT := current_query();
+    rebuilt TEXT;
+    -- What the triggers of the events before this one found out about the command.
+    temp_drop BOOLEAN := coalesce(current_setting('pgdog.temp_drop', true), '') = 'on';
+    drop_index TEXT := coalesce(current_setting('pgdog.ddl_drop_index', true), '');
+    rewritten BOOLEAN := coalesce(current_setting('pgdog.ddl_rewrite', true), '') = 'on';
+    defaults JSON := '[]';
+    row_defaults JSON := '[]';
+    key BYTEA;
+    payload BYTEA;
+BEGIN
+    -- It's about this command only.
+    PERFORM set_config('pgdog.temp_drop', 'off', true),
+            set_config('pgdog.ddl_drop_index', '', true),
+            set_config('pgdog.ddl_rewrite', 'off', true);
+
+    -- Maintenance of the source's own indexes, and temporary
+    -- objects, which only exist in the session that made them.
+    IF TG_TAG = 'REINDEX' OR temp_drop THEN
+        RETURN;
+    END IF;
+
+    -- Nothing reads the message unless the database is being replicated.
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_replication_slots
+        WHERE plugin = 'pgoutput' AND database = current_database()
+    ) THEN
+        RETURN;
+    END IF;
+
+    IF (SELECT bool_and(schema_name = 'pg_temp') FROM pg_event_trigger_ddl_commands()) THEN
+        RETURN;
+    END IF;
+
+    SELECT convert_to(k.key, 'UTF8') INTO key FROM pgdog.ddl_replication_key k;
+    IF key IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- Indexes are made and dropped by what the catalog says, not by the query:
+    -- CONCURRENTLY can't run in the replicated transaction, and the
+    -- destination has no traffic to stay out of the way of.
+    --
+    -- TODO: ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY can't run there either.
+    IF TG_TAG = 'CREATE INDEX' THEN
+        -- IF NOT EXISTS, and it did.
+        IF NOT EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands()) THEN
+            RETURN;
+        END IF;
+
+        -- The index of a partitioned table can't be made CONCURRENTLY,
+        -- and its definition leaves the partitions out.
+        SELECT pg_get_indexdef(c.objid) INTO rebuilt
+        FROM pg_event_trigger_ddl_commands() c
+        JOIN pg_index i ON i.indexrelid = c.objid
+        JOIN pg_class t ON t.oid = i.indrelid AND t.relkind <> 'p';
+
+        query := coalesce(rebuilt, query);
+    ELSIF TG_TAG = 'DROP INDEX' THEN
+        -- IF EXISTS, and it didn't.
+        IF drop_index = '' THEN
+            RETURN;
+        END IF;
+
+        query := drop_index;
+    END IF;
+
+    -- Columns added with a default that isn't the same when the destination computes
+    -- it again, for the rows it has: one computed once for all of them, which the
+    -- catalog keeps, or for each of them, which rewrites the table.
+    --
+    -- TODO: a column added in a subtransaction isn't found by the transaction's ID.
+    IF TG_TAG = 'ALTER TABLE' THEN
+        SELECT
+            coalesce(json_agg(c.name) FILTER (WHERE a.atthasmissing), '[]'),
+            coalesce(json_agg(c.name) FILTER (WHERE NOT a.atthasmissing), '[]')
+        INTO defaults, row_defaults
+        FROM pg_attribute a
+        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum,
+        LATERAL (
+            SELECT json_build_object('table', a.attrelid::regclass::text, 'column', a.attname)
+        ) c (name)
+        WHERE a.attrelid IN (
+                SELECT objid FROM pg_event_trigger_ddl_commands() WHERE object_type = 'table'
+            )
+            AND a.attgenerated = ''
+            AND a.xmin = pg_current_xact_id()::xid
+            AND (
+                -- Numbered by a sequence, in the order the rows are stored in.
+                (rewritten AND a.attidentity <> '')
+                OR (
+                    (a.atthasmissing OR (rewritten AND d.xmin = pg_current_xact_id()::xid))
+                    AND (
+                        d.adbin::text ~ 'SQLVALUEFUNCTION|NEXTVALUEEXPR'
+                        OR EXISTS (
+                            SELECT 1
+                            FROM regexp_matches(d.adbin::text, ':(?:funcid|opfuncid) (\d+)', 'g') f
+                            JOIN pg_proc p ON p.oid = f[1]::oid AND p.provolatile <> 'i'
+                        )
+                    )
+                )
+            );
+    END IF;
+
+    payload := convert_to(json_build_object(
+        -- The role the DDL ran as: this function runs as its owner.
+        'role', coalesce(nullif(current_setting('role'), 'none'), session_user),
+        'search_path', coalesce(current_setting('pgdog.ddl_search_path', true), '"$user", public'),
+        'query', query,
+        'defaults', defaults,
+        'row_defaults', row_defaults
+    )::text, 'UTF8');
+
+    -- The signature, in hex, comes before the DDL it signs.
+    PERFORM pg_logical_emit_message(true, 'ddl_replication',
+        convert_to(encode(sha256(key || sha256(key || payload)), 'hex'), 'UTF8') || payload);
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Dropped objects aren't listed at the end of the command, so pass
+-- what pgdog.log_ddl_to_wal() needs to know about them.
+CREATE OR REPLACE FUNCTION pgdog.mark_temp_drop() RETURNS event_trigger AS $body$
+BEGIN
+    -- Temporary objects, for it to skip.
+    IF (SELECT bool_and(is_temporary) FROM pg_event_trigger_dropped_objects() WHERE original) THEN
+        PERFORM set_config('pgdog.temp_drop', 'on', true);
+    END IF;
+
+    -- Indexes, for it to drop by name. With CASCADE, other objects go with them.
+    IF TG_TAG = 'DROP INDEX' THEN
+        PERFORM set_config('pgdog.ddl_drop_index', (
+            SELECT CASE WHEN bool_and(object_type = 'index')
+                THEN 'DROP INDEX ' || string_agg(object_identity, ', ') FILTER (WHERE original)
+                ELSE current_query()
+            END
+            FROM pg_event_trigger_dropped_objects()
+        ), true);
+    END IF;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- A table is rewritten when a column is added with a default computed for each
+-- of its rows, like random(). Flag it for pgdog.log_ddl_to_wal().
+CREATE OR REPLACE FUNCTION pgdog.mark_default_rewrite() RETURNS event_trigger AS $body$
+BEGIN
+    -- 2: the default value of a column changed.
+    IF pg_event_trigger_table_rewrite_reason() & 2 <> 0 THEN
+        PERFORM set_config('pgdog.ddl_rewrite', 'on', true);
+    END IF;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Replicate DDL during resharding. Event triggers require superuser;
+-- without it, setup still succeeds and DDL is not replicated.
+DO $body$
+BEGIN
+    -- Triggers on the same event fire in the order of their names,
+    -- so the search_path is saved before the DDL is logged.
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_context') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_context ON ddl_command_end
+        EXECUTE FUNCTION pgdog.save_ddl_search_path();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_replication') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_replication ON ddl_command_end
+        EXECUTE FUNCTION pgdog.log_ddl_to_wal();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_rewrite') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_rewrite ON table_rewrite
+        EXECUTE FUNCTION pgdog.mark_default_rewrite();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_temp_drop') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_temp_drop ON sql_drop
+        EXECUTE FUNCTION pgdog.mark_temp_drop();
+    END IF;
+EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+END;
+$body$;
+
 -- Generate a primary key from a sequence that will
 -- match the shard number this is ran on.
 CREATE OR REPLACE FUNCTION pgdog.next_uuid_auto() RETURNS UUID AS $body$
