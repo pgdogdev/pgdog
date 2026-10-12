@@ -68,16 +68,14 @@ fn parse_query(query: &str) -> Command {
 #[test]
 fn parser_marks_dml_for_metrics() {
     let command = parse_query("SELECT 1");
-    assert!(command.route().parsed());
-    assert_eq!(command.route().statement_type(), StatementType::Dml);
+    assert_eq!(command.route().statement_type(), Some(StatementType::Dml));
     assert_eq!(command.route().table_change(), TableChange::None);
 }
 
 #[test]
 fn parser_marks_table_ddl_for_metrics() {
     let command = parse_query("CREATE TABLE metrics_test (id BIGINT)");
-    assert!(command.route().parsed());
-    assert_eq!(command.route().statement_type(), StatementType::Ddl);
+    assert_eq!(command.route().statement_type(), Some(StatementType::Ddl));
     assert_eq!(command.route().table_change(), TableChange::Created);
 }
 

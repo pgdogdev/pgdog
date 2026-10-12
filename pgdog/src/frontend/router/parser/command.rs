@@ -72,14 +72,14 @@ pub(crate) enum Command {
 }
 
 impl Command {
-    pub(crate) fn mark_parsed(&mut self) {
+    pub(crate) fn set_default_statement_type(&mut self, statement_type: Option<StatementType>) {
         match self {
             Self::Query(route)
             | Self::Copy { route, .. }
             | Self::StartTransaction { route, .. }
             | Self::CommitTransaction { route, .. }
             | Self::RollbackTransaction { route, .. }
-            | Self::Set { route, .. } => route.mark_parsed(),
+            | Self::Set { route, .. } => route.set_default_statement_type(statement_type),
             _ => (),
         }
     }

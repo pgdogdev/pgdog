@@ -127,14 +127,14 @@ impl Binding {
 
     /// Record successful parser-classified statements on each target pool.
     pub(crate) fn statement_completed(&mut self, route: &Route) {
-        if !route.parsed() {
+        let Some(statement_type) = route.statement_type() else {
             return;
-        }
+        };
 
         match self {
             Binding::Direct(server) => server
                 .stats_mut()
-                .statement_completed(route.statement_type(), route.table_change()),
+                .statement_completed(statement_type, route.table_change()),
             Binding::MultiShard(servers) => {
                 for server in servers.iter_mut() {
                     let targeted = match route.shard() {
@@ -145,7 +145,7 @@ impl Binding {
                     if targeted {
                         server
                             .stats_mut()
-                            .statement_completed(route.statement_type(), route.table_change());
+                            .statement_completed(statement_type, route.table_change());
                     }
                 }
             }

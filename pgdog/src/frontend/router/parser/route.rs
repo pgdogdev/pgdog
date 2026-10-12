@@ -144,8 +144,7 @@ pub(crate) struct Route {
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
-    stmt_type: StatementType,
-    parsed: bool,
+    stmt_type: Option<StatementType>,
     table_change: TableChange,
 }
 
@@ -410,19 +409,17 @@ impl Route {
     }
 
     pub(super) fn ddl(mut self) -> Self {
-        self.stmt_type = StatementType::Ddl;
+        self.stmt_type = Some(StatementType::Ddl);
         self
     }
 
-    pub(super) fn mark_parsed(&mut self) {
-        self.parsed = true;
+    pub(super) fn set_default_statement_type(&mut self, statement_type: Option<StatementType>) {
+        if self.stmt_type.is_none() {
+            self.stmt_type = statement_type;
+        }
     }
 
-    pub(crate) fn parsed(&self) -> bool {
-        self.parsed
-    }
-
-    pub(crate) fn statement_type(&self) -> StatementType {
+    pub(crate) fn statement_type(&self) -> Option<StatementType> {
         self.stmt_type
     }
 
@@ -436,17 +433,20 @@ impl Route {
     }
 
     pub(super) fn transaction_control(mut self) -> Self {
-        self.stmt_type = StatementType::TransactionControl;
+        self.stmt_type = Some(StatementType::TransactionControl);
         self
     }
 
     pub(super) fn session_control(mut self) -> Self {
-        self.stmt_type = StatementType::SessionControl;
+        self.stmt_type = Some(StatementType::SessionControl);
         self
     }
 
     pub(crate) fn needs_backend(&self) -> bool {
-        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl) || self.rollback_savepoint
+        matches!(
+            self.stmt_type,
+            None | Some(StatementType::Dml | StatementType::Ddl)
+        ) || self.rollback_savepoint
     }
 }
 

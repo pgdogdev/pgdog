@@ -92,7 +92,7 @@ impl QueryParser {
     /// Parse a query and return a command.
     pub(crate) fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut context = QueryParserContext::new(context)?;
-        let parser_enabled = context.router_context.ast.is_some();
+        let default_statement_type = context.router_context.ast.map(|_| StatementType::Dml);
 
         let mut command = if context.query().is_ok() {
             self.write_override = context.write_override();
@@ -102,9 +102,7 @@ impl QueryParser {
             Command::default()
         };
 
-        if parser_enabled {
-            command.mark_parsed();
-        }
+        command.set_default_statement_type(default_statement_type);
 
         match &mut command {
             Command::Query(route)

@@ -63,7 +63,7 @@ async fn test_primary() {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
         assert!(result.route().is_write());
         assert_eq!(result.route().shard(), &Shard::Direct(0));
-        assert!(!result.route().parsed());
+        assert_eq!(result.route().statement_type(), None);
     }
 }
 
