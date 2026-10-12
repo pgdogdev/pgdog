@@ -48,6 +48,7 @@ mod config;
 mod frontend;
 mod healthcheck;
 mod net;
+mod parameters;
 mod plugin;
 mod sighup;
 mod state;
