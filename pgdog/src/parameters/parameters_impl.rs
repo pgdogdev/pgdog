@@ -108,9 +108,7 @@ impl Parameters {
 
     /// Get parameters we should be updating on the server/client
     /// during synchronization.
-    pub(super) fn tracked<'a>(
-        &'a self,
-    ) -> impl IntoIterator<Item = (&'a String, &'a ParameterValue)> {
+    pub(super) fn tracked(&self) -> impl IntoIterator<Item = (&String, &ParameterValue)> {
         self.parameters
             .iter()
             .filter(|(name, _)| !UNTRACKED_PARAMS.contains(&name.as_str()))

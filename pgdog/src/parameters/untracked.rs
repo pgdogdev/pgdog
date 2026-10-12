@@ -1,6 +1,6 @@
 /// Parameters that we don't care if the client changes
 /// or if they are different from the server parameters.
-pub(super) const UNTRACKED_PARAMS: &[&'static str] = &[
+pub(super) const UNTRACKED_PARAMS: &[&str] = &[
     "database",
     "user",
     "client_encoding",

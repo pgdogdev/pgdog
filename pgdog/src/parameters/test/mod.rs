@@ -75,7 +75,7 @@ fn test_set_sync() {
 
     assert!(server.get("lock_timeout").is_none());
 
-    assert!(server.sync(&mut client).is_empty());
+    assert!(server.sync(&client).is_empty());
 }
 
 #[test]
