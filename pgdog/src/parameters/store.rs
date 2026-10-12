@@ -43,9 +43,8 @@ impl ParameterStore {
     }
 
     /// Forget cached state after the server executes RESET or DISCARD.
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn server_reset(&mut self) {
         self.params.clear();
-        self.transaction_end();
     }
 
     pub(crate) fn get_default<'a>(&'a self, name: &str, default: &'a str) -> &'a str {

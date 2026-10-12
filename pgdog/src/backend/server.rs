@@ -688,9 +688,9 @@ impl Server {
                     "DEALLOCATE ALL" => self.prepared_statements.clear(),
                     "DISCARD ALL" => {
                         self.prepared_statements.clear();
-                        self.client_params.clear();
+                        self.client_params.server_reset();
                     }
-                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
+                    "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
                 self.stats.rows_affected(&cmd);
@@ -1186,24 +1186,27 @@ impl Server {
     }
 
     /// Reset error state caused by schema change.
-    pub(crate) fn reset_schema_changed(&mut self) {
+    pub(super) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
-    pub(crate) fn reset_params(&mut self) {
-        self.client_params.clear();
+    /// Reset server params to their original startup state.
+    pub(super) fn reset_params(&mut self) {
+        self.client_params.server_reset();
     }
 
-    pub(crate) fn reset_re_synced(&mut self) {
+    /// Reset the connection re_synced state to default.
+    pub(super) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
-    pub(crate) fn re_synced(&self) -> bool {
+    /// Get server connection re_synced state.
+    pub(super) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
-    pub(crate) fn disconnect_reason(&mut self, reason: DisconnectReason) {
+    pub(super) fn disconnect_reason(&mut self, reason: DisconnectReason) {
         if self.disconnect_reason.is_none() {
             self.disconnect_reason = Some(reason);
         }
