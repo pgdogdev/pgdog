@@ -86,21 +86,21 @@ impl ParameterStore {
     pub(crate) fn reset(&mut self, name: impl AsRef<str>) {
         let name = name.as_ref();
 
-        if let Some(exists) = self.params.remove(&name) {
+        if let Some(exists) = self.params.remove(name) {
             // If the client had this value in its params,
             // store it so we can rollback this change.
-            if self.in_transaction && !self.reset_params.contains_key(&name) {
-                self.reset_params.insert(&name, exists);
+            if self.in_transaction && !self.reset_params.contains_key(name) {
+                self.reset_params.insert(name, exists);
             }
         }
 
         // Reset parameter to its startup value, if provided.
-        if let Some(startup) = self.startup.get(&name) {
-            self.params.insert(&name, startup.clone());
+        if let Some(startup) = self.startup.get(name) {
+            self.params.insert(name, startup.clone());
         }
 
-        self.transaction_local_params.remove(&name);
-        self.transaction_params.remove(&name);
+        self.transaction_local_params.remove(name);
+        self.transaction_params.remove(name);
     }
 
     /// Handle resetting all parameters to their initial values,
