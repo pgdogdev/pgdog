@@ -768,7 +768,7 @@ impl Server {
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         if rollback {
             self.client_params.rollback();
         } else {
@@ -1009,7 +1009,7 @@ impl Server {
         }
 
         // Reset any params left over.
-        self.transaction_params_hook(true);
+        self.transaction_complete(true);
 
         if !self.done() {
             Err(Error::RollbackFailed)
@@ -1053,7 +1053,7 @@ impl Server {
         }
 
         self.stats.rollback();
-        self.transaction_params_hook(true);
+        self.transaction_complete(true);
         self.re_synced = true;
 
         Ok(())

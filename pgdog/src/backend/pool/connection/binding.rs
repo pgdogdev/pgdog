@@ -248,12 +248,12 @@ impl Binding {
     }
 
     /// Handle transaction end.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_compelte(&mut self, rollback: bool) {
         match self {
-            Binding::Direct(server, ..) => server.transaction_params_hook(rollback),
+            Binding::Direct(server, ..) => server.transaction_complete(rollback),
             Binding::MultiShard(servers) => servers
                 .iter_mut()
-                .for_each(|server| server.transaction_params_hook(rollback)),
+                .for_each(|server| server.transaction_complete(rollback)),
             _ => (),
         }
     }
