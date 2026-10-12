@@ -239,6 +239,14 @@ impl ParameterStore {
     }
 }
 
+// TODO(lev): Remove this Deref
+// and be more explicit about the state of parameters.
+//
+// Callers are expected to know when it's okay to read parameters, i.e.,
+// bypassing `Self::get`, before a transaction started or after it finished,
+// and the state of params is settled.
+//
+// This is obviously super bug-prone.
 impl Deref for ParameterStore {
     type Target = Parameters;
 

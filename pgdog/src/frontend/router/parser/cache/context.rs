@@ -5,8 +5,7 @@ use crate::backend::pool::Cluster;
 use crate::backend::schema::Schema;
 use crate::frontend::BufferedQuery;
 use crate::frontend::client::QueryTimestamps;
-use crate::net::Parameters;
-use crate::net::parameter::ParameterValue;
+use crate::parameters::{ParameterStore, ParameterValue};
 
 /// Context for AST parsing and rewriting.
 ///
@@ -31,10 +30,10 @@ pub(crate) struct AstContext<'a> {
 }
 
 impl<'a> AstContext<'a> {
-    /// Create AstContext from a Cluster and Parameters.
+    /// Create AstContext using the client's effective transaction parameters.
     pub(crate) fn from_cluster(
         cluster: &'a Cluster,
-        params: &'a Parameters,
+        params: &'a ParameterStore,
         query_timestamps: QueryTimestamps,
     ) -> Self {
         Self {

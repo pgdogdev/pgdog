@@ -11,7 +11,8 @@ use crate::{
             sharding::lookup,
         },
     },
-    net::{Bind, Parameters, Parse, replication::TupleData},
+    net::{Bind, Parse, replication::TupleData},
+    parameters::ParameterStore,
 };
 
 /// Holds the pre-computed `Bind` message and destination `Shard` for a single replication event.
@@ -44,7 +45,7 @@ impl StreamContext {
     /// logic can be read, tested, and changed independently of bind construction.
     async fn resolve_shard(cluster: &Cluster, bind: &Bind, stmt: &Parse) -> Result<Shard, Error> {
         lazy_static! {
-            static ref PARAMS: Parameters = Parameters::default();
+            static ref PARAMS: ParameterStore = ParameterStore::default();
         }
 
         let parse = stmt.clone();

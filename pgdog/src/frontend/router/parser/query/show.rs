@@ -36,14 +36,14 @@ mod test_show {
     use crate::frontend::router::QueryParser;
     use crate::frontend::router::parser::{AstContext, Cache, Shard};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
-    use crate::net::Parameters;
     use crate::net::messages::Query;
+    use crate::parameters::ParameterStore;
 
     #[test]
     fn show_runs_on_a_direct_shard_round_robin() {
         let c = Cluster::new_test(&config());
         let mut parser = QueryParser::default();
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ctx = AstContext::from_cluster(&c, &params, QueryTimestamps::default());
 
         // First call
