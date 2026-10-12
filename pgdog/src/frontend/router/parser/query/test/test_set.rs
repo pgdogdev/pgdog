@@ -14,6 +14,45 @@ use super::Error;
 use super::setup::*;
 
 #[test]
+fn test_set_local_default_preserves_local() {
+    let mut test = QueryParserTest::new();
+    for sql in [
+        "SET LOCAL statement_timeout TO DEFAULT",
+        "SET LOCAL statement_timeout = DEFAULT; RESET lock_timeout",
+    ] {
+        let command = test.execute(vec![Query::new(sql).into()]);
+        let Command::Set { params, .. } = command else {
+            panic!("expected Command::Set, got {command:?}");
+        };
+        assert_eq!(params[0].name, "statement_timeout");
+        assert_eq!(params[0].value, None);
+        assert!(params[0].local);
+        if let Some(reset) = params.get(1) {
+            assert!(!reset.local);
+        }
+    }
+}
+
+#[test]
+fn test_set_default_and_reset_remain_session_scoped() {
+    let mut test = QueryParserTest::new();
+    for sql in [
+        "SET statement_timeout TO DEFAULT",
+        "SET SESSION statement_timeout = DEFAULT",
+        "RESET statement_timeout",
+    ] {
+        let command = test.execute(vec![Query::new(sql).into()]);
+        let Command::Set { params, .. } = command else {
+            panic!("expected Command::Set, got {command:?}");
+        };
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "statement_timeout");
+        assert_eq!(params[0].value, None);
+        assert!(!params[0].local);
+    }
+}
+
+#[test]
 fn test_npgsql_reset_is_split() {
     for mut test in [
         QueryParserTest::new(),

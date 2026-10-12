@@ -51,7 +51,7 @@ impl QueryParser {
             None => Ok(SetParam {
                 name: stmt.name().expect("SET always has name").to_string(),
                 value: None,
-                local: false,
+                local: stmt.is_local,
             }),
         }
     }
