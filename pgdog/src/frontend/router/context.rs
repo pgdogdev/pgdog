@@ -7,7 +7,6 @@ use crate::{
         client::Sticky,
         router::{Ast, RoutingComment, parser::StatementParameters, sharding::ResolvedLookups},
     },
-    net::Parameters,
 };
 
 #[derive(Debug, Clone)]
@@ -50,7 +49,7 @@ impl<'a> RouterContext<'a> {
     pub(crate) fn new(
         buffer: &'a ClientRequest,
         cluster: &'a Cluster,
-        params: &'a Parameters,
+        params: impl Into<ParameterHints<'a>>,
         transaction: Option<Transaction>,
         sticky: Sticky,
     ) -> Result<Self, Error> {
@@ -64,7 +63,7 @@ impl<'a> RouterContext<'a> {
                 .map(|query| query.extended())
                 .unwrap_or_default(),
             bind,
-            parameter_hints: ParameterHints::from(params),
+            parameter_hints: params.into(),
             cluster,
             transaction,
             copy_mode,

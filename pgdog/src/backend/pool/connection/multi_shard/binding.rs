@@ -10,7 +10,9 @@ use crate::frontend::{
     BufferedQuery, ClientRequest,
     router::{CopyRow, Route, parser::Shard},
 };
-use crate::net::{Bind, FrontendPid, Message, Parameters, ProtocolMessage};
+use crate::net::{Bind, FrontendPid, Message, ProtocolMessage};
+
+use crate::parameters::ParameterStore;
 
 use super::{
     super::{Guard, LinkedServer},
@@ -120,7 +122,7 @@ impl MultiBinding {
     pub(crate) async fn link_client(
         &mut self,
         client_id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         let transaction_start_stmt = self.transaction_stmt.as_ref().map(|q| q.query());
 
@@ -347,6 +349,7 @@ pub(crate) mod test {
 
     use crate::frontend::router::parser::ShardWithPriority;
     use crate::net::{Parameter, Query};
+    use crate::parameters::Parameters;
 
     use super::super::super::linked_server::test::TestLinkedServer;
     use super::*;
@@ -427,6 +430,7 @@ pub(crate) mod test {
             "application_name".to_string(),
             "test_multi_binding".to_string(),
         ))]);
+        let params = ParameterStore::new(params);
         let pid = FrontendPid::new();
 
         assert_eq!(1, binding.link_client(pid, &params).await.unwrap());

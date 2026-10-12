@@ -4,9 +4,10 @@ use crate::{
     config::config,
     frontend::client::QueryTimestamps,
     net::{
-        Close, Format, Parameters, Sync,
+        Close, Format, Sync,
         messages::{bind::Parameter, parse::Parse},
     },
+    parameters::ParameterStore,
 };
 use bytes::Bytes;
 
@@ -49,7 +50,7 @@ fn parse_query(query: &str) -> Command {
     let mut query_parser = QueryParser::default();
     let cluster = Cluster::new_test(&config());
     let buffered = BufferedQuery::Query(Query::new(query));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
         .query(&buffered, &ctx, &mut PreparedStatements::default())
@@ -73,7 +74,7 @@ macro_rules! command {
         let mut query_parser = QueryParser::default();
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Query(Query::new($query));
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &params,
@@ -131,7 +132,7 @@ macro_rules! query_parser {
             .expect("no query in client request");
 
         let mut prep_stmts = PreparedStatements::default();
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &params,
@@ -190,7 +191,7 @@ macro_rules! parse {
         let bind = Bind::new_params_codes($name, &params, $codes);
         let cluster = Cluster::new_test(&crate::config::config());
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous($query));
-        let client_params = Parameters::default();
+        let client_params = ParameterStore::default();
         let ctx = crate::frontend::router::parser::AstContext::from_cluster(
             &cluster,
             &client_params,
@@ -481,7 +482,7 @@ fn test_set() {
     let cluster = Cluster::new_test(&config());
     let mut prep_stmts = PreparedStatements::default();
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
     let ast = Cache::get()
         .query(&buffered_query, &ctx, &mut prep_stmts)
@@ -627,7 +628,7 @@ WHERE t2.account = (
 	)
 	";
     let buffered_query = BufferedQuery::Query(Query::new(query_str));
-    let params = Parameters::default();
+    let params = ParameterStore::default();
     let ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::now());
     let ast = Cache::get()
         .query(&buffered_query, &ctx, &mut prep_stmts)
@@ -669,7 +670,7 @@ fn test_close_direct_one_shard() {
 
     let buf: ClientRequest = vec![Close::named("test").into(), Sync.into()].into();
     let transaction = None;
-    let params = Parameters::default();
+    let params = ParameterStore::default();
 
     let context = RouterContext::new(&buf, &cluster, &params, transaction, Sticky::new()).unwrap();
 

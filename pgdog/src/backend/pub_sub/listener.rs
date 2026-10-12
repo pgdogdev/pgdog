@@ -3,6 +3,7 @@
 //! Handles notifications from Postgres and sends them out
 //! to a broadcast channel.
 //!
+use crate::parameters::ParameterStore;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -367,10 +368,10 @@ impl PubSubListener {
         server
             .link_client(
                 id,
-                &Parameters::from(vec![Parameter {
+                &ParameterStore::new(Parameters::from(vec![Parameter {
                     name: "application_name".into(),
                     value: "PgDog Pub/Sub Listener".into(),
-                }]),
+                }])),
                 None,
             )
             .await?;

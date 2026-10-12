@@ -307,7 +307,7 @@ impl<'a> UpdateMulti<'a> {
         let context = RouterContext::new(
             request,
             cluster,
-            context.params,
+            &*context.params,
             context.transaction(),
             context.sticky,
         )?;

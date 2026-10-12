@@ -61,7 +61,7 @@ impl QueryEngine {
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
-        self.backend.transaction_params_hook(rollback);
+        self.backend.transaction_complete(rollback);
         let cluster = self.backend.cluster()?;
 
         // If we experienced an error and client

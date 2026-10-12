@@ -5,7 +5,8 @@ use crate::{
         ClientRequest,
         client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{FrontendPid, ProtocolMessage, Query},
+    parameters::{ParameterStore, Parameters},
     state::State,
 };
 
@@ -237,7 +238,7 @@ impl Binding {
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         match self {
             Binding::Direct(server, ..) => server.link_client(id, params).await,
@@ -247,12 +248,12 @@ impl Binding {
     }
 
     /// Handle transaction end.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         match self {
-            Binding::Direct(server, ..) => server.transaction_params_hook(rollback),
+            Binding::Direct(server, ..) => server.transaction_complete(rollback),
             Binding::MultiShard(servers) => servers
                 .iter_mut()
-                .for_each(|server| server.transaction_params_hook(rollback)),
+                .for_each(|server| server.transaction_complete(rollback)),
             _ => (),
         }
     }

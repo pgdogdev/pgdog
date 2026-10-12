@@ -1,10 +1,10 @@
 use crate::{
     backend::databases::reload_from_existing,
-    config::{config, load_test_sharded, set},
+    config::{config, load_test, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, ErrorResponse, NoData, NoticeResponse, ParameterDescription,
-        ParseComplete, ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, NoticeResponse,
+        ParameterDescription, ParseComplete, ReadyForQuery, parameter::ParameterValue,
     },
 };
 
@@ -863,5 +863,105 @@ async fn test_reset_all_keeps_transaction_rollback() {
     assert_eq!(
         client.client().params.get("search_path"),
         Some(&ParameterValue::String("runtime".into()))
+    );
+}
+
+#[tokio::test]
+async fn test_set_overrides_set_local_before_connect() {
+    for end in ["COMMIT", "ROLLBACK"] {
+        let mut client = TestClient::new_sharded(Parameters::default()).await;
+        for query in [
+            "SET application_name = 'session'",
+            "BEGIN",
+            "SET LOCAL application_name = 'local'",
+            "SET application_name = 'transaction'",
+        ] {
+            client.send_simple(Query::new(query)).await;
+            client.read_until('Z').await.expect("command completed");
+        }
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from("transaction"))
+        );
+
+        client
+            .send_simple(Query::new("/* pgdog_shard: 0 */ SHOW application_name"))
+            .await;
+        let messages = client.read_until('Z').await.expect("SHOW completed");
+        let row = messages
+            .iter()
+            .find(|message| message.code() == 'D')
+            .expect("SHOW returned a row");
+        assert_eq!(
+            expect_message!(row.clone(), DataRow)
+                .column(0)
+                .expect("application name"),
+            "transaction".as_bytes()
+        );
+
+        client.send_simple(Query::new(end)).await;
+        client.read_until('Z').await.expect("transaction ended");
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from(if end == "COMMIT" {
+                "transaction"
+            } else {
+                "session"
+            }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_reset_does_not_leak_transaction_params_to_next_client() {
+    load_test();
+    let mut config = (*config()).clone();
+    config.config.general.default_pool_size = 1;
+    config.config.general.min_pool_size = 0;
+    set(config).expect("configure a single-connection pool");
+    reload_from_existing().expect("reload test pool");
+
+    let mut first = TestClient::new(Parameters::default()).await;
+    for query in ["BEGIN", "SET statement_timeout = '12345ms'"] {
+        first.send_simple(Query::new(query)).await;
+        first.read_until('Z').await.expect("command completed");
+    }
+    assert!(
+        !first.backend_connected(),
+        "SET must be buffered before the first backend checkout"
+    );
+
+    // Checking out the backend copies the pending SET into its transaction cache.
+    let backend_pid = first.backend_pid().await;
+    for query in ["RESET lock_timeout", "COMMIT"] {
+        first.send_simple(Query::new(query)).await;
+        first.read_until('Z').await.expect("command completed");
+    }
+    assert!(
+        !first.backend_connected(),
+        "COMMIT must return the backend to the pool"
+    );
+
+    // Keep the first client alive: dropping a TestClient shuts down the pools.
+    let mut second = TestClient::new(Parameters::default()).await;
+    assert_eq!(
+        second.backend_pid().await,
+        backend_pid,
+        "the second client must reuse the same physical connection"
+    );
+    second
+        .send_simple(Query::new("SHOW statement_timeout"))
+        .await;
+    let messages = second.read_until('Z').await.expect("SHOW completed");
+    let row = messages
+        .iter()
+        .find(|message| message.code() == 'D')
+        .expect("SHOW returned a row");
+    assert_eq!(
+        expect_message!(row.clone(), DataRow)
+            .get_text(0)
+            .expect("statement_timeout value"),
+        "0",
+        "RESET of an unrelated parameter must not leak the first client's committed SET"
     );
 }
