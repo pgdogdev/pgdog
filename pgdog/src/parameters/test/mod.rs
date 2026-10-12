@@ -28,7 +28,6 @@ fn test_set_sync() {
     client.set_local("timezone", "UTC");
 
     let queries = server.sync(&client);
-    let transaction_sync = server.transaction_sync();
 
     assert_eq!(
         queries,
@@ -38,8 +37,10 @@ fn test_set_sync() {
         ]
     );
 
+    server.sync_complete(queries);
+
     assert_eq!(
-        transaction_sync,
+        server.transaction_sync(),
         vec![
             Query::new("SET \"application_name\" TO \"in_transaction\""),
             Query::new("SET \"statement_timeout\" TO \"0\""),
@@ -432,10 +433,12 @@ fn test_startup_normalizes_names_and_hashes() {
 
     let client = ParameterStore::new(startup);
     let mut server = ParameterStore::default();
+    let sync = server.sync(&client);
     assert_eq!(
-        server.sync(&client),
+        sync,
         vec![Query::new(r#"SET "timezone" TO "Europe/Paris""#)]
     );
+    server.sync_complete(sync);
     assert!(server.sync(&client).is_empty());
 }
 
