@@ -1,7 +1,7 @@
-use crate::net::Query;
+use crate::{net::Query, stats::memory::MemoryUsage};
 
 use super::*;
-use std::mem::take;
+use std::{mem::take, ops::Deref};
 
 /// Handle the complexity of managing parameters
 /// on the client and server.
@@ -34,6 +34,28 @@ impl ParameterStore {
             startup,
             ..Default::default()
         }
+    }
+
+    /// Restore the startup state, discarding all session and transaction changes.
+    pub(crate) fn restore_startup(&mut self) {
+        self.params.restore_from(&self.startup);
+        self.transaction_end();
+    }
+
+    /// Forget cached state after the server executes RESET or DISCARD.
+    pub(crate) fn clear(&mut self) {
+        self.params.clear();
+        self.transaction_end();
+    }
+
+    pub(crate) fn get_default<'a>(&'a self, name: &str, default: &'a str) -> &'a str {
+        self.get(name)
+            .and_then(ParameterValue::as_str)
+            .unwrap_or(default)
+    }
+
+    pub(crate) fn search_path(&self) -> Option<&ParameterValue> {
+        self.get("search_path")
     }
 
     /// Commit parameters to store after a transaction is complete.
@@ -76,7 +98,6 @@ impl ParameterStore {
         if let Some(startup) = self.startup.get(&name) {
             self.params.insert(&name, startup.clone());
         }
-        // TODO(lev): Do I need to do something for rollback ^?
 
         self.transaction_local_params.remove(&name);
         self.transaction_params.remove(&name);
@@ -166,7 +187,7 @@ impl ParameterStore {
                 .map(|(name, _)| name.to_string())
                 .collect();
 
-            let reset: Vec<_> = reset_names.iter().map(|name| reset_to_sql(&name)).collect();
+            let reset: Vec<_> = reset_names.iter().map(|name| reset_to_sql(name)).collect();
 
             // Get all parameters other wants to set on the server.
             let set: Vec<_> = other
@@ -215,5 +236,24 @@ impl ParameterStore {
         self.transaction_local_params.clear();
         self.reset_params.clear();
         self.in_transaction = false;
+    }
+}
+
+impl Deref for ParameterStore {
+    type Target = Parameters;
+
+    fn deref(&self) -> &Self::Target {
+        &self.params
+    }
+}
+
+impl MemoryUsage for ParameterStore {
+    fn memory_usage(&self) -> usize {
+        self.startup.memory_usage()
+            + self.params.memory_usage()
+            + self.transaction_params.memory_usage()
+            + self.transaction_local_params.memory_usage()
+            + self.reset_params.memory_usage()
+            + self.in_transaction.memory_usage()
     }
 }

@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test_sharded, set},
     expect_message,
     net::{
-        BindComplete, CommandComplete, ErrorResponse, NoData, NoticeResponse, ParameterDescription,
-        ParseComplete, ReadyForQuery, parameter::ParameterValue,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, NoticeResponse,
+        ParameterDescription, ParseComplete, ReadyForQuery, parameter::ParameterValue,
     },
 };
 
@@ -864,4 +864,50 @@ async fn test_reset_all_keeps_transaction_rollback() {
         client.client().params.get("search_path"),
         Some(&ParameterValue::String("runtime".into()))
     );
+}
+
+#[tokio::test]
+async fn test_set_overrides_set_local_before_connect() {
+    for end in ["COMMIT", "ROLLBACK"] {
+        let mut client = TestClient::new_sharded(Parameters::default()).await;
+        for query in [
+            "SET application_name = 'session'",
+            "BEGIN",
+            "SET LOCAL application_name = 'local'",
+            "SET application_name = 'transaction'",
+        ] {
+            client.send_simple(Query::new(query)).await;
+            client.read_until('Z').await.expect("command completed");
+        }
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from("transaction"))
+        );
+
+        client
+            .send_simple(Query::new("/* pgdog_shard: 0 */ SHOW application_name"))
+            .await;
+        let messages = client.read_until('Z').await.expect("SHOW completed");
+        let row = messages
+            .iter()
+            .find(|message| message.code() == 'D')
+            .expect("SHOW returned a row");
+        assert_eq!(
+            expect_message!(row.clone(), DataRow)
+                .column(0)
+                .expect("application name"),
+            "transaction".as_bytes()
+        );
+
+        client.send_simple(Query::new(end)).await;
+        client.read_until('Z').await.expect("transaction ended");
+        assert_eq!(
+            client.client().params.get("application_name"),
+            Some(&ParameterValue::from(if end == "COMMIT" {
+                "transaction"
+            } else {
+                "session"
+            }))
+        );
+    }
 }

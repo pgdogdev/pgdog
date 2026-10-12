@@ -1,4 +1,7 @@
-use crate::{net::Query, parameters::*};
+use crate::{
+    net::{Parameter, Query},
+    parameters::*,
+};
 
 #[test]
 fn test_set_sync() {
@@ -413,4 +416,54 @@ fn assert_parameter(store: &ParameterStore, name: &str, expected: Option<&str>) 
         expected.map(ParameterValue::from).as_ref(),
         "unexpected value for {name}"
     );
+}
+
+#[test]
+fn test_startup_normalizes_names_and_hashes() {
+    let startup = Parameters::new([
+        ("TimeZone".into(), "UTC".into()),
+        ("timezone".into(), "Europe/Paris".into()),
+        ("user".into(), "alice".into()),
+    ]);
+    let expected = Parameters::from([("timezone", "Europe/Paris")].as_slice());
+    assert_eq!(startup.get("timezone"), expected.get("timezone"));
+    assert!(startup.identical(&expected));
+    assert_eq!(startup.len(), 2);
+
+    let client = ParameterStore::new(startup);
+    let mut server = ParameterStore::default();
+    assert_eq!(
+        server.sync(&client),
+        vec![Query::new(r#"SET "timezone" TO "Europe/Paris""#)]
+    );
+    assert!(server.sync(&client).is_empty());
+}
+
+#[test]
+fn test_restore_startup_discards_all_runtime_state() {
+    let startup = Parameters::from([("application_name", "startup")].as_slice());
+    let mut store = ParameterStore::new(startup.clone());
+    store.set("application_name", "session");
+    store.set("pgdog.shard", "1");
+    store.begin();
+    store.reset("application_name");
+    store.set("statement_timeout", "100");
+    store.set_local("timezone", "UTC");
+    store.restore_startup();
+    store.rollback();
+    assert_eq!(&*store, &startup);
+    assert!(store.transaction_sync().is_empty());
+    store.set("application_name", "new_session");
+    store.rollback();
+    assert_parameter(&store, "application_name", Some("new_session"));
+}
+
+mod server;
+mod value;
+
+pub(crate) fn new_test(name: &str) -> Parameters {
+    Parameters::from(vec![
+        Parameter::from(("application_name", name)),
+        Parameter::from(("pgdog.test_mode", "1")),
+    ])
 }

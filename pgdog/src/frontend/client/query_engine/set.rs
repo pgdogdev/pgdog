@@ -40,13 +40,11 @@ impl QueryEngine {
             let is_pin = param.name == PGDOG_PIN;
 
             if let Some(value) = param.value.clone() {
-                if context.in_transaction() {
-                    context
-                        .params
-                        .insert_transaction(&param.name, value, param.local);
+                if param.local {
+                    context.params.set_local(&param.name, value);
                 } else {
-                    context.params.insert(&param.name, value);
-                    if is_pin {
+                    context.params.set(&param.name, value);
+                    if is_pin && !context.in_transaction() {
                         self.manual_lock = param
                             .value
                             .as_ref()
@@ -130,7 +128,7 @@ impl QueryEngine {
         if context.in_transaction() || self.backend.connected() {
             context.params.reset_all();
         } else {
-            context.params.restore_startup(context.startup_params);
+            context.params.restore_startup();
             self.comms.update_params(context.params);
         }
 

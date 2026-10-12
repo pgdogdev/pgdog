@@ -389,7 +389,7 @@ impl QueryEngine {
             if !changed_params.is_empty() {
                 for (name, value) in changed_params.iter() {
                     debug!("setting client's \"{}\" to {}", name, value);
-                    context.params.insert(name.clone(), value.clone());
+                    context.params.set(name, value.clone());
                 }
                 self.comms.update_params(context.params);
             }

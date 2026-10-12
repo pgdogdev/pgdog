@@ -484,7 +484,7 @@ async fn test_client_login_timeout() {
         let (stream, addr) = stream.accept().await.unwrap();
         let stream = Stream::plain(stream, 4096);
 
-        let mut params = crate::net::parameter::Parameters::default();
+        let mut params = crate::net::Parameters::default();
         params.insert("user", "pgdog");
         params.insert("database", "pgdog");
 

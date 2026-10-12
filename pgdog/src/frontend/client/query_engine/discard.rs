@@ -82,7 +82,7 @@ impl QueryEngine {
     }
 
     fn reset_session_params(&mut self, context: &mut QueryEngineContext<'_>) {
-        context.params.restore_startup(context.startup_params);
+        context.params.restore_startup();
         self.manual_lock = context
             .params
             .get(PGDOG_PIN)

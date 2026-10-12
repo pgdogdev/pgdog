@@ -10,7 +10,7 @@ use crate::{
             lookup::shard_for_bare_key,
         },
     },
-    net::{Parameters, parameter::ParameterValue},
+    parameters::{ParameterStore, ParameterValue, Parameters},
 };
 
 /// `SET pgdog.shard` — pin queries to an explicit shard number.
@@ -33,6 +33,18 @@ pub(crate) struct ParameterHints<'a> {
 
 impl<'a> From<&'a Parameters> for ParameterHints<'a> {
     fn from(value: &'a Parameters) -> Self {
+        Self {
+            search_path: value.search_path(),
+            pgdog_shard: value.get(PGDOG_SHARD),
+            pgdog_role: value.get(PGDOG_ROLE),
+            pgdog_sharding_key: value.get(PGDOG_SHARDING_KEY),
+            hooks: ParserHooks::default(),
+        }
+    }
+}
+
+impl<'a> From<&'a ParameterStore> for ParameterHints<'a> {
+    fn from(value: &'a ParameterStore) -> Self {
         Self {
             search_path: value.search_path(),
             pgdog_shard: value.get(PGDOG_SHARD),

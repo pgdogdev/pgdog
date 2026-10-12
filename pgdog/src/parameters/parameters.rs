@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, ops::Deref};
+use std::{collections::BTreeMap, fmt::Display, ops::Deref};
+
+use crate::{
+    net::{Error, Parameter},
+    stats::memory::MemoryUsage,
+};
 
 use super::{ParameterValue, UNTRACKED_PARAMS, hash_parameters};
 
@@ -17,6 +22,35 @@ impl Deref for Parameters {
 }
 
 impl Parameters {
+    /// Get a string parameter, or report that it is missing.
+    pub(crate) fn get_required(&self, name: &str) -> Result<&str, Error> {
+        self.get(name)
+            .and_then(ParameterValue::as_str)
+            .ok_or_else(|| Error::MissingParameter(name.into()))
+    }
+
+    /// Get a string parameter, falling back to the supplied default.
+    pub(crate) fn get_default<'a>(&'a self, name: &str, default: &'a str) -> &'a str {
+        self.get(name)
+            .and_then(ParameterValue::as_str)
+            .unwrap_or(default)
+    }
+
+    pub(crate) fn search_path(&self) -> Option<&ParameterValue> {
+        self.get("search_path")
+    }
+
+    /// Create new parameters store from values.
+    pub(crate) fn new(values: impl IntoIterator<Item = (String, ParameterValue)>) -> Self {
+        let parameters: BTreeMap<_, _> = values
+            .into_iter()
+            .map(|(name, value)| (name.to_lowercase(), value))
+            .collect();
+        let hash = hash_parameters(parameters.iter());
+
+        Self { parameters, hash }
+    }
+
     /// Insert a parameter into the store, returning previous value if
     /// the parameter exists.
     pub(crate) fn insert(
@@ -98,5 +132,40 @@ impl<'a> From<&'a [(&'a str, &'a str)]> for Parameters {
         }
 
         parameters
+    }
+}
+
+impl Display for Parameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output = self
+            .iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "{output}")
+    }
+}
+
+impl MemoryUsage for Parameters {
+    fn memory_usage(&self) -> usize {
+        self.parameters.memory_usage() + self.hash.memory_usage()
+    }
+}
+
+impl From<Vec<Parameter>> for Parameters {
+    fn from(params: Vec<Parameter>) -> Self {
+        Self::new(params.into_iter().map(|param| (param.name, param.value)))
+    }
+}
+
+impl From<&Parameters> for Vec<Parameter> {
+    fn from(params: &Parameters) -> Self {
+        params
+            .iter()
+            .map(|(name, value)| Parameter {
+                name: name.clone(),
+                value: value.clone(),
+            })
+            .collect()
     }
 }

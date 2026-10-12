@@ -5,7 +5,8 @@ use crate::{
         ClientRequest,
         client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
     },
-    net::{FrontendPid, ProtocolMessage, Query, parameter::Parameters},
+    net::{FrontendPid, ProtocolMessage, Query},
+    parameters::{ParameterStore, Parameters},
     state::State,
 };
 
@@ -237,7 +238,7 @@ impl Binding {
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
     ) -> Result<usize, Error> {
         match self {
             Binding::Direct(server, ..) => server.link_client(id, params).await,

@@ -50,7 +50,7 @@ impl StreamContext {
         let parse = stmt.clone();
         let mut request = ClientRequest::from(vec![parse.clone().into(), bind.clone().into()]);
 
-        let ast_context = AstContext::from_cluster(cluster, &PARAMS, QueryTimestamps::now());
+        let ast_context = AstContext::from_cluster(cluster, &*PARAMS, QueryTimestamps::now());
         let entry = Cache::get().query(
             &BufferedQuery::Prepared(parse),
             &ast_context,
@@ -58,7 +58,7 @@ impl StreamContext {
         )?;
         request.ast = Some(entry.ast);
 
-        let router_context = RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?;
+        let router_context = RouterContext::new(&request, cluster, &*PARAMS, None, Sticky::new())?;
         let mut router = Router::new();
         router.query(router_context)?;
 
@@ -73,7 +73,7 @@ impl StreamContext {
                 .await
                 .map_err(|err| Error::Lookup(err.message.clone()))?;
             let router_context =
-                RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?
+                RouterContext::new(&request, cluster, &*PARAMS, None, Sticky::new())?
                     .with_resolved_lookups(resolved);
             router.query(router_context)?;
 

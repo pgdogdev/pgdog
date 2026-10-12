@@ -17,6 +17,7 @@ use super::{
     pool::Address,
     prepared_statements::{HandleResult, Prepare},
 };
+use crate::parameters::{ParameterStore, Parameters};
 use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
@@ -38,7 +39,6 @@ use crate::{
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
-        parameter::Parameters,
         tls::UpstreamTlsSettings,
     },
 };
@@ -134,7 +134,7 @@ pub(crate) struct Server {
     id: BackendPid,
     params: Parameters,
     changed_params: Parameters,
-    client_params: Parameters,
+    client_params: ParameterStore,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -431,7 +431,7 @@ impl Server {
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
-            client_params: Parameters::default(),
+            client_params: ParameterStore::default(),
             prepared_statements: PreparedStatements::new(oids),
             dirty: false,
             streaming: false,
@@ -715,7 +715,7 @@ impl Server {
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
         // Sync application_name parameter
@@ -729,52 +729,34 @@ impl Server {
         self.changed_params.clear();
         let mut clear_params = false;
 
-        // Compare client and server params.
-        let mut executed = if !params.identical(&self.client_params) {
-            // Construct client parameter SET queries.
-            let tracked = params.tracked_and_different(&self.client_params);
-            // Construct RESET queries to reset any current params
-            // to their default values.
-            let mut queries = self.client_params.reset_queries(params);
-
-            // Combine both to create a new, fresh session state
-            // on this connection.
-            queries.extend(tracked.set_queries(false));
-
-            // Set state on the connection only if
-            // there are any params to change.
-            if !queries.is_empty() {
-                debug!("syncing {} params", queries.len());
-
-                self.execute_batch(&queries).await?;
-                clear_params = true;
-            }
-
-            // Update params on this connection.
-            self.client_params = params.tracked();
-
-            queries.len()
-        } else {
-            0
-        };
+        // Plan synchronization on a copy: RESET responses invalidate the cached store,
+        // and a failed batch must not mark unexecuted changes as synchronized.
+        let mut synced = self.client_params.clone();
+        let queries = synced.sync(params);
+        let mut executed = queries.len();
+        if !queries.is_empty() {
+            debug!("syncing {} params", queries.len());
+            self.execute_batch(&queries).await?;
+            clear_params = true;
+        }
 
         // Sync any parameters set inside the transaction. These will
         // need to be revered on rollback or commited on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let transaction_sets = params.set_queries(true);
+            let transaction_sets = synced.transaction_sync();
 
             if !transaction_sets.is_empty() {
                 debug!("syncing {} in-transaction params", transaction_sets.len());
 
                 self.execute_batch(&transaction_sets).await?;
                 clear_params = true;
-
-                self.client_params.copy_in_transaction(params);
             }
 
             executed += transaction_sets.len();
         }
+
+        self.client_params = synced;
 
         if clear_params {
             // We can receive ParameterStatus messages here,
@@ -1442,7 +1424,7 @@ pub(crate) mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
-                client_params: Parameters::default(),
+                client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,
@@ -2422,9 +2404,9 @@ pub(crate) mod test {
             "on"
         };
 
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_sync_params");
-        params.insert("is_superuser", opposite);
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_sync_params");
+        params.set("is_superuser", opposite);
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
             .await
@@ -2531,8 +2513,8 @@ pub(crate) mod test {
 
     #[tokio::test]
     async fn test_params_sync() -> Result<(), Box<dyn std::error::Error>> {
-        let mut params = Parameters::default();
-        params.insert("application_name", "test");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test");
 
         let mut server = test_server().await;
 
@@ -2548,7 +2530,7 @@ pub(crate) mod test {
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
-            params.insert("application_name", value);
+            params.set("application_name", value);
 
             let changed = server
                 .link_client(FrontendPid::new(), &params, None)
@@ -3231,8 +3213,8 @@ pub(crate) mod test {
     #[tokio::test]
     async fn test_reset_clears_client_params() {
         let mut server = test_server().await;
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_reset");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_reset");
 
         // Sync params to server
         let changed = server
