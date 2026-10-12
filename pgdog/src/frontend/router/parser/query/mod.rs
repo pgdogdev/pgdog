@@ -92,6 +92,7 @@ impl QueryParser {
     /// Parse a query and return a command.
     pub(crate) fn parse(&mut self, context: RouterContext) -> Result<Command, Error> {
         let mut context = QueryParserContext::new(context)?;
+        let parser_enabled = context.router_context.ast.is_some();
 
         let mut command = if context.query().is_ok() {
             self.write_override = context.write_override();
@@ -100,6 +101,10 @@ impl QueryParser {
         } else {
             Command::default()
         };
+
+        if parser_enabled {
+            command.mark_parsed();
+        }
 
         match &mut command {
             Command::Query(route)

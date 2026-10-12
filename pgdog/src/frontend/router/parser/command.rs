@@ -72,6 +72,18 @@ pub(crate) enum Command {
 }
 
 impl Command {
+    pub(crate) fn mark_parsed(&mut self) {
+        match self {
+            Self::Query(route)
+            | Self::Copy { route, .. }
+            | Self::StartTransaction { route, .. }
+            | Self::CommitTransaction { route, .. }
+            | Self::RollbackTransaction { route, .. }
+            | Self::Set { route, .. } => route.mark_parsed(),
+            _ => (),
+        }
+    }
+
     pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route =

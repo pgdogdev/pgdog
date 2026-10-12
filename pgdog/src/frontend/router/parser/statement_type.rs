@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub(crate) enum StatementType {
     SessionControl,     // SET
     TransactionControl, // BEGIN, COMMIT

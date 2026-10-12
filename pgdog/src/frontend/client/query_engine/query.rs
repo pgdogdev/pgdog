@@ -189,6 +189,8 @@ impl QueryEngine {
             }
 
             'C' => {
+                self.backend
+                    .statement_completed(self.router.command().route());
                 self.emit_explain_rows(context).await?;
                 self.result_row_counter = 0;
             }

@@ -7,6 +7,15 @@ use super::{
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
 
+/// Table changes identified by the query parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TableChange {
+    #[default]
+    None,
+    Created,
+    Dropped(u32),
+}
+
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub(crate) enum Shard {
@@ -136,6 +145,8 @@ pub(crate) struct Route {
     /// The temporary table being created/dropped if present
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
     stmt_type: StatementType,
+    parsed: bool,
+    table_change: TableChange,
 }
 
 impl Display for Route {
@@ -401,6 +412,27 @@ impl Route {
     pub(super) fn ddl(mut self) -> Self {
         self.stmt_type = StatementType::Ddl;
         self
+    }
+
+    pub(super) fn mark_parsed(&mut self) {
+        self.parsed = true;
+    }
+
+    pub(crate) fn parsed(&self) -> bool {
+        self.parsed
+    }
+
+    pub(crate) fn statement_type(&self) -> StatementType {
+        self.stmt_type
+    }
+
+    pub(super) fn with_table_change(mut self, table_change: TableChange) -> Self {
+        self.table_change = table_change;
+        self
+    }
+
+    pub(crate) fn table_change(&self) -> TableChange {
+        self.table_change
     }
 
     pub(super) fn transaction_control(mut self) -> Self {
