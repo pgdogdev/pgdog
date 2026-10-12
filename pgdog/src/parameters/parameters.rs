@@ -1,8 +1,6 @@
 use std::{collections::BTreeMap, ops::Deref};
 
-use crate::parameters::UNTRACKED_PARAMS;
-
-use super::{ParameterValue, hash_parameters};
+use super::{ParameterValue, UNTRACKED_PARAMS, hash_parameters};
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct Parameters {
@@ -43,6 +41,14 @@ impl Parameters {
         }
     }
 
+    /// Remove multiple parameters from the store.
+    pub(crate) fn remove_many<'a>(&'a mut self, names: impl IntoIterator<Item = &'a str>) {
+        for name in names.into_iter() {
+            self.parameters.remove(name);
+        }
+        self.hash = hash_parameters(self.parameters.iter());
+    }
+
     /// Compare hashes to quickly check if the two parameter stores
     /// are identical.
     ///
@@ -81,5 +87,16 @@ impl Parameters {
     pub(super) fn restore_from(&mut self, other: &Self) {
         self.parameters.clone_from(&other.parameters);
         self.hash = hash_parameters(self.parameters.iter());
+    }
+}
+
+impl<'a> From<&'a [(&'a str, &'a str)]> for Parameters {
+    fn from(params: &[(&'a str, &'a str)]) -> Self {
+        let mut parameters = Self::default();
+        for (name, value) in params {
+            parameters.insert(name, *value);
+        }
+
+        parameters
     }
 }

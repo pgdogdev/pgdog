@@ -1,10 +1,11 @@
-use crate::{net::Query, util::escape_identifier};
+use crate::net::Query;
 
 use super::*;
 use std::mem::take;
 
 /// Handle the complexity of managing parameters
 /// on the client and server.
+#[derive(Default, Debug, Clone)]
 pub(crate) struct ParameterStore {
     // Parameters this client or server had when it was first created.
     startup: Parameters,
@@ -26,16 +27,30 @@ pub(crate) struct ParameterStore {
 }
 
 impl ParameterStore {
+    /// Create new parameter store from startup parameters.
+    pub(crate) fn new(startup: Parameters) -> Self {
+        Self {
+            params: startup.clone(),
+            startup,
+            ..Default::default()
+        }
+    }
+
     /// Commit parameters to store after a transaction is complete.
-    pub(crate) fn commit(&mut self) {
+    pub(crate) fn commit(&mut self) -> bool {
+        let changed = !self.transaction_params.is_empty() || !self.reset_params.is_empty();
+
         self.params.extend(take(&mut self.transaction_params));
         self.transaction_end();
+        changed
     }
 
     /// Rollback changes to the store after a transaction is aborted.
-    pub(crate) fn rollback(&mut self) {
+    pub(crate) fn rollback(&mut self) -> bool {
+        let changed = !self.reset_params.is_empty();
         self.params.extend(take(&mut self.reset_params));
         self.transaction_end();
+        changed
     }
 
     /// Indicate a transaction has been started and all subsequent
@@ -47,25 +62,24 @@ impl ParameterStore {
     /// Handle a parameter reset, while respecting transactional
     /// semantics.
     pub(crate) fn reset(&mut self, name: impl AsRef<str>) {
-        let name = name.as_ref();
+        let name = name.as_ref().to_lowercase();
 
-        if let Some(exists) = self.params.remove(name) {
+        if let Some(exists) = self.params.remove(&name) {
             // If the client had this value in its params,
             // store it so we can rollback this change.
-            if self.in_transaction {
-                self.reset_params.insert(name, exists);
+            if self.in_transaction && !self.reset_params.contains_key(&name) {
+                self.reset_params.insert(&name, exists);
             }
         }
 
         // Reset parameter to its startup value, if provided.
-        if let Some(startup) = self.startup.get(name) {
-            self.params.insert(name, startup.clone());
+        if let Some(startup) = self.startup.get(&name) {
+            self.params.insert(&name, startup.clone());
         }
+        // TODO(lev): Do I need to do something for rollback ^?
 
-        // TODO(lev): Handle rollback ^.
-
-        self.transaction_local_params.remove(name);
-        self.transaction_params.remove(name);
+        self.transaction_local_params.remove(&name);
+        self.transaction_params.remove(&name);
     }
 
     /// Handle resetting all parameters to their initial values,
@@ -74,6 +88,7 @@ impl ParameterStore {
         let names: Vec<_> = self
             .params
             .keys()
+            .chain(self.startup.keys())
             .filter(|name| !UNTRACKED_PARAMS.contains(&name.as_str()))
             .cloned()
             .collect();
@@ -97,6 +112,23 @@ impl ParameterStore {
         &mut self,
         name: impl AsRef<str>,
         value: impl Into<ParameterValue>,
+    ) -> Option<ParameterValue> {
+        self.set_internal(name, value, false)
+    }
+
+    /// Insert a transaction-local parameter into the store, respecting transactional semantics.
+    pub(crate) fn set_local(
+        &mut self,
+        name: impl AsRef<str>,
+        value: impl Into<ParameterValue>,
+    ) -> Option<ParameterValue> {
+        self.set_internal(name, value, true)
+    }
+
+    fn set_internal(
+        &mut self,
+        name: impl AsRef<str>,
+        value: impl Into<ParameterValue>,
         local: bool,
     ) -> Option<ParameterValue> {
         let name = name.as_ref();
@@ -105,7 +137,6 @@ impl ParameterStore {
             // This replicates Postgres behavior of the
             // latest SET command overriding previous SET.
             if local {
-                self.transaction_params.remove(name);
                 self.transaction_local_params.insert(name, value)
             } else {
                 self.transaction_local_params.remove(name);
@@ -123,38 +154,46 @@ impl ParameterStore {
     /// Returns a list of queries that need to be executed on the
     /// server to make this sync actually stick.
     pub(crate) fn sync(&mut self, other: &Self) -> Vec<Query> {
-        // This is the fast and most common path.
-        if self.params.identical(&other.params) {
-            return vec![];
-        }
+        let queries = if !self.params.identical(&other.params) {
+            // Get all parameters that we have, but other does not.
+            // We don't want our value to persist, so we are resetting
+            // them to their default server values.
+            let reset_names: Vec<_> = self
+                .params
+                .tracked()
+                .into_iter()
+                .filter(|(name, _)| !other.params.contains_key(name.as_str()))
+                .map(|(name, _)| name.to_string())
+                .collect();
 
-        // Get all parameters that we have, but other does not.
-        // We don't want our value to persist, so we are resetting
-        // them to their default server values.
-        let reset: Vec<_> = self
-            .params
-            .tracked()
-            .into_iter()
-            .filter(|(name, _)| !other.params.contains_key(name.as_str()))
-            .map(|(name, _)| reset_to_sql(name))
-            .collect();
+            let reset: Vec<_> = reset_names.iter().map(|name| reset_to_sql(&name)).collect();
 
-        // Get all parameters other wants to set on the server.
-        let set: Vec<_> = other
-            .params
-            .tracked()
-            .into_iter()
-            .filter(|(name, value)| self.get(name) != Some(*value)) // Only set parameters that are different.
-            .map(|(name, value)| param_to_sql(name, value, false))
-            .collect();
+            // Get all parameters other wants to set on the server.
+            let set: Vec<_> = other
+                .params
+                .tracked()
+                .into_iter()
+                .filter(|(name, value)| self.get(name) != Some(*value)) // Only set parameters that are different.
+                .map(|(name, value)| param_to_sql(name, value, false))
+                .collect();
 
-        self.params.extend(other.params.clone());
+            self.params.extend(other.params.clone());
+            // Remove parameters that are being reset.
+            self.params
+                .remove_many(reset_names.iter().map(|name| name.as_str()));
+
+            reset.into_iter().chain(set).collect()
+        } else {
+            vec![]
+        };
+
         self.transaction_local_params
-            .extend(other.transaction_local_params.clone());
+            .restore_from(&other.transaction_local_params);
         self.transaction_params
-            .extend(other.transaction_params.clone());
+            .restore_from(&other.transaction_params);
+        self.in_transaction = other.in_transaction;
 
-        reset.into_iter().chain(set).collect()
+        queries
     }
 
     /// Generate the queries we need to sync the server transaction
