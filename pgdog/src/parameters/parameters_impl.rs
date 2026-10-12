@@ -47,10 +47,6 @@ impl Parameters {
             .unwrap_or(default)
     }
 
-    pub(crate) fn search_path(&self) -> Option<&ParameterValue> {
-        self.get("search_path")
-    }
-
     /// Create new parameters store from values.
     pub(crate) fn new(values: impl IntoIterator<Item = (String, ParameterValue)>) -> Self {
         let parameters: BTreeMap<_, _> = values

@@ -206,21 +206,21 @@ impl ParameterStore {
         ParametersSync {
             reset,
             queries,
-            target_store: other,
+            source_store: other,
         }
     }
 
     /// Complete parameter synchronization.
     pub(crate) fn sync_complete(&mut self, sync: ParametersSync) {
-        self.params.extend(sync.target_store.params.clone());
+        self.params.extend(sync.source_store.params.clone());
         // Remove parameters that were reset.
         self.params
             .remove_many(sync.reset.iter().map(|name| name.as_str()));
         self.transaction_local_params
-            .restore_from(&sync.target_store.transaction_local_params);
+            .restore_from(&sync.source_store.transaction_local_params);
         self.transaction_params
-            .restore_from(&sync.target_store.transaction_params);
-        self.in_transaction = sync.target_store.in_transaction;
+            .restore_from(&sync.source_store.transaction_params);
+        self.in_transaction = sync.source_store.in_transaction;
     }
 
     /// Generate the queries we need to sync the server transaction

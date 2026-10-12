@@ -349,6 +349,7 @@ pub(crate) mod test {
 
     use crate::frontend::router::parser::ShardWithPriority;
     use crate::net::{Parameter, Query};
+    use crate::parameters::Parameters;
 
     use super::super::super::linked_server::test::TestLinkedServer;
     use super::*;
@@ -425,7 +426,7 @@ pub(crate) mod test {
             binding.connected_shards().collect::<Vec<_>>(),
         );
 
-        let params = crate::parameters::Parameters::from(vec![Parameter::from((
+        let params = Parameters::from(vec![Parameter::from((
             "application_name".to_string(),
             "test_multi_binding".to_string(),
         ))]);

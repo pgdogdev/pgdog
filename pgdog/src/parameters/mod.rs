@@ -1,4 +1,3 @@
-mod builder;
 mod hash;
 mod name;
 mod parameters_impl;

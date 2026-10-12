@@ -13,14 +13,14 @@ use crate::net::Query;
 pub(crate) struct ParametersSync<'a> {
     pub(super) reset: Vec<String>,
     pub(super) queries: Vec<Query>,
-    pub(super) target_store: &'a ParameterStore,
+    pub(super) source_store: &'a ParameterStore,
 }
 
 impl ParametersSync<'_> {
     /// Get queries that should sync the in-transaction
     /// parameter state.
     pub(crate) fn transaction_sync(&self) -> Vec<Query> {
-        self.target_store.transaction_sync()
+        self.source_store.transaction_sync()
     }
 }
 

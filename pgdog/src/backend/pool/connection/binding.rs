@@ -248,7 +248,7 @@ impl Binding {
     }
 
     /// Handle transaction end.
-    pub(crate) fn transaction_compelte(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         match self {
             Binding::Direct(server, ..) => server.transaction_complete(rollback),
             Binding::MultiShard(servers) => servers
