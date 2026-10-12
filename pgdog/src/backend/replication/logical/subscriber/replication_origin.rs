@@ -251,6 +251,12 @@ impl ReplicationOrigin {
             BackendError::ExecutionError(response) if response.code == "55006" => {
                 Error::ReplicationOriginInUse(self.name.clone())
             }
+            BackendError::ExecutionError(response) if response.code == "53400" => {
+                Error::ReplicationOriginLimitExceeded {
+                    addr: self.address.to_string(),
+                    source: Box::new(error),
+                }
+            }
             _ => {
                 error!(
                     origin = %self.name,

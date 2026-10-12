@@ -97,6 +97,20 @@ pub(crate) enum Error {
         source: Box<crate::backend::Error>,
     },
 
+    #[error(
+        "Replication origin limit reached on \"{addr}\": {source}.
+    For replication process pgdog requires on destination shard one replication origin for each source shard.
+    To fix this, increase `max_active_replication_origins` (pg 18+) or `max_replication_slots`
+    (for older pg) and restart pg, or drop unused origins
+    listed in `pg_replication_origin`.
+    "
+    )]
+    ReplicationOriginLimitExceeded {
+        addr: String,
+        #[source]
+        source: Box<crate::backend::Error>,
+    },
+
     #[error("pool: {0}")]
     Pool(#[from] crate::backend::pool::Error),
 
