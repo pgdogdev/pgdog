@@ -34,16 +34,15 @@ pub struct Address {
     pub database_name: String,
 }
 
-/// Direction of a replication task: the initial migration (`Forward`) or the
+/// Direction of a resharding run: the initial migration (`Forward`) or the
 /// post-cutover reverse replication that backs a rollback (`Reverse`). A `CUTOVER`
-/// on a `Reverse` task is therefore a rollback. Affects reported status only,
-/// not control flow.
+/// in the `Reverse` direction is therefore a rollback.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 #[display(rename_all = "snake_case")]
-pub enum ReplicationDirection {
+pub enum ReshardingDirection {
     #[default]
     Forward,
     Reverse,
@@ -118,7 +117,7 @@ pub enum ReplicationStatus {
 #[display("{direction} replication {databases}")]
 pub struct ReplicationClusterDefinition {
     pub databases: Databases,
-    pub direction: ReplicationDirection,
+    pub direction: ReshardingDirection,
 }
 
 /// Stages of one replication cluster, reported as the subtask's status.
@@ -130,7 +129,7 @@ pub enum ReplicationClusterStatus {
     /// Streaming changes to catch the destination up.
     #[display("{direction} replicating, {progress}")]
     Replicating {
-        direction: ReplicationDirection,
+        direction: ReshardingDirection,
         progress: ReplicationProgress,
     },
     /// Stopped streaming so the parent task can cut traffic over.

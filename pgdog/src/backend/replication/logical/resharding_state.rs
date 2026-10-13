@@ -1,7 +1,7 @@
 use futures::future::try_join_all;
 use futures::prelude::future::join_all;
 use parking_lot::Mutex;
-use pgdog_stats::Databases;
+use pgdog_stats::{Databases, ReshardingDirection};
 use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -49,6 +49,8 @@ struct ReshardingStateInner {
     origins: Origins,
     #[builder(into)]
     slot_name: String,
+    #[builder(skip)]
+    direction: ReshardingDirection,
 }
 
 type Slots = HashMap<usize, ReplicationSlot<Permanent>>;
@@ -125,6 +127,18 @@ impl ReshardingState {
             source: self.source.identifier().database.clone(),
             destination: self.destination.identifier().database.clone(),
         }
+    }
+
+    pub(crate) fn direction(&self) -> ReshardingDirection {
+        self.inner.lock().direction
+    }
+
+    pub(crate) fn flip_direction(&self) {
+        let mut inner = self.inner.lock();
+        inner.direction = match inner.direction {
+            ReshardingDirection::Forward => ReshardingDirection::Reverse,
+            ReshardingDirection::Reverse => ReshardingDirection::Forward,
+        };
     }
 
     pub(crate) fn tables(&self) -> HashMap<usize, Vec<Table>> {

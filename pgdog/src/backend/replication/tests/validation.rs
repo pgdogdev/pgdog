@@ -2,7 +2,9 @@ use std::panic::AssertUnwindSafe;
 
 use futures::FutureExt;
 use pgdog_config::resharding::PostDataValidationStage;
-use pgdog_stats::{ReplicationStatus, SyncState, TaskDefinitionKind, TaskProgress};
+use pgdog_stats::{
+    ReplicationStatus, ReshardingDirection, SyncState, TaskDefinitionKind, TaskProgress,
+};
 
 use super::*;
 use crate::api::{replication::ReplicationTask, schema_sync::SchemaSyncBuilder};
@@ -142,33 +144,6 @@ async fn fk_validation_setup(
         schema_sync,
         dest,
     })
-}
-
-fn replication_status(id: TaskId) -> Option<ReplicationStatus> {
-    let mut found = None;
-    tasks_storage().try_for_each(|task| {
-        if task.id != id {
-            return ControlFlow::Continue(());
-        }
-        if let TaskStatus::Replication(status) = task.state().status {
-            found = Some(status);
-        }
-        ControlFlow::Break(())
-    });
-    found
-}
-
-async fn wait_for_replication_status(
-    id: TaskId,
-    expected: ReplicationStatus,
-) -> Result<(), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(60), async {
-        while replication_status(id) != Some(expected) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    Ok(())
 }
 
 fn validation_tasks(root: TaskId) -> Vec<TaskProgress> {
@@ -343,6 +318,15 @@ async fn post_data_validation_after_cutover_keeps_replicating() -> TestResult {
             assert_eq!(
                 replication_status(id),
                 Some(ReplicationStatus::ReverseReplicating)
+            );
+            assert!(
+                subtree_definitions(id).iter().any(|definition| matches!(
+                    definition,
+                    TaskDefinitionKind::SchemaSync(sync)
+                        if sync.sync_state == SyncState::PostDataValidation
+                            && sync.direction == ReshardingDirection::Reverse
+                )),
+                "validation after cutover must report the reverse direction"
             );
 
             assert!(ReplicationTask::trigger_cutover(Some(id)));

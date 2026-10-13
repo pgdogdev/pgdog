@@ -35,8 +35,8 @@ use crate::util::{safe_interval, safe_timeout};
 use pgdog_config::resharding::PostDataValidationStage;
 use pgdog_stats::{
     Databases, MissedRows, ReplicationClusterDefinition, ReplicationClusterStatus,
-    ReplicationCutoverReason, ReplicationDefinition, ReplicationDirection,
-    ReplicationShardDefinition, ReplicationShardStatus, ReplicationStatus, TaskDefinition,
+    ReplicationCutoverReason, ReplicationDefinition, ReplicationShardDefinition,
+    ReplicationShardStatus, ReplicationStatus, ReshardingDirection, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -121,7 +121,6 @@ struct Replication<T> {
     schema_sync: SchemaSyncBuilder,
     auto_cutover: bool,
     validation_stage: PostDataValidationStage,
-    direction: ReplicationDirection,
     maintenance: MaintenanceMode,
     _task: PhantomData<fn() -> T>,
 }
@@ -145,7 +144,6 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             schema_sync,
             auto_cutover,
             validation_stage,
-            direction: ReplicationDirection::Forward,
             maintenance: MaintenanceMode::new(),
             _task: PhantomData,
         }
@@ -164,7 +162,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
 
         let cancelled = ctx.cancellation_token().is_cancelled();
         let stopped_in_rollback_window = cancelled
-            && self.direction == ReplicationDirection::Reverse
+            && self.state.direction() == ReshardingDirection::Reverse
             && matches!(result, Err(Error::ReplicationAborted));
         let completed = result.is_ok() || stopped_in_rollback_window;
 
@@ -214,6 +212,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                 .clone()
                 .phase(SchemaSyncPhase::Cutover)
                 .ignore_errors(true)
+                .direction(self.state.direction())
                 .build(),
         )
         .await?;
@@ -222,7 +221,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
 
         loop {
             self.cutover(ctx).await?;
-            self.flip_direction();
+            self.state.flip_direction();
             self.replicate_until_cutover(ctx, false, PostDataValidationStage::AfterCutover)
                 .await?;
             self.validation_stage = PostDataValidationStage::Off;
@@ -233,6 +232,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                     .publication(self.state.publication.clone())
                     .phase(SchemaSyncPhase::Cutover)
                     .ignore_errors(true)
+                    .direction(self.state.direction())
                     .build(),
             )
             .await?;
@@ -249,7 +249,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         stage: PostDataValidationStage,
     ) -> Result<(), Error> {
         let wait_for_validation = stage != PostDataValidationStage::AfterCutover;
-        let direction = self.direction;
+        let direction = self.state.direction();
         let task_cancel = ctx.cancellation_token();
         let mut cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
         let mut validation = pin!(self.post_data_validation(ctx, stage).fuse());
@@ -259,13 +259,13 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             let mut tables = self.state.tables();
             let mut cutover_reason = None;
             let (cluster, stop_cluster_replication) =
-                ReplicationClusterTask::new(self.state.clone(), direction, progress.clone());
+                ReplicationClusterTask::new(self.state.clone(), progress.clone());
 
             info!("[replication] {direction} replication starting");
             ctx.set_status(
                 match direction {
-                    ReplicationDirection::Forward => ReplicationStatus::Replicating,
-                    ReplicationDirection::Reverse => ReplicationStatus::ReverseReplicating,
+                    ReshardingDirection::Forward => ReplicationStatus::Replicating,
+                    ReshardingDirection::Reverse => ReplicationStatus::ReverseReplicating,
                 }
                 .into(),
             );
@@ -355,6 +355,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
                 .schema_sync
                 .clone()
                 .phase(SchemaSyncPhase::PostDataValidation)
+                .direction(self.state.direction())
                 .build(),
         });
         async move {
@@ -392,6 +393,7 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             })
             .publication(self.state.publication.clone())
             .phase(SchemaSyncPhase::PostDataValidation)
+            .direction(self.state.direction())
             .build()
     }
 
@@ -404,17 +406,10 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
         ctx: &TaskContext<T>,
         schema_sync: SchemaSyncTask,
     ) -> Result<(), Error> {
-        info!("Run schema sync in {} direction", self.direction);
+        info!("Run schema sync in {} direction", self.state.direction());
         ctx.set_status(ReplicationStatus::SyncingSchema.into());
         ctx.run(schema_sync).await?;
         Ok(())
-    }
-
-    fn flip_direction(&mut self) {
-        self.direction = match self.direction {
-            ReplicationDirection::Reverse => ReplicationDirection::Forward,
-            ReplicationDirection::Forward => ReplicationDirection::Reverse,
-        };
     }
 
     /// Wait for cutover initial conditions, stop the traffic
@@ -455,9 +450,9 @@ impl<T: Task<Status: From<ReplicationStatus>>> Replication<T> {
             .create_reverse_slots(&ctx.cancellation_token())
             .await?;
         ctx.set_status(
-            match self.direction {
-                ReplicationDirection::Forward => ReplicationStatus::CuttingOver,
-                ReplicationDirection::Reverse => ReplicationStatus::RollingBack,
+            match self.state.direction() {
+                ReshardingDirection::Forward => ReplicationStatus::CuttingOver,
+                ReshardingDirection::Reverse => ReplicationStatus::RollingBack,
             }
             .into(),
         );
@@ -492,14 +487,12 @@ impl ReplicationClusterStop {
 pub(crate) struct ReplicationClusterTask {
     state: ReshardingState,
     progress: ReplicationProgress,
-    direction: ReplicationDirection,
     stop: tokio::sync::oneshot::Receiver<Option<ReplicationCutoverReason>>,
 }
 
 impl ReplicationClusterTask {
     pub(crate) fn new(
         state: ReshardingState,
-        direction: ReplicationDirection,
         progress: ReplicationProgress,
     ) -> (Self, ReplicationClusterStop) {
         let (sender, stop) = tokio::sync::oneshot::channel();
@@ -507,7 +500,6 @@ impl ReplicationClusterTask {
             Self {
                 state,
                 progress,
-                direction,
                 stop,
             },
             ReplicationClusterStop { sender },
@@ -527,7 +519,7 @@ impl Task for ReplicationClusterTask {
     fn definition(&self) -> impl Into<TaskDefinition> {
         ReplicationClusterDefinition {
             databases: self.state.databases(),
-            direction: self.direction,
+            direction: self.state.direction(),
         }
     }
 
@@ -536,8 +528,8 @@ impl Task for ReplicationClusterTask {
             state,
             progress,
             stop,
-            direction,
         } = self;
+        let direction = state.direction();
         let task_cancel = ctx.cancellation_token();
         let mut streams = ReplicationStreams::new();
         let mut replication_streams = Vec::new();
