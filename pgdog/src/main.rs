@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     bootstrap_logger(&args.config);
 
-    let nofile = util::raise_nofile_limit();
+    let nofile = util::system::raise_nofile_limit();
 
     let config = match config::load(&args.config, &args.users) {
         Ok(config) => config,
@@ -172,7 +172,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
     if let Some(openmetrics_port) = general.openmetrics_port {
         let openmetrics_host = general.openmetrics_host.clone();
         tasks::spawn("openmetrics server", async move {
-            stats::http_server::server(&openmetrics_host, openmetrics_port).await
+            stats::http_server::server(&openmetrics_host, openmetrics_port)
+                .await
+                .inspect_err(|error| {
+                    error!("Metrics server failed due to: {error}");
+                })
         });
     }
 
@@ -182,7 +186,11 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     if let Some(healthcheck_port) = general.healthcheck_port {
         tasks::spawn("http healthcheck server", async move {
-            healthcheck::server(healthcheck_port).await
+            healthcheck::server(healthcheck_port)
+                .await
+                .inspect_err(|error| {
+                    error!("Healthcheck server failed due to: {error}");
+                })
         });
     }
 
@@ -197,7 +205,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         match command {
             None | Some(Commands::Run { .. }) => {
                 if config().config.general.dry_run {
-                    info!("dry run mode enabled");
+                    warn!("dry run mode enabled");
                 }
 
                 if general.two_phase_commit {
