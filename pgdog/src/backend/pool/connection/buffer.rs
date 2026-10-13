@@ -234,6 +234,14 @@ impl Buffer {
     pub(super) fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Clear the buffer.
+    ///
+    /// Use this in case of an aggregation/sort/post-processing error. The data in the buffer
+    /// is not valid for client consumption.
+    pub(super) fn clear(&mut self) {
+        self.buffer.clear();
+    }
 }
 
 #[cfg(test)]

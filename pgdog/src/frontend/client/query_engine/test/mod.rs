@@ -54,6 +54,7 @@ mod temp_table;
 mod test_omnisharded;
 mod transaction_state;
 mod two_pc_single_shard;
+mod unsupported_aggregation;
 
 pub(super) fn test_client() -> Client {
     load_test();

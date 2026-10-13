@@ -1,6 +1,7 @@
 use tracing::{info, trace};
 
 use crate::{
+    backend::Error as BackendError,
     frontend::{
         client::{TransactionType, transaction_type::Transaction},
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
@@ -140,8 +141,25 @@ impl QueryEngine {
                     && !self.backend.in_copy_mode()
                     && !self.streaming
                 {
-                    let message = self.read_server_message().await?;
-                    self.process_server_message(context, message).await?;
+                    match self.read_server_message().await {
+                        Ok(message) => self.process_server_message(context, message).await?,
+                        Err(err) => {
+                            if err.is_unsupported() {
+                                if let Some(transaction) = context.transaction.as_mut() {
+                                    transaction.set_error();
+                                }
+                                self.error_response(
+                                    context,
+                                    client_request,
+                                    ErrorResponse::unsupported(&err),
+                                )
+                                .await?;
+                                return Ok(());
+                            } else {
+                                return Err(err.into());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -157,7 +175,7 @@ impl QueryEngine {
         Ok(())
     }
 
-    pub(crate) async fn read_server_message(&mut self) -> Result<Message, Error> {
+    pub(crate) async fn read_server_message(&mut self) -> Result<Message, BackendError> {
         Ok(self.backend.read().await?)
     }
 
@@ -211,16 +229,9 @@ impl QueryEngine {
 
                 match state {
                     TransactionState::Error => {
-                        let error_state = match context.transaction.map(|t| t.transaction_type()) {
-                            Some(TransactionType::ReadOnly) => {
-                                Some(Transaction::new(TransactionType::ErrorReadOnly))
-                            }
-                            Some(TransactionType::ReadWrite | TransactionType::Implicit) => {
-                                Some(Transaction::new(TransactionType::ErrorReadWrite))
-                            }
-                            _ => None,
-                        };
-                        context.transaction = error_state;
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
                         if self.two_pc.auto() {
                             self.end_two_pc(true).await?;
                             // TODO: this records a 2pc transaction in client

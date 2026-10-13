@@ -246,13 +246,19 @@ impl MultiShard {
             if !self.buffer.is_empty() {
                 // Helpers remain in the internal row through aggregation and
                 // sorting, then are removed before client-visible operations.
-                self.buffer
+                if let Err(err) = self
+                    .buffer
                     .aggregate(
                         self.route.aggregate(),
                         &self.decoder,
                         &self.route.projection_rewrite_plan,
                     )
-                    .map_err(Error::from)?;
+                    .map_err(Error::from)
+                {
+                    // Probably an unsupported aggregation feature was requested.
+                    self.buffer.clear();
+                    return Err(err);
+                }
 
                 self.buffer.sort(self.route.order_by(), &self.decoder);
                 self.buffer

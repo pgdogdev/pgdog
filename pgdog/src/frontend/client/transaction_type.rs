@@ -25,16 +25,24 @@ impl Transaction {
         self.start_time
     }
 
-    //    pub(crate) fn read_only(&self) -> bool {
-    //      self.transaction_type.read_only()
-    //   }
-
     pub(crate) fn write(&self) -> bool {
         self.transaction_type.write()
     }
 
     pub(crate) fn error(&self) -> bool {
         self.transaction_type.error()
+    }
+
+    /// Mark the transaction as failed without changing its start time.
+    pub(crate) fn set_error(&mut self) {
+        self.transaction_type = match self.transaction_type {
+            TransactionType::ReadOnly | TransactionType::ErrorReadOnly => {
+                TransactionType::ErrorReadOnly
+            }
+            TransactionType::ReadWrite
+            | TransactionType::Implicit
+            | TransactionType::ErrorReadWrite => TransactionType::ErrorReadWrite,
+        };
     }
 }
 
