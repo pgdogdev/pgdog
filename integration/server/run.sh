@@ -28,8 +28,6 @@ function check_all() {
     fi
 }
 
-export PGDOG_BIN=${PGDOG_BIN:-target/debug/pgdog}
-
 run_pgdog integration/server
 wait_for_pgdog
 PID=$(cat ${COMMON_DIR}/pgdog.pid)
