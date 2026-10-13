@@ -1,6 +1,6 @@
 use std::slice::{Iter, IterMut};
 
-use futures::future::join_all;
+use futures::future::{join_all, try_join_all};
 
 use crate::backend::Error;
 use crate::frontend::client::query_engine::{
@@ -174,6 +174,8 @@ impl MultiBinding {
             }
 
             let mut read = false;
+            let mut multi_shard_err = None;
+
             for server in &mut self.servers {
                 if !server.has_more_messages() {
                     continue;
@@ -182,9 +184,29 @@ impl MultiBinding {
                 let message = server.read().await?;
                 read = true;
 
-                if let Some(message) = self.state.handle_server_message(message)? {
-                    return Ok(Some(message));
+                match self.state.handle_server_message(message) {
+                    Ok(message) => {
+                        if let Some(message) = message {
+                            return Ok(Some(message));
+                        }
+                    }
+                    Err(err) => {
+                        if err.is_unsupported() {
+                            multi_shard_err = Some(err);
+                        } else {
+                            return Err(err.into());
+                        }
+                    }
                 }
+            }
+
+            // If we couldn't calculate some kind of cross-shard response,
+            // e.g., the aggregate the user requested is not supported,
+            // we drain the servers, abort the request, and return the error.
+            if let Some(err) = multi_shard_err.take() {
+                let futures = self.servers.iter_mut().map(|server| server.drain_pending());
+                try_join_all(futures).await?;
+                return Err(err.into());
             }
 
             if !read {

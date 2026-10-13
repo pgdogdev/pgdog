@@ -244,6 +244,16 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn unsupported(err: &impl std::error::Error) -> Self {
+        let message = err.to_string();
+        Self {
+            severity: "ERROR".into(),
+            code: "0A000".into(),
+            message,
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn tls_required() -> ErrorResponse {
         Self {
             severity: "FATAL".into(),
