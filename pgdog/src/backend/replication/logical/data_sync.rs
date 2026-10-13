@@ -177,6 +177,12 @@ impl DataSync<'_> {
             let mut copy_sub = bg_task.get_back_subscriber().await?;
             on_progress(bg_task.progress());
 
+            // If we break early because of copy_progress,
+            // ensure that none of the publishers encountered an Error before we COMMIT
+            while let Some(result) = set.join_next().await {
+                result??;
+            }
+
             // Measure of how much backlog there was, where the subscriber
             // can't keep up with our parallelized publishers.
             //
