@@ -176,7 +176,7 @@ impl QueryEngine {
     }
 
     pub(crate) async fn read_server_message(&mut self) -> Result<Message, BackendError> {
-        Ok(self.backend.read().await?)
+        self.backend.read().await
     }
 
     /// Handle a message received from Postgres.

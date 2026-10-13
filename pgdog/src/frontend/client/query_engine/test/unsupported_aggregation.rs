@@ -58,7 +58,9 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             if begin.is_some() {
                 // The failed transaction must reject further queries until rollback.
                 for _ in 0..2 {
-                    client.send(Query::new("SELECT 42")).await;
+                    client
+                        .send(Query::new("SELECT count(*) FROM sharded WHERE false"))
+                        .await;
                     let error = expect_message!(client.read().await, ErrorResponse);
                     assert_eq!(error.severity, "ERROR");
                     assert_eq!(error.code, "25P02");
@@ -79,10 +81,13 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
                 );
             }
 
-            client.send(Query::new("SELECT 42")).await;
+            // Each shard returns a count row, exercising aggregation again without fixtures.
+            client
+                .send(Query::new("SELECT count(*) FROM sharded WHERE false"))
+                .await;
             expect_message!(client.read().await, RowDescription);
             let row = expect_message!(client.read().await, DataRow);
-            assert_eq!(row.get_int(0, true), Some(42));
+            assert_eq!(row.get_int(0, true), Some(0));
             assert_eq!(
                 expect_message!(client.read().await, CommandComplete).command(),
                 "SELECT 1"
