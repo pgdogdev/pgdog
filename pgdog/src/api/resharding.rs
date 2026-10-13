@@ -124,26 +124,25 @@ impl Task for ReshardTask {
 
             // Replication, unless sync-only.
             if !self.sync_only {
-                ctx.set_status(ReshardStatus::Replication);
-
                 // data_sync / schema sync can run for hours; pools may have
                 // reloaded. Re-fetch live cluster refs before replicating.
                 state.reload()?;
 
-                // `auto_cutover` (reshard) cuts over on its own; otherwise the
-                // task runs until an operator `CUTOVER`/`STOP_TASK`. A stop in
-                // a forward phase resolves to `Err(ReplicationAborted)` and runs
-                // the cleanup below; a stop in a reverse phase resolves to
-                // `Ok`, because the migration is already complete.
+                // The replication reports its stages as this task's status and
+                // its subtasks attach to this task. `auto_cutover` (reshard)
+                // cuts over on its own; otherwise it runs until an operator
+                // `CUTOVER`/`STOP_TASK`. A stop in a forward phase resolves to
+                // `Err(ReplicationAborted)` and runs the cleanup below; a stop
+                // in a reverse phase resolves to `Ok`, because the migration
+                // is already complete.
                 Box::pin(
-                    ctx.run(
-                        ReplicationTask::builder()
-                            .state(state.clone())
-                            .auto_cutover(self.auto_cutover)
-                            .schema_sync(schema_sync.clone())
-                            .validate(!self.skip_schema_sync && !self.replicate_only)
-                            .build(),
-                    ),
+                    ReplicationTask::builder()
+                        .state(state.clone())
+                        .auto_cutover(self.auto_cutover)
+                        .schema_sync(schema_sync.clone())
+                        .validate(!self.skip_schema_sync && !self.replicate_only)
+                        .build()
+                        .run_inline(&ctx),
                 )
                 .await?;
             }
