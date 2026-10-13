@@ -91,6 +91,142 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
+-- DDL replication.
+--
+-- Logical replication normally does not send schema changes.
+-- To get around that, we use custom event triggers here to write each DDL statement to the WAL,
+-- so PgDog can replay it on the destination at the exact point in the WAL.
+--
+-- There are two triggers implemented here to run after every DDL statement (in this order):
+--   1. pgdog.save_ddl_search_path() saves the session's search_path.
+--   2. pgdog.log_ddl_to_wal() signs the statement and writes it to the WAL.
+
+-- We sign each message with a key, so that we can prevent an **unprivileged** role from
+-- getting its own DDL replayed on the destination. This is necessary as any role can write to the WAL.
+-- We store this key in a table that has restricted permissions.
+CREATE TABLE IF NOT EXISTS pgdog.ddl_replication_key (
+    id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+    key TEXT NOT NULL
+);
+
+REVOKE ALL ON TABLE pgdog.ddl_replication_key FROM PUBLIC;
+
+INSERT INTO pgdog.ddl_replication_key (key)
+VALUES (gen_random_uuid()::text)
+ON CONFLICT DO NOTHING;
+
+-- Trigger 1: we save the session's search_path, so that we can replay the statement
+-- with the **same** search_path.
+--
+-- This is necessary when there's an unqualified name (e.g., "users" in
+-- `ALTER TABLE users ...`). It'll only found in the right schema on the destination
+--  if the search_path matches the one on the source.
+-- 
+-- We do this in its own trigger, as trigger 2 runs with a fixed search_path (and can't read the session's).
+CREATE OR REPLACE FUNCTION pgdog.save_ddl_search_path() RETURNS event_trigger AS $body$
+BEGIN
+    PERFORM pg_catalog.set_config(
+        'pgdog.ddl_search_path',
+        pg_catalog.current_setting('search_path'),
+        true
+    );
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Trigger 2: we sign the DDL statement and write it to the WAL.
+-- 
+-- The function runs with the privileges of the role that **created** it (SECURITY DEFINER),
+-- as in, the role that ran this setup.sql file, not the role that just ran the DDL.
+-- This is necessary as only the role that ran this setup.sql file has the ability to read the key.
+-- 
+-- We also give it a fixed search_path (SET search_path). This is necessary because, with the
+-- session's search_path, an unprivileged role could get its own code to run as the owner
+-- (e.g., by creating its own type named "text" in a schema it puts first in the search_path,
+-- which the "TEXT" below would then use).
+CREATE OR REPLACE FUNCTION pgdog.log_ddl_to_wal() RETURNS event_trigger
+SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $body$
+DECLARE
+    is_replicating BOOLEAN;
+    is_temporary BOOLEAN;
+    role_name TEXT;
+    key BYTEA;
+    payload BYTEA;
+    signature BYTEA;
+BEGIN
+    -- Step 1: we only log while the database is being replicated (has a replication slot)
+    is_replicating := EXISTS (
+        SELECT FROM pg_replication_slots
+        WHERE plugin = 'pgoutput' AND database = current_database()
+    );
+
+    IF NOT is_replicating THEN
+        RETURN;
+    END IF;
+
+    -- Step 2: we skip temporary objects (local to sessions; wouldn't want them replayed)
+    --
+    -- TODO: dropping a temporary object is still logged
+    SELECT bool_and(schema_name = 'pg_temp') INTO is_temporary
+    FROM pg_event_trigger_ddl_commands();
+
+    IF is_temporary THEN
+        RETURN;
+    END IF;
+
+    -- Step 3: we find the role that ran the DDL, so that we can replay as that **same** role
+    -- (table should have the same owner on the destination)
+    -- 
+    -- We can't use current_user for this, as that's the owner of this function here
+    role_name := coalesce(nullif(current_setting('role'), 'none'), session_user);
+
+    -- Step 4: build the message, which has everything we need to replay the statement
+    payload := convert_to(json_build_object(
+        'role', role_name,
+        'search_path', current_setting('pgdog.ddl_search_path', true),
+        'query', current_query()
+    )::text, 'UTF8');
+
+    -- Step 5: we sign the message with the key. 
+    --
+    -- We hash **twice**: sha256(key || sha256(key || payload)). This is necessary as a single
+    -- sha256(key || payload) can be continued from where it stopped (a length extension attack),
+    --
+    -- This is the same idea as HMAC.
+    -- 
+    -- Attack: <https://en.wikipedia.org/wiki/Length_extension_attack>
+    -- TODO: alternatively, we could require pgcrypto to call hmac (postgres doesn't natively have it)
+    -- TODO: we could fully hand roll HMAC by adding padding here
+    SELECT convert_to(k.key, 'UTF8') INTO key FROM pgdog.ddl_replication_key k;
+
+    signature := convert_to(encode(sha256(key || sha256(key || payload)), 'hex'), 'UTF8');
+
+    -- Step 6: we write the signature & message to the WAL.
+    PERFORM pg_logical_emit_message(true, 'ddl_replication', signature || payload);
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Create the two triggers here. Event triggers require superuser.
+-- If we aren't a superuser, skip them. DDL will not be replicated.
+-- TODO: we may want to error here, or at least emit a warning message.
+--
+-- Triggers on the same event will go based on order of their names 
+-- "pgdog_ddl_context" (trigger 1) -> "pgdog_ddl_replication" (trigger 2)
+DO $body$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_context') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_context ON ddl_command_end
+            EXECUTE FUNCTION pgdog.save_ddl_search_path();
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_event_trigger WHERE evtname = 'pgdog_ddl_replication') THEN
+        CREATE EVENT TRIGGER pgdog_ddl_replication ON ddl_command_end
+            EXECUTE FUNCTION pgdog.log_ddl_to_wal();
+    END IF;
+EXCEPTION WHEN insufficient_privilege THEN
+    NULL;
+END;
+$body$;
+
 -- Generate a primary key from a sequence that will
 -- match the shard number this is ran on.
 CREATE OR REPLACE FUNCTION pgdog.next_uuid_auto() RETURNS UUID AS $body$
