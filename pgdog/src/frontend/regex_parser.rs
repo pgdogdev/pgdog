@@ -10,7 +10,8 @@ use crate::util::truncate_utf8;
 static COMMENT_PREFIX: &str = r"(?i)^\s*(?:(?:--[^\n]*\n|/\*[\s\S]*?\*/)\s*)*";
 
 static CMD_BASE: &[&str] = &[
-    "(RE)?SET", "BEGIN", "COMMIT", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY", "DISCARD",
+    "(RE)?SET", "BEGIN", "START", "COMMIT", "END", "ROLLBACK", "LISTEN", "UNLISTEN", "NOTIFY",
+    "DISCARD", "ABORT",
 ];
 
 static CMD_ADVISORY: &[&str] = &[
