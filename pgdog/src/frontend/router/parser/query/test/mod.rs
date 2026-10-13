@@ -31,6 +31,7 @@ pub(crate) mod test_dml;
 pub(crate) mod test_explain;
 pub(crate) mod test_functions;
 pub(crate) mod test_insert;
+mod test_join_columns;
 pub(crate) mod test_prefer_primary;
 pub(crate) mod test_prepared;
 mod test_replica_only;

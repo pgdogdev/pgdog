@@ -59,6 +59,8 @@ struct SearchContext<'a> {
     aliases: HashMap<&'a str, Table<'a>>,
     /// The primary table from the FROM clause (if simple)
     table: Option<Table<'a>>,
+    /// Base tables in this FROM clause, without descending into subqueries.
+    tables: Vec<Table<'a>>,
     /// Column equalities that can carry a key from one side of a join to the other.
     joined_columns: Vec<(Column<'a>, Column<'a>)>,
 }
@@ -66,12 +68,6 @@ struct SearchContext<'a> {
 impl<'a> SearchContext<'a> {
     /// Build context from a FROM clause, extracting table aliases.
     fn from_from_clause(nodes: &'a list::NodeList) -> Self {
-        let mut aliases = HashMap::new();
-
-        for node in nodes {
-            Self::extract_alias_from_node(&mut aliases, node);
-        }
-
         let table = nodes
             .into_iter()
             .exactly_one()
@@ -79,11 +75,11 @@ impl<'a> SearchContext<'a> {
             .and_then(|n| Table::try_from(n).ok());
 
         let mut ctx = Self {
-            aliases,
             table,
             ..Default::default()
         };
         for node in nodes {
+            ctx.extract_table_from_node(node);
             ctx.extract_joined_columns(node);
         }
         ctx
@@ -158,23 +154,27 @@ impl<'a> SearchContext<'a> {
         });
     }
 
-    fn extract_alias_from_node(aliases: &mut HashMap<&'a str, Table<'a>>, node: Node<'a>) {
+    fn extract_table_from_node(&mut self, node: Node<'a>) {
         match node {
-            Node::RangeVar(rv) if let Some(alias) = rv.alias() => {
+            Node::RangeVar(rv) => {
                 let table = Table::from(rv);
-                aliases.insert(alias.aliasname().expect("alias name always present"), table);
+                self.tables.push(table);
+                if let Some(alias) = rv.alias() {
+                    self.aliases
+                        .insert(alias.aliasname().expect("alias name always present"), table);
+                }
             }
 
             Node::JoinExpr(join) => {
-                Self::extract_alias_from_node(aliases, join.larg());
-                Self::extract_alias_from_node(aliases, join.rarg());
+                self.extract_table_from_node(join.larg());
+                self.extract_table_from_node(join.rarg());
             }
 
             Node::RangeSubselect(subselect) if let Some(alias) = subselect.alias() => {
                 // For subselects, we don't have a real table name
                 // but we record the alias anyway for future use
                 let aliasname = alias.aliasname().expect("alias name always present");
-                aliases.insert(
+                self.aliases.insert(
                     aliasname,
                     Table {
                         name: aliasname,
@@ -816,9 +816,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
     }
 
     fn search_stmt(&mut self, stmt: Node<'a>) -> ControlFlow<Result<Shard, Error>> {
-        use nodes::{A_Expr_Kind, BoolExprType};
-
-        let ctx = match stmt {
+        let mut ctx = match stmt {
             Node::SelectStmt(s) => SearchContext::from_from_clause(s.from_clause()),
             Node::UpdateStmt(s) => self.context_from_relation(s.relation()),
             Node::DeleteStmt(s) => self.context_from_relation(s.relation()),
@@ -832,15 +830,40 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             _ => return ControlFlow::Continue(()),
         };
 
+        // A CTE can shadow a configured table without preserving its columns.
+        let cte_names = &self.walk().cte_names;
+        ctx.tables
+            .retain(|table| table.schema.is_some() || !cte_names.contains(table.name));
+
         if let Node::SelectStmt(select) = stmt
             && !ctx.joined_columns.is_empty()
         {
             self.search_joined_key(select.where_clause(), &ctx)?;
         }
 
+        self.search_node(stmt, &ctx)
+    }
+
+    fn search_node(
+        &mut self,
+        stmt: Node<'a>,
+        ctx: &SearchContext<'a>,
+    ) -> ControlFlow<Result<Shard, Error>> {
+        use nodes::{A_Expr_Kind, BoolExprType, JoinType};
+
         let result = walk::walk_manual(stmt, |node| match node {
             Node::SelectStmt(_) => {
                 self.search_stmt(node)?;
+                Recurse::no()
+            }
+
+            Node::JoinExpr(join) if join.jointype != JoinType::JOIN_INNER => {
+                // An outer join's ON clause does not restrict rows from its
+                // preserved side. Don't infer new key owners there; WHERE
+                // predicates still use the enclosing query's table context.
+                let mut ctx = ctx.clone();
+                ctx.tables.clear();
+                self.search_node(node, &ctx)?;
                 Recurse::no()
             }
 
@@ -860,8 +883,8 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
                 let is_any = matches!(expr.kind, A_Expr_Kind::AEXPR_OP_ANY);
 
-                let left = self.search_expr(expr.lexpr(), &ctx)?;
-                let right = self.search_expr(expr.rexpr(), &ctx)?;
+                let left = self.search_expr(expr.lexpr(), ctx)?;
+                let right = self.search_expr(expr.rexpr(), ctx)?;
 
                 let Some(left) = left else {
                     return Recurse::no();
@@ -880,7 +903,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                         let shards = values
                             .iter()
                             .filter_map(|value| {
-                                self.compute_shard_with_ctx(column, value.clone(), &ctx)
+                                self.compute_shard_with_ctx(column, value.clone(), ctx)
                                     .transpose()
                             })
                             .collect::<Result<Vec<_>, _>>()
@@ -1024,6 +1047,28 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                     && let Some(ref table) = ctx.table
                 {
                     column.qualify(*table);
+                }
+                // In joins, a named sharding config can identify the owner
+                // of an otherwise unqualified key. Only consider tables in
+                // this query scope, and leave ambiguous keys unresolved.
+                if column.table.is_none()
+                    && let Ok(table) = ctx
+                        .tables
+                        .iter()
+                        .filter(|table| {
+                            self.get_sharded_table_by_name(
+                                column.name,
+                                Some(table.name),
+                                table.schema,
+                            )
+                            .is_some_and(|config| config.name.is_some())
+                        })
+                        .exactly_one()
+                {
+                    // Keep the SQL reference until resolve_column resolves
+                    // aliases; another table may use this table's name as an alias.
+                    column.table = Some(table.alias.unwrap_or(table.name));
+                    column.schema = table.schema;
                 }
                 ControlFlow::Continue(Some(SearchResult::Column(column)))
             }
