@@ -67,9 +67,21 @@ fn parse_query(query: &str) -> Command {
 
 #[test]
 fn parser_marks_dml_for_metrics() {
-    let command = parse_query("SELECT 1");
-    assert_eq!(command.route().statement_type(), Some(StatementType::Dml));
-    assert_eq!(command.route().table_change(), TableChange::None);
+    for query in [
+        "SELECT 1",
+        "INSERT INTO metrics_test VALUES (1)",
+        "UPDATE metrics_test SET id = 2",
+        "DELETE FROM metrics_test",
+        "COPY metrics_test TO STDOUT",
+    ] {
+        let command = parse_query(query);
+        assert_eq!(
+            command.route().statement_type(),
+            Some(StatementType::Dml),
+            "{query}"
+        );
+        assert_eq!(command.route().table_change(), TableChange::None);
+    }
 }
 
 #[test]
@@ -77,6 +89,12 @@ fn parser_marks_table_ddl_for_metrics() {
     let command = parse_query("CREATE TABLE metrics_test (id BIGINT)");
     assert_eq!(command.route().statement_type(), Some(StatementType::Ddl));
     assert_eq!(command.route().table_change(), TableChange::Created);
+}
+
+#[test]
+fn parser_does_not_count_session_commands_as_dml() {
+    let command = parse_query("SHOW transaction_isolation");
+    assert_eq!(command.route().statement_type(), None);
 }
 
 macro_rules! command {

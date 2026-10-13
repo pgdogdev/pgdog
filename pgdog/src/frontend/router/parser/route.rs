@@ -175,6 +175,7 @@ impl Route {
             aggregate,
             limit,
             distinct,
+            stmt_type: Some(StatementType::Dml),
             ..Default::default()
         }
     }
@@ -413,10 +414,9 @@ impl Route {
         self
     }
 
-    pub(super) fn set_default_statement_type(&mut self, statement_type: Option<StatementType>) {
-        if self.stmt_type.is_none() {
-            self.stmt_type = statement_type;
-        }
+    pub(super) fn dml(mut self) -> Self {
+        self.stmt_type = Some(StatementType::Dml);
+        self
     }
 
     pub(crate) fn statement_type(&self) -> Option<StatementType> {

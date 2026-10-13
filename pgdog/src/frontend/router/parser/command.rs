@@ -72,18 +72,6 @@ pub(crate) enum Command {
 }
 
 impl Command {
-    pub(crate) fn set_default_statement_type(&mut self, statement_type: Option<StatementType>) {
-        match self {
-            Self::Query(route)
-            | Self::Copy { route, .. }
-            | Self::StartTransaction { route, .. }
-            | Self::CommitTransaction { route, .. }
-            | Self::RollbackTransaction { route, .. }
-            | Self::Set { route, .. } => route.set_default_statement_type(statement_type),
-            _ => (),
-        }
-    }
-
     pub(crate) fn route(&self) -> &Route {
         lazy_static! {
             static ref DEFAULT_ROUTE: Route =
