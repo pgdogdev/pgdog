@@ -1,6 +1,7 @@
 //! Server connection requested by a frontend.
 
 use futures::future::try_join_all;
+use pgdog_config::SessionRole;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
@@ -218,7 +219,10 @@ impl Connection {
         // `read_write_split = "aggressive"` lets the first statement
         // inside a transaction decide if it's a read or a write; we haven't
         // connected to Postgres yet, so we can still make this call.
-        let is_read = is_read.unwrap_or(route.is_read());
+        let is_read = match route.session_role() {
+            Some(role) => role == SessionRole::Replica,
+            None => is_read.unwrap_or(route.is_read()),
+        };
 
         if let Shard::Direct(shard) = route.shard() {
             let server = match self.cluster.get_conn(request, *shard, is_read).await {

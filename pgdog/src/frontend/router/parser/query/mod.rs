@@ -172,7 +172,7 @@ impl QueryParser {
             && !context.write_only
             && let Some(role) = context.session_role
         {
-            route.set_read(role == SessionRole::Replica);
+            route.set_session_role(role);
         }
 
         if let Command::Query(_) = command
