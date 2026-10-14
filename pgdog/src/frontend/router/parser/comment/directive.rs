@@ -1,9 +1,8 @@
 use once_cell::sync::Lazy;
+use pgdog_config::SessionRole;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
-use pgdog_config::SessionRole;
-
 use crate::frontend::router::sharding::{ShardOrLookup, lookup::shard_for_bare_key};
 
 use super::super::Error;

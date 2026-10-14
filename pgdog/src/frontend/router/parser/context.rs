@@ -114,13 +114,30 @@ impl<'a> QueryParserContext<'a> {
             Some(TransactionType::ReadWrite | TransactionType::Implicit)
         ) && self.rw_conservative()
             && !self.read_only;
-        // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
-        let role_write = match self.session_role {
-            Some(SessionRole::Primary) => true,
-            Some(SessionRole::Replica) => false,
-            None => self.prefer_primary,
-        };
-        txn_write || role_write
+        txn_write || self.prefer_primary
+    }
+
+    /// Role requested by the session. A cluster with only a primary
+    /// or only replicas has nothing to choose from.
+    pub(super) fn session_role(&self) -> Option<SessionRole> {
+        if self.read_only || self.write_only {
+            return None;
+        }
+
+        self.session_role
+    }
+
+    /// Role that decides the route of this statement: the query comment,
+    /// then the session.
+    pub(super) fn query_role(&self) -> Option<SessionRole> {
+        if self.read_only || self.write_only {
+            return None;
+        }
+
+        self.router_context
+            .comment
+            .and_then(|comment| comment.role)
+            .or(self.session_role)
     }
 
     /// Are we using the conservative read/write separation strategy?
