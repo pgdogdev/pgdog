@@ -1,10 +1,10 @@
 #![allow(clippy::print_stdout)]
 
 use pg_raw_parse::parse;
+use pgdog_config::SessionRole;
 use tokio::spawn;
 
 use crate::{
-    config::Role,
     frontend::router::parser::Shard,
     frontend::{BufferedQuery, PreparedStatements},
     net::{Parse, Query},
@@ -202,7 +202,7 @@ fn test_cache_hit_overrides_role_hint() {
     // Seed with a primary role hint; cache stores an entry keyed by the
     // stripped body.
     let first = run_prepared("/* pgdog_role: primary */ SELECT 1 FROM cache_role_override");
-    assert_eq!(first.comment.role, Some(Role::Primary));
+    assert_eq!(first.comment.role, Some(SessionRole::Primary));
 
     // Second query, same body, replica hint. Must hit cache AND return
     // an Ast whose role reflects the new hint, not the cached one.
@@ -211,7 +211,7 @@ fn test_cache_hit_overrides_role_hint() {
     assert_eq!(stats.hits, 1, "second query should hit cache");
     assert_eq!(
         second.comment.role,
-        Some(Role::Replica),
+        Some(SessionRole::Replica),
         "cached Ast must be overridden with the incoming role hint"
     );
 }

@@ -1,9 +1,10 @@
 //! Route queries to correct shards.
 use std::{collections::HashSet, ops::Deref};
 
+use pgdog_config::SessionRole;
+
 use crate::{
     backend::ShardingSchema,
-    config::Role,
     frontend::router::{
         RoutingComment,
         context::RouterContext,
@@ -159,8 +160,8 @@ impl QueryParser {
 
                 if let Some(role) = context.router_context.sticky.role {
                     match role {
-                        Role::Primary => route.set_read(false),
-                        _ => route.set_read(true),
+                        SessionRole::Primary => route.set_read(false),
+                        SessionRole::Replica => route.set_read(true),
                     }
                 }
             }
@@ -226,8 +227,8 @@ impl QueryParser {
         // The role is specified in the connection parameter (pgdog.role).
         } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
             Some(match role {
-                Role::Replica => Route::read(shard),
-                Role::Primary | Role::Auto => Route::write(shard),
+                SessionRole::Replica => Route::read(shard),
+                SessionRole::Primary => Route::write(shard),
             })
         } else if context.prefer_primary {
             // Send queries to primary by default.
@@ -318,7 +319,7 @@ impl QueryParser {
 
             let role_override = routing_comment.role;
             if let Some(role) = role_override {
-                self.write_override = role == Role::Primary;
+                self.write_override = role == SessionRole::Primary;
             }
 
             if comment_shard_set || role_override.is_some() {
