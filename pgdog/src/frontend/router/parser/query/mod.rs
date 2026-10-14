@@ -224,7 +224,10 @@ impl QueryParser {
         else if context.write_only {
             Some(Route::write(shard))
 
-        // The role is specified in the connection parameter (pgdog.role).
+        // The role was already changed explicitly by parameters, so we can bypass it.
+        // Comments for `pgdog.role` could be ignored though.
+        // But parameters are not parsed only when query_parser == off according
+        // to [`Cluster::use_query_parser`]
         } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
             Some(match role {
                 SessionRole::Replica => Route::read(shard),
