@@ -1,4 +1,4 @@
-use pgdog_config::Role;
+use pgdog_config::SessionRole;
 
 use super::parser::Error;
 use crate::{
@@ -107,16 +107,11 @@ impl ParameterHints<'_> {
     }
 
     /// Compute role from parameter value.
-    pub(crate) fn compute_role(&self) -> Option<Role> {
-        let role = match self.pgdog_role {
-            Some(ParameterValue::String(val)) => match val.as_str() {
-                "replica" => Some(Role::Replica),
-                "primary" => Some(Role::Primary),
-                _ => None,
-            },
-
-            _ => None,
-        };
+    pub(crate) fn compute_role(&self) -> Option<SessionRole> {
+        let role = self
+            .pgdog_role
+            .and_then(|value| value.as_str())
+            .and_then(|value| value.parse().ok());
 
         if let Some(role) = &role {
             self.hooks.record_set_role(role);

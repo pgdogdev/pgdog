@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use pgdog_config::Role;
+use pgdog_config::SessionRole;
 
 use crate::frontend::client::TransactionType;
 use crate::frontend::router::parser::ShardsWithPriority;
@@ -97,7 +97,6 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        let role = self.router_context.parameter_hints.compute_role();
         // Readonly clusters cannot pin ordinary transactions to a writer.
         let txn_write = matches!(
             self.router_context
@@ -107,9 +106,12 @@ impl<'a> QueryParserContext<'a> {
         ) && self.rw_conservative()
             && !self.read_only;
         // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
-        txn_write
-            || role == Some(Role::Primary)
-            || (self.prefer_primary && role != Some(Role::Replica))
+        let role_write = match self.router_context.parameter_hints.compute_role() {
+            Some(SessionRole::Primary) => true,
+            Some(SessionRole::Replica) => false,
+            None => self.prefer_primary,
+        };
+        txn_write || role_write
     }
 
     /// Are we using the conservative read/write separation strategy?

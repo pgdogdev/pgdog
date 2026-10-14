@@ -128,6 +128,21 @@
         }
       ]
     },
+    "SessionRole": {
+      "description": "Database role a client session wants its queries routed to.\n\n<https://docs.pgdog.dev/features/load-balancer/manual-routing/#parameters>",
+      "oneOf": [
+        {
+          "description": "Send queries to the primary.",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "Send queries to the replicas.",
+          "type": "string",
+          "const": "replica"
+        }
+      ]
+    },
     "User": {
       "description": "User allowed to connect to pgDog.\nA user entry in `users.toml`, controlling which users are allowed to connect to PgDog.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/>",
       "type": "object",
@@ -319,6 +334,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "role": {
+          "description": "Default value for the `pgdog.role` parameter for clients that don't set it.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionRole"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "schema_admin": {

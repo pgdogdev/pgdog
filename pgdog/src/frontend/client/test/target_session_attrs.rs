@@ -1,10 +1,10 @@
 use std::ops::Deref;
 
-use pgdog_config::ReadWriteSplit;
+use pgdog_config::{ReadWriteSplit, SessionRole};
 
 use crate::{
     backend::databases::reload_from_existing,
-    config::{Role, config, load_test_replicas, set},
+    config::{config, load_test_replicas, set},
     expect_message,
     net::{DataRow, ErrorResponse, Message, Parameters, Protocol, Query, ReadyForQuery},
 };
@@ -89,7 +89,7 @@ async fn assert_replica(client: &mut TestClient, table: &str) {
 #[tokio::test]
 async fn test_startup_replica() {
     let mut client = new_replicas_exclude_primary(Some("replica")).await;
-    assert_eq!(client.client().sticky.role, Some(Role::Replica));
+    assert_eq!(client.client().sticky.role, Some(SessionRole::Replica));
 
     assert_replica(&mut client, "test_startup_replica").await;
 }
@@ -97,7 +97,7 @@ async fn test_startup_replica() {
 #[tokio::test]
 async fn test_startup_primary() {
     let mut client = new_replicas_exclude_primary(Some("primary")).await;
-    assert_eq!(client.client().sticky.role, Some(Role::Primary));
+    assert_eq!(client.client().sticky.role, Some(SessionRole::Primary));
 
     assert_primary(&mut client, "test_startup_primary").await;
 }
