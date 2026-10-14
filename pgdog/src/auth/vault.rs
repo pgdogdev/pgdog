@@ -9,6 +9,7 @@
 //!   cache here to fetch dynamic database credentials.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
@@ -18,7 +19,9 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use tracing::{debug, warn};
 
-use crate::backend::Error;
+use crate::backend::auth::vault::evict_static_backend_credentials;
+use crate::backend::databases::databases;
+use crate::backend::{Error, reload_signal};
 use crate::config::config;
 use pgdog_config::users::PasswordKind;
 use pgdog_config::vault::{Vault, VaultAuthMethod};
@@ -46,8 +49,22 @@ struct AuthData {
 /// Static role client-auth cache
 struct CachedStaticPassword {
     password: String,
+    fetched_at: Instant,
     expires_at: Instant,
 }
+
+/// Safety margin subtracted from the static role TTL, so the cache expires
+/// slightly before Vault rotates the password.
+const STATIC_TTL_MARGIN: Duration = Duration::from_secs(1);
+
+/// Minimum age of a cached static password before a failed client auth may
+/// evict it. Bounds the Vault request rate a client sending wrong passwords
+/// can cause.
+const MIN_REFETCH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Per-path async mutex — serialises Vault fetches to prevent thundering herd on cache expiry.
+static FETCH_LOCKS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 static CLIENT_PASSWORD_CACHE: Lazy<Mutex<HashMap<String, CachedStaticPassword>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -241,16 +258,34 @@ pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, E
         return Ok(cached.password.clone());
     }
 
+    let fetch_lock = {
+        let mut locks = FETCH_LOCKS.lock();
+        Arc::clone(
+            locks
+                .entry(vault_path.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    };
+    let _fetch_guard = fetch_lock.lock().await;
+
+    // Double-check: another task may have fetched while we waited for the lock.
+    if let Some(cached) = CLIENT_PASSWORD_CACHE.lock().get(vault_path)
+        && Instant::now() < cached.expires_at
+    {
+        return Ok(cached.password.clone());
+    }
+
     let vault = config()
         .config
         .vault
         .clone()
         .ok_or_else(|| error("[vault] section is missing from pgdog.toml"))?;
 
+    watch_reloads();
     let secret: StaticSecretResponse = fetch_secret(&vault, vault_path).await?;
-
-    let ttl = Duration::from_secs(secret.data.ttl);
-    let expires_at = Instant::now() + ttl;
+    let fetched_at = Instant::now();
+    let expires_at =
+        fetched_at + Duration::from_secs(secret.data.ttl).saturating_sub(STATIC_TTL_MARGIN);
 
     debug!(
         vault_path,
@@ -262,11 +297,57 @@ pub(crate) async fn static_client_password(vault_path: &str) -> Result<String, E
         vault_path.to_owned(),
         CachedStaticPassword {
             password: secret.data.password.clone(),
+            fetched_at,
             expires_at,
         },
     );
 
     Ok(secret.data.password)
+}
+
+/// Evict cached static role passwords referenced by `passwords` after a failed
+/// client auth, so the next attempt refetches from Vault. Handles the password
+/// being rotated before its TTL ran out (e.g. a manual `rotate-role`).
+///
+/// Entries younger than [`MIN_REFETCH_INTERVAL`] are kept, so repeated bad
+/// passwords can't turn into a flood of Vault requests.
+pub(crate) fn evict_static_client_passwords(passwords: &[PasswordKind]) {
+    let mut cache = CLIENT_PASSWORD_CACHE.lock();
+    for p in passwords {
+        if let PasswordKind::VaultStaticRole(path) = p
+            && cache
+                .get(path)
+                .is_some_and(|cached| cached.fetched_at.elapsed() >= MIN_REFETCH_INTERVAL)
+        {
+            cache.remove(path);
+            debug!(
+                vault_path = path,
+                "evicted cached Vault static role password"
+            );
+        }
+    }
+}
+
+/// Drop cached static role passwords, client and backend, whenever the
+/// databases are reloaded (`RELOAD`, `RECONNECT`, SIGHUP, ...).
+///
+/// Vault only rotates static role passwords on schedule, so this is how
+/// operators make pgdog pick up an out-of-schedule rotation (e.g.
+/// `vault write -f database/rotate-role/<role>`) without waiting for the next
+/// scheduled one. Started by the first static role fetch.
+pub(crate) fn watch_reloads() {
+    static STARTED: Once = Once::new();
+    STARTED.call_once(|| {
+        let mut reloads = reload_signal::watch();
+        tokio::spawn(async move {
+            loop {
+                reloads.changed().await;
+                CLIENT_PASSWORD_CACHE.lock().clear();
+                evict_static_backend_credentials(&databases());
+                debug!("evicted cached Vault static role passwords after reload");
+            }
+        });
+    });
 }
 
 /// Resolve any [`PasswordKind::VaultStaticRole`] entries in `passwords` to
@@ -348,6 +429,7 @@ mod tests {
             "database/static-creds/cached-role".into(),
             CachedStaticPassword {
                 password: "cached-pw".into(),
+                fetched_at: Instant::now(),
                 expires_at: Instant::now() + Duration::from_secs(3600),
             },
         );
@@ -369,6 +451,7 @@ mod tests {
             "database/static-creds/expired-role".into(),
             CachedStaticPassword {
                 password: "stale-pw".into(),
+                fetched_at: Instant::now() - Duration::from_secs(3600),
                 expires_at: Instant::now() - Duration::from_secs(1),
             },
         );
@@ -397,6 +480,128 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pw, "fresh-pw");
+    }
+
+    #[tokio::test]
+    async fn test_static_client_password_concurrent_fetches_once() {
+        setup();
+        let server = MockServer::start().await;
+        let vault_path = "database/static-creds/concurrent-role";
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.tok4", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        // Fails on drop if Vault is hit more than once.
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/{vault_path}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({
+                        "data": { "username": "pgdog-static", "password": "shared-pw", "ttl": 3600 }
+                    }))
+                    .set_delay(Duration::from_millis(100)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        CLIENT_PASSWORD_CACHE.lock().remove(vault_path);
+        set_vault_config(approle_vault(&server.uri()));
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..10 {
+            tasks.spawn(static_client_password(vault_path));
+        }
+        while let Some(pw) = tasks.join_next().await {
+            assert_eq!(pw.unwrap().unwrap(), "shared-pw");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_static_client_password_ttl_below_margin_not_cached() {
+        setup();
+        let server = MockServer::start().await;
+        let vault_path = "database/static-creds/rotating-role";
+
+        Mock::given(method("POST"))
+            .and(path("/v1/auth/approle/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "auth": { "client_token": "s.tok5", "lease_duration": 3600 }
+            })))
+            .mount(&server)
+            .await;
+
+        // Rotation is imminent: every call must go back to Vault.
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/{vault_path}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "username": "pgdog-static", "password": "about-to-rotate", "ttl": 0 }
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let _guard = crate::test_utils::set_env_var("VAULT_SECRET_ID", "my-secret");
+        *VAULT_TOKEN.lock() = None;
+        CLIENT_PASSWORD_CACHE.lock().remove(vault_path);
+        set_vault_config(approle_vault(&server.uri()));
+
+        for _ in 0..2 {
+            let pw = static_client_password(vault_path).await.unwrap();
+            assert_eq!(pw, "about-to-rotate");
+        }
+    }
+
+    // ── evict_static_client_passwords() ─────────────────────────────────────────
+
+    #[test]
+    fn test_evict_static_client_passwords() {
+        let old = "database/static-creds/evict-old";
+        let fresh = "database/static-creds/evict-fresh";
+        let untouched = "database/static-creds/evict-untouched";
+        let expires_at = Instant::now() + Duration::from_secs(3600);
+
+        {
+            let mut cache = CLIENT_PASSWORD_CACHE.lock();
+            for (vault_path, age) in [
+                (old, MIN_REFETCH_INTERVAL),
+                (fresh, Duration::ZERO),
+                (untouched, MIN_REFETCH_INTERVAL),
+            ] {
+                cache.insert(
+                    vault_path.into(),
+                    CachedStaticPassword {
+                        password: "pw".into(),
+                        fetched_at: Instant::now() - age,
+                        expires_at,
+                    },
+                );
+            }
+        }
+
+        evict_static_client_passwords(&[
+            PasswordKind::VaultStaticRole(old.into()),
+            PasswordKind::VaultStaticRole(fresh.into()),
+            PasswordKind::Plain(untouched.into()),
+        ]);
+
+        let cache = CLIENT_PASSWORD_CACHE.lock();
+        assert!(!cache.contains_key(old), "old entry should be evicted");
+        assert!(
+            cache.contains_key(fresh),
+            "entry younger than MIN_REFETCH_INTERVAL should be kept"
+        );
+        assert!(
+            cache.contains_key(untouched),
+            "paths not referenced by a Vault password should be kept"
+        );
     }
 
     // ── static_client_password(): HTTP responses ────────────────────────────────
