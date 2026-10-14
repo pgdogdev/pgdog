@@ -195,13 +195,19 @@ impl<'a> StatementRewrite<'a> {
 
         if nd_function_rewrite {
             match stmt.stmt_mut() {
-                NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_) => {
+                NodeMut::InsertStmt(_)
+                | NodeMut::SelectStmt(_)
+                | NodeMut::UpdateStmt(_)
+                | NodeMut::DeleteStmt(_) => {
                     self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(
                         prepare.query_mut(),
-                        NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)
+                        NodeMut::InsertStmt(_)
+                            | NodeMut::SelectStmt(_)
+                            | NodeMut::UpdateStmt(_)
+                            | NodeMut::DeleteStmt(_)
                     ) {
                         self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
