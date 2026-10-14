@@ -157,16 +157,22 @@ impl QueryParser {
                     .extend(std::mem::take(&mut context.bare_key_lookups));
 
                 route.set_pending_lookups(std::mem::take(&mut context.pending_lookups));
-
-                if let Some(role) = context.router_context.sticky.role {
-                    match role {
-                        SessionRole::Primary => route.set_read(false),
-                        SessionRole::Replica => route.set_read(true),
-                    }
-                }
             }
 
             _ => (),
+        }
+
+        if let Command::Query(route) | Command::Copy { route, .. } = &mut command
+            && context
+                .router_context
+                .comment
+                .and_then(|comment| comment.role)
+                .is_none()
+            && !context.read_only
+            && !context.write_only
+            && let Some(role) = context.session_role
+        {
+            route.set_read(role == SessionRole::Replica);
         }
 
         if let Command::Query(_) = command
@@ -223,16 +229,6 @@ impl QueryParser {
         // Cluster doesn't have replicas and has only one shard.
         else if context.write_only {
             Some(Route::write(shard))
-
-        // The role was already changed explicitly by parameters, so we can bypass it.
-        // Comments for `pgdog.role` could be ignored though.
-        // But parameters are not parsed only when query_parser == off according
-        // to [`Cluster::use_query_parser`]
-        } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
-            Some(match role {
-                SessionRole::Replica => Route::read(shard),
-                SessionRole::Primary => Route::write(shard),
-            })
         } else if context.prefer_primary {
             // Send queries to primary by default.
             Some(Route::write(shard))
