@@ -596,6 +596,13 @@ impl TaskStorage {
         while self.has_running_tasks() && Instant::now() < deadline {
             sleep(Duration::from_millis(50)).await;
         }
+
+        if self.has_running_tasks() {
+            warn!(
+                "api tasks still running after {:.3}s, not waiting for them anymore",
+                limit.as_secs_f64()
+            );
+        }
     }
 
     /// Drop every root task that reached a terminal state more than
