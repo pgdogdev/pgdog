@@ -122,6 +122,9 @@ pub(crate) enum Error {
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+
     #[error("type: {0}")]
     Type(#[from] pgdog_postgres_types::Error),
 
@@ -212,6 +215,21 @@ pub(crate) enum Error {
 
     #[error("copy for table {0} been aborted")]
     CopyAborted(PublicationTable),
+
+    #[error(
+        "the event trigger to log DDL isn't installed on the source db, run PgDog's setup.sql there as a superuser"
+    )]
+    DdlReplicationNotInstalled,
+
+    #[error(
+        "\"{0}\" can't read ddl_replication_key, run on the source: GRANT SELECT ON pgdog.ddl_replication_key TO \"{0}\""
+    )]
+    DdlReplicationKeyUnreadable(String),
+
+    #[error(
+        "replaying DDL from a source with more than one shard isn't supported (will be later on in stack)"
+    )]
+    DdlReplicationMultiShardSource,
 
     #[error("data sync has been aborted")]
     DataSyncAborted,

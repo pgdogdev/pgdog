@@ -10,6 +10,7 @@ use super::replication_progress::{ReplicationProgressShardUpdater, ReplicationSh
 use super::{Lsn, ReplicationData, ReplicationSlotGuard, Table};
 use crate::backend::Cluster;
 use crate::backend::replication::logical::Error;
+use crate::backend::replication::logical::subscriber::ddl::DdlReplay;
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::replication::logical::subscriber::stream::StreamSubscriber;
 use crate::net::replication::ReplicationMeta;
@@ -26,6 +27,7 @@ pub(crate) struct ReplicationStream {
     source_name: String,
     dest_cluster: Cluster,
     updater: ReplicationProgressShardUpdater,
+    ddl_replay: Option<DdlReplay>,
     /// `None` while running, `Some(drain)` after a stop.
     stop: watch::Sender<Option<bool>>,
 }
@@ -34,12 +36,14 @@ impl ReplicationStream {
     pub(crate) fn new(
         source: &Cluster,
         dest: &Cluster,
+        ddl_replay: Option<DdlReplay>,
         updater: ReplicationProgressShardUpdater,
     ) -> Self {
         Self {
             source_name: source.name().to_owned(),
             dest_cluster: dest.clone(),
             updater,
+            ddl_replay,
             stop: watch::Sender::new(None),
         }
     }
@@ -64,6 +68,9 @@ impl ReplicationStream {
     ) -> Result<(), Error> {
         let mut stream = StreamSubscriber::new(&self.dest_cluster, tables, origins);
         stream.set_current_lsn(slot.lsn().lsn);
+        if let Some(ddl_replay) = &self.ddl_replay {
+            stream.set_ddl_replay(ddl_replay.clone());
+        }
         self.updater.update(|p| {
             p.advance_applied_lsn(slot.lsn());
             p.started = Some(Instant::now());
@@ -349,7 +356,7 @@ mod tests {
             let source = Cluster::new_test_single_shard(&config());
             let progress = ReplicationProgress::new(1);
             let updater = progress.updater_for_shard(0);
-            let replication = Arc::new(ReplicationStream::new(&source, &source, updater));
+            let replication = Arc::new(ReplicationStream::new(&source, &source, None, updater));
             Self {
                 source_table: format!("replication_source_{suffix}"),
                 destination_table: format!("replication_destination_{suffix}"),
