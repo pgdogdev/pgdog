@@ -31,6 +31,11 @@ pub struct Counts {
     pub rows_inserted: usize,
     pub rows_updated: usize,
     pub rows_deleted: usize,
+    pub rows_copied: usize,
+    pub tables_created: usize,
+    pub tables_dropped: usize,
+    pub ddl_commands: usize,
+    pub dml_commands: usize,
 }
 
 impl Add<Counts> for PoolCounts {
@@ -60,6 +65,11 @@ impl Add<Counts> for PoolCounts {
             rows_inserted: self.rows_inserted + rhs.rows_inserted,
             rows_updated: self.rows_updated + rhs.rows_updated,
             rows_deleted: self.rows_deleted + rhs.rows_deleted,
+            rows_copied: self.rows_copied + rhs.rows_copied,
+            tables_created: self.tables_created + rhs.tables_created,
+            tables_dropped: self.tables_dropped + rhs.tables_dropped,
+            ddl_commands: self.ddl_commands + rhs.ddl_commands,
+            dml_commands: self.dml_commands + rhs.dml_commands,
 
             // These are not counted by each server stats.
             connect_count: self.connect_count,
@@ -102,6 +112,11 @@ impl Add for Counts {
             rows_inserted: self.rows_inserted.saturating_add(rhs.rows_inserted),
             rows_updated: self.rows_updated.saturating_add(rhs.rows_updated),
             rows_deleted: self.rows_deleted.saturating_add(rhs.rows_deleted),
+            rows_copied: self.rows_copied.saturating_add(rhs.rows_copied),
+            tables_created: self.tables_created.saturating_add(rhs.tables_created),
+            tables_dropped: self.tables_dropped.saturating_add(rhs.tables_dropped),
+            ddl_commands: self.ddl_commands.saturating_add(rhs.ddl_commands),
+            dml_commands: self.dml_commands.saturating_add(rhs.dml_commands),
         }
     }
 }
@@ -150,5 +165,51 @@ mod test {
         };
 
         assert_eq!((pool + server).idle_xact_timeouts, 5);
+    }
+
+    #[test]
+    fn test_statement_metrics_propagate_to_pool() {
+        let server = Counts {
+            rows_copied: 10,
+            tables_created: 1,
+            tables_dropped: 2,
+            ddl_commands: 3,
+            dml_commands: 4,
+            ..Default::default()
+        };
+
+        let pool = PoolCounts::default() + server;
+        assert_eq!(pool.rows_copied, 10);
+        assert_eq!(pool.tables_created, 1);
+        assert_eq!(pool.tables_dropped, 2);
+        assert_eq!(pool.ddl_commands, 3);
+        assert_eq!(pool.dml_commands, 4);
+    }
+
+    #[test]
+    fn test_statement_metrics_add() {
+        let left = Counts {
+            rows_copied: 10,
+            tables_created: 1,
+            tables_dropped: 2,
+            ddl_commands: 3,
+            dml_commands: 4,
+            ..Default::default()
+        };
+        let right = Counts {
+            rows_copied: 5,
+            tables_created: 2,
+            tables_dropped: 3,
+            ddl_commands: 4,
+            dml_commands: 5,
+            ..Default::default()
+        };
+
+        let total = left + right;
+        assert_eq!(total.rows_copied, 15);
+        assert_eq!(total.tables_created, 3);
+        assert_eq!(total.tables_dropped, 5);
+        assert_eq!(total.ddl_commands, 7);
+        assert_eq!(total.dml_commands, 9);
     }
 }

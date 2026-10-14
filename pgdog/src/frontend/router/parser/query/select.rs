@@ -122,7 +122,8 @@ impl QueryParser {
                     .with_read(!writes)
                     .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
+                    .with_advisory_locks(advisory_locks)
+                    .dml(),
             ));
         }
 
@@ -184,7 +185,8 @@ impl QueryParser {
                     .with_read(!writes)
                     .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
+                    .with_advisory_locks(advisory_locks)
+                    .dml(),
             ));
         }
 

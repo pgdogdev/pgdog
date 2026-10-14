@@ -7,6 +7,15 @@ use super::{
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
 
+/// Table changes identified by the query parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TableChange {
+    #[default]
+    None,
+    Created,
+    Dropped(u32),
+}
+
 /// The shard destination for a query.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
 pub(crate) enum Shard {
@@ -135,7 +144,8 @@ pub(crate) struct Route {
     pending_lookups: Vec<PendingLookup>,
     /// The temporary table being created/dropped if present
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
-    stmt_type: StatementType,
+    stmt_type: Option<StatementType>,
+    table_change: TableChange,
 }
 
 impl Display for Route {
@@ -165,6 +175,7 @@ impl Route {
             aggregate,
             limit,
             distinct,
+            stmt_type: Some(StatementType::Dml),
             ..Default::default()
         }
     }
@@ -399,22 +410,43 @@ impl Route {
     }
 
     pub(super) fn ddl(mut self) -> Self {
-        self.stmt_type = StatementType::Ddl;
+        self.stmt_type = Some(StatementType::Ddl);
         self
     }
 
+    pub(super) fn dml(mut self) -> Self {
+        self.stmt_type = Some(StatementType::Dml);
+        self
+    }
+
+    pub(crate) fn statement_type(&self) -> Option<StatementType> {
+        self.stmt_type
+    }
+
+    pub(super) fn with_table_change(mut self, table_change: TableChange) -> Self {
+        self.table_change = table_change;
+        self
+    }
+
+    pub(crate) fn table_change(&self) -> TableChange {
+        self.table_change
+    }
+
     pub(super) fn transaction_control(mut self) -> Self {
-        self.stmt_type = StatementType::TransactionControl;
+        self.stmt_type = Some(StatementType::TransactionControl);
         self
     }
 
     pub(super) fn session_control(mut self) -> Self {
-        self.stmt_type = StatementType::SessionControl;
+        self.stmt_type = Some(StatementType::SessionControl);
         self
     }
 
     pub(crate) fn needs_backend(&self) -> bool {
-        matches!(self.stmt_type, StatementType::Dml | StatementType::Ddl) || self.rollback_savepoint
+        matches!(
+            self.stmt_type,
+            None | Some(StatementType::Dml | StatementType::Ddl)
+        ) || self.rollback_savepoint
     }
 }
 

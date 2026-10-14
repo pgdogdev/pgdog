@@ -133,6 +133,13 @@ mod test {
     }
 
     #[test]
+    fn rows_and_tag_for_copy() {
+        let copy = CommandComplete::from_str("COPY 42");
+        assert_eq!(copy.tag(), "COPY");
+        assert_eq!(copy.rows().unwrap(), Some(42));
+    }
+
+    #[test]
     fn rows_none_for_non_dml() {
         let begin = CommandComplete::from_str("BEGIN");
         assert_eq!(begin.tag(), "BEGIN");

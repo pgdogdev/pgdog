@@ -4,6 +4,7 @@ use crate::{
     frontend::{
         ClientRequest,
         client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
+        router::parser::Shard,
     },
     net::{FrontendPid, ProtocolMessage, Query},
     parameters::{ParameterStore, Parameters},
@@ -122,6 +123,34 @@ impl Binding {
             Binding::Direct(server) => server.send(client_request).await,
             Binding::NotConnected | Binding::Transaction(_) => Err(Error::NotConnected),
             Binding::MultiShard(servers) => servers.send(client_request).await,
+        }
+    }
+
+    /// Record successful parser-classified statements on each target pool.
+    pub(crate) fn statement_completed(&mut self, route: &Route) {
+        let Some(statement_type) = route.statement_type() else {
+            return;
+        };
+
+        match self {
+            Binding::Direct(server) => server
+                .stats_mut()
+                .statement_completed(statement_type, route.table_change()),
+            Binding::MultiShard(servers) => {
+                for server in servers.iter_mut() {
+                    let targeted = match route.shard() {
+                        Shard::Direct(shard) => *shard == server.shard,
+                        Shard::Multi(shards) => shards.contains(&server.shard),
+                        Shard::All => true,
+                    };
+                    if targeted {
+                        server
+                            .stats_mut()
+                            .statement_completed(statement_type, route.table_change());
+                    }
+                }
+            }
+            _ => (),
         }
     }
 
