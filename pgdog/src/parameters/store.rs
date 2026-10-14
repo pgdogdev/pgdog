@@ -53,6 +53,11 @@ impl ParameterStore {
             .unwrap_or(default)
     }
 
+    /// The value restored by RESET, before any session or transaction changes.
+    pub(crate) fn get_startup(&self, name: &str) -> Option<&ParameterValue> {
+        self.startup.get(name)
+    }
+
     pub(crate) fn search_path(&self) -> Option<&ParameterValue> {
         self.get("search_path")
     }

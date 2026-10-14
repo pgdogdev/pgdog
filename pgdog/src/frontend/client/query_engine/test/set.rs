@@ -5,7 +5,8 @@ use crate::{
     frontend::client::TransactionType,
     net::{
         BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, NoticeResponse,
-        ParameterDescription, ParseComplete, ReadyForQuery, ToBytes, parameter::ParameterValue,
+        ParameterDescription, ParameterStatus, ParseComplete, ReadyForQuery, ToBytes,
+        parameter::ParameterValue,
     },
 };
 
@@ -33,6 +34,7 @@ async fn test_set() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -103,6 +105,7 @@ async fn test_invalid_set_preserves_parameters() {
         ("statement_timeout", "SET statement_timeout = '25d'"),
         ("statement_timeout", "SET statement_timeout = '5MB'"),
         ("work_mem", "SET work_mem = '63kB'"),
+        ("vacuum_cost_delay", "SET vacuum_cost_delay = '10s'"),
     ] {
         client.send_simple(Query::new(query)).await;
         assert_eq!(
@@ -296,6 +299,7 @@ async fn test_set_statement_describe() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -316,6 +320,7 @@ async fn test_set_search_path() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -352,6 +357,7 @@ async fn test_set_inside_transaction() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -399,6 +405,7 @@ async fn test_set_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -434,6 +441,7 @@ async fn test_reset() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "SET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -453,6 +461,7 @@ async fn test_reset() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -477,6 +486,7 @@ async fn test_reset_all() {
         .send_simple(Query::new("SET application_name TO 'test_reset_all'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     test_client
@@ -550,6 +560,7 @@ async fn test_reset_inside_transaction_commit() {
         .send_simple(Query::new("SET application_name TO 'before_reset'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     assert_eq!(
@@ -573,6 +584,7 @@ async fn test_reset_inside_transaction_commit() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'
@@ -606,6 +618,7 @@ async fn test_reset_inside_transaction_rollback() {
         .send_simple(Query::new("SET application_name TO 'before_reset'"))
         .await;
     expect_message!(test_client.read().await, CommandComplete);
+    expect_message!(test_client.read().await, ParameterStatus);
     expect_message!(test_client.read().await, ReadyForQuery);
 
     assert_eq!(
@@ -629,6 +642,7 @@ async fn test_reset_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "RESET"
     );
+    expect_message!(test_client.read().await, ParameterStatus);
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'T'

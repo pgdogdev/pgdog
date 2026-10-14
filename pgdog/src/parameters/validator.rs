@@ -11,6 +11,11 @@ use crate::{
     net::{ErrorResponse, ParameterStatus},
 };
 
+use super::ParameterValue;
+
+mod names;
+mod numeric;
+
 static TZ: Lazy<HashSet<&'static str>> =
     Lazy::new(|| chrono_tz::TZ_VARIANTS.iter().map(|tz| tz.name()).collect());
 
@@ -40,7 +45,7 @@ impl<'a> From<&'a SetParam> for Parameter<'a> {
     fn from(value: &'a SetParam) -> Self {
         Self {
             name: value.name.as_str(),
-            value: value.value.as_ref().map(|value| value.as_str()).flatten(),
+            value: value.value.as_ref().and_then(|value| value.as_str()),
         }
     }
 }
@@ -49,9 +54,10 @@ impl<'a> From<&'a SetParam> for Parameter<'a> {
 pub(crate) struct ParameterValidator;
 
 impl ParameterValidator {
-    /// Should we notify the client of a change to this parameter.
+    /// Report a changed parameter using its effective value after SET or RESET.
     pub(crate) fn notify_client<'a>(
         param: impl Into<Parameter<'a>>,
+        previous: Option<&ParameterValue>,
         store: &super::ParameterStore,
     ) -> Option<ParameterStatus> {
         let param = param.into();
@@ -60,28 +66,26 @@ impl ParameterValidator {
             .map(|guc| guc.report)
             .unwrap_or_default();
 
-        if report
-            && param.value()
-                != store
-                    .get(param.name())
-                    .map(|value| value.as_str())
-                    .flatten()
-        {
+        let value = store.get(param.name());
+        if report && value != previous {
             Some(ParameterStatus {
                 name: param.name().to_string(),
-                value: param.value().unwrap_or_default().to_string().into(),
+                value: value.cloned().unwrap_or_else(|| "".into()),
             })
         } else {
             None
         }
     }
 
-    /// Run paramete validation. If any of the parameters are invalid,
+    /// Run parameter validation. If any of the parameters are invalid,
     /// an error is returned.
     pub(crate) fn validate<'a>(param: impl Into<Parameter<'a>>) -> Option<ErrorResponse> {
         let param = param.into();
 
         let name = param.name();
+        if let Some(error) = names::validate(name) {
+            return Some(error);
+        }
         let value = param.value()?;
 
         let valid = if name == "TimeZone" {
@@ -97,6 +101,12 @@ impl ParameterValidator {
                 message: format!("invalid value for parameter \"{name}\": \"{value}\""),
                 ..Default::default()
             };
+            if let Some(message) = GUC
+                .get(name)
+                .and_then(|guc| numeric::range_error(guc, value))
+            {
+                error.message = message;
+            }
             if let Some(guc) = GUC.get(name).filter(|guc| !guc.options.is_empty()) {
                 error.hint = Some(format!("Available values: {}.", guc.options.join(", ")));
                 error.file = Some("guc.c".into());
@@ -245,6 +255,66 @@ mod tests {
         }
         for value in ["63kB", "0.01MB", "2TB", "5s"] {
             assert!(validate("work_mem", value).is_some(), "{value}");
+        }
+    }
+
+    #[test]
+    fn numeric_range_messages_use_converted_values_and_units() {
+        for (name, value, expected) in [
+            (
+                "vacuum_cost_delay",
+                "10s",
+                "10000 ms is outside the valid range for parameter \"vacuum_cost_delay\" (0 ms .. 100 ms)",
+            ),
+            (
+                "vacuum_cost_delay",
+                "100.125",
+                "100.125 ms is outside the valid range for parameter \"vacuum_cost_delay\" (0 ms .. 100 ms)",
+            ),
+            (
+                "extra_float_digits",
+                "3.5",
+                "4 is outside the valid range for parameter \"extra_float_digits\" (-15 .. 3)",
+            ),
+            (
+                "work_mem",
+                "1B",
+                "0 kB is outside the valid range for parameter \"work_mem\" (64 kB .. 2147483647 kB)",
+            ),
+            (
+                "statement_timeout",
+                "-1s",
+                "-1000 ms is outside the valid range for parameter \"statement_timeout\" (0 ms .. 2147483647 ms)",
+            ),
+            (
+                "geqo_selection_bias",
+                "2.1",
+                "2.1 is outside the valid range for parameter \"geqo_selection_bias\" (1.5 .. 2)",
+            ),
+            (
+                "seq_page_cost",
+                "-1",
+                "-1 is outside the valid range for parameter \"seq_page_cost\" (0 .. 1.79769e+308)",
+            ),
+            (
+                "seq_page_cost",
+                "inf",
+                "Infinity is outside the valid range for parameter \"seq_page_cost\" (0 .. 1.79769e+308)",
+            ),
+        ] {
+            let error = validate(name, value).expect("out of range");
+            assert_eq!(error.code, "22023");
+            assert_eq!(error.message, expected);
+            assert!(error.hint.is_none());
+            assert!(error.detail.is_none());
+        }
+        for value in ["NaN", "invalid"] {
+            assert_eq!(
+                validate("seq_page_cost", value)
+                    .expect("invalid number")
+                    .message,
+                format!("invalid value for parameter \"seq_page_cost\": \"{value}\"")
+            );
         }
     }
 

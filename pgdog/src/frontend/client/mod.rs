@@ -35,7 +35,6 @@ use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
-pub(crate) mod parameter_validator;
 pub(crate) mod query_engine;
 pub(crate) mod sticky;
 pub(crate) mod timeouts;
@@ -269,7 +268,7 @@ impl Client {
     /// Create new frontend client from the given TCP stream.
     async fn login(
         mut stream: Stream,
-        params: Parameters,
+        mut params: Parameters,
         addr: SocketAddr,
         config: Arc<ConfigAndUsers>,
         protocol_version: ProtocolVersion,
@@ -281,10 +280,11 @@ impl Client {
         }
 
         let (user, database) = user_database_from_params(&params);
+        let database = database.to_string();
         let admin = database == config.config.admin.name && config.config.admin.user == user;
         let admin_password = &config.config.admin.password;
         let auth_type = databases::databases()
-            .auth_type((user, database))
+            .auth_type((user, database.as_str()))
             .unwrap_or(config.config.general.auth_type);
         let passthrough = config.config.general.passthrough_auth();
         let id = FrontendPid::new();
@@ -307,7 +307,7 @@ impl Client {
             Self::check_password(
                 &mut stream,
                 user,
-                database,
+                &database,
                 &config.config.general.auth_type, // Admin auth uses general auth_type on purpose, which defaults to scram.
                 &passwords,
             )
@@ -327,7 +327,7 @@ impl Client {
                 AuthResult::NoPassthroughNoUser
             }
         } else {
-            match databases::databases().cluster((user, database)) {
+            match databases::databases().cluster((user, database.as_str())) {
                 Ok(cluster) => {
                     if let Some(identity) = cluster.identity() {
                         // mTLS authentication: the client certificate identity
@@ -353,7 +353,7 @@ impl Client {
                         // entries to plaintext before the auth exchange
                         let passwords =
                             crate::auth::vault::resolve_passwords(cluster.passwords()).await;
-                        Self::check_password(&mut stream, user, database, &auth_type, &passwords)
+                        Self::check_password(&mut stream, user, &database, &auth_type, &passwords)
                             .await?
                     }
                 }
@@ -369,7 +369,7 @@ impl Client {
                     user, database, auth_result
                 );
             }
-            stream.fatal(ErrorResponse::auth(user, database)).await?;
+            stream.fatal(ErrorResponse::auth(user, &database)).await?;
             return Ok(None);
         } else {
             stream.send(&Authentication::Ok).await?;
@@ -386,11 +386,11 @@ impl Client {
             return Ok(None);
         }
 
-        let mut conn = match Connection::new(user, database, admin) {
+        let mut conn = match Connection::new(user, &database, admin) {
             Ok(conn) => conn,
             Err(err) => {
                 debug!("connection error: {}", err);
-                stream.fatal(ErrorResponse::auth(user, database)).await?;
+                stream.fatal(ErrorResponse::auth(user, &database)).await?;
                 return Ok(None);
             }
         };
@@ -406,7 +406,7 @@ impl Client {
                         addr
                     );
                     stream
-                        .fatal(ErrorResponse::connection(user, database))
+                        .fatal(ErrorResponse::connection(user, &database))
                         .await?;
                     return Ok(None);
                 } else {
@@ -415,8 +415,8 @@ impl Client {
             }
         };
 
-        for param in server_params {
-            stream.send(&param).await?;
+        for param in &server_params {
+            stream.send(param).await?;
         }
 
         stream.send(&key).await?;
@@ -443,6 +443,10 @@ impl Client {
             user, params, addr
         );
 
+        params.set_server_defaults(&server_params);
+
+        let sticky = Sticky::from_params(&params);
+
         Ok(Some(Self {
             addr,
             stream,
@@ -450,7 +454,7 @@ impl Client {
             comms,
             admin,
             streaming: false,
-            params: ParameterStore::new(params.clone()),
+            params: ParameterStore::new(params),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
@@ -459,8 +463,8 @@ impl Client {
                 config.config.memory.message_buffer,
                 config.config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&params),
-            database: database.to_string(),
+            sticky,
+            database,
             query_log_stdout: false,
             query_size_limit: None,
             statement_start: Utc::now(),

@@ -3160,6 +3160,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pg_internals"
 version = "0.1.0"
+source = "git+https://github.com/pgdogdev/pg-internals#cf036bf31b78029bd48bb78bb0d626da4157303a"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
@@ -3171,6 +3172,7 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.118",
+ "thiserror",
 ]
 
 [[package]]
@@ -3407,7 +3409,7 @@ dependencies = [
 [[package]]
 name = "pgdog-regress"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/regress#c367bbce243c0e420f65a2065c8392793546f629"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -3610,7 +3612,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.12"
-source = "git+https://github.com/pgdogdev/regress#c367bbce243c0e420f65a2065c8392793546f629"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
 dependencies = [
  "base64 0.23.1",
  "byteorder",
