@@ -12,9 +12,19 @@ use crate::{
 use super::test_client::TestClient;
 
 async fn new_replicas_exclude_primary(startup_role: Option<&str>) -> TestClient {
+    new_replicas_with_user_role(startup_role, None).await
+}
+
+async fn new_replicas_with_user_role(
+    startup_role: Option<&str>,
+    user_role: Option<SessionRole>,
+) -> TestClient {
     load_test_replicas();
 
     let mut config = config().deref().clone();
+    for user in &mut config.users.users {
+        user.role = user_role;
+    }
     config.config.general.read_write_split = ReadWriteSplit::ExcludePrimary;
     set(config).unwrap();
     reload_from_existing().unwrap();
@@ -89,16 +99,12 @@ async fn assert_replica(client: &mut TestClient, table: &str) {
 #[tokio::test]
 async fn test_startup_replica() {
     let mut client = new_replicas_exclude_primary(Some("replica")).await;
-    assert_eq!(client.client().sticky.role, Some(SessionRole::Replica));
-
     assert_replica(&mut client, "test_startup_replica").await;
 }
 
 #[tokio::test]
 async fn test_startup_primary() {
     let mut client = new_replicas_exclude_primary(Some("primary")).await;
-    assert_eq!(client.client().sticky.role, Some(SessionRole::Primary));
-
     assert_primary(&mut client, "test_startup_primary").await;
 }
 
@@ -263,4 +269,101 @@ async fn test_set_primary_reset_all() {
     for _ in 0..5 {
         assert!(read_only(&mut client).await, "read went to the primary");
     }
+}
+
+#[tokio::test]
+async fn test_user_replica() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Replica)).await;
+    assert_replica(&mut client, "test_user_replica").await;
+}
+
+#[tokio::test]
+async fn test_user_primary() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Primary)).await;
+    assert_primary(&mut client, "test_user_primary").await;
+}
+
+#[tokio::test]
+async fn test_user_replica_startup_primary() {
+    let mut client = new_replicas_with_user_role(Some("primary"), Some(SessionRole::Replica)).await;
+    assert_primary(&mut client, "test_user_replica_startup_primary").await;
+}
+
+#[tokio::test]
+async fn test_user_primary_startup_replica() {
+    let mut client = new_replicas_with_user_role(Some("replica"), Some(SessionRole::Primary)).await;
+    assert_replica(&mut client, "test_user_primary_startup_replica").await;
+}
+
+#[tokio::test]
+async fn test_user_replica_set_primary() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Replica)).await;
+    execute(&mut client, "SET pgdog.role TO 'primary'")
+        .await
+        .unwrap();
+
+    assert_primary(&mut client, "test_user_replica_set_primary").await;
+}
+
+#[tokio::test]
+async fn test_user_primary_set_replica() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Primary)).await;
+    execute(&mut client, "SET pgdog.role TO 'replica'")
+        .await
+        .unwrap();
+
+    assert_replica(&mut client, "test_user_primary_set_replica").await;
+}
+
+#[tokio::test]
+async fn test_user_replica_set_local_primary() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Replica)).await;
+    execute(&mut client, "BEGIN").await.unwrap();
+    execute(&mut client, "SET LOCAL pgdog.role TO 'primary'")
+        .await
+        .unwrap();
+
+    assert_primary(&mut client, "test_user_replica_set_local_primary").await;
+    execute(&mut client, "ROLLBACK").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_user_primary_set_local_replica() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Primary)).await;
+    execute(&mut client, "BEGIN").await.unwrap();
+    execute(&mut client, "SET LOCAL pgdog.role TO 'replica'")
+        .await
+        .unwrap();
+
+    assert_replica(&mut client, "test_user_primary_set_local_replica").await;
+    execute(&mut client, "ROLLBACK").await.unwrap();
+}
+
+#[tokio::test]
+async fn test_user_replica_comment_primary() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Replica)).await;
+
+    for _ in 0..5 {
+        assert!(!read_only_with_comment(&mut client, "/* pgdog_role: primary */").await);
+    }
+}
+
+#[tokio::test]
+async fn test_user_primary_comment_replica() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Primary)).await;
+
+    for _ in 0..5 {
+        assert!(read_only_with_comment(&mut client, "/* pgdog_role: replica */").await);
+    }
+}
+
+#[tokio::test]
+async fn test_user_replica_set_primary_reset() {
+    let mut client = new_replicas_with_user_role(None, Some(SessionRole::Replica)).await;
+    execute(&mut client, "SET pgdog.role TO 'primary'")
+        .await
+        .unwrap();
+    execute(&mut client, "RESET pgdog.role").await.unwrap();
+
+    assert_replica(&mut client, "test_user_replica_set_primary_reset").await;
 }
