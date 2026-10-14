@@ -127,8 +127,8 @@ jobs:
             }
           - {
               name: server,
-              script: integration/server/run.sh
-          }
+              script: integration/server/run.sh,
+            }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
