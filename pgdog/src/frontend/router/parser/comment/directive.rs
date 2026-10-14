@@ -2,7 +2,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
-use crate::config::database::Role;
+use pgdog_config::SessionRole;
+
 use crate::frontend::router::sharding::{ShardOrLookup, lookup::shard_for_bare_key};
 
 use super::super::Error;
@@ -25,7 +26,7 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
 
 pub(crate) struct Directive {
     pub(crate) shard_or_lookup: Option<ShardOrLookup>,
-    pub(crate) role: Option<Role>,
+    pub(crate) role: Option<SessionRole>,
     pub(crate) sharding_key: Option<String>,
 }
 
@@ -38,11 +39,7 @@ pub(super) fn shard_role_from_comment(
     if let Some(cap) = ROLE.captures(comment)
         && let Some(r) = cap.get(1)
     {
-        match r.as_str() {
-            "primary" => role = Some(Role::Primary),
-            "replica" => role = Some(Role::Replica),
-            _ => return Err(Error::RegexError),
-        }
+        role = Some(r.as_str().parse().map_err(|_| Error::RegexError)?);
     }
     if let Some(cap) = SHARDING_KEY.captures(comment)
         && let Some(sharding_key) = get_matched_value(&cap)

@@ -403,6 +403,10 @@ pub struct User {
     /// Maximum random adjustment applied to `server_lifetime` per backend connection (milliseconds).
     /// Overrides the database-level and general-level `server_lifetime_jitter` setting for this user.
     pub server_lifetime_jitter: Option<u64>,
+    /// Default value for the `pgdog.role` parameter for clients that don't set it.
+    ///
+    /// <https://docs.pgdog.dev/configuration/users.toml/users/#role>
+    pub role: Option<crate::SessionRole>,
 
     /// Role-specific configuration settings.
     ///
