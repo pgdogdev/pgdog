@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the bits that the Blacksmith runner image doesn't already ship.
+# Install build dependencies and CI tools for Blacksmith runners and the CI image.
 # Linux/Debian-derivative only — no-op on other platforms. Idempotent.
 set -euo pipefail
 
@@ -22,9 +22,15 @@ case "$ARCH" in
     *) echo "install-deps.sh: unsupported architecture ${ARCH}" >&2; exit 1 ;;
 esac
 
-if ! dpkg -s mold gdb >/dev/null 2>&1; then
+# Match pg-internals' CI dependencies for PostgreSQL configure and bindgen.
+packages=(
+    build-essential clang libclang-dev bison flex pkg-config
+    libicu-dev libreadline-dev zlib1g-dev
+    mold gdb
+)
+if ! dpkg -s "${packages[@]}" >/dev/null 2>&1; then
     sudo apt-get update
-    sudo apt-get install -y --no-install-recommends mold gdb
+    sudo apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
 # The protocol_version smoke test needs a psql >= 18 client. The runner
