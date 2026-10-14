@@ -219,9 +219,12 @@ impl Connection {
         // `read_write_split = "aggressive"` lets the first statement
         // inside a transaction decide if it's a read or a write; we haven't
         // connected to Postgres yet, so we can still make this call.
-        let is_read = match route.session_role() {
-            Some(role) => role == SessionRole::Replica,
-            None => is_read.unwrap_or(route.is_read()),
+        // Otherwise, only the session role can override the transaction intent.
+        let is_read = match is_read {
+            Some(is_read) => route
+                .session_role()
+                .map_or(is_read, |role| role == SessionRole::Replica),
+            None => route.is_read(),
         };
 
         if let Shard::Direct(shard) = route.shard() {

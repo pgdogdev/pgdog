@@ -162,17 +162,11 @@ impl QueryParser {
             _ => (),
         }
 
-        if let Command::Query(route) | Command::Copy { route, .. } = &mut command
-            && context
-                .router_context
-                .comment
-                .and_then(|comment| comment.role)
-                .is_none()
-            && !context.read_only
-            && !context.write_only
-            && let Some(role) = context.session_role
-        {
-            route.set_session_role(role);
+        if let Command::Query(route) | Command::Copy { route, .. } = &mut command {
+            if let Some(role) = context.query_role() {
+                route.set_read(role == SessionRole::Replica);
+            }
+            route.set_session_role(context.session_role());
         }
 
         if let Command::Query(_) = command
@@ -317,9 +311,6 @@ impl QueryParser {
             }
 
             let role_override = routing_comment.role;
-            if let Some(role) = role_override {
-                self.write_override = role == SessionRole::Primary;
-            }
 
             if comment_shard_set || role_override.is_some() {
                 let shard = context.shards_calculator.shard();
