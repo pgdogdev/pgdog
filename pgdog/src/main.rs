@@ -50,7 +50,6 @@ mod healthcheck;
 mod net;
 mod parameters;
 mod plugin;
-mod sighup;
 mod state;
 mod stats;
 pub(crate) mod sync;
@@ -150,9 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
-    // Run atexit handlers on SIGTERM (e.g. llvm-cov profile flushing).
-    #[cfg(unix)]
-    install_sigterm_handler();
+    let mut signals = util::system::ShutdownSignal::new();
 
     // Preload TLS. Resulting primitives
     // are async, so doing this after Tokio launched seems prudent.
@@ -201,7 +198,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         stats_logger.spawn();
     }
 
-    let outcome = async {
+    let run = async {
         match command {
             None | Some(Commands::Run { .. }) => {
                 if config().config.general.dry_run {
@@ -234,16 +231,12 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             Some(ref command) => {
                 if let Commands::DataSync { .. } = command {
                     info!("🔄 entering data sync mode");
-                    cli::data_sync(command.clone()).await.inspect_err(|err| {
-                        error!("{}", err);
-                    })?;
+                    cli::data_sync(command.clone()).await?;
                 }
 
                 if let Commands::SchemaSync { .. } = command {
                     info!("🔄 entering schema sync mode");
-                    cli::schema_sync(command.clone()).await.inspect_err(|err| {
-                        error!("{}", err);
-                    })?;
+                    cli::schema_sync(command.clone()).await?;
                 }
 
                 if let Commands::Setup { database } = command {
@@ -257,50 +250,54 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 }
 
                 if let Commands::Route { .. } = command {
-                    cli::route(command.clone()).await.inspect_err(|err| {
-                        error!("{}", err);
-                    })?;
+                    cli::route(command.clone()).await?;
                 }
             }
         }
 
         Ok(())
+    };
+    let shutting_down = frontend::comms::comms().shutting_down();
+
+    // run the main task and the tasks_storage cleanup in parallel,
+    // so the pg listener can still process admin requests during
+    // shutdown, while part of shutdown is in progress
+    let (outcome, ()) = tokio::join!(
+        async {
+            let outcome = run.await;
+            // make sure to run the shutdown if task is called to stop the signal listener
+            frontend::comms::comms().shutdown();
+            outcome
+        },
+        async {
+            tokio::select! {
+                _ = signals.recv() => frontend::comms::comms().shutdown(),
+                _ = shutting_down.cancelled() => {}
+            }
+            warn!("🐕 PgDog is shutting down...");
+            // here, in parallel we can only shutdown tasks_storage
+            // and other shutdown tasks could mess up with listener
+            api::tasks_storage()
+                .shutdown(general.shutdown_timeout())
+                .await;
+        },
+    );
+
+    if let Err(err) = &outcome {
+        error!("{err}");
     }
-    .await;
 
-    frontend::comms::comms().shutdown();
-    api::tasks_storage()
-        .shutdown(general.shutdown_timeout())
-        .await;
-
+    // the following shutdown should be run in sequence
+    // to not mess up with the inner shutdown execution
     Manager::get().shutdown().await;
     databases::shutdown();
     tasks::shutdown().await;
 
-    // Any shutdown routines go below.
     plugin::shutdown();
 
-    info!("🐕 PgDog is shutting down");
+    warn!("🐕 PgDog is shut down");
 
     outcome
-}
-
-/// Install a SIGTERM handler that exits the process via [`exit`], running
-/// `atexit` handlers. Without it, SIGTERM terminates the process outright,
-/// which skips the llvm-cov profile flush (no .profraw written) used by
-/// integration test coverage. Behavior is otherwise unchanged: PgDog stops
-/// immediately.
-#[cfg(unix)]
-fn install_sigterm_handler() {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    if let Ok(mut sigterm) = signal(SignalKind::terminate()) {
-        tokio::spawn(async move {
-            sigterm.recv().await;
-            info!("🐕 PgDog is shutting down immediately [SIGTERM]");
-            exit(0);
-        });
-    }
 }
 
 fn build_runtime(general: &General, memory: &Memory) -> std::io::Result<tokio::runtime::Runtime> {
