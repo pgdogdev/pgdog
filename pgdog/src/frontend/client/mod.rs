@@ -352,8 +352,20 @@ impl Client {
                         // entries to plaintext before the auth exchange
                         let passwords =
                             crate::auth::vault::resolve_passwords(cluster.passwords()).await;
-                        Self::check_password(&mut stream, user, database, &auth_type, &passwords)
-                            .await?
+                        let result = Self::check_password(
+                            &mut stream,
+                            user,
+                            database,
+                            &auth_type,
+                            &passwords,
+                        )
+                        .await?;
+                        // Vault may have rotated the password before the cached
+                        // TTL ran out; refetch on the next attempt.
+                        if !result.is_ok() {
+                            crate::auth::vault::evict_static_client_passwords(cluster.passwords());
+                        }
+                        result
                     }
                 }
 
