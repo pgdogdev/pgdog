@@ -21,6 +21,10 @@ impl QueryEngine {
         params: &[SetParam],
         set_config: bool,
     ) -> Result<(), Error> {
+        if self.setting_value_check(context, params).await? {
+            return Ok(());
+        }
+
         // Make sure client isn't changing route mid-transaction.
         if self
             .route_change_check(context, client_request, params)
@@ -144,5 +148,41 @@ impl QueryEngine {
         }
 
         Ok(())
+    }
+
+    async fn setting_value_check(
+        &self,
+        context: &mut QueryEngineContext<'_>,
+        params: &[SetParam],
+    ) -> Result<bool, Error> {
+        for param in params {
+            let name = match param.name.as_ref() {
+                "intervalstyle" => "IntervalStyle",
+                // Validate timezone ourselves.
+                "timezone" => {
+                    if let Some(ref value) = param.value {
+                        if !Self::validate_timezone(value.as_str().unwrap()) {
+                            // ERROR.
+                        }
+                    }
+                    continue;
+                }
+                name => name,
+            };
+
+            let param = pg_internals::guc::GUC.get(name);
+            if let Some(param) = param {
+                println!("{:?}", param);
+            }
+        }
+
+        Ok(false)
+    }
+
+    fn validate_timezone(value: &str) -> bool {
+        chrono_tz::TZ_VARIANTS
+            .iter()
+            .find(|tz| tz.name() == value)
+            .is_some()
     }
 }

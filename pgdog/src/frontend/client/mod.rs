@@ -35,6 +35,7 @@ use crate::state::State;
 use crate::stats::memory::MemoryUsage;
 use crate::util::{safe_timeout, user_database_from_params};
 
+pub(crate) mod parameter_validator;
 pub(crate) mod query_engine;
 pub(crate) mod sticky;
 pub(crate) mod timeouts;
