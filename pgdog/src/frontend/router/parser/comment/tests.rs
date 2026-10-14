@@ -1,9 +1,8 @@
-use pgdog_config::SystemCatalogsBehavior;
+use pgdog_config::{SessionRole, SystemCatalogsBehavior};
 
 use crate::backend::ShardedTables;
 use crate::backend::ShardingSchema;
 use crate::frontend::router::sharding::ShardOrLookup;
-use pgdog_config::SessionRole;
 
 use super::super::Shard;
 use super::directive::{SHARDING_KEY, get_matched_value};

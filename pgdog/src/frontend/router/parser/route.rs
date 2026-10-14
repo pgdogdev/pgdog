@@ -98,8 +98,9 @@ pub(crate) struct Route {
     /// A user-defined function with side effects is not detected and is
     /// treated as a read.
     mutates: bool,
-    /// The session role (`pgdog.role`) that decided `read`. It takes priority
-    /// over the read/write intent recorded when a transaction started.
+    /// Role requested by the session (`pgdog.role` or the user default).
+    /// It takes priority over the read/write intent recorded when a
+    /// transaction started. A query comment role only changes `read`.
     session_role: Option<SessionRole>,
     /// `ORDER BY` clause, transformed into something
     /// we can quickly use to sort the result.
@@ -358,13 +359,11 @@ impl Route {
         self.read = read;
     }
 
-    /// Route to the database role requested by the session.
-    pub(crate) fn set_session_role(&mut self, role: SessionRole) {
-        self.read = role == SessionRole::Replica;
-        self.session_role = Some(role);
+    pub(crate) fn set_session_role(&mut self, role: Option<SessionRole>) {
+        self.session_role = role;
     }
 
-    /// The session role that decided `read`, if any.
+    /// Role requested by the session, if any.
     pub(crate) fn session_role(&self) -> Option<SessionRole> {
         self.session_role
     }
