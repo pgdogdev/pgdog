@@ -3,8 +3,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::net::{
     BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, NoticeResponse,
-    ParameterDescription, ParseComplete, ProtocolMessage, ReadyForQuery, RowDescription,
-    parameter::ParameterValue,
+    ParameterDescription, ParameterStatus, ParseComplete, ProtocolMessage, ReadyForQuery,
+    RowDescription, parameter::ParameterValue,
 };
 
 use super::*;
@@ -16,6 +16,7 @@ pub(super) struct FakeResponse {
     row_description: Option<RowDescription>,
     row: Option<DataRow>,
     notice: Option<NoticeResponse>,
+    parameter_status: Option<ParameterStatus>,
 }
 
 impl FakeResponse {
@@ -25,6 +26,7 @@ impl FakeResponse {
             row_description: None,
             row: None,
             notice: None,
+            parameter_status: None,
         }
     }
 
@@ -48,6 +50,11 @@ impl FakeResponse {
 
     pub(super) fn with_notice(mut self, notice: NoticeResponse) -> Self {
         self.notice = Some(notice);
+        self
+    }
+
+    pub(super) fn with_parameter_status(mut self, status: ParameterStatus) -> Self {
+        self.parameter_status = Some(status);
         self
     }
 }

@@ -15,8 +15,10 @@ pub(crate) struct ErrorResponse {
     pub(crate) code: String,
     pub(crate) message: String,
     pub(crate) detail: Option<String>,
+    pub(crate) hint: Option<String>,
     pub(crate) context: Option<String>,
     pub(crate) file: Option<String>,
+    pub(crate) line: Option<String>,
     pub(crate) routine: Option<String>,
 }
 
@@ -27,8 +29,10 @@ impl Default for ErrorResponse {
             code: String::default(),
             message: String::default(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -50,8 +54,10 @@ impl ErrorResponse {
                 user, database
             ),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -69,8 +75,10 @@ impl ErrorResponse {
                     "".into()
                 }
             )),
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -86,8 +94,10 @@ impl ErrorResponse {
             code: "58000".into(),
             message: "unmapped sharding key was specified".into(),
             detail: Some(format!("sharding key '{}' is not mapped", sharding_key)),
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -172,8 +182,10 @@ impl ErrorResponse {
                 },
                 duration.as_millis()
             )),
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -188,8 +200,10 @@ impl ErrorResponse {
                 user, database
             ),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -201,8 +215,10 @@ impl ErrorResponse {
             code: "57P01".into(),
             message: "PgDog is shutting down".into(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -214,8 +230,10 @@ impl ErrorResponse {
             code: "57P01".into(),
             message: "terminating connection due to administrator command".into(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -226,8 +244,10 @@ impl ErrorResponse {
             code: "42601".into(),
             message: err.into(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -238,8 +258,10 @@ impl ErrorResponse {
             code: "08P01".into(),
             message: err.into(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -260,8 +282,10 @@ impl ErrorResponse {
             code: "08004".into(),
             message: "only TLS connections are allowed".into(),
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -273,8 +297,10 @@ impl ErrorResponse {
             code: "58000".into(),
             message,
             detail: None,
+            hint: None,
             context: None,
             file: None,
+            line: None,
             routine: None,
         }
     }
@@ -395,8 +421,10 @@ impl FromBytes for ErrorResponse {
                 'C' => error_response.code = value,
                 'M' => error_response.message = value,
                 'D' => error_response.detail = Some(value),
+                'H' => error_response.hint = Some(value),
                 'W' => error_response.context = Some(value),
                 'F' => error_response.file = Some(value),
+                'L' => error_response.line = Some(value),
                 'R' => error_response.routine = Some(value),
                 _ => continue,
             }
@@ -427,6 +455,11 @@ impl ToBytes for ErrorResponse {
             payload.put_string(detail);
         }
 
+        if let Some(ref hint) = self.hint {
+            payload.put_u8(b'H');
+            payload.put_string(hint);
+        }
+
         if let Some(ref context) = self.context {
             payload.put_u8(b'W');
             payload.put_string(context);
@@ -435,6 +468,11 @@ impl ToBytes for ErrorResponse {
         if let Some(ref file) = self.file {
             payload.put_u8(b'F');
             payload.put_string(file);
+        }
+
+        if let Some(ref line) = self.line {
+            payload.put_u8(b'L');
+            payload.put_string(line);
         }
 
         if let Some(ref routine) = self.routine {

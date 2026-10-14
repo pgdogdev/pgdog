@@ -540,13 +540,22 @@ impl QueryEngine {
         client_request: &ClientRequest,
         mut error: ErrorResponse,
     ) -> Result<(), Error> {
-        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
-
         // Attach query context.
         if error.detail.is_none() {
             let query = client_request.query()?.map(|q| q.query().to_owned());
             error.detail = Some(query.unwrap_or_default());
         }
+
+        self.send_error_response(context, error).await
+    }
+
+    /// Send an error without adding fields to PostgreSQL-compatible responses.
+    pub(super) async fn send_error_response(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        error: ErrorResponse,
+    ) -> Result<(), Error> {
+        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
         self.hooks.on_engine_error(context, &error)?;
 

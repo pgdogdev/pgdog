@@ -2,6 +2,7 @@ use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::FakeResponse;
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
+use crate::parameters::ParameterValidator;
 
 use super::*;
 
@@ -16,15 +17,10 @@ impl QueryEngine {
     pub(crate) async fn set(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        // FIXME(sage): Remove mut
         client_request: &mut ClientRequest,
         params: &[SetParam],
         set_config: bool,
     ) -> Result<(), Error> {
-        if self.setting_value_check(context, params).await? {
-            return Ok(());
-        }
-
         // Make sure client isn't changing route mid-transaction.
         if self
             .route_change_check(context, client_request, params)
@@ -39,6 +35,14 @@ impl QueryEngine {
         for param in params {
             if !context.in_transaction() && param.local {
                 continue;
+            }
+
+            if let Some(error) = ParameterValidator::validate(param) {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.send_error_response(context, error).await?;
+                return Ok(());
             }
 
             let is_pin = param.name == PGDOG_PIN;
@@ -80,6 +84,9 @@ impl QueryEngine {
                     params.iter().map(|param| param.value.as_ref()),
                 );
             }
+            if let Some(status) = ParameterValidator::notify_client(param, context.params) {
+                response = response.with_parameter_status(status);
+            }
             if set_local_outside_transaction {
                 response = response.with_notice(NoticeResponse::from(
                     ErrorResponse::set_local_outside_transaction(),
@@ -90,6 +97,58 @@ impl QueryEngine {
         }
 
         Ok(())
+    }
+
+    async fn handle_parameter(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        param: &SetParam,
+    ) -> Result<bool, Error> {
+        if !context.in_transaction() && param.local {
+            return Ok(true);
+        }
+
+        if let Some(error) = ParameterValidator::validate(param) {
+            if let Some(transaction) = context.transaction.as_mut() {
+                transaction.set_error();
+            }
+            self.send_error_response(context, error).await?;
+            return Ok(true);
+        }
+
+        let is_pin = param.name == PGDOG_PIN;
+
+        // SET has a value.
+        let command = if let Some(value) = param.value.clone() {
+            if param.local {
+                context.params.set_local(&param.name, value);
+            } else {
+                context.params.set(&param.name, value);
+
+                // Pin the backend to this client.
+                if is_pin && !context.in_transaction() {
+                    self.manual_lock = param
+                        .value
+                        .as_ref()
+                        .and_then(|p| p.as_str())
+                        .map(|p| matches!(p, "true" | "t"))
+                        .unwrap_or_default();
+                }
+            }
+
+            "SET"
+        } else {
+            // RESET does not have a value.
+            context.params.reset(&param.name);
+
+            if is_pin {
+                self.manual_lock = false;
+            }
+
+            "RESET"
+        };
+
+        todo!()
     }
 
     /// Make sure the client isn't changing the route mid-transaction
@@ -148,41 +207,5 @@ impl QueryEngine {
         }
 
         Ok(())
-    }
-
-    async fn setting_value_check(
-        &self,
-        context: &mut QueryEngineContext<'_>,
-        params: &[SetParam],
-    ) -> Result<bool, Error> {
-        for param in params {
-            let name = match param.name.as_ref() {
-                "intervalstyle" => "IntervalStyle",
-                // Validate timezone ourselves.
-                "timezone" => {
-                    if let Some(ref value) = param.value {
-                        if !Self::validate_timezone(value.as_str().unwrap()) {
-                            // ERROR.
-                        }
-                    }
-                    continue;
-                }
-                name => name,
-            };
-
-            let param = pg_internals::guc::GUC.get(name);
-            if let Some(param) = param {
-                println!("{:?}", param);
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn validate_timezone(value: &str) -> bool {
-        chrono_tz::TZ_VARIANTS
-            .iter()
-            .find(|tz| tz.name() == value)
-            .is_some()
     }
 }

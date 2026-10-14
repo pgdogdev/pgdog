@@ -5,6 +5,7 @@ mod store;
 mod sync;
 mod to_sql;
 mod untracked;
+mod validator;
 mod value;
 
 use hash::hash_parameters;
@@ -15,6 +16,7 @@ pub(crate) use name::{ParameterName, ParameterNameRef};
 pub(crate) use parameters_impl::Parameters;
 pub(crate) use store::ParameterStore;
 pub(crate) use sync::ParametersSync;
+pub(crate) use validator::ParameterValidator;
 pub(crate) use value::ParameterValue;
 
 #[cfg(test)]

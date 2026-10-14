@@ -3160,9 +3160,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pg_internals"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg-internals.git?rev=323003dfdf21e79d48178a7d4105cbd34e12473a#323003dfdf21e79d48178a7d4105cbd34e12473a"
 dependencies = [
  "bindgen 0.72.1",
+ "cc",
  "clang-sys",
  "phf 0.13.1",
  "phf_codegen",
