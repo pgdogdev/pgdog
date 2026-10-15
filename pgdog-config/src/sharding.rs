@@ -28,6 +28,12 @@ pub struct ShardedTableConfig {
     #[serde(default)]
     pub name: Option<String>,
 
+    /// Treat `name` as a prefix, e.g. `name = "users"` also matches `users_1` and `users_archive`.
+    ///
+    /// _Default:_ `false`
+    #[serde(default)]
+    pub prefix: bool,
+
     /// The name of the PostgreSQL schema where the sharded table is located. This is optional.
     ///
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#schema>

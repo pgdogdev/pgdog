@@ -217,18 +217,21 @@ database = "pgdog_sharded_subqueries"
 name = "subusers"
 column = "id"
 data_type = "bigint"
+prefix = true
 
 [[sharded_tables]]
 database = "pgdog_sharded_subqueries"
 name = "suborders"
 column = "user_id"
 data_type = "bigint"
+prefix = true
 
 [[sharded_tables]]
 database = "pgdog_sharded_subqueries"
 name = "subpackages"
 column = "user_id"
 data_type = "bigint"
+prefix = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"
