@@ -377,6 +377,11 @@ impl QueryParser {
         let mut command = match root.stmt() {
             Node::VariableSetStmt(stmt) => return self.set(stmt, context),
 
+            // SELECT ... INTO creates a table: DDL, like CREATE TABLE ... AS.
+            Node::SelectStmt(stmt) if stmt.into_clause().is_some() => {
+                self.ddl(Node::SelectStmt(stmt), context)
+            }
+
             Node::SelectStmt(stmt) if let Some(set_config) = extract_set_config(stmt) => {
                 return Ok(self.set_config(set_config, context));
             }
