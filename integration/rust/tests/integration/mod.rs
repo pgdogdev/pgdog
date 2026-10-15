@@ -44,6 +44,7 @@ pub mod set_sharding_key;
 pub mod shard_consistency;
 pub mod simple_prepared;
 pub mod stddev;
+pub mod subqueries;
 pub mod sum;
 pub mod syntax_error;
 pub mod timestamp_sorting;
