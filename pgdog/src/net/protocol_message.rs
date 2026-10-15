@@ -15,8 +15,6 @@ pub(crate) enum ProtocolMessage {
     Describe(Describe),
     EnsurePrepared(Prepare),
     PrepareFromClient(Prepare),
-    /// Record a SQL PREPARE after its extended Execute succeeds.
-    RegisterPrepared(Prepare),
     Execute(Execute),
     Close(Close),
     Query(Query),
@@ -66,7 +64,6 @@ impl ProtocolMessage {
             Self::Describe(describe) => describe.len(),
             Self::EnsurePrepared(prepare) => prepare.len(),
             Self::PrepareFromClient(prepare) => prepare.len(),
-            Self::RegisterPrepared(prepare) => prepare.len(),
             Self::Execute(execute) => execute.len(),
             Self::Close(close) => close.len(),
             Self::Query(query) => query.len(),
@@ -86,9 +83,7 @@ impl Protocol for ProtocolMessage {
             Self::Bind(bind) => bind.code(),
             Self::Parse(parse) => parse.code(),
             Self::Describe(describe) => describe.code(),
-            Self::EnsurePrepared { .. }
-            | Self::PrepareFromClient { .. }
-            | Self::RegisterPrepared { .. } => 'Q',
+            Self::EnsurePrepared { .. } | Self::PrepareFromClient { .. } => 'Q',
             Self::Execute(execute) => execute.code(),
             Self::Close(close) => close.code(),
             Self::Query(query) => query.code(),
@@ -130,7 +125,6 @@ impl ToBytes for ProtocolMessage {
             Self::Describe(describe) => describe.to_bytes(),
             Self::EnsurePrepared(prepare) => prepare.to_bytes(),
             Self::PrepareFromClient(prepare) => prepare.to_bytes(),
-            Self::RegisterPrepared(prepare) => prepare.to_bytes(),
             Self::Execute(execute) => execute.to_bytes(),
             Self::Close(close) => close.to_bytes(),
             Self::Query(query) => query.to_bytes(),

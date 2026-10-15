@@ -111,17 +111,19 @@ async fn test_rewrite_prepare_and_execute_preserves_extended_protocol() {
     assert!(
         matches!(&messages[1], ProtocolMessage::Bind(bind) if bind.statement() == outer_prepare_name)
     );
-    let ProtocolMessage::RegisterPrepared(prepare) = &messages[2] else {
-        panic!("expected RegisterPrepared, got {:#?}", messages[2]);
-    };
+    let prepare = client
+        .client_request
+        .prepare_on_execute
+        .as_deref()
+        .expect("expected SQL PREPARE execution metadata");
     let sql_prepared_name = prepare.name().to_owned();
     assert!(
         parse
             .query()
             .starts_with(&format!("PREPARE {sql_prepared_name} AS"))
     );
-    assert!(matches!(&messages[3], ProtocolMessage::Execute(_)));
-    assert!(matches!(&messages[4], ProtocolMessage::Sync(_)));
+    assert!(matches!(&messages[2], ProtocolMessage::Execute(_)));
+    assert!(matches!(&messages[3], ProtocolMessage::Sync(_)));
 
     let messages = run_extended_test(
         &mut client,
@@ -145,6 +147,7 @@ async fn test_rewrite_prepare_and_execute_preserves_extended_protocol() {
     );
     assert!(matches!(&messages[3], ProtocolMessage::Execute(_)));
     assert!(matches!(&messages[4], ProtocolMessage::Sync(_)));
+    assert!(client.client_request.prepare_on_execute.is_none());
 }
 
 fn rewritten_query(messages: &[ProtocolMessage]) -> String {

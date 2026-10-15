@@ -13,17 +13,20 @@ async fn test_simple_prepared_over_extended_protocol() {
         .prepare("PREPARE extended_stmt(int) AS SELECT $1")
         .await
         .unwrap();
-    prepare.query().execute(&mut conn).await.unwrap();
+    for _ in 0..3 {
+        prepare.query().execute(&mut conn).await.unwrap();
+    }
 
     let execute = conn.prepare("EXECUTE extended_stmt($1)").await.unwrap();
-    let row = execute
-        .query()
-        .bind(5_i32)
-        .fetch_one(&mut conn)
-        .await
-        .unwrap();
-
-    assert_eq!(row.get::<i32, usize>(0), 5);
+    for value in 5..8 {
+        let row = execute
+            .query()
+            .bind(value)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i32, usize>(0), value);
+    }
 }
 
 /// In addition to the unit test, `ensure_prepared_re_prepares_after_ttl_expire`,

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use pg_raw_parse::{Error as ParseError, deparse, nodes};
+use pg_raw_parse::{Error as ParseError, Node, deparse, nodes};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -14,6 +14,14 @@ use super::{super::parse_edge_comment, Ast, AstContext, AstQuery, ClientQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
+
+fn cacheable(ast: &Ast) -> bool {
+    ast.rewrite_plan.prepare_rewrites.is_empty()
+        && !matches!(
+            ast.ast.stmts().next(),
+            Some(Node::PrepareStmt(_) | Node::ExecuteStmt(_))
+        )
+}
 
 /// Cache statistics.
 #[derive(Default, Debug, Clone, Copy)]
@@ -111,18 +119,25 @@ impl Cache {
     ) -> Result<ClientQuery, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
-        let ast = {
+        let cached_ast = {
             let mut guard = self.inner.lock();
-            let ast = guard.queries.get(query_and_comment.query).map(|entry| {
-                entry.stats.lock().hits += 1; // No contention on this.
-                Ok::<_, Error>(Arc::clone(entry))
-            });
+            let ast = guard
+                .queries
+                .get(query_and_comment.query)
+                .filter(|entry| cacheable(entry))
+                .map(|entry| {
+                    entry.stats.lock().hits += 1; // No contention on this.
+                    Arc::clone(entry)
+                });
             if ast.is_some() {
                 guard.stats.hits += 1;
             }
             ast
-        }
-        .unwrap_or_else(|| {
+        };
+
+        let (ast, cached) = if let Some(ast) = cached_ast {
+            (ast, true)
+        } else {
             // Parse query without holding lock.
             let ast = Arc::new(Ast::parse_and_rewrite(
                 &AstQuery {
@@ -133,18 +148,21 @@ impl Cache {
                 prepared_statements,
             )?);
             let parse_time = ast.stats.lock().parse_time;
+            let cacheable = cacheable(&ast);
 
             let mut guard = self.inner.lock();
-            guard
-                .queries
-                .put(ast.query_without_comment.clone(), Arc::clone(&ast));
+            if cacheable {
+                guard
+                    .queries
+                    .put(ast.query_without_comment.clone(), Arc::clone(&ast));
+            }
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
-            Ok(ast)
-        })?;
+            (ast, cacheable)
+        };
 
         Ok(ClientQuery {
-            cached: true,
+            cached,
             comment: Arc::new(query_and_comment.comment),
             ast,
         })

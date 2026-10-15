@@ -481,7 +481,14 @@ impl Server {
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
         for message in client_request.messages.iter() {
-            self.send_one(message).await?;
+            let result = if matches!(message, ProtocolMessage::Execute(_))
+                && let Some(prepare) = client_request.prepare_on_execute.as_deref()
+            {
+                self.prepared_statements.handle_execute_prepare(prepare)
+            } else {
+                self.prepared_statements.handle(message)?
+            };
+            self.send_handled(message, result).await?;
         }
         self.flush().await?;
 
@@ -500,7 +507,15 @@ impl Server {
         self.stats.state(State::Active);
 
         let result = self.prepared_statements.handle(message)?;
+        self.send_handled(message, result).await
+    }
 
+    /// Apply prepared-statement handling and send any resulting messages.
+    async fn send_handled(
+        &mut self,
+        message: &ProtocolMessage,
+        result: HandleResult,
+    ) -> Result<(), Error> {
         match &result {
             HandleResult::Drop => {}
             HandleResult::Forward => self.send_stream(message).await?,
