@@ -298,6 +298,14 @@ impl PreparedStatements {
                 }
             }
 
+            ProtocolMessage::RegisterPrepared(prepare) => {
+                // The following Execute runs a SQL PREPARE using the extended
+                // protocol. Remember its SQL-level name only after the
+                // CommandComplete confirms that it succeeded.
+                self.parses.push_back(prepare.name().to_owned());
+                return Ok(HandleResult::Drop);
+            }
+
             ProtocolMessage::Execute(_) => {
                 self.state.add(ExecutionCode::ExecutionCompleted);
             }
@@ -1152,6 +1160,49 @@ pub(crate) mod test {
         let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
         assert!(!ps.forward(&mut ready_for_query).unwrap());
         assert!(ps.done());
+    }
+
+    #[test]
+    fn register_prepared_waits_for_extended_execute_completion() {
+        let mut ps = new_extended();
+        let name = "__stmt_extended_prepare";
+        let register = ProtocolMessage::RegisterPrepared(SimplePrepare::new(
+            name,
+            "PREPARE __pgdog_template_name AS SELECT $1",
+        ));
+
+        assert_eq!(ps.handle(&register).unwrap(), HandleResult::Drop);
+        assert!(!ps.contains(name));
+        assert_eq!(
+            ps.handle(&ProtocolMessage::Execute(Execute::new()))
+                .unwrap(),
+            HandleResult::Forward
+        );
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+    }
+
+    #[test]
+    fn register_prepared_discards_failed_extended_execute() {
+        let mut ps = new_extended();
+        let name = "__stmt_failed_extended_prepare";
+        let register = ProtocolMessage::RegisterPrepared(SimplePrepare::new(
+            name,
+            "PREPARE __pgdog_template_name AS SELECT $1",
+        ));
+
+        assert_eq!(ps.handle(&register).unwrap(), HandleResult::Drop);
+        assert_eq!(
+            ps.handle(&ProtocolMessage::Execute(Execute::new()))
+                .unwrap(),
+            HandleResult::Forward
+        );
+
+        let mut error = Message::new(ErrorResponse::syntax("boom").to_bytes());
+        assert!(ps.forward(&mut error).unwrap());
+        assert!(!ps.contains(name));
     }
 
     #[test]

@@ -316,14 +316,34 @@ impl RewritePlan {
         timezone: Option<&ParameterValue>,
         timestamps: QueryTimestamps,
     ) -> Result<RewriteResult, Error> {
-        // Prepend any required Prepare messages for EXECUTE statements.
+        // Add the internal messages required by SQL PREPARE/EXECUTE.
         if !self.prepare_rewrites.is_empty() {
+            let simple = request
+                .messages
+                .iter()
+                .any(|message| matches!(message, ProtocolMessage::Query(_)));
+
             self.prepare_rewrites
                 .iter()
                 .for_each(|prepare| match prepare {
                     PrepareExecute::Prepare(prepare) => {
-                        request.messages.clear();
-                        request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        if simple {
+                            request.messages.clear();
+                            request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        } else {
+                            // Keep the client's extended exchange intact so Postgres
+                            // produces ParseComplete/BindComplete itself. This marker
+                            // records the SQL-level prepared statement when Execute's
+                            // CommandComplete arrives.
+                            for index in (0..request.messages.len()).rev() {
+                                if matches!(request.messages[index], ProtocolMessage::Execute(_)) {
+                                    request.messages.insert(
+                                        index,
+                                        ProtocolMessage::RegisterPrepared(prepare.clone()),
+                                    );
+                                }
+                            }
+                        }
                     }
                     PrepareExecute::Execute(prepare) => {
                         request
