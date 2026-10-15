@@ -1,8 +1,6 @@
 //! Route queries to correct shards.
 use std::{collections::HashSet, ops::Deref};
 
-use pgdog_config::SessionRole;
-
 use crate::{
     backend::ShardingSchema,
     frontend::router::{
@@ -57,8 +55,6 @@ use tracing::{debug, trace};
 ///
 #[derive(Debug, Default)]
 pub(crate) struct QueryParser {
-    // No matter what query is executed, we'll send it to the primary.
-    write_override: bool,
     // Plugin read override.
     plugin_output: PluginOutput,
     // Record explain output.
@@ -95,8 +91,6 @@ impl QueryParser {
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {
-            self.write_override = context.write_override();
-
             self.query(&mut context)?
         } else {
             Command::default()
@@ -109,6 +103,9 @@ impl QueryParser {
             | Command::StartTransaction { route, .. }
             | Command::CommitTransaction { route, .. }
             | Command::RollbackTransaction { route, .. } => {
+                let default_read = route.is_read() && !route.mutates();
+                route.set_read(context.route_read(default_read));
+
                 if route.is_cross_shard() && context.shards == 1 {
                     context
                         .shards_calculator
@@ -162,13 +159,6 @@ impl QueryParser {
             _ => (),
         }
 
-        if let Command::Query(route) | Command::Copy { route, .. } = &mut command {
-            if let Some(role) = context.query_role() {
-                route.set_read(role == SessionRole::Replica);
-            }
-            route.set_session_role(context.session_role());
-        }
-
         if let Command::Query(_) = command
             && context.router_context.cluster.cross_shard_disabled()
             && context.shards_calculator.shard().is_all()
@@ -216,21 +206,12 @@ impl QueryParser {
 
         let shard = context.shards_calculator.shard();
 
-        // Cluster is read-only and only has one shard.
-        if context.read_only {
-            Some(Route::read(shard))
-        }
-        // Cluster doesn't have replicas and has only one shard.
-        else if context.write_only {
-            Some(Route::write(shard))
-        } else if context.prefer_primary {
-            // Send queries to primary by default.
-            Some(Route::write(shard))
-        } else if context.prefer_replica {
-            // Send queries to replicas by default.
+        // Without the parser, the statement is unknown: send it to the
+        // primary unless replicas are preferred. The context applies
+        // the cluster, transaction, and role on top of this.
+        if context.prefer_replica && !context.write_only {
             Some(Route::read(shard))
         } else {
-            // Default to primary.
             Some(Route::write(shard))
         }
     }
@@ -492,7 +473,9 @@ impl QueryParser {
                 context,
                 statement,
                 match &command {
-                    Command::Query(query) => query.is_read(),
+                    Command::Query(query) => {
+                        context.route_read(query.is_read() && !query.mutates())
+                    }
                     _ => false,
                 },
             )?;
@@ -507,11 +490,9 @@ impl QueryParser {
         }
 
         // Set plugin-specified route, if available.
-        // Plugins override what we calculated above.
-        if let Command::Query(ref mut route) = command {
-            if let Some(read) = self.plugin_output.read {
-                route.set_read(read);
-            }
+        // The context applies the plugin read/write with the final decision.
+        if let Command::Query(route) = &mut command {
+            context.plugin_read = self.plugin_output.read;
 
             if let Some(ref shard) = self.plugin_output.shard {
                 context

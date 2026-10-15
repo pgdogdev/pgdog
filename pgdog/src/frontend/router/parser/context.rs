@@ -60,6 +60,8 @@ pub(crate) struct QueryParserContext<'a> {
     /// Role requested by the client session (`pgdog.role`), falling back
     /// to the role configured for the user.
     pub(super) session_role: Option<SessionRole>,
+    /// Read/write returned by a plugin for this statement.
+    pub(super) plugin_read: Option<bool>,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -97,6 +99,7 @@ impl<'a> QueryParserContext<'a> {
             dry_run: router_context.cluster.dry_run(),
             expanded_explain: router_context.cluster.expanded_explain(),
             session_role,
+            plugin_read: None,
             router_context,
             shards_calculator,
             pending_lookups: Vec::new(),
@@ -104,40 +107,67 @@ impl<'a> QueryParserContext<'a> {
         })
     }
 
-    /// Write override enabled?
-    pub(super) fn write_override(&self) -> bool {
-        // Readonly clusters cannot pin ordinary transactions to a writer.
-        let txn_write = matches!(
+    /// Read/write intent fixed by `BEGIN`: `BEGIN READ ONLY` reads and
+    /// a conservative `BEGIN` writes. `None` lets the statement decide.
+    fn transaction_read(&self) -> Option<bool> {
+        match self.transaction_type()? {
+            TransactionType::ReadOnly | TransactionType::ErrorReadOnly => Some(true),
+            TransactionType::ReadWrite | TransactionType::ErrorReadWrite
+                if self.rw_conservative() =>
+            {
+                Some(false)
+            }
+            _ => None,
+        }
+    }
+
+    /// Role requested for this statement. The query comment cannot change
+    /// a transaction whose intent is fixed; the session role can. A cluster
+    /// with only a primary or only replicas has nothing to choose from.
+    fn requested_role(&self, transaction_fixed: bool) -> Option<SessionRole> {
+        if self.read_only || self.write_only {
+            return None;
+        }
+
+        if transaction_fixed {
+            self.session_role
+        } else {
             self.router_context
-                .transaction()
-                .map(|t| t.transaction_type()),
-            Some(TransactionType::ReadWrite | TransactionType::Implicit)
-        ) && self.rw_conservative()
-            && !self.read_only;
-        txn_write || self.prefer_primary
+                .comment
+                .and_then(|comment| comment.role)
+                .or(self.session_role)
+        }
     }
 
-    /// Role requested by the session. A cluster with only a primary
-    /// or only replicas has nothing to choose from.
-    pub(super) fn session_role(&self) -> Option<SessionRole> {
-        if self.read_only || self.write_only {
-            return None;
+    /// Final read/write decision for a statement, from the highest priority:
+    /// cluster without a primary, requested role, transaction intent, plugin,
+    /// then `default_read`, the decision of the statement itself. A statement
+    /// read goes to the primary with `prefer_primary`, or inside a
+    /// conservative implicit transaction.
+    pub(super) fn route_read(&self, default_read: bool) -> bool {
+        if self.read_only {
+            return true;
         }
 
-        self.session_role
+        let transaction_read = self.transaction_read();
+
+        if let Some(role) = self.requested_role(transaction_read.is_some()) {
+            return role == SessionRole::Replica;
+        }
+
+        transaction_read.or(self.plugin_read).unwrap_or_else(|| {
+            let implicit_write = self.rw_conservative()
+                && self.transaction_type() == Some(TransactionType::Implicit);
+
+            default_read && !self.prefer_primary && !implicit_write
+        })
     }
 
-    /// Role that decides the route of this statement: the query comment,
-    /// then the session.
-    pub(super) fn query_role(&self) -> Option<SessionRole> {
-        if self.read_only || self.write_only {
-            return None;
-        }
-
+    /// Type of the transaction this statement runs in.
+    fn transaction_type(&self) -> Option<TransactionType> {
         self.router_context
-            .comment
-            .and_then(|comment| comment.role)
-            .or(self.session_role)
+            .transaction()
+            .map(|transaction| transaction.transaction_type())
     }
 
     /// Are we using the conservative read/write separation strategy?
@@ -169,5 +199,252 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn is_canonicalizing_oids(&self) -> bool {
         self.router_context.cluster.is_canonicalizing_oids()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use pgdog_config::ReadWriteSplit;
+    use pgdog_config::SessionRole::{Primary, Replica};
+
+    use super::*;
+    use crate::{
+        backend::Cluster,
+        config::config,
+        frontend::{
+            ClientRequest,
+            client::{Sticky, transaction_type::Transaction},
+            router::RoutingComment,
+        },
+        net::Query,
+        parameters::ParameterStore,
+    };
+
+    #[derive(Default)]
+    struct Input {
+        transaction: Option<TransactionType>,
+        param: Option<&'static str>,
+        user: Option<SessionRole>,
+        comment: Option<SessionRole>,
+        plugin: Option<bool>,
+        strategy: ReadWriteStrategy,
+        split: ReadWriteSplit,
+    }
+
+    fn route_read_on(mut cluster: Cluster, input: Input, default_read: bool) -> bool {
+        cluster.set_read_write_strategy(input.strategy);
+        cluster.set_rw_split(input.split);
+        cluster.set_role(input.user);
+
+        let mut params = ParameterStore::default();
+        if let Some(role) = input.param {
+            params.set("pgdog.role", role);
+        }
+
+        let mut request = ClientRequest::from(vec![Query::new("SELECT 1").into()]);
+        request.routing_comment = input.comment.map(|role| {
+            Arc::new(RoutingComment {
+                role: Some(role),
+                ..Default::default()
+            })
+        });
+
+        let router_context = RouterContext::new(
+            &request,
+            &cluster,
+            &params,
+            input.transaction.map(Transaction::new),
+            Sticky::new_test(),
+        )
+        .unwrap();
+        let mut context = QueryParserContext::new(router_context).unwrap();
+        context.plugin_read = input.plugin;
+
+        context.route_read(default_read)
+    }
+
+    fn route_read(input: Input, default_read: bool) -> bool {
+        route_read_on(Cluster::new_test(&config()), input, default_read)
+    }
+
+    const READ: bool = true;
+    const WRITE: bool = false;
+
+    #[test]
+    fn test_statement_decides_without_overrides() {
+        assert!(route_read(Input::default(), READ));
+        assert!(!route_read(Input::default(), WRITE));
+    }
+
+    #[test]
+    fn test_cluster_without_primary_reads() {
+        let cluster = Cluster::new_test_single_replica(&config());
+        let input = Input {
+            param: Some("primary"),
+            transaction: Some(TransactionType::ReadWrite),
+            ..Default::default()
+        };
+
+        assert!(route_read_on(cluster, input, WRITE));
+    }
+
+    #[test]
+    fn test_cluster_without_replicas_ignores_role() {
+        let input = || Input {
+            param: Some("replica"),
+            comment: Some(Replica),
+            ..Default::default()
+        };
+        let cluster = || Cluster::new_test_single_primary(&config());
+
+        assert!(!route_read_on(cluster(), input(), WRITE));
+    }
+
+    #[test]
+    fn test_role_precedence() {
+        for (comment, param, user, read_expected) in [
+            (None, None, Some(Replica), true),
+            (None, Some("primary"), Some(Replica), false),
+            (Some(Replica), Some("primary"), Some(Primary), true),
+            (Some(Primary), Some("replica"), None, false),
+            (None, Some("auto"), Some(Replica), true),
+        ] {
+            let input = Input {
+                comment,
+                param,
+                user,
+                ..Default::default()
+            };
+
+            assert_eq!(
+                route_read(input, WRITE),
+                read_expected,
+                "comment={comment:?} param={param:?} user={user:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_transaction_intent() {
+        use ReadWriteStrategy::{Aggressive, Conservative};
+        use TransactionType::{ErrorReadOnly, ErrorReadWrite, Implicit, ReadOnly, ReadWrite};
+
+        for (strategy, transaction, default_read, read_expected) in [
+            (Conservative, ReadWrite, READ, false),
+            (Conservative, ErrorReadWrite, READ, false),
+            (Conservative, Implicit, READ, false),
+            (Conservative, ReadOnly, WRITE, true),
+            (Conservative, ErrorReadOnly, WRITE, true),
+            (Aggressive, ReadWrite, READ, true),
+            (Aggressive, ReadWrite, WRITE, false),
+            (Aggressive, Implicit, READ, true),
+            (Aggressive, ReadOnly, WRITE, true),
+        ] {
+            let input = Input {
+                strategy,
+                transaction: Some(transaction),
+                ..Default::default()
+            };
+
+            assert_eq!(
+                route_read(input, default_read),
+                read_expected,
+                "{strategy:?} {transaction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_role_inside_transaction() {
+        use ReadWriteStrategy::{Aggressive, Conservative};
+        use TransactionType::{Implicit, ReadOnly, ReadWrite};
+
+        for (strategy, transaction, comment, param, read_expected) in [
+            (Conservative, ReadWrite, Some(Replica), None, false),
+            (Conservative, ReadWrite, None, Some("replica"), true),
+            (
+                Conservative,
+                ReadWrite,
+                Some(Primary),
+                Some("replica"),
+                true,
+            ),
+            (Conservative, ReadOnly, Some(Primary), None, true),
+            (Conservative, ReadOnly, None, Some("primary"), false),
+            (Conservative, Implicit, Some(Replica), None, true),
+            (Aggressive, ReadWrite, Some(Replica), None, true),
+            (Aggressive, ReadWrite, Some(Replica), Some("primary"), true),
+        ] {
+            let input = Input {
+                strategy,
+                transaction: Some(transaction),
+                comment,
+                param,
+                ..Default::default()
+            };
+
+            assert_eq!(
+                route_read(input, READ),
+                read_expected,
+                "{strategy:?} {transaction:?} comment={comment:?} param={param:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_plugin_precedence() {
+        let plugin_write = || Input {
+            plugin: Some(false),
+            ..Default::default()
+        };
+
+        assert!(!route_read(plugin_write(), READ));
+        assert!(route_read(
+            Input {
+                plugin: Some(true),
+                ..Default::default()
+            },
+            WRITE
+        ));
+        assert!(route_read(
+            Input {
+                param: Some("replica"),
+                ..plugin_write()
+            },
+            READ
+        ));
+        assert!(route_read(
+            Input {
+                transaction: Some(TransactionType::ReadOnly),
+                ..plugin_write()
+            },
+            READ
+        ));
+    }
+
+    #[test]
+    fn test_prefer_primary() {
+        let prefer_primary = || Input {
+            split: ReadWriteSplit::PreferPrimary,
+            ..Default::default()
+        };
+
+        assert!(!route_read(prefer_primary(), READ));
+        assert!(route_read(
+            Input {
+                param: Some("replica"),
+                ..prefer_primary()
+            },
+            READ
+        ));
+        assert!(route_read(
+            Input {
+                comment: Some(Replica),
+                ..prefer_primary()
+            },
+            READ
+        ));
     }
 }

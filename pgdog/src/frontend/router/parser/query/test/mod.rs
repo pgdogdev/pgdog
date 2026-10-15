@@ -488,7 +488,6 @@ fn test_set() {
     };
 
     let (_, mut qp) = command!("BEGIN");
-    assert!(qp.write_override);
     let command = query_parser!(qp, Query::new(r#"SET statement_timeout TO 3000"#), true);
     assert!(
         matches!(command, Command::Set { .. }),
@@ -555,8 +554,6 @@ fn test_transaction() {
         Command::StartTransaction { query: q, .. } => assert_eq!(q.query(), "BEGIN"),
         _ => panic!("not a query"),
     };
-
-    assert!(qp.write_override);
 
     let route = query_parser!(qp, Parse::named("test", "SELECT $1"), true);
     match route {
@@ -670,8 +667,7 @@ WHERE t2.account = (
     let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
-    let mut context = QueryParserContext::new(router_context).unwrap();
-    let route = qp.query(&mut context).unwrap();
+    let route = qp.parse(router_context).unwrap();
     match route {
         Command::Query(query) => assert!(query.is_write()),
         _ => panic!("not a select"),

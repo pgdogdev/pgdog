@@ -76,9 +76,9 @@ reads the rest to reassemble cross-shard results.
 
 Before touching the SQL AST, `parse()` checks two bypass conditions:
 
-1. **Comment override** — `/* shard=N */` or `/* role=primary */` embedded in the SQL is extracted
-   from `Ast::comment_shard` and pushed onto `shards_calculator` before the AST walk. The role
-   override (`/* role=primary */`) sets `write_override = true`.
+1. **Comment override** — `/* pgdog_shard: N */` embedded in the SQL is extracted
+   from the routing comment and pushed onto `shards_calculator` before the AST walk.
+   `/* pgdog_role: ... */` does not change the shard; see [Primary or replica](#primary-or-replica).
 
 2. **Parser bypass** — if a shard is already known (from a prior `SET pgdog.shard = N` command or
    a sticky connection) and the cluster has only one shard, the full AST walk is skipped entirely
@@ -101,6 +101,27 @@ After the pre-parse phase, the root `NodeEnum` is matched:
 
 Empty queries (no FROM clause, e.g. `SELECT 1` or `SELECT NOW()`) are round-robined to
 `Shard::Direct(round_robin::next() % shards)` and never hit the WHERE clause walker.
+
+### Primary or replica
+
+Handlers classify the statement only: `Route::read`/`Route::select` for reads, `Route::write`
+for everything else, and `mutates` for a `SELECT` that changes data. After the handler returns,
+`parse()` calls `QueryParserContext::route_read()` for every command that carries a route and
+stores the result with `Route::set_read`. The first rule that applies wins:
+
+1. The cluster has no primary (or the user is `read_only`): replica.
+2. A requested role: the `pgdog.role` parameter (startup, `SET`, `SET LOCAL`), then the user
+   `role` in `users.toml`. A `/* pgdog_role */` comment comes first, unless the transaction
+   intent is fixed (rule 3). Ignored on clusters without replicas.
+3. The transaction intent: `BEGIN READ ONLY` reads; a conservative `BEGIN` writes.
+4. The plugin result.
+5. The statement: a read that doesn't mutate goes to a replica, unless the transaction is a
+   conservative implicit one, or `read_write_split = prefer_primary`.
+
+Plugins get the result of rules 1–3 and 5 as `write_override` input.
+
+The connection uses `Route::is_read()` only to choose the server for a statement with no
+bound server. A bound transaction stays on its server until it ends.
 
 ### SELECT routing decision tree
 

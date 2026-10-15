@@ -21,7 +21,7 @@ async fn two_pc_subset_commit_counts() {
 
     let mut connection = test_connection();
     connection
-        .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")))
+        .start_transaction(BufferedQuery::Query(Query::new("BEGIN")))
         .unwrap();
     let pid = FrontendPid::new();
     for shard in [1, 2] {
@@ -85,7 +85,7 @@ async fn two_pc_recovery_subset() {
     use crate::parameters::ParameterStore;
     let mut connection = test_connection();
     connection
-        .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")))
+        .start_transaction(BufferedQuery::Query(Query::new("BEGIN")))
         .unwrap();
     let pid = FrontendPid::new();
     for shard in [1, 2] {
