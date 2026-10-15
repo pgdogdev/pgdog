@@ -10,7 +10,6 @@ use crate::{
 
 use super::ParameterValue;
 
-mod names;
 mod numeric;
 
 /// Parameter with name and value.
@@ -71,15 +70,11 @@ impl ParameterValidator {
         }
     }
 
-    /// Run parameter validation. If any of the parameters are invalid,
-    /// an error is returned.
+    /// Validate values for parameters present in GUC.
     pub(crate) fn validate<'a>(param: impl Into<Parameter<'a>>) -> Option<ErrorResponse> {
         let param = param.into();
 
         let name = param.name();
-        if let Some(error) = names::validate(name) {
-            return Some(error);
-        }
         let value = param.value()?;
 
         let valid = GUC
@@ -100,12 +95,6 @@ impl ParameterValidator {
             }
             if let Some(guc) = GUC.get(name).filter(|guc| !guc.options.is_empty()) {
                 error.hint = Some(format!("Available values: {}.", guc.options.join(", ")));
-                error.file = Some("guc.c".into());
-                // We are doing this to pass our regression test suite,
-                // but it's kinda dumb. We should just loosen the assertions
-                // in the suite instead.
-                error.line = Some("3278".into());
-                error.routine = Some("parse_and_validate_value".into());
             }
             return Some(error);
         }
@@ -155,6 +144,41 @@ mod tests {
             value: Some(value.into()),
             local: false,
         })
+    }
+
+    #[test]
+    fn unknown_parameters_allow_any_name_and_value() {
+        for name in [
+            "no_such_variable",
+            "",
+            "some setting",
+            "app.setting",
+            ".setting",
+            "app.",
+            "app..setting",
+            "1app.setting",
+            "app.1setting",
+            "app.bad-name",
+            "app.$name",
+            "app.é",
+        ] {
+            for value in [
+                None,
+                Some("anything"),
+                Some(""),
+                Some("-999999999999999999"),
+            ] {
+                assert!(
+                    ParameterValidator::validate(&SetParam {
+                        name: name.into(),
+                        value: value.map(Into::into),
+                        local: false,
+                    })
+                    .is_none(),
+                    "{name:?} = {value:?}"
+                );
+            }
+        }
     }
 
     #[test]
