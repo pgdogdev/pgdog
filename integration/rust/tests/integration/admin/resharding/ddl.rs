@@ -88,14 +88,15 @@ async fn test_ddl_in_transaction() {
         let task_id = start_replication(&admin, &source).await;
 
         // add a column in a transaction with rows before and after the column
-        let transaction = format!(
-            "BEGIN;
-             INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('before');
-             ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ADD COLUMN extra INT;
-             INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val, extra) VALUES ('after', 9);
-             COMMIT"
-        );
-        sqlx::raw_sql(&transaction).execute(&source).await.unwrap();
+        let mut transaction = source.begin().await.unwrap();
+        for statement in [
+            format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('before')"),
+            format!("ALTER TABLE {TEST_SCHEMA}.{TEST_TABLE} ADD COLUMN extra INT"),
+            format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val, extra) VALUES ('after', 9)"),
+        ] {
+            transaction.execute(statement.as_str()).await.unwrap();
+        }
+        transaction.commit().await.unwrap();
 
         // wait for the row from after the column to be on both shards with the column
         let after =
@@ -126,13 +127,15 @@ async fn test_ddl_unqualified_name() {
 
         // add a column without qualifying the table's name.
         // table is only available through the session's search_path
-        let session = format!(
-            "SET search_path TO {TEST_SCHEMA};
-             ALTER TABLE {TEST_TABLE} ADD COLUMN extra INT;
-             INSERT INTO {TEST_TABLE} (val, extra) VALUES ('new', 9);
-             RESET search_path"
-        );
-        sqlx::raw_sql(&session).execute(&source).await.unwrap();
+        let mut session = source.acquire().await.unwrap();
+        for statement in [
+            format!("SET search_path TO {TEST_SCHEMA}"),
+            format!("ALTER TABLE {TEST_TABLE} ADD COLUMN extra INT"),
+            format!("INSERT INTO {TEST_TABLE} (val, extra) VALUES ('new', 9)"),
+            "RESET search_path".to_string(),
+        ] {
+            session.execute(statement.as_str()).await.unwrap();
+        }
 
         // wait for the column and the row to be replayed on both shards.
         let select =
@@ -153,21 +156,18 @@ async fn test_ddl_keeps_owner() {
         let task_id = start_replication(&admin, &source).await;
 
         // create a table as another role then insert a row
-        let as_other_role = format!(
-            "DO $$ BEGIN CREATE ROLE ddl_owner; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-             GRANT CREATE, USAGE ON SCHEMA {TEST_SCHEMA} TO ddl_owner;
-             SET ROLE ddl_owner;
-             CREATE TABLE {TEST_SCHEMA}.owned (id BIGINT);
-             RESET ROLE"
-        );
-
-        let insert = format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('new')");
-
-        sqlx::raw_sql(&as_other_role)
-            .execute(&source)
-            .await
-            .unwrap();
-        source.execute(insert.as_str()).await.unwrap();
+        let mut session = source.acquire().await.unwrap();
+        for statement in [
+            "DO $$ BEGIN CREATE ROLE ddl_owner; EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+                .to_string(),
+            format!("GRANT CREATE, USAGE ON SCHEMA {TEST_SCHEMA} TO ddl_owner"),
+            "SET ROLE ddl_owner".to_string(),
+            format!("CREATE TABLE {TEST_SCHEMA}.owned (id BIGINT)"),
+            "RESET ROLE".to_string(),
+            format!("INSERT INTO {TEST_SCHEMA}.{TEST_TABLE} (val) VALUES ('new')"),
+        ] {
+            session.execute(statement.as_str()).await.unwrap();
+        }
 
         // wait for the row to be on both shards (replication carried on)
         let select = format!("SELECT val FROM {TEST_SCHEMA}.{TEST_TABLE} WHERE id > {ROWS}");
