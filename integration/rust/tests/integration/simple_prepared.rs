@@ -55,15 +55,9 @@ async fn test_extended_sql_execute_rewrites() {
              SELECT id FROM sharded ORDER BY id DESC LIMIT $1 OFFSET $2"
         );
         if extended_prepare {
-            sqlx::query(&prepare)
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            sqlx::query(&prepare).execute(&mut conn).await.unwrap();
         } else {
-            sqlx::raw_sql(&prepare)
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            sqlx::raw_sql(&prepare).execute(&mut conn).await.unwrap();
         }
 
         for persistent in [true, false] {
@@ -85,15 +79,9 @@ async fn test_extended_sql_execute_rewrites() {
         let id_name = format!("{name}_id");
         let prepare = format!("PREPARE {id_name} AS SELECT pgdog.unique_id()");
         if extended_prepare {
-            sqlx::query(&prepare)
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            sqlx::query(&prepare).execute(&mut conn).await.unwrap();
         } else {
-            sqlx::raw_sql(&prepare)
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            sqlx::raw_sql(&prepare).execute(&mut conn).await.unwrap();
         }
 
         let mut ids = std::collections::HashSet::new();

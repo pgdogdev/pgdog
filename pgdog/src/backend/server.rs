@@ -480,10 +480,7 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
-        let mut execute_parse = match client_request.prepared_operation.as_deref() {
-            Some(PreparedOperation::RewriteExecute(parse)) => Some(parse.clone()),
-            _ => None,
-        };
+        let mut execute_parse_pending = true;
 
         for message in client_request.messages.iter() {
             match (client_request.prepared_operation.as_deref(), message) {
@@ -494,18 +491,12 @@ impl Server {
                     let result = self.prepared_statements.handle_execute_prepare(prepare);
                     self.send_handled(message, result).await?;
                 }
-                (Some(PreparedOperation::RewriteExecute(_)), ProtocolMessage::Bind(bind)) => {
-                    if let Some(mut parse) = execute_parse.take() {
-                        self.prepared_statements
-                            .rewrite_parse_data_types(&mut parse);
-                        self.send_ignore(&parse.into()).await?;
-                    }
-
-                    let mut bind = bind.clone();
-                    bind.anonymize();
-                    let message = ProtocolMessage::Bind(bind);
-                    let result = self.prepared_statements.handle(&message)?;
-                    self.send_handled(&message, result).await?;
+                (Some(PreparedOperation::RewriteExecute(parse)), ProtocolMessage::Bind(bind)) => {
+                    Box::pin(
+                        self.send_rewritten_execute(execute_parse_pending.then_some(parse), bind),
+                    )
+                    .await?;
+                    execute_parse_pending = false;
                 }
                 _ => {
                     let result = self.prepared_statements.handle(message)?;
@@ -522,6 +513,26 @@ impl Server {
         self.stats.state(State::ReceivingData);
 
         Ok(())
+    }
+
+    /// Parse an execution-specific SQL EXECUTE and bind its anonymous statement.
+    async fn send_rewritten_execute(
+        &mut self,
+        parse: Option<&Parse>,
+        bind: &Bind,
+    ) -> Result<(), Error> {
+        if let Some(parse) = parse {
+            let mut parse = parse.clone();
+            self.prepared_statements
+                .rewrite_parse_data_types(&mut parse);
+            self.send_ignore(&parse.into()).await?;
+        }
+
+        let mut bind = bind.clone();
+        bind.anonymize();
+        let message = ProtocolMessage::Bind(bind);
+        let result = self.prepared_statements.handle(&message)?;
+        self.send_handled(&message, result).await
     }
 
     /// Send one message to the server but don't flush the buffer,
