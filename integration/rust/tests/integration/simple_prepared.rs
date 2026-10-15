@@ -29,6 +29,92 @@ async fn test_simple_prepared_over_extended_protocol() {
     }
 }
 
+#[tokio::test]
+async fn test_extended_sql_execute_rewrites() {
+    let mut conn =
+        sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+            .await
+            .unwrap();
+
+    sqlx::raw_sql("TRUNCATE sharded")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    for id in 1..=55i64 {
+        sqlx::query("INSERT INTO sharded(id) VALUES ($1)")
+            .bind(id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    for extended_prepare in [false, true] {
+        let name = format!("extended_{}", uuid::Uuid::new_v4().simple());
+        let prepare = format!(
+            "PREPARE {name} AS \
+             SELECT id FROM sharded ORDER BY id DESC LIMIT $1 OFFSET $2"
+        );
+        if extended_prepare {
+            sqlx::query(&prepare)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        } else {
+            sqlx::raw_sql(&prepare)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+
+        for persistent in [true, false] {
+            for _ in 0..3 {
+                let rows = sqlx::query(&format!("EXECUTE {name}(5, 10)"))
+                    .persistent(persistent)
+                    .fetch_all(&mut conn)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    rows.iter()
+                        .map(|row| row.get::<i64, _>("id"))
+                        .collect::<Vec<_>>(),
+                    vec![45, 44, 43, 42, 41]
+                );
+            }
+        }
+
+        let id_name = format!("{name}_id");
+        let prepare = format!("PREPARE {id_name} AS SELECT pgdog.unique_id()");
+        if extended_prepare {
+            sqlx::query(&prepare)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        } else {
+            sqlx::raw_sql(&prepare)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..3 {
+            let row = sqlx::query(&format!("EXECUTE {id_name}"))
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+            assert!(
+                ids.insert(row.get::<i64, _>(0)),
+                "each execution needs a fresh ID"
+            );
+        }
+    }
+
+    sqlx::raw_sql("TRUNCATE sharded")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+}
+
 /// In addition to the unit test, `ensure_prepared_re_prepares_after_ttl_expire`,
 /// which proves that it actually does a Close -> Prepare,
 /// ensure that nothing breaks Client-side by the internal re-Prepare operation it conducts.

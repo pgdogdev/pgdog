@@ -22,7 +22,7 @@ use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
     config::AuthType,
-    frontend::ClientRequest,
+    frontend::{ClientRequest, PreparedOperation},
     net::{
         Close, Liveness, MessageBuffer, Parameter, ProtocolMessage, Sync,
         messages::{
@@ -480,15 +480,38 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
+        let mut execute_parse = match client_request.prepared_operation.as_deref() {
+            Some(PreparedOperation::RewriteExecute(parse)) => Some(parse.clone()),
+            _ => None,
+        };
+
         for message in client_request.messages.iter() {
-            let result = if matches!(message, ProtocolMessage::Execute(_))
-                && let Some(prepare) = client_request.prepare_on_execute.as_deref()
-            {
-                self.prepared_statements.handle_execute_prepare(prepare)
-            } else {
-                self.prepared_statements.handle(message)?
-            };
-            self.send_handled(message, result).await?;
+            match (client_request.prepared_operation.as_deref(), message) {
+                (
+                    Some(PreparedOperation::PrepareOnExecute(prepare)),
+                    ProtocolMessage::Execute(_),
+                ) => {
+                    let result = self.prepared_statements.handle_execute_prepare(prepare);
+                    self.send_handled(message, result).await?;
+                }
+                (Some(PreparedOperation::RewriteExecute(_)), ProtocolMessage::Bind(bind)) => {
+                    if let Some(mut parse) = execute_parse.take() {
+                        self.prepared_statements
+                            .rewrite_parse_data_types(&mut parse);
+                        self.send_ignore(&parse.into()).await?;
+                    }
+
+                    let mut bind = bind.clone();
+                    bind.anonymize();
+                    let message = ProtocolMessage::Bind(bind);
+                    let result = self.prepared_statements.handle(&message)?;
+                    self.send_handled(&message, result).await?;
+                }
+                _ => {
+                    let result = self.prepared_statements.handle(message)?;
+                    self.send_handled(message, result).await?;
+                }
+            }
         }
         self.flush().await?;
 

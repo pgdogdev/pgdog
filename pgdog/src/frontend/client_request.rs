@@ -20,6 +20,15 @@ use super::{PreparedStatements, router::Route};
 
 pub(crate) use super::BufferedQuery;
 
+/// Extra backend work associated with a SQL PREPARE or EXECUTE request.
+#[derive(Debug, Clone)]
+pub(crate) enum PreparedOperation {
+    /// Register this SQL prepared statement when Execute completes.
+    PrepareOnExecute(Prepare),
+    /// Parse this execution-specific SQL EXECUTE immediately before Bind.
+    RewriteExecute(Parse),
+}
+
 /// Client request, containing exactly one query.
 #[derive(Debug, Clone)]
 pub(crate) struct ClientRequest {
@@ -39,8 +48,8 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
-    /// SQL PREPARE created when this request's Execute succeeds.
-    pub(crate) prepare_on_execute: Option<Box<Prepare>>,
+    /// SQL-level prepared statement operation carried by this request.
+    pub(crate) prepared_operation: Option<Box<PreparedOperation>>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -49,10 +58,13 @@ impl MemoryUsage for ClientRequest {
         self.messages.capacity() * mem::size_of::<ProtocolMessage>()
             - mem::size_of::<Vec<ProtocolMessage>>()
             + mem::size_of::<Self>()
-            + self
-                .prepare_on_execute
-                .as_deref()
-                .map_or(0, |prepare| mem::size_of::<Prepare>() + prepare.len())
+            + self.prepared_operation.as_deref().map_or(0, |operation| {
+                mem::size_of::<PreparedOperation>()
+                    + match operation {
+                        PreparedOperation::PrepareOnExecute(prepare) => prepare.len(),
+                        PreparedOperation::RewriteExecute(parse) => parse.len(),
+                    }
+            })
     }
 }
 
@@ -73,7 +85,7 @@ impl ClientRequest {
             routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
-            prepare_on_execute: None,
+            prepared_operation: None,
         }
     }
 
@@ -106,7 +118,7 @@ impl ClientRequest {
         }
 
         self.messages.clear();
-        self.prepare_on_execute = None;
+        self.prepared_operation = None;
         self.route = None;
         self.ast = None;
     }
@@ -235,7 +247,7 @@ impl ClientRequest {
             routing_comment: self.routing_comment.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
-            prepare_on_execute: self.prepare_on_execute.clone(),
+            prepared_operation: self.prepared_operation.clone(),
         }
     }
 
@@ -422,7 +434,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
-            prepare_on_execute: None,
+            prepared_operation: None,
         }
     }
 }
