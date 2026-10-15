@@ -309,7 +309,7 @@ pub(crate) fn route(
     let context = RouterContext::new(
         request,
         cluster,
-        context.params,
+        &*context.params,
         context.transaction(),
         context.sticky,
     )?;

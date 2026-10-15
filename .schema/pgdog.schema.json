@@ -236,7 +236,8 @@
         "non_deterministic_functions": "ignore",
         "primary_key": "ignore",
         "shard_key": "error",
-        "split_inserts": "error"
+        "split_inserts": "error",
+        "subqueries": "ignore"
       }
     },
     "sharded_mappings": {
@@ -2013,6 +2014,11 @@
           "description": "Behavior for multi-row `INSERT` on sharded tables: `error` rejects, `rewrite` distributes rows to their shards, `ignore` forwards unchanged.\n\n_Default:_ `error`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#split_inserts>",
           "$ref": "#/$defs/RewriteMode",
           "default": "error"
+        },
+        "subqueries": {
+          "description": "Behavior for queries containing subqueries: `rewrite` executes the subquery separately and injects its results into the outer query\n\n**Note:** Highly experimental and in development. Do not use in production.\n\n_Default:_ `ignore`",
+          "$ref": "#/$defs/RewriteMode",
+          "default": "ignore"
         }
       },
       "additionalProperties": false
