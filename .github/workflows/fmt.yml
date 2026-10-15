@@ -19,7 +19,7 @@ jobs:
   fmt:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
-      image: ghcr.io/pgdogdev/pgdog-ci:v2
+      image: ghcr.io/pgdogdev/pgdog-ci:v3
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
