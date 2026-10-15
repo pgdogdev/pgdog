@@ -50,7 +50,8 @@ async fn test_set() {
 
 #[tokio::test]
 async fn test_invalid_intervalstyle_matches_postgres_response() {
-    let expected = b"SERROR\0VERROR\0C22023\0Minvalid value for parameter \"IntervalStyle\": \"asd\"\0HAvailable values: postgres, postgres_verbose, sql_standard, iso_8601.\0Fguc.c\0L3278\0Rparse_and_validate_value\0\0";
+    // PgDog matches PostgreSQL's diagnostics without claiming its source location.
+    let expected = b"SERROR\0VERROR\0C22023\0Minvalid value for parameter \"IntervalStyle\": \"asd\"\0HAvailable values: postgres, postgres_verbose, sql_standard, iso_8601.\0\0";
     for in_transaction in [false, true] {
         for extended in [false, true] {
             let mut client = TestClient::new_sharded(Parameters::default()).await;
