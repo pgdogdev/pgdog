@@ -2454,6 +2454,7 @@ dependencies = [
  "native-tls",
  "ordered-float",
  "parking_lot",
+ "pg_stream",
  "pgdog-stats",
  "postgres-native-tls",
  "rand 0.9.4",
@@ -2776,6 +2777,12 @@ name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"
@@ -3110,6 +3117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg_stream"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "210dabdb4e8d3735c03f5af0ef125f2ffa48948de592b92b81e9a574e6ffdf98"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "md5 0.8.1",
+ "tokio",
+]
+
+[[package]]
 name = "pgdog"
 version = "0.1.61"
 dependencies = [
@@ -3148,7 +3168,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "lru",
- "md5",
+ "md5 0.7.0",
  "memchr",
  "moka",
  "once_cell",
