@@ -1,9 +1,6 @@
 //! Validate that the params the client attempts
 //! to SET are valid without talking to Postgres.
 
-use std::collections::HashSet;
-
-use once_cell::sync::Lazy;
 use pg_internals::guc::{GUC, Guc, Value};
 
 use crate::{
@@ -15,9 +12,6 @@ use super::ParameterValue;
 
 mod names;
 mod numeric;
-
-static TZ: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| chrono_tz::TZ_VARIANTS.iter().map(|tz| tz.name()).collect());
 
 /// Parameter with name and value.
 pub(crate) struct Parameter<'a> {
@@ -88,12 +82,9 @@ impl ParameterValidator {
         }
         let value = param.value()?;
 
-        let valid = if name == "TimeZone" {
-            TZ.contains(value)
-        } else {
-            GUC.get(name)
-                .is_none_or(|guc| Self::validate_value(guc, value))
-        };
+        let valid = GUC
+            .get(name)
+            .is_none_or(|guc| Self::validate_value(guc, value));
 
         if !valid {
             let mut error = ErrorResponse {
@@ -164,22 +155,6 @@ mod tests {
             value: Some(value.into()),
             local: false,
         })
-    }
-
-    #[test]
-    fn timezone() {
-        for name in ["timezone", "TimeZone"] {
-            for value in ["UTC", "America/New_York", "Europe/Paris"] {
-                assert!(validate(name, value).is_none());
-            }
-            let error = validate(name, "invalid/timezone").expect("invalid time zone");
-            assert_eq!(error.severity, "ERROR");
-            assert_eq!(error.code, "22023");
-            assert_eq!(
-                error.message,
-                "invalid value for parameter \"TimeZone\": \"invalid/timezone\""
-            );
-        }
     }
 
     #[test]

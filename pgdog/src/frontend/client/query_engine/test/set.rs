@@ -98,7 +98,6 @@ async fn test_invalid_set_preserves_parameters() {
     let mut client = TestClient::new_sharded(startup.clone()).await;
 
     for (name, query) in [
-        ("timezone", "SET timezone = 'invalid/timezone'"),
         ("intervalstyle", "SET intervalstyle = 'invalid'"),
         ("extra_float_digits", "SET extra_float_digits = 4"),
         ("extra_float_digits", "SET extra_float_digits = '3ms'"),
