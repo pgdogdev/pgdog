@@ -1,5 +1,8 @@
-// Shared test skeleton that runs each statement against pgdog **AND** Postgres
-// to ensure they return same output.
+//! Shared test skeleton for subqueries that runs each statement against pgdog **AND** Postgres
+//! to ensure they return same output.
+//!
+//! Re-writing subqueries are a work in progress (still in development), and are not recommended to be used in production yet.
+//! Please do not work on this code without contacting @jkaczman to discuss first.
 
 use pg_stream::PgConnection;
 use sqlx::{Executor, postgres::PgPoolOptions};
@@ -17,6 +20,8 @@ use crate::integration::subqueries::wire::Protocol;
 // between Postgres and PgDog
 mod wire;
 
+// TODO: modify this to accept 'first'; we only need to re-create the first time,
+// otherwise, we can just TRUNCATE.
 async fn setup_subqueries_suite() {
     let direct_postgres = connection_sqlx_testing_direct().await;
     let sharded_conn = PgPoolOptions::new()
@@ -82,6 +87,12 @@ async fn setup_subqueries_suite() {
     // Reload schema
     let admin_conn = admin_sqlx().await;
     admin_conn.execute("RELOAD").await.unwrap();
+
+    // Ignored by default.
+    admin_conn
+        .execute("SET rewrite_subqueries TO rewrite")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -121,17 +132,17 @@ async fn test_subqueries_suite() {
         }
     }
 
-    // TODO: complete context in nearby comment to assert...
+    // TODO(jkaczman): complete context in nearby comment to assert...
     //         - (1) correct routing,
     //         - (2) expected error,
     //         - (3) ordered vs unordered
     //
-    // TODO:  maybe have separate tables for each for parallelization for
-    //          INSERT / UPDATE / etc). Depends on overhead; we don't have much data
+    // TODO(jkaczman):  'X' separate tables for each for parallelization for
+    //          data-modifying tests for INSERT / UPDATE / etc.
     //
-    // TODO: parallelize SELECT / etc that doesn't include inserts (can have a command for this)
+    // TODO(jkaczman): parallelize non-data modifying tests
     //
-    // TODO: prepare?
+    // TODO(jkaczman): PREPARE
 
     pub(crate) async fn execute_test_case(
         commands: Commands,
@@ -140,14 +151,6 @@ async fn test_subqueries_suite() {
         sql: &str,
     ) {
         for protocol in [Protocol::Simple, Protocol::Extended] {
-            if let Some(setup_command) = commands.setup_command.as_ref() {
-                if setup_command.eq("reset tables with fresh data") {
-                    setup_subqueries_suite().await;
-                } else {
-                    panic!("unsupported command: {setup_command}");
-                }
-            }
-
             let expected = wire::run(direct_conn, sql.to_string(), protocol, Some(&commands)).await;
             let actual = wire::run(sharded_conn, sql.to_string(), protocol, Some(&commands)).await;
             assert_eq!(actual, expected, "{protocol:?} protocol: {sql}");
@@ -165,11 +168,21 @@ async fn test_subqueries_suite() {
                 );
             }
 
+            // Run after potentially modifying something with an INSERT/UPDATE/etc to reset
+            // back to the original tables + data, if requested by the test case.
+            if let Some(setup_command) = commands.setup_command.as_ref() {
+                if setup_command.eq("reset tables with fresh data") {
+                    setup_subqueries_suite().await;
+                } else {
+                    panic!("unsupported command: {setup_command}");
+                }
+            }
+
             println!("[SUCCESS] {protocol:?} with {sql}!");
         }
     }
 
-    // TODO: Emit a total success / failure (if wanted)
+    // TODO(jkaczman): Emit a total success / failure
 }
 
 pub struct Commands {
@@ -182,8 +195,6 @@ pub struct Commands {
 
     /// Used to specify a certain test setup; e.g., if we want
     /// the tables reset beforehand with fresh data.
-    ///
-    /// TODO: Parallel option
     pub setup_command: Option<String>,
 
     /// Assuming an continuous increasing order: $1, $2, $3...

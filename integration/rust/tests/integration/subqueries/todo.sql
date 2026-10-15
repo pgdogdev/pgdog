@@ -32,19 +32,19 @@
 -- FIRST
 --   basis: Mastodon's test suite (highest to lowest share of subquery calls)
 --
---   [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
+-- [DONE EXCEPT INSERT] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
 --       case: <x> is <col>
 --       case: <x> is <key>
---   [A1 A2 A3 A4 A5 A6 O9 Q7] [update, delete] .. WHERE <col> <op> (<sq>)
+-- [DONE]  [A1 A2 A3 A4 A5 A6 O9 Q7] [update, delete] .. WHERE <col> <op> (<sq>)
 --       case: <op> = IN
 --       case: <op> = NOT IN (with NULLs)
 --       case: <op> = EXISTS
 --       case: <op> = NOT EXISTS
 --       case: <op> = scalar comparison
---   [A1 A2 A3 A4 A6 O1 O2 O3 O9] [update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <st1>)
+-- [DONE]  [A1 A2 A3 A4 A6 O1 O2 O3 O9] [update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <st1>)
 --       condition: self-reference
---   [A1 A2 A3 A4 A6] [select] .. WHERE <col> IN (<sq>)
---   [A1 A3] [select, update, delete] .. WHERE <key> IN (<sq>)
+--  [DONE] [A1 A2 A3 A4 A6] [select] .. WHERE <col> IN (<sq>)
+--  [DONE)] [A1 A3] [select, update, delete] .. WHERE <key> IN (<sq>)
 --   [A1 A2 A3 A4 A5 A6] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
 --       condition: no sharding key value anywhere in the INSERT statement
 --   [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
@@ -52,23 +52,23 @@
 --   [A1 A2 A3] [insert] INSERT INTO <st1> SELECT .. RETURNING ..
 --       condition: cross-shard; row count and rows from all shards
 --   [A1 A2 A4] [insert] INSERT INTO <st1> SELECT .. FROM <st1>
---   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq> WHERE <key> = <k1>)
---   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <key> = $1)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <key> = $1)
 --   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>)
 --       condition: <sq> has no key
 --   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k1>)
 --       condition: same shard; single-shard route
 --   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1)
 --       condition: same parameter in outer and inner
---   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <col> = $1)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <col> = $1)
 --   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
 --       case: <op> = AND
 --       case: <op> = OR
 --       case: <op> = AND NOT
 --   [A1 A2 A3 A4 A6 O1 O2 O3 O4 O5 O7] [select] SELECT <agg>(..) FROM (<sq>) s
 --       condition: <sq> is cross-shard
---   [A1 A2 A3 A4 A5 A6 O2 O7 Q5] [select] .. WHERE NOT EXISTS (<sq>)
---   [A1 A2 A3 A4 A6 Q3] [select] .. WHERE <col> NOT IN (<sq>)
+-- [DONE] [A1 A2 A3 A4 A5 A6 O2 O7 Q5] [select] .. WHERE NOT EXISTS (<sq>)
+-- [DONE] [A1 A2 A3 A4 A6 Q3] [select] .. WHERE <col> NOT IN (<sq>)
 --       condition: <sq> result with and without NULLs
 --   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
 --   [A1 A2 A3 A4 A6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
@@ -81,7 +81,7 @@
 --       case: <agg> = avg
 --   [A1 A2 A3 A4 A5 A6] [select, update, delete] .. WHERE <col> IN (<sq> WHERE <col> IN (<sq> WHERE <col> IN (<sq>)))
 --       condition: mix of single-shard and cross-shard levels
---   [A1 A2 A3 A6 Q3] [select] .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
+-- [DONE] [A1 A2 A3 A6 Q3] [select] .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
 --   [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
 --   [A1 A2 A3 A4 A6 O7 O9 Ob] [select] .. WHERE EXISTS (<sq> WHERE <st2>.<x> = <st1>.<x> AND <filter>)
 --   [A1 A2 A6 O9 Oc Q6] [select] .. FROM <st1> <join> LATERAL (<sq> WHERE <st2>.<x> = <st1>.<x>) s ..
