@@ -1039,6 +1039,11 @@ mod test {
         pub(crate) fn set_rw_split(&mut self, rw_split: ReadWriteSplit) {
             self.rw_split = rw_split;
         }
+
+        #[cfg(test)]
+        pub(crate) fn set_role(&mut self, role: Option<pgdog_config::SessionRole>) {
+            self.role = role;
+        }
     }
 
     #[test]

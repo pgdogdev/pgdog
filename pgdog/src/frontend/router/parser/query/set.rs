@@ -18,10 +18,9 @@ impl QueryParser {
             Ok(Command::ResetAll)
         } else if stmt.kind == VAR_SET_MULTI {
             // SET TRANSACTION
-            Ok(Command::Query(
-                Route::write(context.shards_calculator.shard().clone())
-                    .with_read(context.read_only),
-            ))
+            Ok(Command::Query(Route::write(
+                context.shards_calculator.shard().clone(),
+            )))
         } else {
             let param = Self::parse_set_param(stmt)?;
             Ok(Command::Set {

@@ -18,10 +18,6 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let mut rollback_savepoint = false;
 
-        if context.rw_conservative() && !context.read_only {
-            self.write_override = true;
-        }
-
         context
             .shards_calculator
             .push(ShardWithPriority::new_table(Shard::All));
@@ -44,9 +40,7 @@ impl QueryParser {
                 return Ok(Command::StartTransaction {
                     query: context.query()?.clone(),
                     transaction_type,
-                    route: route
-                        .with_read(transaction_type == TransactionType::ReadOnly)
-                        .transaction_control(),
+                    route: route.transaction_control(),
                 });
             }
             TRANS_STMT_ROLLBACK_TO => rollback_savepoint = true,

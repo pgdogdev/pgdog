@@ -69,7 +69,7 @@ impl QueryParser {
             has_replicas: !context.read_only,
             has_primary: !context.write_only,
             in_transaction: context.router_context.in_transaction(),
-            write_override: self.write_override || !read, // This is set inside `QueryParser::plugins`.
+            write_override: !read,
             query: statement.ast.first().ok_or(Error::EmptyQuery)?,
             params,
         };
