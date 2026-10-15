@@ -189,6 +189,7 @@ impl ShardedTables {
         for candidate in &self.inner.tables {
             if let Some(table_name) = candidate.name.as_ref()
                 && !table.name_match(table_name)
+                && !candidate.name_matches(table.name)
             {
                 continue;
             }
