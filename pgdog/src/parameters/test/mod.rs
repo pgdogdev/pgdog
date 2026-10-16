@@ -80,6 +80,32 @@ fn test_set_sync() {
 }
 
 #[test]
+fn test_sync_matching_session_params_preserves_transaction_state() {
+    let startup = Parameters::from([("DateStyle", "ISO, MDY")].as_slice());
+    let mut server = ParameterStore::new(startup.clone());
+    let mut client = ParameterStore::new(startup);
+    client.begin();
+    client.set("statement_timeout", "100");
+    client.set_local("timezone", "UTC");
+
+    let sync = server.sync(&client);
+    assert!(sync.is_empty());
+    server.sync_complete(sync);
+
+    assert_parameter(&server, "statement_timeout", Some("100"));
+    assert_parameter(&server, "timezone", Some("UTC"));
+    assert_eq!(server.transaction_sync(), client.transaction_sync());
+
+    // The transaction flag must also be copied so this SET rolls back.
+    server.set("lock_timeout", "50");
+    server.rollback();
+    assert_parameter(&server, "lock_timeout", None);
+    assert_parameter(&server, "statement_timeout", None);
+    assert_parameter(&server, "timezone", None);
+    assert_parameter(&server, "DateStyle", Some("ISO, MDY"));
+}
+
+#[test]
 fn test_commit() {
     let mut store = ParameterStore::new(Parameters::from(
         [

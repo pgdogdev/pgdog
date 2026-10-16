@@ -216,14 +216,28 @@ impl ParameterStore {
 
     /// Complete parameter synchronization.
     pub(crate) fn sync_complete(&mut self, sync: ParametersSync) {
-        self.params.extend(sync.source_store.params.clone());
-        // Remove parameters that were reset.
-        self.params
-            .remove_many(sync.reset.iter().map(|name| name.as_str()));
-        self.transaction_local_params
-            .restore_from(&sync.source_store.transaction_local_params);
-        self.transaction_params
-            .restore_from(&sync.source_store.transaction_params);
+        if !self.params.identical(&sync.source_store.params) {
+            self.params.extend(sync.source_store.params.clone());
+            // Remove parameters that were reset.
+            if !sync.reset.is_empty() {
+                self.params
+                    .remove_many(sync.reset.iter().map(|name| name.as_str()));
+            }
+        }
+        if !self
+            .transaction_local_params
+            .identical(&sync.source_store.transaction_local_params)
+        {
+            self.transaction_local_params
+                .restore_from(&sync.source_store.transaction_local_params);
+        }
+        if !self
+            .transaction_params
+            .identical(&sync.source_store.transaction_params)
+        {
+            self.transaction_params
+                .restore_from(&sync.source_store.transaction_params);
+        }
         self.in_transaction = sync.source_store.in_transaction;
     }
 
