@@ -11,6 +11,7 @@ use pg_raw_parse::{Node, NodeMut, make, nodes, transform, walk};
 pub(crate) mod aggregate;
 pub(crate) mod auto_id;
 pub(crate) mod error;
+mod having;
 pub(crate) mod insert;
 pub(crate) mod insert_split_plan;
 pub(crate) mod nextval;

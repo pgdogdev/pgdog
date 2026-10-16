@@ -6,10 +6,11 @@
 
 use super::Error;
 use super::aggregate::{AggregatesRewrite, HelperKind};
+use super::having;
 use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{Aggregate, OrderBy};
+use crate::frontend::router::parser::{Aggregate, HavingRewritePlan, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make};
@@ -57,11 +58,14 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
+    pub(crate) having: HavingRewritePlan,
 }
 
 impl ProjectionRewritePlan {
     pub(crate) fn is_noop(&self) -> bool {
-        self.aggregate_helpers.is_empty() && self.order_by_helpers.is_empty()
+        self.aggregate_helpers.is_empty()
+            && self.order_by_helpers.is_empty()
+            && self.having.is_noop()
     }
 
     pub(crate) fn drop_columns(&self, row_description: &RowDescription) -> BTreeSet<usize> {
@@ -74,6 +78,7 @@ impl ProjectionRewritePlan {
                     .filter(|helper| helper.injected)
                     .map(|helper| helper.alias.as_str()),
             )
+            .chain(self.having.hidden_aliases().iter().map(String::as_str))
             .filter_map(|alias| row_description.field_index(alias))
             .collect()
     }
@@ -83,6 +88,7 @@ impl ProjectionRewritePlan {
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
     plan: ProjectionRewritePlan,
+    aggregate: Option<Aggregate>,
 }
 
 pub(crate) fn finalize_after_route(
@@ -148,6 +154,9 @@ pub(crate) fn finalize_after_route(
         && let Some(route) = request.route.as_mut()
     {
         route.projection_rewrite_plan = rewrite.plan.clone();
+        if let Some(aggregate) = &rewrite.aggregate {
+            route.set_aggregate(aggregate.clone());
+        }
         let mut order_by = route.order_by().to_vec();
         for helper in &rewrite.plan.order_by_helpers {
             // Prefer the structural position. The source fallback handles a
@@ -181,29 +190,53 @@ fn build(
         return Ok(None);
     };
 
+    let has_having = !matches!(select.having_clause(), Node::None);
     let aggregate = Aggregate::parse(select, schema);
-    if aggregate.is_empty() && select.sort_clause().is_empty() && !rewrite_offset {
+    if aggregate.is_empty() && !has_having && select.sort_clause().is_empty() && !rewrite_offset {
         return Ok(None);
     }
 
     let mut plan = ProjectionRewritePlan::default();
-    let rewritten = make::owned(|mem| {
+    let mut rewritten_aggregate = None;
+    let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
+        if has_having {
+            plan.having = having::rewrite_select(&mut select.as_mut(), mem)?;
+            let aggregate = Aggregate::parse(&select, schema);
+            if aggregate.is_empty() {
+                return Err(Error::UnsupportedHaving(String::from(
+                    "at least one aggregate function is required",
+                )));
+            }
+            if aggregate.group_by().len() != select.group_clause().len() {
+                return Err(Error::UnsupportedHaving(String::from(
+                    "every GROUP BY expression must be a selected column or ordinal",
+                )));
+            }
+            rewritten_aggregate = Some(aggregate);
+        }
+        let aggregate = rewritten_aggregate.as_ref().unwrap_or(&aggregate);
         if !aggregate.is_empty() {
-            plan = AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, &aggregate);
+            let aggregate_plan =
+                AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, aggregate);
+            plan.aggregate_helpers = aggregate_plan.aggregate_helpers;
         }
         order_by::rewrite_select(&mut select.as_mut(), mem, &mut plan);
         if rewrite_offset {
             offset::rewrite_select(&mut select.as_mut(), mem);
         }
-        select
-    });
+        Ok::<_, Error>(select)
+    })?;
     if plan.is_noop() && !rewrite_offset {
         return Ok(None);
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
 
-    Ok(Some(PostRouteRewrite { sql, plan }))
+    Ok(Some(PostRouteRewrite {
+        sql,
+        plan,
+        aggregate: rewritten_aggregate,
+    }))
 }
 
 #[cfg(test)]
@@ -252,5 +285,118 @@ mod tests {
             crate::net::Field::numeric("item_price"),
         ]);
         assert!(plan.drop_columns(&row_description).is_empty());
+    }
+
+    #[test]
+    fn having_projects_operands_and_updates_aggregate_plan() {
+        let ast = pg_raw_parse::parse(
+            "SELECT customer_id, COUNT(*) AS orders \
+             FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
+        )
+        .unwrap();
+        let rewrite = build(&ast, &Schema::default(), false)
+            .unwrap()
+            .expect("HAVING requires a rewrite");
+
+        assert!(rewrite.sql.contains("__pgdog_having_0"));
+        assert!(rewrite.sql.contains("__pgdog_having_1"));
+        assert_eq!(rewrite.plan.having.hidden_aliases().len(), 3);
+        assert_eq!(
+            rewrite
+                .aggregate
+                .as_ref()
+                .expect("rewritten aggregate")
+                .targets()
+                .len(),
+            2,
+            "the selected and hidden COUNT must both be merged"
+        );
+    }
+
+    #[test]
+    fn having_internal_aliases_do_not_collide_with_client_aliases() {
+        let ast = pg_raw_parse::parse(
+            "SELECT __pgdog_having_0, COUNT(*) \
+             FROM purchases GROUP BY __pgdog_having_0 HAVING COUNT(*) > 2",
+        )
+        .unwrap();
+        let rewrite = build(&ast, &Schema::default(), false)
+            .unwrap()
+            .expect("HAVING requires a rewrite");
+
+        assert_eq!(
+            rewrite.plan.having.hidden_aliases(),
+            &["__pgdog_having_1", "__pgdog_having_2", "__pgdog_having_3"]
+        );
+    }
+
+    #[test]
+    fn having_projects_unselected_grouping_column() {
+        let ast = pg_raw_parse::parse(
+            "SELECT COUNT(*) FROM purchases \
+             GROUP BY customer_id HAVING COUNT(*) > 2",
+        )
+        .unwrap();
+        let rewrite = build(&ast, &Schema::default(), false)
+            .unwrap()
+            .expect("HAVING requires a rewrite");
+        let aggregate = rewrite.aggregate.expect("rewritten aggregate");
+
+        assert_eq!(aggregate.group_by().len(), 1);
+        assert_eq!(aggregate.targets().len(), 2);
+    }
+
+    #[test]
+    fn having_avg_receives_independent_count_helper() {
+        let ast = pg_raw_parse::parse(
+            "SELECT customer_id, AVG(price) FROM purchases \
+             GROUP BY customer_id HAVING AVG(price) > 10",
+        )
+        .unwrap();
+        let rewrite = build(&ast, &Schema::default(), false)
+            .unwrap()
+            .expect("HAVING requires a rewrite");
+
+        assert_eq!(
+            rewrite
+                .aggregate
+                .as_ref()
+                .expect("rewritten aggregate")
+                .targets()
+                .len(),
+            2
+        );
+        assert_eq!(
+            rewrite.plan.aggregate_helpers.len(),
+            2,
+            "selected and hidden AVG each require their own COUNT"
+        );
+    }
+
+    #[test]
+    fn aggregate_used_only_by_having_is_merged_and_hidden() {
+        let ast = pg_raw_parse::parse(
+            "SELECT customer_id FROM purchases \
+             GROUP BY customer_id HAVING COUNT(*) > 2",
+        )
+        .unwrap();
+        let rewrite = build(&ast, &Schema::default(), false)
+            .unwrap()
+            .expect("HAVING requires a rewrite");
+        let aggregate = rewrite.aggregate.expect("rewritten aggregate");
+
+        assert_eq!(aggregate.targets().len(), 1);
+        assert_eq!(aggregate.group_by().len(), 1);
+    }
+
+    #[test]
+    fn unsupported_having_expression_fails_closed() {
+        let ast = pg_raw_parse::parse(
+            "SELECT customer_id, SUM(price) FROM purchases \
+             GROUP BY customer_id HAVING SUM(price) / COUNT(*) > 2",
+        )
+        .unwrap();
+        let error = build(&ast, &Schema::default(), false).unwrap_err();
+        assert!(matches!(error, Error::UnsupportedHaving(_)));
     }
 }

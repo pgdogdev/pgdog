@@ -1,0 +1,311 @@
+//! Route-dependent rewrite for cross-shard `HAVING`.
+
+use std::collections::HashSet;
+
+use itertools::Itertools;
+use pg_raw_parse::{ConstValue, Node, make, nodes};
+
+use crate::frontend::router::parser::{
+    CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
+};
+
+use super::Error;
+
+const ALIAS_PREFIX: &str = "__pgdog_having_";
+
+struct ParsedHaving<'a> {
+    expression: HavingTemplate,
+    values: Vec<(String, Node<'a>)>,
+}
+
+enum HavingTemplate {
+    Compare {
+        left: ValueTemplate,
+        operator: CompareOperator,
+        right: ValueTemplate,
+    },
+    And(Vec<HavingTemplate>),
+    Or(Vec<HavingTemplate>),
+    Not(Box<HavingTemplate>),
+    IsNull {
+        value: ValueTemplate,
+        negated: bool,
+    },
+}
+
+struct ValueTemplate {
+    alias: String,
+}
+
+/// Project every supported predicate operand and disable shard-local filtering.
+///
+/// The original expression remains under `OR TRUE` so PostgreSQL still performs
+/// parse analysis and parameter type inference.
+pub(super) fn rewrite_select<'a>(
+    select: &mut nodes::SelectStmtMut<'a, '_>,
+    mem: make::MemoryToken<'a>,
+) -> Result<HavingRewritePlan, Error> {
+    let having = select.having_clause();
+    if matches!(having, Node::None) {
+        return Ok(HavingRewritePlan::default());
+    }
+    let having_source = mem.make_unique(having);
+    let having = having_source.as_ref();
+
+    let aliases = select
+        .target_list()
+        .iter()
+        .filter_map(|target| {
+            target
+                .name()
+                .or_else(|| target_output_name(target.val()))
+                .map(str::to_owned)
+        })
+        .collect();
+    let mut parser = Parser {
+        aliases,
+        values: Vec::new(),
+        next_alias: 0,
+    };
+    let expression = parser.parse_expression(having)?;
+    let group_sources = select
+        .group_clause()
+        .iter()
+        .map(|group| mem.make_unique(group))
+        .collect::<Vec<_>>();
+    for group_source in &group_sources {
+        let group = group_source.as_ref();
+        match group {
+            Node::ColumnRef(_) => {
+                let alias = parser.next_alias();
+                parser.values.push((alias, group));
+            }
+            Node::A_Const(_) => {}
+            _ => {
+                return Err(Error::UnsupportedHaving(String::from(
+                    "GROUP BY expressions other than columns and ordinals are unsupported",
+                )));
+            }
+        }
+    }
+    let parsed = ParsedHaving {
+        expression,
+        values: parser.values,
+    };
+
+    let hidden_aliases = parsed
+        .values
+        .iter()
+        .map(|(alias, _)| alias.clone())
+        .collect::<Vec<_>>();
+    let targets = parsed
+        .values
+        .iter()
+        .map(|(alias, node)| mem.make_res_target(Some(alias), mem.empty(), mem.make_unique(*node)))
+        .collect::<Vec<_>>();
+    select
+        .target_list_mut()
+        .extend(mem, mem.make_list(&targets));
+
+    let original = mem.make_unique(having);
+    let true_value = mem.make_a_const(ConstValue::Boolean(true)).uncast();
+    let mut neutralized = mem.make_node::<nodes::BoolExpr>();
+    neutralized
+        .as_mut()
+        .set_boolop(nodes::BoolExprType::OR_EXPR);
+    neutralized
+        .as_mut()
+        .set_args(mem.make_list(&[original, true_value]));
+    select.set_having_clause(neutralized.uncast());
+
+    Ok(HavingRewritePlan::new(
+        parsed.expression.materialize(),
+        hidden_aliases,
+    ))
+}
+
+fn target_output_name(node: Node<'_>) -> Option<&str> {
+    match node {
+        Node::ColumnRef(column) => column.fields().iter().next_back()?.as_str(),
+        Node::FuncCall(function) => function.funcname().iter().next_back()?.as_str(),
+        Node::TypeCast(cast) => target_output_name(cast.arg()),
+        _ => None,
+    }
+}
+
+impl HavingTemplate {
+    fn materialize(self) -> HavingExpr {
+        match self {
+            Self::Compare {
+                left,
+                operator,
+                right,
+            } => HavingExpr::Compare {
+                left: left.materialize(),
+                operator,
+                right: right.materialize(),
+            },
+            Self::And(expressions) => {
+                HavingExpr::And(expressions.into_iter().map(Self::materialize).collect())
+            }
+            Self::Or(expressions) => {
+                HavingExpr::Or(expressions.into_iter().map(Self::materialize).collect())
+            }
+            Self::Not(expression) => HavingExpr::Not(Box::new(expression.materialize())),
+            Self::IsNull { value, negated } => HavingExpr::IsNull {
+                value: value.materialize(),
+                negated,
+            },
+        }
+    }
+}
+
+impl ValueTemplate {
+    fn materialize(self) -> HavingValue {
+        HavingValue::new(self.alias)
+    }
+}
+
+struct Parser<'a> {
+    aliases: HashSet<String>,
+    values: Vec<(String, Node<'a>)>,
+    next_alias: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn parse_expression(&mut self, node: Node<'a>) -> Result<HavingTemplate, Error> {
+        match node {
+            Node::A_Expr(expression) if expression.kind == nodes::A_Expr_Kind::AEXPR_OP => {
+                let operator = expression
+                    .name()
+                    .iter()
+                    .exactly_one()
+                    .ok()
+                    .and_then(Node::as_str)
+                    .and_then(Self::comparison_operator)
+                    .ok_or_else(|| {
+                        Error::UnsupportedHaving(String::from(
+                            "only =, <>, !=, <, <=, > and >= comparisons are supported",
+                        ))
+                    })?;
+                Ok(HavingTemplate::Compare {
+                    left: self.parse_value(expression.lexpr())?,
+                    operator,
+                    right: self.parse_value(expression.rexpr())?,
+                })
+            }
+            Node::BoolExpr(expression) => {
+                let expressions = expression
+                    .args()
+                    .iter()
+                    .map(|node| self.parse_expression(node))
+                    .collect::<Result<Vec<_>, _>>()?;
+                match expression.boolop {
+                    nodes::BoolExprType::AND_EXPR => Ok(HavingTemplate::And(expressions)),
+                    nodes::BoolExprType::OR_EXPR => Ok(HavingTemplate::Or(expressions)),
+                    nodes::BoolExprType::NOT_EXPR => {
+                        let mut expressions = expressions.into_iter();
+                        let expression = expressions.next().ok_or_else(|| {
+                            Error::UnsupportedHaving(String::from("NOT requires one expression"))
+                        })?;
+                        if expressions.next().is_some() {
+                            return Err(Error::UnsupportedHaving(String::from(
+                                "NOT requires one expression",
+                            )));
+                        }
+                        Ok(HavingTemplate::Not(Box::new(expression)))
+                    }
+                    _ => Err(Error::UnsupportedHaving(String::from(
+                        "unsupported boolean expression",
+                    ))),
+                }
+            }
+            Node::NullTest(test) => {
+                let negated = match test.nulltesttype {
+                    nodes::NullTestType::IS_NULL => false,
+                    nodes::NullTestType::IS_NOT_NULL => true,
+                    _ => {
+                        return Err(Error::UnsupportedHaving(String::from(
+                            "only IS NULL and IS NOT NULL are supported",
+                        )));
+                    }
+                };
+                Ok(HavingTemplate::IsNull {
+                    value: self.parse_value(test.arg())?,
+                    negated,
+                })
+            }
+            _ => Err(Error::UnsupportedHaving(String::from(
+                "supported predicates are comparisons, AND, OR, NOT and NULL tests",
+            ))),
+        }
+    }
+
+    fn parse_value(&mut self, node: Node<'a>) -> Result<ValueTemplate, Error> {
+        let supported = match node {
+            Node::A_Const(_) | Node::ParamRef(_) | Node::ColumnRef(_) => true,
+            Node::TypeCast(cast) => Self::supported_value(cast.arg()),
+            Node::FuncCall(_) => Self::supported_aggregate(node),
+            _ => false,
+        };
+        if !supported {
+            return Err(Error::UnsupportedHaving(String::from(
+                "operands must be aggregate calls, grouped columns, constants or parameters",
+            )));
+        }
+
+        let alias = self.next_alias();
+        self.values.push((alias.clone(), node));
+        Ok(ValueTemplate { alias })
+    }
+
+    fn supported_value(node: Node<'_>) -> bool {
+        match node {
+            Node::A_Const(_) | Node::ParamRef(_) | Node::ColumnRef(_) => true,
+            Node::TypeCast(cast) => Self::supported_value(cast.arg()),
+            Node::FuncCall(_) => Self::supported_aggregate(node),
+            _ => false,
+        }
+    }
+
+    fn supported_aggregate(node: Node<'_>) -> bool {
+        Function::try_from(node).is_ok_and(|function| {
+            matches!(
+                function.name,
+                "count"
+                    | "max"
+                    | "min"
+                    | "sum"
+                    | "avg"
+                    | "stddev"
+                    | "stddev_samp"
+                    | "stddev_pop"
+                    | "variance"
+                    | "var_samp"
+                    | "var_pop"
+            )
+        })
+    }
+
+    fn comparison_operator(operator: &str) -> Option<CompareOperator> {
+        Some(match operator {
+            "=" => CompareOperator::Equal,
+            "<>" | "!=" => CompareOperator::NotEqual,
+            "<" => CompareOperator::Less,
+            "<=" => CompareOperator::LessOrEqual,
+            ">" => CompareOperator::Greater,
+            ">=" => CompareOperator::GreaterOrEqual,
+            _ => return None,
+        })
+    }
+
+    fn next_alias(&mut self) -> String {
+        loop {
+            let alias = format!("{ALIAS_PREFIX}{}", self.next_alias);
+            self.next_alias += 1;
+            if self.aliases.insert(alias.clone()) {
+                return alias;
+            }
+        }
+    }
+}
