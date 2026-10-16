@@ -121,7 +121,6 @@ impl Listener {
                 }
 
                 _ = self.shutdown.cancelled() => {
-                    warn!("[frontend] listener stopped");
                     break;
                 }
             }
@@ -138,8 +137,8 @@ impl Listener {
     async fn execute_shutdown(&self) {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
-        warn!(
-            "[frontend] shutting down the listener, waiting up to {:.3}s for {} clients to finish transactions",
+        info!(
+            "waiting up to {:.3}s for {} clients to finish their transactions, new connections are rejected (shutdown_timeout)",
             shutdown_timeout.as_secs_f64(),
             comms().tracker().len(),
         );
@@ -148,10 +147,12 @@ impl Listener {
 
         if safe_timeout(shutdown_timeout, comms.tracker().wait())
             .await
-            .is_err()
+            .is_ok()
         {
+            info!("all clients finished their transactions, closing server connections");
+        } else {
             warn!(
-                "terminating {} client connections due to shutdown timeout",
+                "{} clients did not finish their transactions within shutdown_timeout, terminating their connections",
                 comms.tracker().len()
             );
 
@@ -170,7 +171,7 @@ impl Listener {
 
                 if safe_timeout(termination_timeout, cancel_all).await.is_err() {
                     error!(
-                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s",
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s (shutdown_termination_timeout)",
                         comms.clients().len(),
                         termination_timeout.as_secs_f64()
                     );

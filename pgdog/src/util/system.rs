@@ -71,24 +71,24 @@ impl ShutdownSignal {
         }
     }
 
-    /// Resolve on the next SIGINT or SIGTERM. Cancel safe.
+    /// Resolve on the next SIGINT or SIGTERM and return the signal name. Cancel safe.
     #[cfg(unix)]
-    pub(crate) async fn recv(&mut self) {
+    pub(crate) async fn recv(&mut self) -> &'static str {
         tokio::select! {
-            _ = next(&mut self.interrupt) => warn!("SIGINT received, shutting down"),
-            _ = next(&mut self.terminate) => warn!("SIGTERM received, shutting down"),
+            _ = next(&mut self.interrupt) => "SIGINT",
+            _ = next(&mut self.terminate) => "SIGTERM",
         }
     }
 
     /// Resolve on the next Ctrl-C. A failure to install the handler is logged,
     /// and `recv` then never resolves.
     #[cfg(not(unix))]
-    pub(crate) async fn recv(&mut self) {
+    pub(crate) async fn recv(&mut self) -> &'static str {
         if let Err(err) = tokio::signal::ctrl_c().await {
-            warn!("Ctrl-C handler not installed: {err}");
+            warn!("Ctrl-C handler not installed, Ctrl-C will stop PgDog immediately: {err}");
             pending::<()>().await;
         }
-        warn!("Ctrl-C received, shutting down");
+        "Ctrl-C"
     }
 }
 
@@ -121,7 +121,9 @@ impl Sighup {
 #[cfg(unix)]
 fn install(kind: SignalKind, name: &str) -> Option<Signal> {
     signal(kind)
-        .inspect_err(|err| warn!("{name} handler not installed: {err}"))
+        .inspect_err(|err| {
+            warn!("{name} handler not installed, {name} will stop PgDog immediately: {err}")
+        })
         .ok()
 }
 
