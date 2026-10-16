@@ -54,7 +54,11 @@ for name in "$@"; do
     ctx=$(awk '/^pgdog_ctx_switches/ {print $3}' $name.txt)
     cpu_per_txn=$(awk -v c=$cpu -v t=$txns 'BEGIN {printf "%.4f", c * 1000000 / t}')
     ctx_per_txn=$(awk -v c=$ctx -v t=$txns 'BEGIN {printf "%.6f", c / t}')
-    json+="\"$name\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}, \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}},"
+    ctx_json=""
+    if [ "${workers}" -gt 1 ]; then
+        ctx_json=", \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}"
+    fi
+    json+="\"$name\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}},"
 done
 
 echo "{${json%,}}"
