@@ -132,6 +132,12 @@ impl QueryEngine {
                 .await?;
             }
 
+            Some(RewriteResult::Subquery(subquery)) => {
+                multi_step::SubqueryMulti::new(self, &subquery)
+                    .execute(context, client_request)
+                    .await?;
+            }
+
             Some(RewriteResult::InPlace { .. }) | None => {
                 self.backend
                     .handle_client_request(client_request, &mut self.router, self.streaming)
