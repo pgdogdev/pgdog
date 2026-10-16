@@ -1,3 +1,6 @@
+use pgdog_config::SessionRole;
+
+use super::sharding::ShardOrLookup;
 use super::{Error, ParameterHints};
 use crate::frontend::client::transaction_type::Transaction;
 use crate::{
@@ -91,5 +94,17 @@ impl<'a> RouterContext<'a> {
 
     pub(crate) fn transaction(&self) -> &Option<Transaction> {
         &self.transaction
+    }
+
+    pub(crate) fn pgdog_role(&self) -> Option<SessionRole> {
+        self.comment.and_then(|c| c.role)
+    }
+
+    pub(crate) fn pgdog_sharding_key(&self) -> Option<&'a String> {
+        self.comment.and_then(|c| c.sharding_key.as_ref())
+    }
+
+    pub(crate) fn pgdog_shard(&self) -> Option<&'a ShardOrLookup> {
+        self.comment.and_then(|c| c.shard.as_ref())
     }
 }

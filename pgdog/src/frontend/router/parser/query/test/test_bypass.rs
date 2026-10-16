@@ -6,6 +6,7 @@
 use pgdog_config::{QueryParserLevel, ReadWriteSplit};
 
 use crate::{
+    backend::pool::RoleTarget,
     config::config,
     frontend::router::parser::{Error, Shard},
     net::Query,
@@ -50,7 +51,7 @@ async fn test_replica() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_read());
+        assert_eq!(result.route().role_target(), RoleTarget::PreferReplica);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -61,7 +62,7 @@ async fn test_primary() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
         assert_eq!(result.route().shard(), &Shard::Direct(0));
         assert_eq!(result.route().statement_type(), None);
     }
@@ -73,18 +74,31 @@ async fn test_no_hints() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
 
+/// An explicit role applies on every topology, even without a primary.
 #[tokio::test]
 async fn test_read_only_cluster() {
     let mut test = setup_single_replica().with_param("pgdog.role", "primary");
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_read());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
+        assert_eq!(result.route().shard(), &Shard::Direct(0))
+    }
+}
+
+/// Without a role, a cluster without a primary uses its replicas.
+#[tokio::test]
+async fn test_read_only_cluster_no_hints() {
+    let mut test = setup_single_replica();
+
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert_eq!(result.route().role_target(), RoleTarget::Any);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -95,7 +109,7 @@ async fn test_write_only_cluster() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::PreferReplica);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -106,7 +120,7 @@ async fn test_role_auto() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -117,7 +131,7 @@ async fn test_prefer_primary() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -128,7 +142,7 @@ async fn test_prefer_replica() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_read());
+        assert_eq!(result.route().role_target(), RoleTarget::Any);
         assert_eq!(result.route().shard(), &Shard::Direct(0))
     }
 }
@@ -139,7 +153,7 @@ async fn test_sharded_with_shard() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_write());
+        assert_eq!(result.route().role_target(), RoleTarget::Primary);
         assert_eq!(result.route().shard(), &Shard::Direct(1))
     }
 }
@@ -152,7 +166,7 @@ async fn test_sharded_with_shard_and_replica() {
 
     for query in QUERIES {
         let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
-        assert!(result.route().is_read());
+        assert_eq!(result.route().role_target(), RoleTarget::PreferReplica);
         assert_eq!(result.route().shard(), &Shard::Direct(1))
     }
 }

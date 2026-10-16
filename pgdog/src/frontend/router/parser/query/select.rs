@@ -99,7 +99,7 @@ impl QueryParser {
         if context.shards_calculator.shard().is_direct() {
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
-                    .with_mutates(mutates)
+                    .with_read(!mutates)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks)
                     .dml(),
@@ -161,7 +161,7 @@ impl QueryParser {
 
             return Ok(Command::Query(
                 Route::read(context.shards_calculator.shard().clone())
-                    .with_mutates(mutates)
+                    .with_read(!mutates)
                     .with_omnisharded(omnisharded)
                     .with_advisory_locks(advisory_locks)
                     .dml(),
@@ -293,7 +293,7 @@ impl QueryParser {
             }
         }
 
-        let query = Route::select(
+        let route = Route::select(
             context.shards_calculator.shard().clone(),
             order_by,
             aggregates,
@@ -302,8 +302,8 @@ impl QueryParser {
         );
 
         Ok(Command::Query(
-            query
-                .with_mutates(mutates)
+            route
+                .with_read(!mutates)
                 .with_omnisharded(omnisharded)
                 .with_advisory_locks(advisory_locks),
         ))

@@ -3,7 +3,7 @@ use crate::{
     backend::{
         Cluster, databases, passthrough_auth,
         pool::{
-            Error as PoolError, Guard, Request,
+            Error as PoolError, Guard, Request, RoleTarget,
             connection::mirror::{Mirror, MirrorHandler},
         },
         reload_notify,
@@ -79,13 +79,11 @@ impl ClusterConnection {
         Ok(())
     }
 
-    /// Get connections for all `shards`. If `is_read` is true,
-    /// connect to replicas.
+    /// Get connections for all `shards`, using the servers allowed by `request.role_target`.
     pub(crate) async fn get_conns_for_shards(
         &mut self,
         request: &Request,
         shards: &[usize],
-        is_read: bool,
     ) -> Result<Vec<Guard>, Error> {
         let mut conns = vec![];
         let shards_before = self.cluster()?.shards().len();
@@ -93,7 +91,7 @@ impl ClusterConnection {
         for shard in shards {
             // TODO(lev): maybe parallelize, although pool checkout
             // is very quick (unless things are broken, in which case it doesn't matter).
-            conns.push(self.get_conn(request, *shard, is_read).await?);
+            conns.push(self.get_conn(request, *shard).await?);
         }
 
         // TODO(lev): this doesn't protect against address changes for shards.
@@ -111,7 +109,6 @@ impl ClusterConnection {
         &mut self,
         request: &Request,
         shard: &Shard,
-        is_read: bool,
     ) -> Result<(Vec<Guard>, Vec<usize>), Error> {
         let shards = (0..self.cluster()?.shards().len())
             .filter(|shard_number| {
@@ -125,10 +122,7 @@ impl ClusterConnection {
             })
             .collect::<Vec<_>>();
 
-        Ok((
-            self.get_conns_for_shards(request, &shards, is_read).await?,
-            shards,
-        ))
+        Ok((self.get_conns_for_shards(request, &shards).await?, shards))
     }
 
     /// Get a connection from the cluster for the given `shard`.
@@ -136,9 +130,8 @@ impl ClusterConnection {
         &mut self,
         request: &Request,
         shard: usize,
-        is_read: bool,
     ) -> Result<Guard, Error> {
-        match self.get_conn_internal(request, shard, is_read).await {
+        match self.get_conn_internal(request, shard).await {
             Ok(conn) => Ok(conn),
             Err(Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) => {
                 debug!(
@@ -147,7 +140,7 @@ impl ClusterConnection {
                 );
 
                 self.safe_reload().await?;
-                self.get_conn_internal(request, shard, is_read).await
+                self.get_conn_internal(request, shard).await
             }
             Err(err) => Err(err),
         }
@@ -157,16 +150,25 @@ impl ClusterConnection {
         (self.user.as_str(), self.database.as_str())
     }
 
-    async fn get_conn_internal(
-        &self,
-        request: &Request,
-        shard: usize,
-        is_read: bool,
-    ) -> Result<Guard, Error> {
-        let mut server = if is_read {
-            self.cluster()?.replica(shard, request).await?
+    async fn get_conn_internal(&self, request: &Request, shard: usize) -> Result<Guard, Error> {
+        let cluster = self.cluster()?;
+        let shard = cluster
+            .shards()
+            .get(shard)
+            .ok_or(PoolError::NoShard(shard))?;
+
+        let primary = match request.role_target {
+            RoleTarget::Primary => true,
+            // TODO: this forces only primary, fall back to a replica when the primary is unavailable.
+            // But this needs a non-blocking get connection.
+            RoleTarget::Any => cluster.prefer_primary(),
+            RoleTarget::PreferReplica => false,
+        };
+
+        let mut server = if primary && shard.can_have_primary() {
+            shard.primary(request).await?
         } else {
-            self.cluster()?.primary(shard, request).await?
+            shard.replica(request).await?
         };
 
         if self.is_in_session_mode() {

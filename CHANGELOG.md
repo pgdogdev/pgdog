@@ -4,6 +4,12 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### pending
+
+#### Breaking changes
+
+- **[Breaking]** `<user>.read_only` setting in `users.toml` won't force traffic to replica only. That setting is now only used to set `default_transaction_read_only` on the connection pool and that could fit either primary or replica depending of the `general.read_write_split` configuration. To force traffic to replica only use `<user>.role = replica` or `pgdog.role` startup-parameter/SET/comment for session/transaction/single query.
+
 ### v0.1.62
 
 | Application | Docker image                     |

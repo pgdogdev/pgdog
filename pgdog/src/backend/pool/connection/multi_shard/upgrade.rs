@@ -27,10 +27,15 @@ impl<'a> MultiShardUpgrade<'a> {
     pub(crate) async fn upgrade(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         // Don't switch to a replica or to a primary
         // between shard connection upgrades.
-        let is_read = match self.connection.binding {
-            Binding::Direct(ref server) => server.is_read,
-            Binding::MultiShard(ref servers) => servers.is_read,
+        let role_target = match &self.connection.binding {
+            Binding::Direct(server) => server.role_target,
+            Binding::MultiShard(servers) => servers.role_target,
             _ => return Ok(()),
+        };
+        // The transaction keeps its own role target, even if this statement has another role.
+        let request = &Request {
+            role_target,
+            ..*request
         };
 
         let MissingShards {
@@ -45,7 +50,7 @@ impl<'a> MultiShardUpgrade<'a> {
         let servers = self
             .connection
             .cluster
-            .get_conns_for_shards(request, &missing, is_read)
+            .get_conns_for_shards(request, &missing)
             .await?;
 
         debug_assert_eq!(servers.len(), missing.len());
@@ -71,7 +76,7 @@ impl<'a> MultiShardUpgrade<'a> {
                     servers,
                     state: MultiShard::new(total_shards, route).boxed(),
                     transaction_stmt: server.transaction_stmt,
-                    is_read: server.is_read,
+                    role_target: server.role_target,
                 }
             }
 

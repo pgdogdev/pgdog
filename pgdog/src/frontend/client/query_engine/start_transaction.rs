@@ -16,7 +16,7 @@ impl QueryEngine {
         context.transaction = Some(Transaction::new(transaction_type));
         context.params.begin();
 
-        self.backend.start_transaction(begin)?;
+        self.backend.start_transaction(begin);
 
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;

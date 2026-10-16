@@ -1,4 +1,5 @@
 use crate::{
+    backend::pool::RoleTarget,
     expect_message,
     net::{
         BindComplete, CommandComplete, DataRow, Parameters, ParseComplete, ReadyForQuery,
@@ -32,7 +33,10 @@ async fn test_transaction_state() {
     client.try_process().await.unwrap();
 
     assert!(client.client().transaction.is_some());
-    assert!(client.engine.router().command().route().is_write());
+    assert_eq!(
+        client.engine.router().command().route().role_target(),
+        RoleTarget::Primary
+    );
 
     expect_message!(client.read().await, ParseComplete);
     client.read_until('Z').await.unwrap();
@@ -52,7 +56,10 @@ async fn test_transaction_state() {
     client.try_process().await.unwrap();
 
     assert!(client.client().transaction.is_some());
-    assert!(client.engine.router().command().route().is_write());
+    assert_eq!(
+        client.engine.router().command().route().role_target(),
+        RoleTarget::Primary
+    );
 
     expect_message!(client.read().await, BindComplete);
     expect_message!(client.read().await, DataRow);

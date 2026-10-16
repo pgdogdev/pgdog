@@ -16,8 +16,8 @@ mod tests {
         },
     };
 
-    use super::super::DirectBinding;
     use super::super::multi_shard::MultiBinding;
+    use super::super::{DirectBinding, RoleTarget};
     use tokio::time::Instant;
 
     async fn create_multishard_binding() -> Binding {
@@ -51,7 +51,12 @@ mod tests {
 
         let route = Route::write(ShardWithPriority::new_default_unset(Shard::All));
 
-        let servers = MultiBinding::new(guards, vec![0, 1, 2], &route, None, false);
+        let servers = MultiBinding::builder()
+            .servers(guards)
+            .shard_indices(vec![0, 1, 2])
+            .route(&route)
+            .role_target(RoleTarget::Primary)
+            .build();
 
         let mut binding = Binding::MultiShard(servers);
 
@@ -76,7 +81,13 @@ mod tests {
         });
 
         let guard = crate::backend::pool::Guard::new(pool, server, Instant::now());
-        let mut binding = Binding::Direct(DirectBinding::new(guard, 0, None, false));
+        let mut binding = Binding::Direct(
+            DirectBinding::builder()
+                .server(guard)
+                .shard(0)
+                .role_target(RoleTarget::Primary)
+                .build(),
+        );
 
         let result = binding
             .two_pc(TwoPcTransaction::new(), TwoPcPhase::Phase1, false)

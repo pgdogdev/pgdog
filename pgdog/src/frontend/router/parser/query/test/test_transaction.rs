@@ -70,7 +70,7 @@ fn test_set_application_name_in_transaction() {
                 Some("test")
             );
             assert!(!params[0].local);
-            assert!(!test.cluster().read_only());
+            assert!(test.cluster().has_primary());
             assert!(route.is_write());
             assert!(route.shard().is_all());
         }

@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 
 /// Database role a client session wants its queries routed to.
 ///
+/// Could be specified with:
+/// - `user.role` config
+/// - startup parameters
+/// - SET/SET LOCAL commands
+/// - inline sql comment
+///
 /// <https://docs.pgdog.dev/features/load-balancer/manual-routing/#parameters>
 #[derive(
     Serialize,

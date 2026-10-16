@@ -10,14 +10,3 @@ pub(in crate::frontend) struct RoutingComment {
     pub(super) role: Option<SessionRole>,
     pub(super) sharding_key: Option<String>,
 }
-
-impl RoutingComment {
-    // FIXME: Remove when const `Default` is stable
-    pub(super) const fn empty() -> Self {
-        Self {
-            shard: None,
-            role: None,
-            sharding_key: None,
-        }
-    }
-}

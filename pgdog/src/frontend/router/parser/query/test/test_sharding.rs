@@ -1,3 +1,4 @@
+use crate::backend::pool::RoleTarget;
 use crate::config::config;
 use crate::frontend::Command;
 use crate::frontend::client::TransactionType;
@@ -413,9 +414,9 @@ fn test_omnisharded_read_with_directive_allowed_inside_transaction() {
         Command::Query(route) => {
             assert_eq!(route.shard(), &Shard::Direct(1), "{:?}", route);
             assert!(route.is_omnisharded());
-            // Routed to the primary because of the transaction, but not a mutation.
-            assert!(route.is_write());
-            assert!(!route.mutates());
+            // Routed to the primary because of the transaction, but the statement is a read.
+            assert!(route.is_read());
+            assert_eq!(route.role_target(), RoleTarget::Primary);
         }
         other => panic!("expected Command::Query, got {other:#?}"),
     }
@@ -462,7 +463,7 @@ fn test_omnisharded_read_with_directive_allowed_in_read_only_transaction() {
         Command::Query(route) => {
             assert_eq!(route.shard(), &Shard::Direct(1), "{:?}", route);
             assert!(route.is_read());
-            assert!(!route.mutates());
+            assert_eq!(route.role_target(), RoleTarget::Any);
         }
         other => panic!("expected Command::Query, got {other:#?}"),
     }
@@ -557,7 +558,6 @@ fn test_omnisharded_data_modifying_cte_broadcasts() {
         let route = command.route();
         assert_eq!(route.shard(), &Shard::All, "{sql}: {route:?}");
         assert!(route.is_omnisharded(), "{sql}");
-        assert!(route.mutates(), "{sql}");
         assert!(route.is_write(), "{sql}");
     }
 }
@@ -617,7 +617,7 @@ fn test_omnisharded_read_only_cte_stays_single_shard() {
             "{sql}: {route:?}"
         );
         assert!(route.is_omnisharded(), "{sql}: {route:?}");
-        assert!(!route.mutates(), "{sql}");
+        assert!(route.is_read(), "{sql}");
     }
 }
 

@@ -20,9 +20,7 @@ async fn two_pc_subset_commit_counts() {
     };
 
     let mut connection = test_connection();
-    connection
-        .start_transaction(BufferedQuery::Query(Query::new("BEGIN")))
-        .unwrap();
+    connection.start_transaction(BufferedQuery::Query(Query::new("BEGIN")));
     let pid = FrontendPid::new();
     for shard in [1, 2] {
         connection
@@ -84,9 +82,7 @@ async fn two_pc_recovery_subset() {
     };
     use crate::parameters::ParameterStore;
     let mut connection = test_connection();
-    connection
-        .start_transaction(BufferedQuery::Query(Query::new("BEGIN")))
-        .unwrap();
+    connection.start_transaction(BufferedQuery::Query(Query::new("BEGIN")));
     let pid = FrontendPid::new();
     for shard in [1, 2] {
         connection
@@ -142,7 +138,7 @@ async fn test_connection_upgrade() {
     let params = ParameterStore::new(new_test("test_connection_connect_upgrade"));
 
     connection
-        .connect(&Request::default(), &route(Shard::Direct(0), true))
+        .connect(&request(true), &route(Shard::Direct(0), true))
         .await
         .unwrap();
 
@@ -161,7 +157,7 @@ async fn test_connection_upgrade() {
     }
 
     connection
-        .connect(&Request::default(), &route(Shard::Direct(1), true))
+        .connect(&request(true), &route(Shard::Direct(1), true))
         .await
         .unwrap();
     assert_eq!(2, connection.connected_servers());

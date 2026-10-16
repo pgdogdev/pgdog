@@ -197,6 +197,11 @@ impl Shard {
         pending || self.lb.primary().is_some()
     }
 
+    /// Returns true if the shard has a primary, or can elect one with role detection.
+    pub(crate) fn can_have_primary(&self) -> bool {
+        self.lb.role_detection_enabled() || self.lb.primary().is_some()
+    }
+
     /// Returns true if the shard has any replica databases.
     pub(crate) fn has_replicas(&self) -> bool {
         self.lb.has_replicas()

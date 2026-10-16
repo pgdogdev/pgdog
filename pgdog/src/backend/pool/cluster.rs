@@ -86,7 +86,6 @@ pub(crate) struct Cluster {
     #[debug(skip)]
     schema_loader: Box<dyn SchemaLoader>,
     canonical_oids: Option<Arc<CanonicalOids>>,
-    read_only: bool,
     failover_signal: ClusterFailoverSignalWatcher,
     cancellation_token: CancellationToken,
     auth_type: AuthType,
@@ -134,7 +133,6 @@ impl Default for Cluster {
             tls_client_certificate_required: Default::default(),
             schema_loader: Default::default(),
             canonical_oids: Default::default(),
-            read_only: Default::default(),
             failover_signal: ClusterFailoverSignalWatcher::default(),
             cancellation_token: Default::default(),
             auth_type: AuthType::default(),
@@ -226,7 +224,6 @@ pub(crate) struct ClusterConfig<'a> {
     tls_client_certificate_required: bool,
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
-    read_only: bool,
     auth_type: AuthType,
     role: Option<pgdog_config::SessionRole>,
 }
@@ -298,7 +295,6 @@ impl<'a> ClusterConfig<'a> {
             tls_client_certificate_required: user.tls_client_certificate_required.unwrap_or(true),
             schema_cache,
             canonicalize_oids: general.canonicalize_type_information,
-            read_only: user.read_only.unwrap_or(false),
             auth_type: user.auth_type.unwrap_or(general.auth_type),
             role: user.role,
         }
@@ -347,7 +343,6 @@ impl Cluster {
             tls_client_certificate_required,
             schema_cache,
             canonicalize_oids,
-            read_only,
             auth_type,
             role,
         } = config;
@@ -425,7 +420,6 @@ impl Cluster {
             tls_client_certificate_required,
             schema_loader: Box::new(schema_loader::FromServer),
             canonical_oids,
-            read_only,
             failover_signal,
             cancellation_token: Default::default(),
             auth_type,
@@ -464,12 +458,6 @@ impl Cluster {
     pub(crate) async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
         let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
         shard.primary(request).await
-    }
-
-    /// Get a connection to a replica of the given shard.
-    pub(crate) async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
-        let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
-        shard.replica(request).await
     }
 
     /// The two clusters have the same databases.
@@ -576,31 +564,14 @@ impl Cluster {
         self.expanded_explain
     }
 
-    /// A cluster is read_only if zero shards have a primary,
-    /// or if `read_only` for the corresponding `User` is set to true.
-    pub(crate) fn read_only(&self) -> bool {
-        if self.read_only {
-            return true;
-        }
-
-        for shard in &self.shards {
-            if shard.has_primary() {
-                return false;
-            }
-        }
-
-        true
+    /// At least one shard has a primary.
+    pub(crate) fn has_primary(&self) -> bool {
+        self.shards.iter().any(|shard| shard.has_primary())
     }
 
-    /// This cluster is write_only if zero shards have a replica.
-    pub(crate) fn write_only(&self) -> bool {
-        for shard in &self.shards {
-            if shard.has_replicas() {
-                return false;
-            }
-        }
-
-        true
+    /// At least one shard has a replica.
+    pub(crate) fn has_replicas(&self) -> bool {
+        self.shards.iter().any(|shard| shard.has_replicas())
     }
 
     /// This database/user pair is responsible for schema management.
@@ -620,7 +591,7 @@ impl Cluster {
     /// We'll need the query router to figure out
     /// where a query should go.
     pub(crate) fn router_needed(&self) -> bool {
-        !(self.shards().len() == 1 && (self.read_only() || self.write_only()))
+        self.shards().len() != 1 || (self.has_primary() && self.has_replicas())
     }
 
     /// Use the query parser.
@@ -682,7 +653,7 @@ impl Cluster {
         &self.rw_strategy
     }
 
-    /// Route queries to the primary by default unless an explicit role hint says otherwise.
+    /// Route reads to the primary by default unless an explicit role hint says otherwise.
     pub(crate) fn prefer_primary(&self) -> bool {
         self.rw_split == ReadWriteSplit::PreferPrimary
     }
@@ -1040,7 +1011,6 @@ mod test {
             self.rw_split = rw_split;
         }
 
-        #[cfg(test)]
         pub(crate) fn set_role(&mut self, role: Option<pgdog_config::SessionRole>) {
             self.role = role;
         }
