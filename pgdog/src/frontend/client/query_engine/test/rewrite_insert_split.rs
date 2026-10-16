@@ -6,8 +6,6 @@ use super::prelude::*;
 
 use super::{test_client, test_sharded_client};
 
-divan_tokio_bench!(run_insert_split_extended);
-
 async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     let mut client = test_sharded_client();
 
@@ -35,9 +33,9 @@ async fn run_test(messages: Vec<ProtocolMessage>) -> Vec<ClientRequest> {
     }
 }
 
-/// TODO: ....
-pub(crate) async fn run_insert_split_extended() -> Vec<ClientRequest> {
-    run_test(vec![
+#[tokio::test]
+async fn test_insert_split() {
+    let requests = run_test(vec![
         ProtocolMessage::Parse(Parse::new_anonymous(
             "INSERT INTO test (id, email) VALUES ($1, $2), ($3, $4)",
         )),
@@ -53,12 +51,8 @@ pub(crate) async fn run_insert_split_extended() -> Vec<ClientRequest> {
         ProtocolMessage::Execute(Execute::new()),
         ProtocolMessage::Sync(Sync),
     ])
-    .await
-}
+    .await;
 
-#[tokio::test]
-async fn test_insert_split() {
-    let requests = run_insert_split_extended().await;
     assert_eq!(
         requests.len(),
         2,

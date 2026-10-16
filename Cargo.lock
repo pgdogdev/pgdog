@@ -3206,7 +3206,6 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "paste",
  "pg_raw_parse",
  "pgdog-config",
  "pgdog-macros",

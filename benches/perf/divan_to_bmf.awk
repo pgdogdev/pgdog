@@ -84,7 +84,7 @@ depth >= 0 && col[1] ~ /^\+- [^ ]+ +[0-9.]+ [^ ]+$/ {
     split(substr(col[1], 4), parts, / +/)
     leaf = path(depth) parts[1]
     fastest = parts[2] " " parts[3]
-    emit(leaf, "latency", to_ns(col[4]), to_ns(fastest), to_ns(col[2]))
+    emit(leaf, "latency", to_ns(col[3]), to_ns(fastest), to_ns(col[2]))
     section = ""
     next
 }
@@ -109,8 +109,8 @@ col[1] ~ /^(max alloc|alloc|dealloc|grow|shrink):$/ {
 
 section != "" && col[1] ~ /^[0-9]/ {
     row++
-    if (row == 1) emit(leaf, section "_count", col[4], "", "")
-    if (row == 2) emit(leaf, section "_bytes", to_bytes(col[4]), "", "")
+    if (row == 1) emit(leaf, section "_count", col[3], "", "")
+    if (row == 2) emit(leaf, section "_bytes", to_bytes(col[3]), "", "")
     next
 }
 
