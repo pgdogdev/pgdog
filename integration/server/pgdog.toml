@@ -3,7 +3,28 @@ host = "127.0.0.1"
 port = 6432
 healthcheck_port = 8080
 openmetrics_port = 9090
+shutdown_timeout = 5_000
 
 [[databases]]
 name = "pgdog"
 host = "127.0.0.1"
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_sharded"
+host = "127.0.0.1"
+database_name = "shard_1"
+shard = 1
+
+[[sharded_tables]]
+database = "pgdog_sharded"
+column = "id"
+data_type = "bigint"
+
+[admin]
+password = "pgdog"
