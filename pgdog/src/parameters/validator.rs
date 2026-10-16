@@ -53,6 +53,21 @@ impl<'a> From<&'a str> for Parameter<'a> {
 pub(crate) struct ParameterValidator;
 
 impl ParameterValidator {
+    /// Built-in scalar default when no startup value is available locally.
+    /// This does not include server, database, or role configuration overrides.
+    pub(crate) fn default_value<'a>(param: impl Into<Parameter<'a>>) -> Option<ParameterValue> {
+        let param = param.into();
+        let value = match GUC.get(param.name())?.boot_val {
+            Value::Bool(value) => if value { "on" } else { "off" }.into(),
+            Value::Int(value) => value.to_string().into(),
+            Value::Real(value) => value.to_string().into(),
+            Value::String(value) => value.into(),
+            // Enum metadata contains numeric values without their name mapping.
+            Value::Enum(_) | Value::Null => return None,
+        };
+        Some(value)
+    }
+
     /// Report a parameter whose effective value changed.
     pub(crate) fn notify_client<'a>(
         param: impl Into<Parameter<'a>>,

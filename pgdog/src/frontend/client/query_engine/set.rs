@@ -100,8 +100,16 @@ impl QueryEngine {
         };
         let mut command = FakeCommand::new(tag);
         if set_config {
+            let default = if value.is_none() {
+                ParameterValidator::default_value(param)
+            } else {
+                None
+            };
             let empty = ParameterValue::from("");
-            command = command.with_params(&["set_config"], [Some(value.unwrap_or(&empty))]);
+            command = command.with_params(
+                &["set_config"],
+                [Some(value.or(default.as_ref()).unwrap_or(&empty))],
+            );
         }
 
         if !in_transaction && param.local {
