@@ -567,39 +567,43 @@ impl TaskStorage {
     }
 
     fn cancel_all(&self) {
-        info!("cancelling all current api tasks");
-
         for task in &self.tasks.map {
             task.value().cancel();
         }
     }
 
-    fn has_running_tasks(&self) -> bool {
-        let mut running = false;
+    /// Number of root tasks that did not reach a terminal state yet.
+    fn running_tasks(&self) -> usize {
+        let mut running = 0;
 
         self.try_for_each(|entry| {
-            if entry.state().is_terminal() {
-                ControlFlow::Continue(())
-            } else {
-                running = true;
-                ControlFlow::Break(())
+            if !entry.state().is_terminal() {
+                running += 1;
             }
+            ControlFlow::Break(())
         });
 
         running
     }
 
     pub(crate) async fn shutdown(&self, limit: Duration) {
+        let mut running = self.running_tasks();
+        if running == 0 {
+            return;
+        }
+
+        info!("stopping {running} running tasks (SHOW TASKS)");
         self.cancel_all();
 
         let deadline = Instant::now() + limit;
-        while self.has_running_tasks() && Instant::now() < deadline {
+        while running > 0 && Instant::now() < deadline {
             sleep(Duration::from_millis(50)).await;
+            running = self.running_tasks();
         }
 
-        if self.has_running_tasks() {
+        if running > 0 {
             warn!(
-                "api tasks still running after {:.3}s, not waiting for them anymore",
+                "{running} tasks did not stop within {:.3}s, continuing shutdown without waiting them",
                 limit.as_secs_f64()
             );
         }

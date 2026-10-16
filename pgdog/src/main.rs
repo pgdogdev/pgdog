@@ -143,7 +143,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.config.general.unique_id_function
     );
 
-    runtime.block_on(async move { pgdog(args.command).await })?;
+    if let Err(err) = runtime.block_on(async move { pgdog(args.command).await }) {
+        error!("PgDog stopped with an error: {err}");
+        exit(1);
+    }
 
     Ok(())
 }
@@ -266,15 +269,21 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         async {
             let outcome = run.await;
             // make sure to run the shutdown if task is called to stop the signal listener
-            frontend::comms::comms().shutdown();
+            let comms = frontend::comms::comms();
+            if !comms.shutting_down().is_cancelled() {
+                warn!("🐕 PgDog is shutting down");
+                comms.shutdown();
+            }
             outcome
         },
         async {
             tokio::select! {
-                _ = signals.recv() => frontend::comms::comms().shutdown(),
+                signal = signals.recv() => {
+                    warn!("🐕 PgDog is shutting down ({signal})");
+                    frontend::comms::comms().shutdown();
+                }
                 _ = shutting_down.cancelled() => {}
             }
-            warn!("🐕 PgDog is shutting down...");
             // here, in parallel we can only shutdown tasks_storage
             // and other shutdown tasks could mess up with listener
             api::tasks_storage()
@@ -282,10 +291,6 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
                 .await;
         },
     );
-
-    if let Err(err) = &outcome {
-        error!("{err}");
-    }
 
     // the following shutdown should be run in sequence
     // to not mess up with the inner shutdown execution
