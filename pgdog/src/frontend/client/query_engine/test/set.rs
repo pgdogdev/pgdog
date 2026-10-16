@@ -51,11 +51,20 @@ async fn test_set() {
 #[tokio::test]
 async fn test_invalid_set_batch_and_config_preserve_parameters() {
     let mut client = TestClient::new_sharded(Parameters::default()).await;
-    for query in [
-        "SET application_name = 'changed'; SET extra_float_digits = 4",
-        "SELECT set_config('extra_float_digits', '4', false)",
+    for (query, completion) in [
+        (
+            "SET application_name = 'changed'; SET extra_float_digits = 4",
+            Some("SET"),
+        ),
+        ("SELECT set_config('extra_float_digits', '4', false)", None),
     ] {
         client.send_simple(Query::new(query)).await;
+        if let Some(completion) = completion {
+            assert_eq!(
+                expect_message!(client.read().await, CommandComplete).command(),
+                completion
+            );
+        }
         assert_eq!(
             expect_message!(client.read().await, ErrorResponse).code,
             "22023"
@@ -90,6 +99,8 @@ async fn test_invalid_set_aborts_transaction() {
                 client.send(Execute::new()).await;
                 client.send(Sync).await;
                 client.try_process().await.expect("SET processed");
+                expect_message!(client.read().await, ParseComplete);
+                expect_message!(client.read().await, BindComplete);
             } else {
                 client.send_simple(Query::new(query)).await;
             }
@@ -334,6 +345,8 @@ async fn test_set_inside_transaction_rollback() {
         expect_message!(test_client.read().await, CommandComplete).command(),
         "ROLLBACK"
     );
+    let status = expect_message!(test_client.read().await, ParameterStatus);
+    assert_eq!(status.name, "search_path");
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
@@ -568,6 +581,9 @@ async fn test_reset_inside_transaction_rollback() {
     // Rollback
     test_client.send_simple(Query::new("ROLLBACK")).await;
     expect_message!(test_client.read().await, CommandComplete);
+    let status = expect_message!(test_client.read().await, ParameterStatus);
+    assert_eq!(status.name, "application_name");
+    assert_eq!(status.value.as_str(), Some("before_reset"));
     assert_eq!(
         expect_message!(test_client.read().await, ReadyForQuery).status,
         'I'
