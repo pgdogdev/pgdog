@@ -45,29 +45,25 @@ pub(crate) enum HavingExpr {
 }
 
 /// Metadata produced while rewriting a cross-shard `HAVING` clause.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HavingRewritePlan {
-    expression: Option<HavingExpr>,
+    expression: HavingExpr,
     hidden_aliases: Vec<String>,
 }
 
 impl HavingRewritePlan {
     pub(crate) fn new(expression: HavingExpr, hidden_aliases: Vec<String>) -> Self {
         Self {
-            expression: Some(expression),
+            expression,
             hidden_aliases,
         }
     }
 
-    pub(crate) fn expression(&self) -> Option<&HavingExpr> {
-        self.expression.as_ref()
+    pub(crate) fn expression(&self) -> &HavingExpr {
+        &self.expression
     }
 
     pub(crate) fn hidden_aliases(&self) -> &[String] {
         &self.hidden_aliases
-    }
-
-    pub(crate) fn is_noop(&self) -> bool {
-        self.expression.is_none()
     }
 }

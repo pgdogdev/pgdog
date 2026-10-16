@@ -347,7 +347,7 @@ impl Route {
     pub(crate) fn requires_post_processing(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
-            || !self.projection_rewrite_plan.having.is_noop()
+            || self.projection_rewrite_plan.having.is_some()
             || self.distinct().is_some()
             || self.limit().limit.is_some()
             || self.limit().offset.is_some()

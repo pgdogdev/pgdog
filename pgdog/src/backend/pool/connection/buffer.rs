@@ -164,13 +164,13 @@ impl Buffer {
         plan: &ProjectionRewritePlan,
         decoder: &Decoder,
     ) -> Result<(), super::Error> {
-        let Some(expression) = plan.having.expression() else {
+        let Some(having) = plan.having.as_deref() else {
             return Ok(());
         };
 
         let mut filtered = VecDeque::with_capacity(self.buffer.len());
         for row in self.buffer.drain(..) {
-            if having::evaluate(expression, &row, decoder)? {
+            if having::evaluate(having.expression(), &row, decoder)? {
                 filtered.push_back(row);
             }
         }
@@ -380,14 +380,16 @@ mod test {
         assert!(noop.is_empty());
 
         let plan = ProjectionRewritePlan {
-            having: crate::frontend::router::parser::HavingRewritePlan::new(
-                HavingExpr::Compare {
-                    left: HavingValue::new("__pgdog_having_0".into()),
-                    operator: CompareOperator::Greater,
-                    right: HavingValue::new("__pgdog_having_1".into()),
-                },
-                vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
-            ),
+            having: Some(std::sync::Arc::new(
+                crate::frontend::router::parser::HavingRewritePlan::new(
+                    HavingExpr::Compare {
+                        left: HavingValue::new("__pgdog_having_0".into()),
+                        operator: CompareOperator::Greater,
+                        right: HavingValue::new("__pgdog_having_1".into()),
+                    },
+                    vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
+                ),
+            )),
             ..Default::default()
         };
 
