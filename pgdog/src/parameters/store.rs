@@ -1,4 +1,9 @@
-use crate::{net::Query, stats::memory::MemoryUsage};
+use itertools::Itertools;
+
+use crate::{
+    net::{ParameterStatus, Query},
+    stats::memory::MemoryUsage,
+};
 
 use super::*;
 use std::{mem::take, ops::Deref};
@@ -77,6 +82,26 @@ impl ParameterStore {
         self.params.extend(take(&mut self.reset_params));
         self.transaction_end();
         changed
+    }
+
+    /// Parameter reports for the values that COMMIT or ROLLBACK will restore.
+    pub(crate) fn transaction_end_status(
+        &self,
+        rollback: bool,
+    ) -> impl Iterator<Item = ParameterStatus> {
+        self.transaction_local_params
+            .keys()
+            .chain(self.transaction_params.keys())
+            .chain(self.reset_params.keys())
+            .unique()
+            .filter_map(move |name| {
+                let restored = if rollback {
+                    self.reset_params.get(name).or(self.params.get(name))
+                } else {
+                    self.transaction_params.get(name).or(self.params.get(name))
+                };
+                ParameterValidator::notify_client(name.as_str(), self.get(name.as_str()), restored)
+            })
     }
 
     /// Indicate a transaction has been started and all subsequent
@@ -216,7 +241,7 @@ impl ParameterStore {
 
     /// Complete parameter synchronization.
     pub(crate) fn sync_complete(&mut self, sync: ParametersSync) {
-        if !self.params.identical(&sync.source_store.params) {
+        if !sync.queries.is_empty() {
             self.params.extend(sync.source_store.params.clone());
             // Remove parameters that were reset.
             if !sync.reset.is_empty() {

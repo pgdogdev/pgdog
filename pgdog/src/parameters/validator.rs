@@ -43,18 +43,23 @@ impl<'a> From<&'a SetParam> for Parameter<'a> {
     }
 }
 
+impl<'a> From<&'a str> for Parameter<'a> {
+    fn from(name: &'a str) -> Self {
+        Self { name, value: None }
+    }
+}
+
 /// Ergonomic interface around the GUC.
 pub(crate) struct ParameterValidator;
 
 impl ParameterValidator {
-    /// Report a changed parameter using its effective value after SET or RESET.
+    /// Report a parameter whose effective value changed.
     pub(crate) fn notify_client<'a>(
         param: impl Into<Parameter<'a>>,
         previous: Option<&ParameterValue>,
-        store: &super::ParameterStore,
+        value: Option<&ParameterValue>,
     ) -> Option<ParameterStatus> {
         let param = param.into();
-        let value = store.get(param.name());
         if value != previous && GUC.get(param.name()).is_some_and(|guc| guc.report) {
             Some(ParameterStatus {
                 name: param.name().to_string(),

@@ -526,7 +526,7 @@ impl QueryEngine {
         {
             let error = ErrorResponse::in_failed_transaction();
 
-            self.error_response(context, client_request, error).await?;
+            self.send_error_response(context, error).await?;
 
             Ok(false)
         } else {

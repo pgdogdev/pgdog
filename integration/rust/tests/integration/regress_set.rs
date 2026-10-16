@@ -208,3 +208,139 @@ async fn test_local() {
     .await
     .expect("commit restores the session value after SET LOCAL");
 }
+
+#[tokio::test]
+async fn test_multi_set() {
+    RegressTest::new(&["SET application_name TO 'z'; SET statement_timeout TO 1234;"])
+        .run_simple_ci()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn multiple_set_and_reset_report_each_change() {
+    RegressTest::new(&[
+        "SET application_name = 'startup'",
+        "SET timezone = 'UTC'",
+        "SET application_name = 'first';
+         SET application_name = 'first';
+         SET timezone = 'Europe/Paris';
+         RESET application_name;
+         SET work_mem = '4MB';
+         SET application_name = 'last'",
+        "SET application_name = 'last'",
+        "SHOW application_name",
+        "SHOW timezone",
+        "SHOW work_mem",
+    ])
+    .run_simple_ci()
+    .await
+    .expect(
+        "multi-SET completions, final parameter statuses, and repeated values match PostgreSQL",
+    );
+}
+
+#[tokio::test]
+async fn multiple_set_local_transaction() {
+    RegressTest::new(&[
+        "BEGIN",
+        "SET application_name = 'startup'",
+        "SET timezone = 'UTC'",
+        "SET work_mem = '4MB';
+         SET LOCAL application_name = 'ignored';
+         SET LOCAL timezone = 'Europe/Paris';
+         SET lock_timeout = '1s'",
+        "SHOW application_name",
+        "SHOW timezone",
+        "SHOW work_mem",
+        "SET lock_timeout TO 5000",
+        "SHOW lock_timeout",
+        "END",
+    ])
+    .run_simple_ci()
+    .await
+    .expect("SET LOCAL batch notices and effective session values match PostgreSQL");
+}
+
+#[tokio::test]
+async fn set_config_returns_row_and_parameter_status() {
+    RegressTest::new(&[
+        "SET application_name = 'startup'",
+        "SELECT set_config('application_name', 'changed', false)",
+        "SELECT set_config('application_name', NULL, false)",
+        "/* server_reset */ SHOW application_name",
+    ])
+    .known_bad_queries(&["/* server_reset */ SHOW application_name"])
+    .run_simple_ci()
+    .await
+    .expect("set_config rows, NULL handling, completions, and parameter statuses match PostgreSQL");
+}
+
+#[tokio::test]
+async fn datestyle_batch_uses_each_preceding_value_and_reset() {
+    RegressTest::new(&[
+        "SET datestyle = 'ISO, YMD'",
+        "SET datestyle = SQL, YMD;
+         SET datestyle = 'MDY';
+         SET datestyle = 'SQL';
+         RESET datestyle;
+         SET datestyle = 'MDY'",
+        "SHOW datestyle",
+    ])
+    .run_simple_ci()
+    .await
+    .expect("DateStyle batch inheritance, RESET, and final status match PostgreSQL");
+}
+
+#[tokio::test]
+async fn datestyle_set_config_returns_normalized_value() {
+    RegressTest::new(&[
+        "SET datestyle = 'SQL, YMD'",
+        "SELECT set_config('DateStyle', 'MDY', false)",
+        "SHOW datestyle",
+    ])
+    .run_simple_ci()
+    .await
+    .expect("set_config returns and reports the normalized DateStyle value");
+}
+
+#[tokio::test]
+async fn datestyle_local_inheritance_and_transaction_end() {
+    for end in ["ROLLBACK", "COMMIT"] {
+        RegressTest::new(&[
+            "SET datestyle = 'ISO, MDY'",
+            "BEGIN",
+            "SET LOCAL datestyle = 'SQL'",
+            "SET datestyle = 'DMY'",
+            end,
+            "SHOW datestyle",
+            "SET datestyle = 'DEFAULT, YMD'",
+            "SHOW datestyle",
+        ])
+        .run_simple_ci()
+        .await
+        .expect("DateStyle inheritance and transaction end match PostgreSQL");
+    }
+}
+
+#[tokio::test]
+async fn invalid_datestyle_batch_preserves_state_and_aborts_transaction() {
+    for in_transaction in [false, true] {
+        let mut queries = vec!["SET datestyle = 'ISO, MDY'"];
+        if in_transaction {
+            queries.push("BEGIN");
+        }
+        queries.extend([
+            "SET datestyle = 'SQL'; SET datestyle = 'ISO, SQL'",
+            "SHOW datestyle",
+        ]);
+        if in_transaction {
+            queries.extend(["ROLLBACK", "SHOW datestyle"]);
+        }
+
+        RegressTest::new(&queries)
+            .run_simple_ci()
+            .await
+            .expect("invalid DateStyle batches preserve state and report PostgreSQL errors");
+    }
+}

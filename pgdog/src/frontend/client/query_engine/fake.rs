@@ -1,4 +1,7 @@
 use itertools::Itertools;
+use tracing::error;
+
+use crate::parameters::ParameterStatusBuffer;
 
 use crate::net::{
     BindComplete, CloseComplete, CommandComplete, DataRow, Field, NoData, NoticeResponse,
@@ -12,17 +15,24 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct FakeResponse {
     commands: Vec<FakeCommand>,
+    error: Option<ErrorResponse>,
 }
 
 impl FakeResponse {
     pub(super) fn new(commands: impl IntoIterator<Item = FakeCommand>) -> Self {
         Self {
             commands: commands.into_iter().collect(),
+            error: None,
         }
     }
 
     pub(super) fn command(command: impl Into<String>) -> Self {
         Self::new([FakeCommand::new(command)])
+    }
+
+    pub(super) fn with_error(mut self, error: ErrorResponse) -> Self {
+        self.error = Some(error);
+        self
     }
 
     /// Respond in protocol order, appending at most one ReadyForQuery.
@@ -69,7 +79,29 @@ impl FakeResponse {
             }
         }
 
-        if send_ready && let Some(ready) = ready {
+        if let Some(error) = &self.error {
+            messages.push(error.message());
+        } else {
+            let completed = self.commands.len() - commands.len();
+            let mut statuses = ParameterStatusBuffer::default();
+            for (status, previous) in self.commands[..completed]
+                .iter()
+                .flat_map(|command| &command.parameter_status)
+            {
+                statuses.insert(status, previous.as_ref());
+            }
+
+            messages.extend(statuses.into_statuses().map(|status| status.message()));
+        }
+
+        if (send_ready || self.error.is_some())
+            && let Some(ready) = ready
+        {
+            let ready = if self.error.is_some() && ready.status == 'T' {
+                ReadyForQuery::error()
+            } else {
+                ready
+            };
             messages.push(ready.message());
         }
 
@@ -84,7 +116,7 @@ pub(super) struct FakeCommand {
     row_description: Option<RowDescription>,
     rows: Vec<DataRow>,
     notice: Option<NoticeResponse>,
-    parameter_status: Option<ParameterStatus>,
+    parameter_status: Vec<(ParameterStatus, Option<ParameterValue>)>,
 }
 
 impl FakeCommand {
@@ -94,7 +126,7 @@ impl FakeCommand {
             row_description: None,
             rows: Vec::new(),
             notice: None,
-            parameter_status: None,
+            parameter_status: Vec::new(),
         }
     }
 
@@ -130,8 +162,12 @@ impl FakeCommand {
         self
     }
 
-    pub(super) fn with_parameter_status(mut self, status: ParameterStatus) -> Self {
-        self.parameter_status = Some(status);
+    pub(super) fn with_parameter_status(
+        mut self,
+        status: ParameterStatus,
+        previous: Option<ParameterValue>,
+    ) -> Self {
+        self.parameter_status.push((status, previous));
         self
     }
 
@@ -146,9 +182,6 @@ impl FakeCommand {
             messages.push(row.message());
         }
         messages.push(CommandComplete::new(&self.command).message());
-        if let Some(status) = &self.parameter_status {
-            messages.push(status.message());
-        }
     }
 }
 
@@ -161,12 +194,20 @@ impl QueryEngine {
         client_messages: &[ProtocolMessage],
         response: &FakeResponse,
     ) -> Result<(), Error> {
-        let ready = if context.pipeline.is_simple() && !context.pipeline.is_done() {
+        let ready = if response.error.is_none()
+            && context.pipeline.is_simple()
+            && !context.pipeline.is_done()
+        {
             None
         } else {
             Some(ReadyForQuery::in_transaction(context.in_transaction()))
         };
         let messages = response.messages(client_messages, ready);
+        if let Some(error) = &response.error {
+            error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
+            self.hooks.on_engine_error(context, error)?;
+        }
+
         let sent = context.stream.send_many(&messages).await?;
         self.stats.sent(sent);
 
@@ -189,7 +230,7 @@ mod tests {
                 .with_notice(NoticeResponse::from(
                     ErrorResponse::set_local_outside_transaction(),
                 ))
-                .with_parameter_status(ParameterStatus::from(("application_name", "first"))),
+                .with_parameter_status(ParameterStatus::from(("application_name", "first")), None),
             FakeCommand::new("SELECT 1").with_params(&["set_config"], [Some(&value)]),
             FakeCommand::new("RESET"),
         ]);
@@ -200,7 +241,7 @@ mod tests {
             Some(ReadyForQuery::in_transaction(true)),
         ] {
             let messages = response.messages(&[Query::new("SET; SELECT; RESET").into()], ready);
-            let mut codes = vec!['N', 'C', 'S', 'T', 'D', 'C', 'C'];
+            let mut codes = vec!['N', 'C', 'T', 'D', 'C', 'C', 'S'];
             if let Some(ready) = ready {
                 codes.push('Z');
                 assert_eq!(
@@ -214,7 +255,7 @@ mod tests {
                 messages.iter().map(|message| message.code()).collect_vec(),
                 codes
             );
-            for (index, command) in [(1, "SET"), (5, "SELECT 1"), (6, "RESET")] {
+            for (index, command) in [(1, "SET"), (4, "SELECT 1"), (5, "RESET")] {
                 assert_eq!(
                     CommandComplete::try_from(messages[index].clone())
                         .expect("completion")
@@ -222,11 +263,8 @@ mod tests {
                     command,
                 );
             }
-            let status = ParameterStatus::try_from(messages[2].clone()).expect("parameter status");
-            assert_eq!(status.name, "application_name");
-            assert_eq!(status.value, ParameterValue::from("first"));
             assert_eq!(
-                DataRow::try_from(messages[4].clone())
+                DataRow::try_from(messages[3].clone())
                     .expect("data row")
                     .get_text(0),
                 Some("second".into()),

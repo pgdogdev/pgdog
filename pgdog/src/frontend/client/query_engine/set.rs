@@ -2,7 +2,7 @@ use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::{FakeCommand, FakeResponse};
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
-use crate::parameters::{ParameterNormalizer, ParameterValidator};
+use crate::parameters::{ParameterNormalizer, ParameterValidator, ParameterValue};
 
 use super::*;
 
@@ -34,16 +34,30 @@ impl QueryEngine {
         let mut normalizer = ParameterNormalizer::new(context.params);
         let error = params
             .iter_mut()
-            .filter(|param| context.in_transaction() || !param.local)
-            .find_map(|param| {
+            .enumerate()
+            .filter(|(_, param)| context.in_transaction() || !param.local)
+            .find_map(|(index, param)| {
                 ParameterValidator::validate(&*param)
                     .or_else(|| normalizer.normalize_datestyle(param))
+                    .map(|error| (index, error))
             });
-        if let Some(error) = error {
+        if let Some((index, error)) = error {
             if let Some(transaction) = context.transaction.as_mut() {
                 transaction.set_error();
             }
-            self.send_error_response(context, error).await?;
+            // Earlier statements completed, but their changes are rolled back
+            // with this batch. Build their replies without applying parameters.
+            let commands = params[..index].iter().map(|param| {
+                Self::parameter_command(
+                    param,
+                    set_config,
+                    context.in_transaction(),
+                    param.value.as_ref(),
+                )
+            });
+            let response = FakeResponse::new(commands).with_error(error);
+            self.fake_command_response(context, &client_request.messages, &response)
+                .await?;
             return Ok(());
         }
 
@@ -70,12 +84,12 @@ impl QueryEngine {
         Ok(())
     }
 
-    /// Apply a validated parameter and build its command response.
-    fn handle_parameter(
-        &mut self,
-        context: &mut QueryEngineContext<'_>,
+    /// Build the command result without applying parameter changes.
+    fn parameter_command(
         param: &SetParam,
         set_config: bool,
+        in_transaction: bool,
+        value: Option<&ParameterValue>,
     ) -> FakeCommand {
         let tag = if set_config {
             "SELECT 1"
@@ -86,13 +100,36 @@ impl QueryEngine {
         };
         let mut command = FakeCommand::new(tag);
         if set_config {
-            command = command.with_params(&["set_config"], [param.value.as_ref()]);
+            let empty = ParameterValue::from("");
+            command = command.with_params(&["set_config"], [Some(value.unwrap_or(&empty))]);
         }
 
-        if !context.in_transaction() && param.local {
-            return command.with_notice(NoticeResponse::from(
+        if !in_transaction && param.local {
+            command = command.with_notice(NoticeResponse::from(
                 ErrorResponse::set_local_outside_transaction(),
             ));
+        }
+
+        command
+    }
+
+    /// Apply a validated parameter and build its command response.
+    fn handle_parameter(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        param: &SetParam,
+        set_config: bool,
+    ) -> FakeCommand {
+        if !context.in_transaction() && param.local {
+            return Self::parameter_command(
+                param,
+                set_config,
+                false,
+                param
+                    .value
+                    .as_ref()
+                    .or_else(|| context.params.get_startup(&param.name)),
+            );
         }
 
         let previous = context.params.get(&param.name).cloned();
@@ -120,10 +157,11 @@ impl QueryEngine {
             }
         }
 
-        if let Some(status) =
-            ParameterValidator::notify_client(param, previous.as_ref(), context.params)
-        {
-            command = command.with_parameter_status(status);
+        let value = context.params.get(&param.name);
+        let mut command =
+            Self::parameter_command(param, set_config, context.in_transaction(), value);
+        if let Some(status) = ParameterValidator::notify_client(param, previous.as_ref(), value) {
+            command = command.with_parameter_status(status, previous);
         }
 
         command
