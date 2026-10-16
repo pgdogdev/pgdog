@@ -16,11 +16,21 @@ env:
   IMAGE: registry.bencher.dev/pgdog:${{ github.sha }}
 
 jobs:
-  image:
+  build:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
-    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      matrix:
+        include:
+          - bin: pgdog
+            run: |
+              cargo build --release --bin pgdog
+              cp target/release/pgdog out/pgdog
+          - bin: pgdog-microbench
+            run: |
+              bin=$(cargo test --release -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+                | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
+              cp "$bin" out/pgdog-microbench
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
@@ -28,18 +38,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
-
-      - name: Build PgDog release binary
-        run: cargo build --release --bin pgdog
-
-      - name: Build PgDog microbenchmarks
+          key: ${{ matrix.bin }}
+      - name: Build ${{ matrix.bin }}
         run: |
-          bin=$(cargo test --release -p pgdog --bin pgdog --features bench --no-run --message-format=json \
-            | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
-          cp "$bin" target/release/pgdog-microbench
+          mkdir out
+          ${{ matrix.run }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.bin }}
+          path: out/${{ matrix.bin }}
+          retention-days: 1
+
+  image:
+    needs: build
+    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
+    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: bin
+          merge-multiple: true
 
       - name: Build image
-        run: docker build --build-context bin=target/release -f benches/perf/Dockerfile -t $IMAGE .
+        run: |
+          chmod +x bin/*
+          docker build --build-context bin=bin -f benches/perf/Dockerfile -t $IMAGE .
 
       - name: Push image
         run: |
