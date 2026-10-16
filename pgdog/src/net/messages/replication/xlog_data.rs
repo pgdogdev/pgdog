@@ -7,6 +7,7 @@ use super::logical::begin::Begin;
 use super::logical::commit::Commit;
 use super::logical::delete::Delete;
 use super::logical::insert::Insert;
+use super::logical::message::Message;
 use super::logical::relation::Relation;
 use super::logical::update::Update;
 
@@ -68,6 +69,10 @@ impl XLogData {
                 .map(XLogPayload::Delete),
             'S' => Some(XLogPayload::Start),
             'E' => Some(XLogPayload::End),
+            'M' => Message::from_bytes(self.bytes.clone())
+                .inspect_err(|err| warn!("skipping logical message: {}", err))
+                .ok()
+                .map(XLogPayload::Message),
             c => {
                 warn!("unknown xlog message: {}", c);
                 None
@@ -126,4 +131,7 @@ pub(crate) enum XLogPayload {
     Delete(Delete),
     End,
     Start,
+    /// Will be used in follow-up PR.
+    #[allow(dead_code)]
+    Message(Message),
 }
