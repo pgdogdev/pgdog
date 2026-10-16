@@ -5,7 +5,7 @@ use crate::{
     frontend::client::TransactionType,
     net::{
         BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, NoticeResponse,
-        ParameterDescription, ParameterStatus, ParseComplete, ReadyForQuery, ToBytes,
+        ParameterDescription, ParameterStatus, ParseComplete, ReadyForQuery,
         parameter::ParameterValue,
     },
 };
@@ -46,89 +46,6 @@ async fn test_set() {
     );
 
     assert!(!test_client.backend_locked());
-}
-
-#[tokio::test]
-async fn test_invalid_intervalstyle_matches_postgres_response() {
-    // PgDog matches PostgreSQL's diagnostics without claiming its source location.
-    let expected = b"SERROR\0VERROR\0C22023\0Minvalid value for parameter \"IntervalStyle\": \"asd\"\0HAvailable values: postgres, postgres_verbose, sql_standard, iso_8601.\0\0";
-    for in_transaction in [false, true] {
-        for extended in [false, true] {
-            let mut client = TestClient::new_sharded(Parameters::default()).await;
-            if in_transaction {
-                client.send_simple(Query::new("BEGIN")).await;
-                client.read_until('Z').await.expect("transaction started");
-            }
-            let query = "SET intervalstyle to 'asd'";
-            if extended {
-                client
-                    .send(Parse::named("invalid_intervalstyle", query))
-                    .await;
-                client
-                    .send(Bind::new_statement("invalid_intervalstyle"))
-                    .await;
-                client.send(Execute::new()).await;
-                client.send(Sync).await;
-                client.try_process().await.expect("SET processed");
-            } else {
-                client.send_simple(Query::new(query)).await;
-            }
-
-            let error = client.read().await;
-            assert_eq!(error.code(), 'E');
-            assert_eq!(&error.to_bytes()[5..], expected);
-            let ready = client.read().await;
-            assert_eq!(
-                ready.to_bytes().as_ref(),
-                &[b'Z', 0, 0, 0, 5, if in_transaction { b'E' } else { b'I' }]
-            );
-            assert_eq!(client.client().params.get("intervalstyle"), None);
-            assert!(!client.backend_connected());
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_invalid_set_preserves_parameters() {
-    let mut startup = Parameters::default();
-    startup.insert("timezone", "UTC");
-    startup.insert("intervalstyle", "postgres");
-    startup.insert("extra_float_digits", "1");
-    startup.insert("statement_timeout", "1000");
-    startup.insert("work_mem", "4096");
-    let mut client = TestClient::new_sharded(startup.clone()).await;
-
-    for (name, query) in [
-        ("intervalstyle", "SET intervalstyle = 'invalid'"),
-        ("extra_float_digits", "SET extra_float_digits = 4"),
-        ("extra_float_digits", "SET extra_float_digits = '3ms'"),
-        ("statement_timeout", "SET statement_timeout = '25d'"),
-        ("statement_timeout", "SET statement_timeout = '5MB'"),
-        ("work_mem", "SET work_mem = '63kB'"),
-        ("vacuum_cost_delay", "SET vacuum_cost_delay = '10s'"),
-    ] {
-        client.send_simple(Query::new(query)).await;
-        assert_eq!(
-            expect_message!(client.read().await, ErrorResponse).code,
-            "22023"
-        );
-        assert_eq!(
-            expect_message!(client.read().await, ReadyForQuery).status,
-            'I'
-        );
-        assert_eq!(client.client().params.get(name), startup.get(name));
-        assert!(!client.backend_connected());
-    }
-
-    client
-        .send_simple(Query::new("SET extra_float_digits = 3"))
-        .await;
-    expect_message!(client.read().await, CommandComplete);
-    expect_message!(client.read().await, ReadyForQuery);
-    assert_eq!(
-        client.client().params.get("extra_float_digits"),
-        Some(&"3".into())
-    );
 }
 
 #[tokio::test]

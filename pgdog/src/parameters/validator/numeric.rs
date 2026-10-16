@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+use std::{ffi::CStr, fmt::Display};
 
 use pg_internals::{
     constants::{
@@ -10,15 +10,23 @@ use pg_internals::{
 
 /// PostgreSQL reports range failures using the parsed value in base units.
 pub(super) fn range_error(guc: &Guc, value: &str) -> Option<String> {
-    let (value, min, max) = match (guc.parse_numeric(value)?, guc.min?, guc.max?) {
+    Some(match (guc.parse_numeric(value)?, guc.min?, guc.max?) {
         (Value::Int(value), Value::Int(min), Value::Int(max)) if value < min || value > max => {
-            (value.to_string(), min.to_string(), max.to_string())
+            format_range_error(guc, value, min, max)
         }
         (Value::Real(value), Value::Real(min), Value::Real(max)) if value < min || value > max => {
-            (format_real(value), format_real(min), format_real(max))
+            format_range_error(guc, format_real(value), format_real(min), format_real(max))
         }
         _ => return None,
-    };
+    })
+}
+
+fn format_range_error(
+    guc: &Guc,
+    value: impl Display,
+    min: impl Display,
+    max: impl Display,
+) -> String {
     let unit = match guc.unit_flags & GUC_UNIT {
         GUC_UNIT_BYTE => " B".into(),
         GUC_UNIT_KB => " kB".into(),
@@ -30,10 +38,10 @@ pub(super) fn range_error(guc: &Guc, value: &str) -> Option<String> {
         GUC_UNIT_MIN => " min".into(),
         _ => String::new(),
     };
-    Some(format!(
+    format!(
         "{value}{unit} is outside the valid range for parameter \"{}\" ({min}{unit} .. {max}{unit})",
         guc.name
-    ))
+    )
 }
 
 fn format_real(value: f64) -> String {

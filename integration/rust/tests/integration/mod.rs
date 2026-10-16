@@ -32,7 +32,7 @@ mod passthrough_debounce;
 pub mod per_stmt_routing;
 pub mod prepared;
 pub mod protocol_version;
-mod regress;
+mod regress_set;
 pub mod reload;
 pub mod reset;
 pub mod rewrite;

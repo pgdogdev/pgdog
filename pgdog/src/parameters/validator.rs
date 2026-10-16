@@ -54,13 +54,8 @@ impl ParameterValidator {
         store: &super::ParameterStore,
     ) -> Option<ParameterStatus> {
         let param = param.into();
-        let report = GUC
-            .get(param.name())
-            .map(|guc| guc.report)
-            .unwrap_or_default();
-
         let value = store.get(param.name());
-        if report && value != previous {
+        if value != previous && GUC.get(param.name()).is_some_and(|guc| guc.report) {
             Some(ParameterStatus {
                 name: param.name().to_string(),
                 value: value.cloned().unwrap_or_else(|| "".into()),
@@ -77,23 +72,18 @@ impl ParameterValidator {
         let name = param.name();
         let value = param.value()?;
 
-        let valid = GUC
-            .get(name)
-            .is_none_or(|guc| Self::validate_value(guc, value));
+        let guc = GUC.get(name)?;
 
-        if !valid {
+        if !Self::validate_value(guc, value) {
             let mut error = ErrorResponse {
                 code: "22023".into(),
                 message: format!("invalid value for parameter \"{name}\": \"{value}\""),
                 ..Default::default()
             };
-            if let Some(message) = GUC
-                .get(name)
-                .and_then(|guc| numeric::range_error(guc, value))
-            {
+            if let Some(message) = numeric::range_error(guc, value) {
                 error.message = message;
             }
-            if let Some(guc) = GUC.get(name).filter(|guc| !guc.options.is_empty()) {
+            if !guc.options.is_empty() {
                 error.hint = Some(format!("Available values: {}.", guc.options.join(", ")));
             }
             return Some(error);
