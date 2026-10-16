@@ -16,11 +16,22 @@ env:
   IMAGE: registry.bencher.dev/pgdog:${{ github.sha }}
 
 jobs:
-  image:
+  build:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
-    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+    strategy:
+      matrix:
+        include:
+          - bin: pgdog
+            run: |
+              cargo build --release --bin pgdog
+              cp target/release/pgdog out/pgdog
+          - bin: pgdog-microbench
+            runner: blacksmith-16vcpu-ubuntu-2404
+            run: |
+              bin=$(cargo test --profile microbench -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+                | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
+              cp "$bin" out/pgdog-microbench
     steps:
       - uses: actions/checkout@v6
       - name: Install CI deps
@@ -28,11 +39,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: build-v1
-      - name: Build
-        run: cargo build --release --bin pgdog
+          key: ${{ matrix.bin }}
+      - name: Build ${{ matrix.bin }}
+        run: |
+          mkdir out
+          ${{ matrix.run }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.bin }}
+          path: out/${{ matrix.bin }}
+          retention-days: 1
+
+  image:
+    needs: build
+    # This initial runner is to assemble the docker image for the Bencher runner. It doesn't run any tests itself.
+    # Bencher's runners do not have outside network access; requires us to have everything ready-to-go.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: bin
+          merge-multiple: true
 
       - name: Build image
-        run: docker build --build-context bin=target/release -f benches/perf/Dockerfile -t $IMAGE .
+        run: |
+          chmod +x bin/*
+          docker build --build-context bin=bin -f benches/perf/Dockerfile -t $IMAGE .
+
       - name: Push image
         run: |
           echo '${{ secrets.BENCHER_API_KEY }}' | docker login registry.bencher.dev -u pgdog --password-stdin
@@ -44,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [pooler, lb, sharding]
+        suite: [pooler, lb, sharding, microbench]
     steps:
       - uses: actions/checkout@v6
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
@@ -58,6 +92,10 @@ jobs:
         # of a difference, unless something goes on with their servers in the future.
         # 
         # TODO: we can re-evaluate a proper variance later
+        #
+        # Microbench: error on **any** increase in allocations (alloc_count). This is safe as
+        # allocation counts are the same on every run (unlike timings). It'll also error if alloc_bytes
+        # goes up by more than 1% or latency by more than 10% (loose until we know how noisy it is is)
         #
         # Why --github-actions? This allows it to comment on the PR with the result.
         # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
@@ -73,6 +111,19 @@ jobs:
             --threshold-measure throughput \
             --threshold-test percentage \
             --threshold-lower-boundary 0.03 \
+            --threshold-upper-boundary _ \
+            --threshold-measure alloc_count \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0 \
+            --threshold-measure alloc_bytes \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.01 \
+            --threshold-measure latency \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.10 \
             --thresholds-reset \
             --error-on-alert \
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
