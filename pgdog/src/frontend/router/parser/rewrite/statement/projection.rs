@@ -390,13 +390,18 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_having_expression_fails_closed() {
-        let ast = pg_raw_parse::parse(
+    fn unsupported_having_queries_fail_closed() {
+        for sql in [
             "SELECT customer_id, SUM(price) FROM purchases \
              GROUP BY customer_id HAVING SUM(price) / COUNT(*) > 2",
-        )
-        .unwrap();
-        let error = build(&ast, &Schema::default(), false).unwrap_err();
-        assert!(matches!(error, Error::UnsupportedHaving(_)));
+            "SELECT customer_id FROM purchases \
+             GROUP BY customer_id HAVING customer_id > 2",
+            "SELECT lower(customer_id), COUNT(*) FROM purchases \
+             GROUP BY lower(customer_id) HAVING COUNT(*) > 2",
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let error = build(&ast, &Schema::default(), false).unwrap_err();
+            assert!(matches!(error, Error::UnsupportedHaving(_)), "{sql}");
+        }
     }
 }

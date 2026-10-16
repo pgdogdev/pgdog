@@ -374,6 +374,11 @@ mod test {
             Field::bigint("__pgdog_having_0"),
             Field::bigint("__pgdog_having_1"),
         ]));
+        let mut noop = Buffer::default();
+        noop.having(&ProjectionRewritePlan::default(), &decoder)
+            .unwrap();
+        assert!(noop.is_empty());
+
         let plan = ProjectionRewritePlan {
             having: crate::frontend::router::parser::HavingRewritePlan::new(
                 HavingExpr::Compare {
