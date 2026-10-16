@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
     strategy:
       matrix:
         include:
@@ -27,8 +27,9 @@ jobs:
               cargo build --release --bin pgdog
               cp target/release/pgdog out/pgdog
           - bin: pgdog-microbench
+            runner: blacksmith-16vcpu-ubuntu-2404
             run: |
-              bin=$(cargo test --release -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+              bin=$(cargo test --profile microbench -p pgdog --bin pgdog --features bench --no-run --message-format=json \
                 | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
               cp "$bin" out/pgdog-microbench
     steps:
