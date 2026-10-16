@@ -30,7 +30,7 @@ use crate::{
     config::{config, set},
     util::sync::WorkerPool,
 };
-use pgdog_stats::{ReplicationDirection, ReshardStatus, TaskProgress, TaskStatus};
+use pgdog_stats::{ReplicationDirection, ReplicationStatus, ReshardStatus, TaskProgress, TaskStatus};
 
 mod copy_data;
 mod replication;
@@ -857,7 +857,13 @@ async fn copy_data_cancelled_during_replication_removes_its_slots()
         let (task, _state) = copy_data_task(schema, destination).await?;
         let id = task.id();
 
-        wait_for_reshard_status(id, ReshardStatus::Replication).await?;
+        wait_for_reshard_status(
+            id,
+            ReshardStatus::Replication {
+                stage: ReplicationStatus::Replicating,
+            },
+        )
+        .await?;
         wait_for_active_source_slot(&mut server, schema).await?;
 
         tasks_storage().cancel_task(id);
