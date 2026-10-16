@@ -4,6 +4,48 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.62
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.62` |
+
+#### Features
+
+- Basic support for cross-shard subqueries @jkaczman
+- Add `auth_type` config to user entries in `users.toml` @levkk @BABTUNA
+- Use replication origin to track replication progress during resharding. This makes it durable and allows us to recover progress after a crash (still a TODO). @meskill
+- Add row-level metrics for DML/DDL queries @murex971
+- Ensure non-deterministic functions like `now()` return consistent results in cross-shard DELETEs @jkaczman
+- Support parsing custom logical messages to handle DDL replication @jkaczman
+
+#### Bug fixes
+
+- `pg_try_advisory_lock` handling was optimistic / did not account for lock not being actually available. PgDog will only pin the session now if the lock was actually acquired. @levkk
+- `DISCARD ALL` returned wrong command tag, breaking JDBC driver prepared statements handling @levkk
+- `SET` now correctly overrides `SET LOCAL` inside a transaction @levkk
+- `RESET` now correctly restores startup parameters @levkk
+- `ROLLBACK` no longer undo's a `RESET` from previous transaction @levkk
+- Invalid parameter settings would leave server connection in a partial/dirty state @levkk
+- Parameter names were incorrectly escaped @levkk
+- `SET LOCAL [...] TO DEFAULT` would be incorrectly treated as `SET` @anna-poutanen
+- PgDog now compiles under FreeBSD @mahlonsmith
+- `COPY` identifiers (table name and column names) are now correctly escaped during resharding @BABTUNA
+- Correctly handle `ABORT` and `END` when query parser is off. This was regression introduced in v0.1.60. @levkk @valanor-vaelmir
+- Correctly detect sharding key in join clause @levkk @PeterZaitsev
+- Correctly check that each shard committed the transaction before returning success during resharding @jkaczman
+- Unsupported agggregate functions now return an `ERROR` instead of `FATAL` @levkk @PeterZaitsev
+- Fix `avg()` scale for cross-shard numerics @murex971 @PeterZaitsev
+
+#### Performance
+
+- Reduce memory usage of prepared statements cache after bursts of new statements are added and removed. This affects drivers like `tokio-postgres`, `go/pq`, `Postgrex` and others that prepare one-off prepared statements to execute queries
+
+#### Code quality
+
+- Improve replication benchmark @meskill
+- Microbenchmarks for our query engine @jkaczman
+
 ### v0.1.61
 
 | Application | Docker image                     |
