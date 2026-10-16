@@ -10,7 +10,7 @@ use super::having;
 use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{Aggregate, HavingRewritePlan, OrderBy};
+use crate::frontend::router::parser::{Aggregate, HavingExpr, HavingRewritePlan, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make};
@@ -58,7 +58,31 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
-    pub(crate) having: Option<Arc<HavingRewritePlan>>,
+    pub(crate) having: Option<Arc<HavingPostRoutePlan>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HavingPostRoutePlan {
+    rewrite: HavingRewritePlan,
+    aggregate: Aggregate,
+}
+
+impl HavingPostRoutePlan {
+    pub(crate) fn new(rewrite: HavingRewritePlan, aggregate: Aggregate) -> Self {
+        Self { rewrite, aggregate }
+    }
+
+    pub(crate) fn expression(&self) -> &HavingExpr {
+        self.rewrite.expression()
+    }
+
+    pub(crate) fn hidden_aliases(&self) -> &[String] {
+        self.rewrite.hidden_aliases()
+    }
+
+    pub(crate) fn aggregate(&self) -> &Aggregate {
+        &self.aggregate
+    }
 }
 
 impl ProjectionRewritePlan {
@@ -92,7 +116,6 @@ impl ProjectionRewritePlan {
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
     plan: ProjectionRewritePlan,
-    aggregate: Option<Aggregate>,
 }
 
 pub(crate) fn finalize_after_route(
@@ -158,8 +181,8 @@ pub(crate) fn finalize_after_route(
         && let Some(route) = request.route.as_mut()
     {
         route.projection_rewrite_plan = rewrite.plan.clone();
-        if let Some(aggregate) = &rewrite.aggregate {
-            route.set_aggregate(aggregate.clone());
+        if let Some(having) = &rewrite.plan.having {
+            route.set_aggregate(having.aggregate().clone());
         }
         let mut order_by = route.order_by().to_vec();
         for helper in &rewrite.plan.order_by_helpers {
@@ -201,25 +224,31 @@ fn build(
     }
 
     let mut plan = ProjectionRewritePlan::default();
-    let mut rewritten_aggregate = None;
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
-            plan.having = Some(Arc::new(having::rewrite_select(&mut select.as_mut(), mem)?));
-            let aggregate = Aggregate::parse(&select, schema);
-            if aggregate.is_empty() {
+            let having = having::rewrite_select(&mut select.as_mut(), mem)?;
+            let rewritten_aggregate = Aggregate::parse(&select, schema);
+            if rewritten_aggregate.is_empty() {
                 return Err(Error::UnsupportedHaving(String::from(
                     "at least one aggregate function is required",
                 )));
             }
-            if aggregate.group_by().len() != select.group_clause().len() {
+            if rewritten_aggregate.group_by().len() != select.group_clause().len() {
                 return Err(Error::UnsupportedHaving(String::from(
                     "every GROUP BY expression must be a selected column or ordinal",
                 )));
             }
-            rewritten_aggregate = Some(aggregate);
+            plan.having = Some(Arc::new(HavingPostRoutePlan::new(
+                having,
+                rewritten_aggregate,
+            )));
         }
-        let aggregate = rewritten_aggregate.as_ref().unwrap_or(&aggregate);
+        let aggregate = plan
+            .having
+            .as_deref()
+            .map(HavingPostRoutePlan::aggregate)
+            .unwrap_or(&aggregate);
         if !aggregate.is_empty() {
             let aggregate_plan =
                 AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, aggregate);
@@ -236,11 +265,7 @@ fn build(
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
 
-    Ok(Some(PostRouteRewrite {
-        sql,
-        plan,
-        aggregate: rewritten_aggregate,
-    }))
+    Ok(Some(PostRouteRewrite { sql, plan }))
 }
 
 #[cfg(test)]
@@ -316,9 +341,11 @@ mod tests {
         );
         assert_eq!(
             rewrite
-                .aggregate
-                .as_ref()
-                .expect("rewritten aggregate")
+                .plan
+                .having
+                .as_deref()
+                .expect("HAVING plan")
+                .aggregate()
                 .targets()
                 .len(),
             2,
@@ -358,10 +385,10 @@ mod tests {
         let rewrite = build(&ast, &Schema::default(), false)
             .unwrap()
             .expect("HAVING requires a rewrite");
-        let aggregate = rewrite.aggregate.expect("rewritten aggregate");
+        let aggregate = rewrite.plan.having.expect("HAVING plan");
 
-        assert_eq!(aggregate.group_by().len(), 1);
-        assert_eq!(aggregate.targets().len(), 2);
+        assert_eq!(aggregate.aggregate().group_by().len(), 1);
+        assert_eq!(aggregate.aggregate().targets().len(), 2);
     }
 
     #[test]
@@ -377,9 +404,11 @@ mod tests {
 
         assert_eq!(
             rewrite
-                .aggregate
-                .as_ref()
-                .expect("rewritten aggregate")
+                .plan
+                .having
+                .as_deref()
+                .expect("HAVING plan")
+                .aggregate()
                 .targets()
                 .len(),
             2
@@ -401,10 +430,10 @@ mod tests {
         let rewrite = build(&ast, &Schema::default(), false)
             .unwrap()
             .expect("HAVING requires a rewrite");
-        let aggregate = rewrite.aggregate.expect("rewritten aggregate");
+        let aggregate = rewrite.plan.having.expect("HAVING plan");
 
-        assert_eq!(aggregate.targets().len(), 1);
-        assert_eq!(aggregate.group_by().len(), 1);
+        assert_eq!(aggregate.aggregate().targets().len(), 1);
+        assert_eq!(aggregate.aggregate().group_by().len(), 1);
     }
 
     #[test]
