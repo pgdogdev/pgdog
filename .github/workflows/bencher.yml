@@ -78,7 +78,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [pooler, lb, sharding, microbench]
+        # sharding-w2 runs sharding with 2 PgDog workers, so that we can catch **contention** between
+        # workers (e.g., a new lock on the hot path) through ctx-switches-per-txn.
+        #
+        # TODO: we need another test on a runner with more CPUs to catch contention with a larger
+        # amount of workers (e.g., 4-8). 4 vCPUs can only fit 2 workers while leaving enough
+        # cores for Postgres and pgbench.
+        suite: [pooler, lb, sharding-w2, microbench]
     steps:
       - uses: actions/checkout@v6
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
@@ -86,7 +92,9 @@ jobs:
         env:
           START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
         # This will run one test per job (all in parallel).
-        # It'll error if a test's throughput is more than 3% BELOW the mean of the baseline's previous runs (main)
+        # 
+        # It'll error if a test's throughput is more than 1% BELOW, or PgDog CPU time per transaction
+        # (cpu-per-txn) is more than 1% ABOVE the mean of the baseline's previous runs (main)
         #
         # After testing 5x back-to-back, variance was <1%. This should be enough
         # of a difference, unless something goes on with their servers in the future.
@@ -110,8 +118,16 @@ jobs:
             --spec intel-v1 \
             --threshold-measure throughput \
             --threshold-test percentage \
-            --threshold-lower-boundary 0.03 \
+            --threshold-lower-boundary 0.01 \
             --threshold-upper-boundary _ \
+            --threshold-measure cpu-per-txn \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.01 \
+            --threshold-measure ctx-switches-per-txn \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.10 \
             --threshold-measure alloc_count \
             --threshold-test percentage \
             --threshold-lower-boundary _ \
