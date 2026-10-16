@@ -84,7 +84,7 @@ impl Task for CopyDataTask {
             ),
         });
 
-        let guard = cancel.drop_guard_ref();
+        let guard = ctx.subtasks_cancellation_token().drop_guard();
 
         let mut handles = FuturesUnordered::new();
 
