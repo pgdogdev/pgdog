@@ -529,7 +529,7 @@ impl QueryEngine {
             debug!("[2pc] enabling automatic transaction");
             self.two_pc.set_auto();
             self.backend
-                .start_transaction(BufferedQuery::Query(Query::new("BEGIN")))?;
+                .start_transaction(BufferedQuery::Query(Query::new("BEGIN")));
         }
 
         Ok(())

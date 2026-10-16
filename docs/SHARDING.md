@@ -105,23 +105,48 @@ Empty queries (no FROM clause, e.g. `SELECT 1` or `SELECT NOW()`) are round-robi
 ### Primary or replica
 
 Handlers classify the statement only: `Route::read`/`Route::select` for reads, `Route::write`
-for everything else, and `mutates` for a `SELECT` that changes data. After the handler returns,
-`parse()` calls `QueryParserContext::route_read()` for every command that carries a route and
-stores the result with `Route::set_read`. The first rule that applies wins:
+for everything else; a `SELECT` that changes data (locking clause, data-modifying CTE, write
+function, advisory lock) is a write. After the handler returns, `parse()` stores
+`QueryParserContext::explicit_role_target()` on the route. `Route::role_target()` combines both into
+a `RoleTarget`, which the query engine puts on the connection `Request`:
 
-1. The cluster has no primary (or the user is `read_only`): replica.
-2. A requested role: the `pgdog.role` parameter (startup, `SET`, `SET LOCAL`), then the user
-   `role` in `users.toml`. A `/* pgdog_role */` comment comes first, unless the transaction
-   intent is fixed (rule 3). Ignored on clusters without replicas.
-3. The transaction intent: `BEGIN READ ONLY` reads; a conservative `BEGIN` writes.
-4. The plugin result.
-5. The statement: a read that doesn't mutate goes to a replica, unless the transaction is a
-   conservative implicit one, or `read_write_split = prefer_primary`.
+| `RoleTarget` | Servers |
+|---|---|
+| `Primary` | the primary only |
+| `PreferReplica` | replicas; the primary only if no replica is available |
+| `Any` | any server that `read_write_split` allows |
 
-Plugins get the result of rules 1–3 and 5 as `write_override` input.
+`explicit_role_target()` does not look at the cluster topology or `read_write_split`. It applies
+these rules:
 
-The connection uses `Route::is_read()` only to choose the server for a statement with no
-bound server. A bound transaction stays on its server until it ends.
+1. An explicit role always wins: the `/* pgdog_role */` comment, then the `pgdog.role`
+   parameter (startup, `SET`, `SET LOCAL`), then the user `role` in `users.toml`.
+   Inside a conservative read/write transaction (`BEGIN`, or an implicit transaction from a
+   multi-`Execute` pipeline) the comment is ignored; the session role still applies.
+   Role `replica` gives `PreferReplica`. Role `primary` gives `Primary`. Write access is not
+   checked by pgdog: a replica rejects writes by itself.
+2. Without a role, a conservative read/write or implicit transaction gives `Primary`, and a
+   read-only transaction (`BEGIN READ ONLY`) gives `Any` with every strategy.
+3. Otherwise nothing is forced: a read gives `Any`, a write gives `Primary`.
+
+Plugins get the resulting read/write as `write_override` input. A plugin's read/write result
+replaces the statement's classification in rule 3 and in the omnisharded coverage check
+(`Route::requires_full_shard_coverage()`); the explicit role target of rules 1–2 still wins over it.
+
+`ClusterConnection::get_conn_internal()` picks the shard method for the role target at checkout:
+
+| `RoleTarget` | Shard method | Shard has a primary | Static shard without a primary | `role = auto`, no elected primary |
+|---|---|---|---|---|
+| `Primary` | `primary()`; `replica()` if `!can_have_primary()` | the primary | the replicas | wait for an election, then fail |
+| `PreferReplica` | `replica()` | replicas; the primary if no replica is available | the replicas | the replicas |
+| `Any`, `prefer_primary` | `primary()`; `replica()` if `!can_have_primary()` | the primary | the replicas | wait for an election, then fail |
+| `Any` | `replica()` | as `read_write_split` allows | the replicas | the replicas |
+
+Without the parser, an unknown statement is a read if the cluster has no primary
+(`Cluster::has_primary()`), so a replica-only `role = auto` cluster does not wait for an election.
+
+The connection uses the role target only to choose the servers for a statement with no bound
+server. A bound transaction keeps its role target until it ends, also for new shards.
 
 ### SELECT routing decision tree
 

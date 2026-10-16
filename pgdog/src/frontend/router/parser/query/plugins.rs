@@ -66,8 +66,8 @@ impl QueryParser {
         };
         let context = PdRouterContext {
             shards: context.shards as u64,
-            has_replicas: !context.read_only,
-            has_primary: !context.write_only,
+            has_replicas: context.has_replicas,
+            has_primary: context.has_primary,
             in_transaction: context.router_context.in_transaction(),
             write_override: !read,
             query: statement.ast.first().ok_or(Error::EmptyQuery)?,

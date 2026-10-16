@@ -1,3 +1,4 @@
+use crate::backend::pool::RoleTarget;
 use crate::frontend::router::parser::Shard;
 
 use super::setup::*;
@@ -10,7 +11,7 @@ fn test_comment_pgdog_role_primary() {
         Query::new("/* pgdog_role: primary */ SELECT 1").into(),
     ]);
 
-    assert!(command.route().is_write());
+    assert_eq!(command.route().role_target(), RoleTarget::Primary);
 }
 
 #[test]

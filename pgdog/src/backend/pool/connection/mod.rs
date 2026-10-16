@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     super::{Error, Server, pool::Guard},
-    Address, Cluster, Request,
+    Address, Cluster, Request, RoleTarget,
 };
 
 use std::{
@@ -73,10 +73,7 @@ impl Connection {
     }
 
     /// Start a transaction on this connection, if the connection is idle.
-    pub(crate) fn start_transaction(
-        &mut self,
-        transaction_stmt: BufferedQuery,
-    ) -> Result<(), Error> {
+    pub(crate) fn start_transaction(&mut self, transaction_stmt: BufferedQuery) {
         match self.binding {
             Binding::NotConnected => {
                 self.binding = Binding::Transaction(Some(transaction_stmt));
@@ -98,8 +95,6 @@ impl Connection {
 
             _ => (),
         }
-
-        Ok(())
     }
 
     /// When a transaction is finished, remove the transaction statement,
@@ -190,11 +185,10 @@ impl Connection {
             _ => None,
         };
 
-        // The router folds the transaction intent and the requested role into the route.
-        let is_read = route.is_read();
+        let role_target = request.role_target;
 
         if let Shard::Direct(shard) = route.shard() {
-            let server = match self.cluster.get_conn(request, *shard, is_read).await {
+            let server = match self.cluster.get_conn(request, *shard).await {
                 Ok(server) => server,
                 Err(err) => {
                     if let Binding::Transaction(stmt) = &mut self.binding {
@@ -204,19 +198,18 @@ impl Connection {
                 }
             };
 
-            self.binding = Binding::Direct(DirectBinding::new(
-                server,
-                *shard,
-                transaction_stmt,
-                is_read,
-            ));
+            self.binding = Binding::Direct(
+                DirectBinding::builder()
+                    .server(server)
+                    .shard(*shard)
+                    .maybe_transaction_stmt(transaction_stmt)
+                    .role_target(role_target)
+                    .build(),
+            );
         } else {
             // TODO(lev): Shard::Multi intentionally ignored because it's stupid
             // and we should remove it.
-            let (shards, shard_indices) = match self
-                .cluster
-                .get_conns(request, route.shard(), is_read)
-                .await
+            let (shards, shard_indices) = match self.cluster.get_conns(request, route.shard()).await
             {
                 Ok((shards, shard_indices)) => (shards, shard_indices),
                 Err(err) => {
@@ -228,13 +221,15 @@ impl Connection {
                 }
             };
 
-            self.binding = Binding::MultiShard(MultiBinding::new(
-                shards,
-                shard_indices,
-                route,
-                transaction_stmt,
-                is_read,
-            ));
+            self.binding = Binding::MultiShard(
+                MultiBinding::builder()
+                    .servers(shards)
+                    .shard_indices(shard_indices)
+                    .route(route)
+                    .maybe_transaction_stmt(transaction_stmt)
+                    .role_target(role_target)
+                    .build(),
+            );
         }
 
         Ok(())

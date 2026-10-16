@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::task::yield_now;
 use tokio::time::{Instant, sleep, timeout};
 
-use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
+use crate::backend::pool::{Address, Config, Error, PoolConfig, Request, RoleTarget};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
 use itertools::*;
@@ -429,10 +429,10 @@ async fn test_read_write_split_exclude_primary() {
     replicas.shutdown();
 }
 
-/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
-/// then ensures that the primary is not chosen for reads. We have replicas available.
+/// An explicit `replica` role never uses the primary while a replica is available,
+/// even with `IncludePrimary`.
 #[tokio::test]
-async fn test_user_read_only_include_primary() {
+async fn test_explicit_replica_only_include_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
     let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
@@ -442,41 +442,33 @@ async fn test_user_read_only_include_primary() {
         create_test_pool_config("127.0.0.1", 5432),
     ];
 
-    // Use `IncludePrimary`
     let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
-        LoadBalancingStrategy::Random,
+        LoadBalancingStrategy::RoundRobin,
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
     replicas.launch();
 
-    // Notice that we `read` to true and `read_only` to true.
-    let request = Request::new(Default::default(), true, true);
+    let request = Request::new(Default::default(), RoleTarget::PreferReplica);
+    let primary_id = replicas.primary().unwrap().id();
 
-    // Try getting connections multiple times and verify primary is never used
-    let mut replica_ids = HashSet::new();
-    for _ in 0..100 {
+    let mut used_ids = HashSet::new();
+    for _ in 0..10 {
         let conn = replicas.get(&request).await.unwrap();
-        replica_ids.insert(conn.pool.id());
+        used_ids.insert(conn.pool.id());
     }
 
-    // Should only use replica pools, not primary
-    assert_eq!(replica_ids.len(), 2);
+    assert!(!used_ids.contains(&primary_id));
+    assert_eq!(used_ids.len(), 2, "both replicas are used");
 
-    // Verify primary pool ID is not in the set of used pools
-    let primary_id = replicas.primary().unwrap().id();
-    assert!(!replica_ids.contains(&primary_id));
-
-    // Shutdown both primary and replicas
     replicas.shutdown();
 }
 
-/// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
-/// then ensures that the primary IS chosen for reads. We have no usable replicas.
+/// An explicit `replica` role falls back to the primary when no replica is available.
 #[tokio::test]
-async fn test_user_read_only_include_primary_no_replicas() {
+async fn test_explicit_replica_only_falls_back_to_primary() {
     let primary_config = create_test_pool_config("127.0.0.1", 5432);
     let primary_pool = Pool::new(&primary_config);
     primary_pool.launch();
@@ -486,35 +478,24 @@ async fn test_user_read_only_include_primary_no_replicas() {
     let replicas = LoadBalancer::new(
         &Some(primary_pool),
         &replica_configs,
-        LoadBalancingStrategy::Random,
+        LoadBalancingStrategy::RoundRobin,
         ReadWriteSplit::IncludePrimary,
         Default::default(),
     );
     replicas.launch();
 
-    // Ban the replica
-    let replica_ban = &replicas.targets[0].ban;
-    replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_millis(1000));
 
-    // `read_only` is set to true. This would usually override `IncludePrimary`,
-    // but we have no replicas available.
-    let request = Request::new(Default::default(), true, true);
+    let request = Request::new(Default::default(), RoleTarget::PreferReplica);
+    let primary_id = replicas.primary().unwrap().id();
 
-    // Should only use primary since replica is banned
-    let mut used_pool_ids = HashSet::new();
     for _ in 0..10 {
         let conn = replicas.get(&request).await.unwrap();
-        used_pool_ids.insert(conn.pool.id());
+        assert_eq!(conn.pool.id(), primary_id);
     }
 
-    // Should only use primary pool since replica is banned
-    assert_eq!(used_pool_ids.len(), 1);
-
-    // Verify primary pool ID is in the set of used pools
-    let primary_id = replicas.targets.last().unwrap().pool.id();
-    assert!(used_pool_ids.contains(&primary_id));
-
-    // Shutdown both primary and replicas
     replicas.shutdown();
 }
 
@@ -555,21 +536,9 @@ async fn test_read_write_split_include_primary() {
     replicas.shutdown();
 }
 
-/// Composition contract for `prefer_primary`.
-///
-/// `prefer_primary` lives in the router and only decides read-vs-write: a default
-/// query becomes a *write* and never reaches this load balancer. The only request
-/// that arrives here as a *read* is one that explicitly opted into replicas
-/// (`SET pgdog.role = replica`, `SET LOCAL ...`, or a `/* pgdog_role: replica */`
-/// comment). That read is a plain read — it is NOT pinned replica-only — so where it
-/// lands is governed entirely by `read_write_split`, independently of `prefer_primary`.
-///
-/// This verifies that handoff for every `read_write_split` value: the same opt-in read
-/// follows the split's rules, which is why `prefer_primary` +
-/// `include_primary_if_replica_banned` yields "default to primary, opt into replicas,
-/// fall back to primary when replicas are banned".
+/// A read without a role follows the `read_write_split` rules.
 #[tokio::test]
-async fn test_prefer_primary_optin_read_honors_read_write_split() {
+async fn test_read_honors_read_write_split() {
     async fn used_ids(split: ReadWriteSplit) -> (HashSet<u64>, u64) {
         let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
         primary_pool.launch();
@@ -589,7 +558,7 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
         );
         lb.launch();
 
-        let request = Request::default();
+        let request = Request::new(Default::default(), RoleTarget::Any);
         let mut ids = HashSet::new();
         for _ in 0..50 {
             let conn = lb.get(&request).await.unwrap();
@@ -599,22 +568,22 @@ async fn test_prefer_primary_optin_read_honors_read_write_split() {
         (ids, primary_id)
     }
 
-    // exclude_primary: opt-in reads stay on replicas only.
+    // exclude_primary: reads stay on replicas only.
     let (ids, primary_id) = used_ids(ReadWriteSplit::ExcludePrimary).await;
     assert!(!ids.contains(&primary_id));
     assert_eq!(ids.len(), 2);
 
-    // include_primary: opt-in reads may still be served by the primary.
+    // include_primary: reads may still be served by the primary.
     let (ids, primary_id) = used_ids(ReadWriteSplit::IncludePrimary).await;
     assert!(ids.contains(&primary_id));
 
-    // include_primary_if_replica_banned: with no bans, opt-in reads stay on replicas.
+    // include_primary_if_replica_banned: with no bans, reads stay on replicas.
     let (ids, primary_id) = used_ids(ReadWriteSplit::IncludePrimaryIfReplicaBanned).await;
     assert!(!ids.contains(&primary_id));
     assert_eq!(ids.len(), 2);
 
-    // prefer_primary: opt-in reads stay on replicas (like exclude_primary); the
-    // primary-by-default behavior is enforced upstream in the router, not here.
+    // prefer_primary: the load balancer itself reads from replicas only.
+    // The connection sends prefer_primary reads to the primary.
     let (ids, primary_id) = used_ids(ReadWriteSplit::PreferPrimary).await;
     assert!(!ids.contains(&primary_id));
     assert_eq!(ids.len(), 2);

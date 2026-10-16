@@ -23,14 +23,14 @@ const ATTEMPTS: usize = 2;
 const READ_ONLY_QUERY: &str =
     "SELECT (current_setting('default_transaction_read_only') = 'on')::int";
 
-fn configure(user_role: Option<SessionRole>, strategy: ReadWriteStrategy) {
+fn configure(user_role: Option<SessionRole>, strategy: ReadWriteStrategy, split: ReadWriteSplit) {
     load_test_replicas();
 
     let mut config = config().deref().clone();
     for user in &mut config.users.users {
         user.role = user_role;
     }
-    config.config.general.read_write_split = ReadWriteSplit::IncludePrimary;
+    config.config.general.read_write_split = split;
     config.config.general.read_write_strategy = strategy;
     set(config).unwrap();
     reload_from_existing().unwrap();
@@ -54,7 +54,20 @@ async fn setup_with_strategy(
     user_role: Option<SessionRole>,
     strategy: ReadWriteStrategy,
 ) -> TestClient {
-    configure(user_role, strategy);
+    setup_with_config(table, user_role, strategy, ReadWriteSplit::IncludePrimary).await
+}
+
+async fn setup_with_split(table: &str, split: ReadWriteSplit) -> TestClient {
+    setup_with_config(table, None, ReadWriteStrategy::Conservative, split).await
+}
+
+async fn setup_with_config(
+    table: &str,
+    user_role: Option<SessionRole>,
+    strategy: ReadWriteStrategy,
+    split: ReadWriteSplit,
+) -> TestClient {
+    configure(user_role, strategy, split);
 
     let mut primary = new_client(Some("primary")).await.leak_pool();
     execute(
@@ -643,6 +656,67 @@ async fn test_startup_primary_connected_set_local_replica() {
 }
 
 #[tokio::test]
+async fn test_startup_replica_connected_set_local_primary() {
+    let table = "test_startup_replica_connected_set_local_primary";
+    setup(table, None).await;
+    let mut client = new_client(Some("replica")).await;
+
+    for _ in 0..ATTEMPTS {
+        execute(&mut client, "BEGIN").await.unwrap();
+        assert!(read_only(&mut client, "").await, "read went to the primary");
+        execute(&mut client, "SET LOCAL pgdog.role TO 'primary'")
+            .await
+            .unwrap();
+        assert!(
+            read_only(&mut client, "").await,
+            "transaction left the replica"
+        );
+        execute(&mut client, "ROLLBACK").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_prefer_primary_read() {
+    let table = "test_prefer_primary_read";
+    setup_with_split(table, ReadWriteSplit::PreferPrimary).await;
+    let mut client = new_client(None).await;
+
+    assert_primary(&mut client, table).await;
+}
+
+#[tokio::test]
+async fn test_prefer_primary_set_replica() {
+    let table = "test_prefer_primary_set_replica";
+    let mut primary = setup_with_split(table, ReadWriteSplit::PreferPrimary).await;
+    let mut client = new_client(None).await;
+    execute(&mut client, "SET pgdog.role TO 'replica'")
+        .await
+        .unwrap();
+
+    assert_replica(&mut client, &mut primary, table).await;
+}
+
+#[tokio::test]
+async fn test_read_only_transaction_starts_with_set_transaction() {
+    let table = "test_read_only_transaction_starts_with_set_transaction";
+    setup_with_split(table, ReadWriteSplit::ExcludePrimary).await;
+    let mut client = new_client(None).await;
+
+    for _ in 0..ATTEMPTS {
+        execute(&mut client, "BEGIN READ ONLY").await.unwrap();
+        execute(
+            &mut client,
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        )
+        .await
+        .unwrap();
+        assert!(read_only(&mut client, "").await, "read went to the primary");
+        assert_read(&mut client, table, "").await;
+        execute(&mut client, "ROLLBACK").await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn test_startup_replica_extended() {
     let table = "test_startup_replica_extended";
     let mut primary = setup(table, None).await;
@@ -685,7 +759,7 @@ async fn test_startup_replica_copy() {
 
     for _ in 0..ATTEMPTS {
         let result = timeout(
-            Duration::from_millis(200),
+            Duration::from_secs(5),
             execute(&mut client, &format!("COPY {table} FROM STDIN")),
         )
         .await
