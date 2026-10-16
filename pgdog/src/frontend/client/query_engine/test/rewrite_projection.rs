@@ -132,7 +132,6 @@ async fn cross_shard_having_rewrites_and_replaces_route_aggregate() {
             .route()
             .projection_rewrite_plan
             .having
-            .expression()
             .is_some()
     );
 }

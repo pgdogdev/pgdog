@@ -58,14 +58,14 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
-    pub(crate) having: HavingRewritePlan,
+    pub(crate) having: Option<Arc<HavingRewritePlan>>,
 }
 
 impl ProjectionRewritePlan {
     pub(crate) fn is_noop(&self) -> bool {
         self.aggregate_helpers.is_empty()
             && self.order_by_helpers.is_empty()
-            && self.having.is_noop()
+            && self.having.is_none()
     }
 
     pub(crate) fn drop_columns(&self, row_description: &RowDescription) -> BTreeSet<usize> {
@@ -78,7 +78,11 @@ impl ProjectionRewritePlan {
                     .filter(|helper| helper.injected)
                     .map(|helper| helper.alias.as_str()),
             )
-            .chain(self.having.hidden_aliases().iter().map(String::as_str))
+            .chain(
+                self.having
+                    .iter()
+                    .flat_map(|plan| plan.hidden_aliases().iter().map(String::as_str)),
+            )
             .filter_map(|alias| row_description.field_index(alias))
             .collect()
     }
@@ -201,7 +205,7 @@ fn build(
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
-            plan.having = having::rewrite_select(&mut select.as_mut(), mem)?;
+            plan.having = Some(Arc::new(having::rewrite_select(&mut select.as_mut(), mem)?));
             let aggregate = Aggregate::parse(&select, schema);
             if aggregate.is_empty() {
                 return Err(Error::UnsupportedHaving(String::from(
@@ -300,7 +304,16 @@ mod tests {
 
         assert!(rewrite.sql.contains("__pgdog_having_0"));
         assert!(rewrite.sql.contains("__pgdog_having_1"));
-        assert_eq!(rewrite.plan.having.hidden_aliases().len(), 3);
+        assert_eq!(
+            rewrite
+                .plan
+                .having
+                .as_deref()
+                .expect("HAVING plan")
+                .hidden_aliases()
+                .len(),
+            3
+        );
         assert_eq!(
             rewrite
                 .aggregate
@@ -325,7 +338,12 @@ mod tests {
             .expect("HAVING requires a rewrite");
 
         assert_eq!(
-            rewrite.plan.having.hidden_aliases(),
+            rewrite
+                .plan
+                .having
+                .as_deref()
+                .expect("HAVING plan")
+                .hidden_aliases(),
             &["__pgdog_having_1", "__pgdog_having_2", "__pgdog_having_3"]
         );
     }

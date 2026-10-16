@@ -47,7 +47,9 @@ pub(super) fn rewrite_select<'a>(
 ) -> Result<HavingRewritePlan, Error> {
     let having = select.having_clause();
     if matches!(having, Node::None) {
-        return Ok(HavingRewritePlan::default());
+        return Err(Error::UnsupportedHaving(String::from(
+            "HAVING rewrite requested without a HAVING clause",
+        )));
     }
     let having_source = mem.make_unique(having);
     let having = having_source.as_ref();
@@ -344,7 +346,7 @@ mod tests {
              AND MAX(price)::numeric >= 10",
         );
 
-        let Some(HavingExpr::And(expressions)) = plan.expression() else {
+        let HavingExpr::And(expressions) = plan.expression() else {
             panic!("expected top-level AND")
         };
         assert!(matches!(
