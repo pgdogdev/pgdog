@@ -124,6 +124,10 @@ jobs:
             --threshold-test percentage \
             --threshold-lower-boundary _ \
             --threshold-upper-boundary 0.01 \
+            --threshold-measure ctx-switches-per-txn \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.10 \
             --threshold-measure alloc_count \
             --threshold-test percentage \
             --threshold-lower-boundary _ \

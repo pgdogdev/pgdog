@@ -100,6 +100,10 @@ jobs:
             --threshold-test percentage \
             --threshold-lower-boundary _ \
             --threshold-upper-boundary 0.01 \
+            --threshold-measure ctx-switches-per-txn \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.10 \
             --thresholds-reset \
             --error-on-alert \
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
