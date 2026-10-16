@@ -58,7 +58,7 @@ for name in "$@"; do
     if [ "${workers}" -gt 1 ]; then
         ctx_json=", \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}"
     fi
-    json+="\"$name\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}},"
+    json+="\"$name-v2\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}},"
 done
 
 echo "{${json%,}}"
