@@ -256,6 +256,14 @@ impl MultiShard {
                     return Err(err.into());
                 }
 
+                if let Err(err) = self
+                    .buffer
+                    .having(&self.route.projection_rewrite_plan, &self.decoder)
+                {
+                    self.buffer.clear();
+                    return Err(err.into());
+                }
+
                 self.buffer.sort(self.route.order_by(), &self.decoder);
                 self.buffer
                     .drop_helper_columns(&self.route.projection_rewrite_plan, &self.decoder);

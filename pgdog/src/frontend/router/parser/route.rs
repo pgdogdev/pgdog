@@ -273,6 +273,10 @@ impl Route {
         &self.aggregate
     }
 
+    pub(crate) fn set_aggregate(&mut self, aggregate: Aggregate) {
+        self.aggregate = aggregate;
+    }
+
     /// Set shard on this route, along with reasoning
     /// for that shard selection.
     pub(crate) fn set_shard(&mut self, shard: ShardWithPriority) {
@@ -343,6 +347,7 @@ impl Route {
     pub(crate) fn requires_post_processing(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
+            || !self.projection_rewrite_plan.having.is_noop()
             || self.distinct().is_some()
             || self.limit().limit.is_some()
             || self.limit().offset.is_some()
