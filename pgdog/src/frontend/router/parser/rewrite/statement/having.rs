@@ -309,3 +309,83 @@ impl<'a> Parser<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rewrite(sql: &str) -> (String, HavingRewritePlan) {
+        let ast = pg_raw_parse::parse(sql).expect("parse HAVING query");
+        let Node::SelectStmt(select) = ast.stmts().next().expect("one statement") else {
+            panic!("expected SELECT")
+        };
+        let mut plan = None;
+        let rewritten = make::owned(|mem| {
+            let mut select = mem.make_unique(select);
+            plan =
+                Some(rewrite_select(&mut select.as_mut(), mem).expect("rewrite supported HAVING"));
+            select
+        });
+        (
+            pg_raw_parse::deparse(&*rewritten)
+                .expect("deparse rewritten query")
+                .as_str()
+                .to_owned(),
+            plan.expect("rewrite plan"),
+        )
+    }
+
+    #[test]
+    fn rewrites_nested_boolean_null_cast_and_parameter_expression() {
+        let (sql, plan) = rewrite(
+            "SELECT customer_id, SUM(price)::numeric FROM purchases \
+             GROUP BY customer_id \
+             HAVING NOT (COUNT(*) <= $1 OR SUM(price) IS NOT NULL) \
+             AND MAX(price)::numeric >= 10",
+        );
+
+        let Some(HavingExpr::And(expressions)) = plan.expression() else {
+            panic!("expected top-level AND")
+        };
+        assert!(matches!(
+            expressions.as_slice(),
+            [
+                HavingExpr::Not(not),
+                HavingExpr::Compare {
+                    operator: CompareOperator::GreaterOrEqual,
+                    ..
+                }
+            ] if matches!(
+                not.as_ref(),
+                HavingExpr::Or(or) if matches!(
+                    or.as_slice(),
+                    [
+                        HavingExpr::Compare {
+                            operator: CompareOperator::LessOrEqual,
+                            ..
+                        },
+                        HavingExpr::IsNull { negated: true, .. }
+                    ]
+                )
+            )
+        ));
+        assert!(sql.contains("OR true"));
+        assert_eq!(plan.hidden_aliases().len(), 6);
+    }
+
+    #[test]
+    fn parses_every_comparison_operator() {
+        for (sql, expected) in [
+            ("=", CompareOperator::Equal),
+            ("<>", CompareOperator::NotEqual),
+            ("!=", CompareOperator::NotEqual),
+            ("<", CompareOperator::Less),
+            ("<=", CompareOperator::LessOrEqual),
+            (">", CompareOperator::Greater),
+            (">=", CompareOperator::GreaterOrEqual),
+        ] {
+            assert_eq!(Parser::comparison_operator(sql), Some(expected));
+        }
+        assert_eq!(Parser::comparison_operator("~"), None);
+    }
+}

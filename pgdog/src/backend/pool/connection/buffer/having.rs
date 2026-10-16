@@ -206,6 +206,7 @@ mod tests {
             messages::{DataRow, Datum},
         },
     };
+    use pgdog_postgres_types::{Double, Float};
 
     fn compare_expression(operator: CompareOperator) -> HavingExpr {
         HavingExpr::Compare {
@@ -260,6 +261,47 @@ mod tests {
             value: HavingValue::new("__pgdog_having_0".into()),
             negated: false,
         };
+        let is_not_null = HavingExpr::IsNull {
+            value: HavingValue::new("__pgdog_having_1".into()),
+            negated: true,
+        };
+        let known_false = HavingExpr::Compare {
+            left: HavingValue::new("__pgdog_having_1".into()),
+            operator: CompareOperator::Greater,
+            right: HavingValue::new("__pgdog_having_1".into()),
+        };
+
+        assert_eq!(
+            evaluate_expression(&unknown, &row, &decoder).unwrap(),
+            TruthValue::Unknown
+        );
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::And(vec![is_null.clone(), unknown.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::Unknown
+        );
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::And(vec![unknown.clone(), known_false.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::False
+        );
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::Or(vec![known_false.clone(), unknown.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::Unknown
+        );
         assert!(
             evaluate(
                 &HavingExpr::Or(vec![unknown.clone(), is_null]),
@@ -268,6 +310,89 @@ mod tests {
             )
             .unwrap()
         );
+        assert!(evaluate(&is_not_null, &row, &decoder).unwrap());
         assert!(!evaluate(&HavingExpr::Not(Box::new(unknown)), &row, &decoder).unwrap());
+
+        let missing = HavingExpr::Compare {
+            left: HavingValue::new("__pgdog_missing".into()),
+            operator: CompareOperator::Equal,
+            right: HavingValue::new("__pgdog_having_1".into()),
+        };
+        assert!(matches!(
+            evaluate(&missing, &row, &decoder),
+            Err(Error::InvalidHaving(_))
+        ));
+    }
+
+    #[test]
+    fn compares_supported_scalar_types_and_all_operators() {
+        for (operator, left, right, expected) in [
+            (
+                CompareOperator::Equal,
+                Datum::Bigint(2),
+                Datum::Integer(2),
+                true,
+            ),
+            (
+                CompareOperator::NotEqual,
+                Datum::Integer(2),
+                Datum::SmallInt(3),
+                true,
+            ),
+            (
+                CompareOperator::Less,
+                Datum::SmallInt(2),
+                Datum::Bigint(3),
+                true,
+            ),
+            (
+                CompareOperator::LessOrEqual,
+                Datum::Bigint(2),
+                Datum::Integer(2),
+                true,
+            ),
+            (
+                CompareOperator::Greater,
+                Datum::Numeric(Numeric::from(3_i32)),
+                Datum::SmallInt(2),
+                true,
+            ),
+            (
+                CompareOperator::GreaterOrEqual,
+                Datum::Float(Float(2.0)),
+                Datum::Double(Double(2.0)),
+                true,
+            ),
+            (
+                CompareOperator::Greater,
+                Datum::Text("a".into()),
+                Datum::Text("z".into()),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                compare(&left, operator, &right).unwrap(),
+                if expected {
+                    TruthValue::True
+                } else {
+                    TruthValue::False
+                }
+            );
+        }
+
+        assert_eq!(
+            numeric_ordering(&Datum::Double(Double(f64::NAN)), &Datum::Float(Float(1.0))),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(postgres_float_ordering(f64::NAN, f64::NAN), Ordering::Equal);
+        assert_eq!(postgres_float_ordering(1.0, f64::NAN), Ordering::Less);
+        assert!(matches!(
+            compare(
+                &Datum::Text("2".into()),
+                CompareOperator::Equal,
+                &Datum::Integer(2)
+            ),
+            Err(Error::UnsupportedHaving(_))
+        ));
     }
 }
