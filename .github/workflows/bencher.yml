@@ -32,10 +32,9 @@ jobs:
       - name: Build PgDog release binary
         run: cargo build --release --bin pgdog
 
-      # TODO: I'm currently not using --release here for quick testing. Should add it
       - name: Build PgDog microbenchmarks
         run: |
-          bin=$(cargo test -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+          bin=$(cargo test --release -p pgdog --bin pgdog --features bench --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
           cp "$bin" target/release/pgdog-microbench
 
@@ -68,6 +67,10 @@ jobs:
         # 
         # TODO: we can re-evaluate a proper variance later
         #
+        # Microbench: error on **any** increase in allocations (alloc_count). This is safe as
+        # allocation counts are the same on every run (unlike timings). It'll also error if alloc_bytes
+        # goes up by more than 1% or latency by more than 10% (loose until we know how noisy it is is)
+        #
         # Why --github-actions? This allows it to comment on the PR with the result.
         # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
         # Why --detach & --ci-callback-token? This allows us to exit early, and defer posting a comment until repository_dispatch is fired on
@@ -82,6 +85,19 @@ jobs:
             --threshold-measure throughput \
             --threshold-test percentage \
             --threshold-lower-boundary 0.03 \
+            --threshold-upper-boundary _ \
+            --threshold-measure alloc_count \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0 \
+            --threshold-measure alloc_bytes \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.01 \
+            --threshold-measure latency \
+            --threshold-test percentage \
+            --threshold-lower-boundary _ \
+            --threshold-upper-boundary 0.10 \
             --thresholds-reset \
             --error-on-alert \
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
