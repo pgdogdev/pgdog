@@ -42,6 +42,9 @@ static DATABASES: Lazy<ArcSwap<Databases>> =
     Lazy::new(|| ArcSwap::from_pointee(Databases::default()));
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+mod retained_pools;
+use retained_pools::RetainedPools;
+
 /// Sync databases during modification.
 pub(crate) fn lock() -> MutexGuard<'static, RawMutex, ()> {
     LOCK.lock()
@@ -55,7 +58,7 @@ pub(crate) fn databases() -> Arc<Databases> {
 }
 
 /// Replace databases pooler-wide.
-pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Result<(), Error> {
+pub(crate) fn replace_databases(mut new_databases: Databases, reload: bool) -> Result<(), Error> {
     // Order of operations is important
     // to ensure zero downtime for clients.
     //
@@ -65,6 +68,12 @@ pub(crate) fn replace_databases(new_databases: Databases, reload: bool) -> Resul
 
     // 2. Move connections from old databases into new ones.
     let old_databases = databases();
+    if reload
+        && new_databases.retained_pools.is_some()
+        && let Some(retained) = &old_databases.retained_pools
+    {
+        new_databases.retained_pools = Some(Arc::clone(retained));
+    }
     let new_databases = Arc::new(new_databases);
     if reload {
         // Move whatever connections we can over to new pools.
@@ -120,7 +129,11 @@ pub(crate) fn shutdown() {
 
 /// Reset cumulative statistics for all connection pools.
 pub(crate) fn reset_stats() {
-    for cluster in databases().all().values() {
+    let databases = databases();
+    if let Some(retained) = &databases.retained_pools {
+        retained.lock().clear();
+    }
+    for cluster in databases.all().values() {
         for shard in cluster.shards() {
             for pool in shard.pool_iter() {
                 pool.reset_stats();
@@ -285,6 +298,7 @@ pub(crate) struct Databases {
     databases: HashMap<User, Cluster>,
     mirrors: HashMap<User, Vec<Cluster>>,
     mirror_configs: HashMap<(String, String), crate::config::MirrorConfig>,
+    retained_pools: Option<Arc<Mutex<RetainedPools>>>,
 }
 
 impl Databases {
@@ -383,6 +397,10 @@ impl Databases {
     /// databases config.
     pub(crate) fn move_conns_to(&self, destination: &Databases) -> Result<usize, Error> {
         let mut moved = 0;
+        let mut retained = destination
+            .retained_pools
+            .as_ref()
+            .map(|pools| pools.lock());
         for (user, cluster) in &self.databases {
             let dest = destination.databases.get(user);
 
@@ -391,6 +409,33 @@ impl Databases {
                 && cluster.move_conns_to(dest)?
             {
                 moved += 1;
+            } else if dest.is_none()
+                && let Some(retained) = &mut retained
+            {
+                // Passthrough users are recreated only after authenticating again.
+                for shard in cluster.shards() {
+                    for pool in shard.pool_iter() {
+                        retained.insert(user, shard.number(), pool);
+                    }
+                }
+            }
+        }
+
+        if let Some(retained) = &mut retained {
+            for (user, cluster) in &destination.databases {
+                if self.databases.contains_key(user) {
+                    continue;
+                }
+                let mut restored = false;
+                for shard in cluster.shards() {
+                    for pool in shard.pool_iter() {
+                        if let Some(previous) = retained.take(user, shard.number(), pool) {
+                            previous.move_conns_to(pool)?;
+                            restored = true;
+                        }
+                    }
+                }
+                moved += usize::from(restored);
             }
         }
 
@@ -731,6 +776,9 @@ pub(crate) fn from_config(config: &ConfigAndUsers) -> Databases {
         databases,
         mirrors,
         mirror_configs,
+        retained_pools: (config.config.general.passthrough_auth
+            != pgdog_config::PassthroughAuth::Disabled)
+            .then(Default::default),
     }
 }
 
