@@ -1,6 +1,33 @@
-use sqlx::{Connection, Row};
+use sqlx::{Connection, Executor, Row, Statement};
 use std::time::Duration;
 use tokio::time::sleep;
+
+#[tokio::test]
+async fn test_simple_prepared_over_extended_protocol() {
+    let mut conn =
+        sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+            .await
+            .unwrap();
+
+    let prepare = conn
+        .prepare("PREPARE extended_stmt(int) AS SELECT $1")
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        prepare.query().execute(&mut conn).await.unwrap();
+    }
+
+    let execute = conn.prepare("EXECUTE extended_stmt($1)").await.unwrap();
+    for value in 5..8 {
+        let row = execute
+            .query()
+            .bind(value)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i32, usize>(0), value);
+    }
+}
 
 /// In addition to the unit test, `ensure_prepared_re_prepares_after_ttl_expire`,
 /// which proves that it actually does a Close -> Prepare,

@@ -8,8 +8,8 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, Describe, FromBytes, Message, ParseComplete, Protocol,
-        ProtocolMessage, ToBytes,
+        Close, CloseComplete, CommandComplete, Describe, FromBytes, Message, ParseComplete,
+        Prepare as SqlPrepare, Protocol, ProtocolMessage, ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -50,6 +50,28 @@ impl LocalStatement {
     /// to cover the case when the TTL was set after the statement creation
     fn expired(&self, now: Instant) -> bool {
         self.deadline.is_none_or(|deadline| deadline <= now)
+    }
+}
+
+/// A statement whose ParseComplete or CommandComplete has not arrived yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingStatement {
+    /// The completion belongs to an anonymous or internally injected Parse.
+    Ignored,
+    /// The completion makes this named statement available on the connection.
+    Named(String),
+}
+
+impl PendingStatement {
+    fn named(name: impl Into<String>) -> Self {
+        Self::Named(name.into())
+    }
+
+    fn name(&self) -> Option<&str> {
+        match self {
+            Self::Ignored => None,
+            Self::Named(name) => Some(name),
+        }
     }
 }
 
@@ -111,8 +133,8 @@ pub(crate) struct PreparedStatements {
     global_cache: Arc<RwLock<GlobalCache>>,
     local_cache: LruCache<String, LocalStatement>,
     state: ProtocolState,
-    // Prepared statements being prepared now on the connection.
-    parses: VecDeque<String>,
+    // Statements being prepared now on the connection, in reply order.
+    pending_statements: VecDeque<PendingStatement>,
     // Describes being executed now on the connection.
     describes: VecDeque<String>,
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
@@ -139,7 +161,7 @@ impl PreparedStatements {
             global_cache: frontend::PreparedStatements::global(),
             local_cache: LruCache::unbounded(),
             state: ProtocolState::default(),
-            parses: VecDeque::new(),
+            pending_statements: VecDeque::new(),
             describes: VecDeque::new(),
             parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
@@ -179,9 +201,28 @@ impl PreparedStatements {
         match request {
             ProtocolMessage::Parse(_) => {
                 self.state.add_ignore('1');
+                self.pending_statements.push_back(PendingStatement::Ignored);
                 Ok(())
             }
             _ => Err(Error::UnsupportedHandleIgnore(request.code())),
+        }
+    }
+
+    /// Handle the Execute that runs a SQL PREPARE over the extended protocol.
+    pub(super) fn handle_execute_prepare(&mut self, prepare: &SqlPrepare) -> HandleResult {
+        if self.contains(prepare.name()) {
+            let response = if self.server_state == State::TransactionError {
+                ErrorResponse::in_failed_transaction().message()
+            } else {
+                CommandComplete::from_str("PREPARE").message()
+            };
+            self.state.add_simulated(response);
+            HandleResult::Drop
+        } else {
+            self.pending_statements
+                .push_back(PendingStatement::named(prepare.name()));
+            self.state.add(ExecutionCode::ExecutionCompleted);
+            HandleResult::Forward
         }
     }
 
@@ -197,7 +238,8 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(bind.statement().to_string());
+                            self.pending_statements
+                                .push_back(PendingStatement::named(bind.statement()));
                             message.describe = self.internal_describe(bind.statement());
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
@@ -254,7 +296,8 @@ impl PreparedStatements {
                                 self.state.add_ignore('3');
                             }
                             self.state.add_ignore('1');
-                            self.parses.push_back(describe.statement().to_string());
+                            self.pending_statements
+                                .push_back(PendingStatement::named(describe.statement()));
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
@@ -321,7 +364,8 @@ impl PreparedStatements {
                         self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
-                        self.parses.push_back(parse.name().to_string());
+                        self.pending_statements
+                            .push_back(PendingStatement::named(parse.name()));
                     }
                     // The client is sending named prepared statements,
                     // but we're in ExtendedAnonymous mode so we rewrite
@@ -330,6 +374,8 @@ impl PreparedStatements {
                         parse.anonymize();
                         rewritten = true;
                     }
+                } else {
+                    self.pending_statements.push_back(PendingStatement::Ignored);
                 }
 
                 self.state.add('1');
@@ -371,7 +417,8 @@ impl PreparedStatements {
                     );
                     return Ok(HandleResult::Drop);
                 } else {
-                    self.parses.push_back(prepare.name().to_owned());
+                    self.pending_statements
+                        .push_back(PendingStatement::named(prepare.name()));
                     self.state.add(ExecutionCode::ReadyForQuery);
                 }
             }
@@ -389,7 +436,8 @@ impl PreparedStatements {
                         self.state.add_ignore(ExecutionCode::CommandComplete); // (the Prepare)
                         self.state.add_ignore(ExecutionCode::ReadyForQuery);
 
-                        self.parses.push_back(name.to_owned());
+                        self.pending_statements
+                            .push_back(PendingStatement::named(name));
 
                         // This will do Close => Prepare
                         return Ok(HandleResult::PrependProtocolMessage(
@@ -399,7 +447,8 @@ impl PreparedStatements {
                         return Ok(HandleResult::Drop);
                     }
                 } else {
-                    self.parses.push_back(prepare.name().to_string());
+                    self.pending_statements
+                        .push_back(PendingStatement::named(prepare.name()));
                     self.state.add_ignore('C');
 
                     // Prepare turns into a Simple Query ('Q') so it expects a regular RFQ back.
@@ -443,7 +492,7 @@ impl PreparedStatements {
                 // are syntactically valid.
                 self.describes.clear();
                 self.parameter_describes.clear();
-                self.parses.clear();
+                self.pending_statements.clear();
             }
 
             'T' => {
@@ -462,7 +511,7 @@ impl PreparedStatements {
             }
 
             '1' | 'C' => {
-                if let Some(name) = self.parses.pop_front() {
+                if let Some(PendingStatement::Named(name)) = self.pending_statements.pop_front() {
                     self.prepared(&name);
                 }
             }
@@ -473,9 +522,12 @@ impl PreparedStatements {
             '3' if matches!(action, Action::Ignore) => {
                 // ok, pop_front -> push_front just to avoid borrowing issues
                 // and not to copy the name just to remove by name
-                if let Some(name) = self.parses.pop_front() {
-                    self.remove(&name);
-                    self.parses.push_front(name);
+                if let Some(pending) = self.pending_statements.pop_front() {
+                    if let Some(name) = pending.name() {
+                        let name = name.to_owned();
+                        self.remove(&name);
+                    }
+                    self.pending_statements.push_front(pending);
                 }
             }
 
@@ -510,7 +562,7 @@ impl PreparedStatements {
 
     /// Extended protocol is in sync.
     pub(crate) fn done(&self) -> bool {
-        self.state.done() && self.parses.is_empty() && self.describes.is_empty()
+        self.state.done() && self.pending_statements.is_empty() && self.describes.is_empty()
     }
 
     /// The server connection has more messages to send
@@ -533,7 +585,11 @@ impl PreparedStatements {
     /// to run something before actual client's requests
     fn check_prepared(&mut self, name: &str) -> Result<Option<Prepare>, Error> {
         // Ignore if we already have a Parse in progress.
-        if self.parses.iter().any(|s| s == name) {
+        if self
+            .pending_statements
+            .iter()
+            .any(|pending| pending.name() == Some(name))
+        {
             return Ok(None);
         }
 
@@ -1152,6 +1208,59 @@ pub(crate) mod test {
         let mut ready_for_query = Message::new(ReadyForQuery::idle().to_bytes());
         assert!(!ps.forward(&mut ready_for_query).unwrap());
         assert!(ps.done());
+    }
+
+    #[test]
+    fn extended_sql_prepare_waits_for_execute_completion() {
+        let mut ps = new_extended();
+        let name = "__stmt_extended_prepare";
+        let prepare = SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1");
+
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Forward);
+        assert!(!ps.contains(name));
+
+        let mut command_complete = Message::new(CommandComplete::from_str("PREPARE").to_bytes());
+        assert!(ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
+
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Drop);
+        let simulated = ps
+            .state_mut()
+            .get_simulated()
+            .expect("duplicate PREPARE should complete locally");
+        assert_eq!(simulated.code(), 'C');
+    }
+
+    #[test]
+    fn extended_sql_prepare_discards_failed_execute() {
+        let mut ps = new_extended();
+        let name = "__stmt_failed_extended_prepare";
+        let prepare = SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1");
+
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Forward);
+
+        let mut error = Message::new(ErrorResponse::syntax("boom").to_bytes());
+        assert!(ps.forward(&mut error).unwrap());
+        assert!(!ps.contains(name));
+    }
+
+    #[test]
+    fn ignored_parse_does_not_complete_extended_sql_prepare() {
+        let mut ps = new_extended();
+        let name = "__stmt_after_ignored_parse";
+        let prepare = SimplePrepare::new(name, "PREPARE __pgdog_template_name AS SELECT $1");
+
+        ps.handle_ignore(&ProtocolMessage::Parse(Parse::new_anonymous("SELECT 1")))
+            .unwrap();
+        assert_eq!(ps.handle_execute_prepare(&prepare), HandleResult::Forward);
+
+        let mut parse_complete = ParseComplete.message();
+        assert!(!ps.forward(&mut parse_complete).unwrap());
+        assert!(!ps.contains(name));
+
+        let mut command_complete = CommandComplete::from_str("PREPARE").message();
+        assert!(ps.forward(&mut command_complete).unwrap());
+        assert!(ps.contains(name));
     }
 
     #[test]

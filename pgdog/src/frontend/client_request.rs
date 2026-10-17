@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::{
     frontend::router::{Ast, RoutingComment},
     net::{
-        Error, Flush, Parse, ProtocolMessage,
+        Error, Flush, Parse, Prepare, ProtocolMessage,
         messages::{Bind, CopyData, Protocol},
     },
     stats::memory::MemoryUsage,
@@ -39,6 +39,8 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
+    /// SQL PREPARE created when this request's Execute succeeds.
+    pub(crate) prepare_on_execute: Option<Box<Prepare>>,
 }
 
 impl MemoryUsage for ClientRequest {
@@ -47,6 +49,10 @@ impl MemoryUsage for ClientRequest {
         self.messages.capacity() * mem::size_of::<ProtocolMessage>()
             - mem::size_of::<Vec<ProtocolMessage>>()
             + mem::size_of::<Self>()
+            + self
+                .prepare_on_execute
+                .as_deref()
+                .map_or(0, |prepare| mem::size_of::<Prepare>() + prepare.len())
     }
 }
 
@@ -67,6 +73,7 @@ impl ClientRequest {
             routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
+            prepare_on_execute: None,
         }
     }
 
@@ -99,6 +106,7 @@ impl ClientRequest {
         }
 
         self.messages.clear();
+        self.prepare_on_execute = None;
         self.route = None;
         self.ast = None;
     }
@@ -227,6 +235,7 @@ impl ClientRequest {
             routing_comment: self.routing_comment.clone(),
             last_parse: None,
             anonymous_client_params: self.anonymous_client_params,
+            prepare_on_execute: self.prepare_on_execute.clone(),
         }
     }
 
@@ -413,6 +422,7 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
             routing_comment: None,
             last_parse: None,
             anonymous_client_params: None,
+            prepare_on_execute: None,
         }
     }
 }
