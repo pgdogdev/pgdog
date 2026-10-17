@@ -447,9 +447,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
             // Check named sharded table configs (fast path, no schema lookup needed)
             for config in &named {
-                if let Some(ref name) = config.name
-                    && table.name == name
-                {
+                if config.name_matches(table.name) {
                     // Also check schema match if specified in config
                     if let Some(ref config_schema) = config.schema
                         && table.schema != Some(config_schema.as_str())

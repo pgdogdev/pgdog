@@ -5,7 +5,7 @@ use pg_stream::{
 };
 use tokio::net::TcpStream;
 
-use crate::integration::subqueries::Commands;
+use crate::integration::subqueries::TestCase;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Protocol {
@@ -93,7 +93,7 @@ pub(crate) async fn run(
     conn: &mut PgConnection<TcpStream>,
     mut sql: String,
     protocol: Protocol,
-    commands: Option<&Commands>,
+    commands: Option<&TestCase>,
 ) -> Vec<WireMessage> {
     match protocol {
         Protocol::Simple => {

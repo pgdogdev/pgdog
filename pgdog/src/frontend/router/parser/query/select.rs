@@ -201,7 +201,8 @@ impl QueryParser {
             if let Some((vector, column_name)) = order.vector() {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
-                        && (table.name.is_none() || table.name.as_deref() == from_clause_table_name)
+                        && (table.name.is_none()
+                            || from_clause_table_name.is_some_and(|name| table.name_matches(name)))
                     {
                         let centroids = Centroids::from(&table.centroids);
                         let shard: Shard = centroids
