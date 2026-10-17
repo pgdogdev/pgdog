@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use pgdog_config::Role;
+use pgdog_config::SessionRole;
 
 use crate::frontend::client::TransactionType;
 use crate::frontend::router::parser::ShardsWithPriority;
@@ -57,6 +57,9 @@ pub(crate) struct QueryParserContext<'a> {
     /// the statement is classified: they don't apply to omnisharded
     /// writes, which route to every shard regardless of the key.
     pub(super) bare_key_lookups: Vec<PendingLookup>,
+    /// Role requested by the client session (`pgdog.role`), falling back
+    /// to the role configured for the user.
+    pub(super) session_role: Option<SessionRole>,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -75,6 +78,11 @@ impl<'a> QueryParserContext<'a> {
             &sharding_schema,
         )?;
 
+        let session_role = router_context
+            .parameter_hints
+            .compute_role()
+            .or_else(|| router_context.cluster.role());
+
         Ok(Self {
             read_only: router_context.cluster.read_only(),
             write_only: router_context.cluster.write_only(),
@@ -88,6 +96,7 @@ impl<'a> QueryParserContext<'a> {
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
             expanded_explain: router_context.cluster.expanded_explain(),
+            session_role,
             router_context,
             shards_calculator,
             pending_lookups: Vec::new(),
@@ -97,7 +106,6 @@ impl<'a> QueryParserContext<'a> {
 
     /// Write override enabled?
     pub(super) fn write_override(&self) -> bool {
-        let role = self.router_context.parameter_hints.compute_role();
         // Readonly clusters cannot pin ordinary transactions to a writer.
         let txn_write = matches!(
             self.router_context
@@ -106,10 +114,30 @@ impl<'a> QueryParserContext<'a> {
             Some(TransactionType::ReadWrite | TransactionType::Implicit)
         ) && self.rw_conservative()
             && !self.read_only;
-        // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
-        txn_write
-            || role == Some(Role::Primary)
-            || (self.prefer_primary && role != Some(Role::Replica))
+        txn_write || self.prefer_primary
+    }
+
+    /// Role requested by the session. A cluster with only a primary
+    /// or only replicas has nothing to choose from.
+    pub(super) fn session_role(&self) -> Option<SessionRole> {
+        if self.read_only || self.write_only {
+            return None;
+        }
+
+        self.session_role
+    }
+
+    /// Role that decides the route of this statement: the query comment,
+    /// then the session.
+    pub(super) fn query_role(&self) -> Option<SessionRole> {
+        if self.read_only || self.write_only {
+            return None;
+        }
+
+        self.router_context
+            .comment
+            .and_then(|comment| comment.role)
+            .or(self.session_role)
     }
 
     /// Are we using the conservative read/write separation strategy?

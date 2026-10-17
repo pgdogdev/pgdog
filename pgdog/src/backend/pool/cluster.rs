@@ -93,6 +93,7 @@ pub(crate) struct Cluster {
     failover_signal: ClusterFailoverSignalWatcher,
     cancellation_token: CancellationToken,
     auth_type: AuthType,
+    role: Option<pgdog_config::SessionRole>,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -144,6 +145,7 @@ impl Default for Cluster {
             failover_signal: ClusterFailoverSignalWatcher::default(),
             cancellation_token: Default::default(),
             auth_type: AuthType::default(),
+            role: Default::default(),
         }
     }
 }
@@ -233,6 +235,7 @@ pub(crate) struct ClusterConfig<'a> {
     canonicalize_oids: bool,
     read_only: bool,
     auth_type: AuthType,
+    role: Option<pgdog_config::SessionRole>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -304,6 +307,7 @@ impl<'a> ClusterConfig<'a> {
             canonicalize_oids: general.canonicalize_type_information,
             read_only: user.read_only.unwrap_or(false),
             auth_type: user.auth_type.unwrap_or(general.auth_type),
+            role: user.role,
         }
     }
 }
@@ -352,6 +356,7 @@ impl Cluster {
             canonicalize_oids,
             read_only,
             auth_type,
+            role,
         } = config;
 
         let identifier = Arc::new(DatabaseUser {
@@ -428,6 +433,7 @@ impl Cluster {
             failover_signal,
             cancellation_token: Default::default(),
             auth_type,
+            role,
         }
     }
 
@@ -742,6 +748,11 @@ impl Cluster {
     /// Get auth algorithm used by clients to connect.
     pub(crate) fn auth_type(&self) -> &AuthType {
         &self.auth_type
+    }
+
+    /// Default `pgdog.role` for clients of this user.
+    pub(crate) fn role(&self) -> Option<pgdog_config::SessionRole> {
+        self.role
     }
 
     /// Send a cancellation request for all running queries.

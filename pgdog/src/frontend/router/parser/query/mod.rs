@@ -1,9 +1,10 @@
 //! Route queries to correct shards.
 use std::{collections::HashSet, ops::Deref};
 
+use pgdog_config::SessionRole;
+
 use crate::{
     backend::ShardingSchema,
-    config::Role,
     frontend::router::{
         RoutingComment,
         context::RouterContext,
@@ -156,16 +157,16 @@ impl QueryParser {
                     .extend(std::mem::take(&mut context.bare_key_lookups));
 
                 route.set_pending_lookups(std::mem::take(&mut context.pending_lookups));
-
-                if let Some(role) = context.router_context.sticky.role {
-                    match role {
-                        Role::Primary => route.set_read(false),
-                        _ => route.set_read(true),
-                    }
-                }
             }
 
             _ => (),
+        }
+
+        if let Command::Query(route) | Command::Copy { route, .. } = &mut command {
+            if let Some(role) = context.query_role() {
+                route.set_read(role == SessionRole::Replica);
+            }
+            route.set_session_role(context.session_role());
         }
 
         if let Command::Query(_) = command
@@ -222,13 +223,6 @@ impl QueryParser {
         // Cluster doesn't have replicas and has only one shard.
         else if context.write_only {
             Some(Route::write(shard))
-
-        // The role is specified in the connection parameter (pgdog.role).
-        } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
-            Some(match role {
-                Role::Replica => Route::read(shard),
-                Role::Primary | Role::Auto => Route::write(shard),
-            })
         } else if context.prefer_primary {
             // Send queries to primary by default.
             Some(Route::write(shard))
@@ -317,9 +311,6 @@ impl QueryParser {
             }
 
             let role_override = routing_comment.role;
-            if let Some(role) = role_override {
-                self.write_override = role == Role::Primary;
-            }
 
             if comment_shard_set || role_override.is_some() {
                 let shard = context.shards_calculator.shard();

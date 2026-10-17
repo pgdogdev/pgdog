@@ -6,6 +6,7 @@ use super::{
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
+use pgdog_config::SessionRole;
 
 /// Table changes identified by the query parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,6 +107,10 @@ pub(crate) struct Route {
     /// A user-defined function with side effects is not detected and is
     /// treated as a read.
     mutates: bool,
+    /// Role requested by the session (`pgdog.role` or the user default).
+    /// It takes priority over the read/write intent recorded when a
+    /// transaction started. A query comment role only changes `read`.
+    session_role: Option<SessionRole>,
     /// `ORDER BY` clause, transformed into something
     /// we can quickly use to sort the result.
     order_by: Vec<OrderBy>,
@@ -363,6 +368,15 @@ impl Route {
 
     pub(crate) fn set_read(&mut self, read: bool) {
         self.read = read;
+    }
+
+    pub(crate) fn set_session_role(&mut self, role: Option<SessionRole>) {
+        self.session_role = role;
+    }
+
+    /// Role requested by the session, if any.
+    pub(crate) fn session_role(&self) -> Option<SessionRole> {
+        self.session_role
     }
 
     #[cfg(test)]

@@ -1,8 +1,7 @@
-use pgdog_config::SystemCatalogsBehavior;
+use pgdog_config::{SessionRole, SystemCatalogsBehavior};
 
 use crate::backend::ShardedTables;
 use crate::backend::ShardingSchema;
-use crate::config::database::Role;
 use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::super::Shard;
@@ -85,7 +84,7 @@ fn test_primary_role_detection() {
     let schema = test_schema();
     let query = "SELECT * FROM users /* pgdog_role: primary */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.comment.role, Some(Role::Primary));
+    assert_eq!(result.comment.role, Some(SessionRole::Primary));
 }
 
 #[test]
@@ -102,7 +101,7 @@ fn test_role_and_shard_detection() {
         result.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(2)))
     );
-    assert_eq!(result.comment.role, Some(Role::Replica));
+    assert_eq!(result.comment.role, Some(SessionRole::Replica));
 }
 
 #[test]
@@ -110,7 +109,7 @@ fn test_replica_role_detection() {
     let schema = test_schema();
     let query = "SELECT * FROM users /* pgdog_role: replica */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.comment.role, Some(Role::Replica));
+    assert_eq!(result.comment.role, Some(SessionRole::Replica));
 }
 
 #[test]
@@ -286,7 +285,7 @@ fn test_remove_comment_multiple_trailing() {
         qac.raw_comment,
         "/* pgdog_role: primary *//* pgdog_shard: 1 */"
     );
-    assert_eq!(qac.comment.role, Some(Role::Primary));
+    assert_eq!(qac.comment.role, Some(SessionRole::Primary));
     assert_eq!(
         qac.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(1)))
@@ -407,7 +406,7 @@ fn test_role_and_shard_split_across_sides() {
     )
     .unwrap();
     assert_eq!(qac.query, "SELECT 1");
-    assert_eq!(qac.comment.role, Some(Role::Primary));
+    assert_eq!(qac.comment.role, Some(SessionRole::Primary));
     assert_eq!(
         qac.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(1)))
@@ -452,7 +451,7 @@ fn test_remove_comment_pgdog_directive() {
     let qac = parse_edge_comment("SELECT * FROM users /* pgdog_role: primary */", &schema).unwrap();
     assert_eq!(qac.query, "SELECT * FROM users");
     assert_eq!(qac.raw_comment, "/* pgdog_role: primary */");
-    assert_eq!(qac.comment.role, Some(Role::Primary));
+    assert_eq!(qac.comment.role, Some(SessionRole::Primary));
 }
 
 #[test]
