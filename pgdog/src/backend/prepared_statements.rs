@@ -316,8 +316,25 @@ impl PreparedStatements {
 
                 if !parse.anonymous() {
                     if self.contains(parse.name()) {
-                        // TODO(lev): perform the same in errored transaction check
-                        // as we do for PREPARE below.
+                        if self.server_state == State::TransactionError {
+                            // Parse may accept COMMIT/ROLLBACK in an aborted transaction,
+                            // unlike SQL PREPARE. Let Postgres decide before simulating success.
+                            self.parses.push_back(parse.name().to_owned());
+                            let close = Close::named(if self.config.level.rewrite_anonymous() {
+                                ""
+                            } else {
+                                parse.name()
+                            });
+                            if self.config.level.rewrite_anonymous() {
+                                parse.anonymize();
+                            }
+                            self.state.add_ignore('3');
+                            self.state.add('1');
+                            return Ok(HandleResult::PrependProtocolMessageRewrite {
+                                prepend: ProtocolMessage::Close(close),
+                                rewrite: ProtocolMessage::Parse(parse),
+                            });
+                        }
                         self.state.add_simulated(ParseComplete.message());
                         return Ok(HandleResult::Drop);
                     } else {
