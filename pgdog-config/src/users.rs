@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use tracing::warn;
 
 use super::core::Config;
-use super::pooling::PoolerMode;
+use super::pooling::{PoolerMode, PreparedStatementsLevel};
 use crate::util::random_string;
 use crate::{AuthType, RoleConfig};
 use schemars::JsonSchema;
@@ -314,6 +314,11 @@ pub struct User {
     ///
     /// <https://docs.pgdog.dev/configuration/users.toml/users/#pooler_mode>
     pub pooler_mode: Option<PoolerMode>,
+    /// Overrides which prepared statement protocols PgDog rewrites for this user.
+    /// When omitted, inherits the general `prepared_statements` setting.
+    ///
+    /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements>
+    pub prepared_statements: Option<PreparedStatementsLevel>,
     /// Which user to connect with when creating backend connections from PgDog to PostgreSQL. By default, the user configured in `name` is used. This setting allows you to override this configuration and use a different user.
     ///
     /// **Note:** Values specified in `pgdog.toml` take priority over this configuration.
