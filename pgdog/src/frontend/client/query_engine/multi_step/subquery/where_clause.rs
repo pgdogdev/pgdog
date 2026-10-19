@@ -24,8 +24,8 @@ impl<'a> SubqueryMulti<'a> {
     pub(crate) fn handle_where_clause(
         &self,
         statement: Node<'a>,
-        row_description: Option<RowDescription>,
-        data_rows: Vec<DataRow>,
+        row_description: Option<&RowDescription>,
+        data_rows: &Vec<DataRow>,
     ) -> Result<Option<String>, Error> {
         let Some((sublink, lexpr)) =
             rewrite::statement::subquery::where_clause::has_sub_link_in_where(statement)
@@ -50,7 +50,7 @@ impl<'a> SubqueryMulti<'a> {
                 NodeMut::SubLink(_) => {
                     let sublink_replacement = self.rewrite_sublink_in_where_clause(
                         sublink,
-                        &data_rows,
+                        data_rows,
                         row_description.as_ref().unwrap(),
                         mem,
                         lexpr,
