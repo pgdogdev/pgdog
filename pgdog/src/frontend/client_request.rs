@@ -441,9 +441,31 @@ impl From<Vec<ProtocolMessage>> for ClientRequest {
 
 #[cfg(test)]
 mod test {
-    use crate::net::{Describe, Execute, Parse, Query, Sync};
+    use crate::net::{Describe, Execute, Parse, Prepare, Query, Sync};
 
     use super::*;
+
+    #[test]
+    fn prepared_operation_memory_usage() {
+        let mut request = ClientRequest::default();
+        let baseline = request.memory_usage();
+
+        let prepare = Prepare::new("statement", "PREPARE statement AS SELECT 1");
+        let prepare_len = prepare.len();
+        request.prepared_operation = Some(Box::new(PreparedOperation::PrepareOnExecute(prepare)));
+        assert_eq!(
+            request.memory_usage(),
+            baseline + mem::size_of::<PreparedOperation>() + prepare_len
+        );
+
+        let parse = Parse::named("statement", "EXECUTE statement");
+        let parse_len = parse.len();
+        request.prepared_operation = Some(Box::new(PreparedOperation::RewriteExecute(parse)));
+        assert_eq!(
+            request.memory_usage(),
+            baseline + mem::size_of::<PreparedOperation>() + parse_len
+        );
+    }
 
     #[test]
     fn test_request_splice() {
