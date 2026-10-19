@@ -327,10 +327,6 @@ impl RewritePlan {
         timezone: Option<&ParameterValue>,
         timestamps: QueryTimestamps,
     ) -> Result<RewriteResult, Error> {
-        let executes_sql_prepared = self
-            .prepare_rewrites
-            .iter()
-            .any(|rewrite| matches!(rewrite, PrepareExecute::Execute(_)));
         let execute_prepare = self
             .prepare_rewrites
             .iter()
@@ -338,10 +334,10 @@ impl RewritePlan {
                 PrepareExecute::Execute(prepare) => Some(prepare),
                 PrepareExecute::Prepare(_) => None,
             });
-        let bound_execute = if request
-            .parameters()?
-            .is_some_and(|bind| !bind.params_raw().is_empty())
-            && let Some(prepare) = execute_prepare
+        let bound_execute = if let Some(prepare) = execute_prepare
+            && request
+                .parameters()?
+                .is_some_and(|bind| !bind.params_raw().is_empty())
         {
             if self.offset.is_some() {
                 return Err(Error::UnsupportedBoundExecute("LIMIT/OFFSET rewrites"));
@@ -408,7 +404,7 @@ impl RewritePlan {
         }
 
         if bound_execute.is_none()
-            && executes_sql_prepared
+            && execute_prepare.is_some()
             && request.parameters()?.is_some()
             && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
         {
