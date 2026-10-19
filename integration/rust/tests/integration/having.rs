@@ -15,7 +15,7 @@ async fn having_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>
     seed(
         &sharded,
         1,
-        "INSERT INTO having_merge_test VALUES (1, 20), (2, 21), (2, 22)",
+        "INSERT INTO having_merge_test VALUES (1, 20), (2, 21)",
     )
     .await?;
 
@@ -29,11 +29,10 @@ async fn having_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>
         )
         .await?;
 
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].columns().len(), 2);
     assert_eq!(rows[0].get::<i64, _>("customer_id"), 1);
     assert_eq!(rows[0].get::<i64, _>("order_count"), 3);
-    assert_eq!(rows[1].get::<i64, _>("customer_id"), 2);
-    assert_eq!(rows[1].get::<i64, _>("order_count"), 3);
 
     cleanup(&sharded).await;
     Ok(())

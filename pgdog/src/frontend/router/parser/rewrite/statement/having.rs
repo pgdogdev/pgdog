@@ -46,11 +46,10 @@ pub(super) fn rewrite_select<'a>(
     mem: make::MemoryToken<'a>,
 ) -> Result<HavingRewritePlan, Error> {
     let having = select.having_clause();
-    if matches!(having, Node::None) {
-        return Err(Error::UnsupportedHaving(
-            "HAVING rewrite requested without a HAVING clause",
-        ));
-    }
+    debug_assert!(
+        !matches!(having, Node::None),
+        "HAVING rewrite requires a HAVING clause"
+    );
     let having_source = mem.make_unique(having);
     let having = having_source.as_ref();
 
@@ -344,7 +343,15 @@ mod tests {
                 )
             )
         ));
-        assert!(sql.contains("OR true"));
+        assert_eq!(
+            sql,
+            "SELECT customer_id, sum(price)::numeric, count(*) AS __pgdog_having_0, \
+             $1 AS __pgdog_having_1, sum(price) AS __pgdog_having_2, \
+             max(price)::numeric AS __pgdog_having_3, 10 AS __pgdog_having_4, \
+             customer_id AS __pgdog_having_5 FROM purchases GROUP BY customer_id \
+             HAVING (NOT (count(*) <= $1 OR sum(price) IS NOT NULL) AND \
+             max(price)::numeric >= 10) OR true"
+        );
         assert_eq!(plan.hidden_aliases().len(), 6);
     }
 

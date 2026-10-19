@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashMap};
 
 use pgdog_postgres_types::{Datum, Double, Numeric};
 
@@ -16,6 +16,11 @@ enum TruthValue {
     Unknown,
 }
 
+pub(super) struct Evaluator<'a> {
+    expression: &'a HavingExpr,
+    columns: HashMap<&'a str, usize>,
+}
+
 impl TruthValue {
     fn not(self) -> Self {
         match self {
@@ -26,75 +31,101 @@ impl TruthValue {
     }
 }
 
-pub(super) fn evaluate(
-    expression: &HavingExpr,
-    row: &DataRow,
-    decoder: &Decoder,
-) -> Result<bool, Error> {
-    Ok(matches!(
-        evaluate_expression(expression, row, decoder)?,
-        TruthValue::True
-    ))
+impl<'a> Evaluator<'a> {
+    pub(super) fn new(expression: &'a HavingExpr, decoder: &'a Decoder) -> Self {
+        let columns = decoder
+            .row_description()
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| (field.name.as_str(), index))
+            .collect();
+        Self {
+            expression,
+            columns,
+        }
+    }
+
+    pub(super) fn evaluate(&self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
+        Ok(matches!(
+            self.evaluate_expression(self.expression, row, decoder)?,
+            TruthValue::True
+        ))
+    }
+
+    fn evaluate_expression(
+        &self,
+        expression: &HavingExpr,
+        row: &DataRow,
+        decoder: &Decoder,
+    ) -> Result<TruthValue, Error> {
+        match expression {
+            HavingExpr::Compare {
+                left,
+                operator,
+                right,
+            } => {
+                let left = self.value(left, row, decoder)?;
+                let right = self.value(right, row, decoder)?;
+                compare(&left, *operator, &right)
+            }
+            HavingExpr::And(expressions) => {
+                let mut result = TruthValue::True;
+                for expression in expressions {
+                    match self.evaluate_expression(expression, row, decoder)? {
+                        TruthValue::False => return Ok(TruthValue::False),
+                        TruthValue::Unknown => result = TruthValue::Unknown,
+                        TruthValue::True => {}
+                    }
+                }
+                Ok(result)
+            }
+            HavingExpr::Or(expressions) => {
+                let mut result = TruthValue::False;
+                for expression in expressions {
+                    match self.evaluate_expression(expression, row, decoder)? {
+                        TruthValue::True => return Ok(TruthValue::True),
+                        TruthValue::Unknown => result = TruthValue::Unknown,
+                        TruthValue::False => {}
+                    }
+                }
+                Ok(result)
+            }
+            HavingExpr::Not(expression) => {
+                Ok(self.evaluate_expression(expression, row, decoder)?.not())
+            }
+            HavingExpr::IsNull { value, negated } => {
+                let is_null = self.value(value, row, decoder)?.is_null();
+                Ok(if is_null != *negated {
+                    TruthValue::True
+                } else {
+                    TruthValue::False
+                })
+            }
+        }
+    }
+
+    fn value(&self, value: &HavingValue, row: &DataRow, decoder: &Decoder) -> Result<Datum, Error> {
+        let index =
+            self.columns.get(value.alias()).copied().ok_or_else(|| {
+                Error::InvalidHaving(format!("missing operand {}", value.alias()))
+            })?;
+        Ok(row.get_column_checked(index, decoder)?.value)
+    }
 }
 
+#[cfg(test)]
+fn evaluate(expression: &HavingExpr, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
+    Evaluator::new(expression, decoder).evaluate(row, decoder)
+}
+
+#[cfg(test)]
 fn evaluate_expression(
     expression: &HavingExpr,
     row: &DataRow,
     decoder: &Decoder,
 ) -> Result<TruthValue, Error> {
-    match expression {
-        HavingExpr::Compare {
-            left,
-            operator,
-            right,
-        } => {
-            let left = value(left, row, decoder)?;
-            let right = value(right, row, decoder)?;
-            compare(&left, *operator, &right)
-        }
-        HavingExpr::And(expressions) => {
-            let mut result = TruthValue::True;
-            for expression in expressions {
-                match evaluate_expression(expression, row, decoder)? {
-                    TruthValue::False => return Ok(TruthValue::False),
-                    TruthValue::Unknown => result = TruthValue::Unknown,
-                    TruthValue::True => {}
-                }
-            }
-            Ok(result)
-        }
-        HavingExpr::Or(expressions) => {
-            let mut result = TruthValue::False;
-            for expression in expressions {
-                match evaluate_expression(expression, row, decoder)? {
-                    TruthValue::True => return Ok(TruthValue::True),
-                    TruthValue::Unknown => result = TruthValue::Unknown,
-                    TruthValue::False => {}
-                }
-            }
-            Ok(result)
-        }
-        HavingExpr::Not(expression) => Ok(evaluate_expression(expression, row, decoder)?.not()),
-        HavingExpr::IsNull {
-            value: operand,
-            negated,
-        } => {
-            let is_null = value(operand, row, decoder)?.is_null();
-            Ok(if is_null != *negated {
-                TruthValue::True
-            } else {
-                TruthValue::False
-            })
-        }
-    }
-}
-
-fn value(operand: &HavingValue, row: &DataRow, decoder: &Decoder) -> Result<Datum, Error> {
-    let index = decoder
-        .row_description()
-        .field_index(operand.alias())
-        .ok_or_else(|| Error::InvalidHaving(format!("missing operand {}", operand.alias())))?;
-    Ok(row.get_column_checked(index, decoder)?.value)
+    Evaluator::new(expression, decoder).evaluate_expression(expression, row, decoder)
 }
 
 fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<TruthValue, Error> {
@@ -205,13 +236,14 @@ mod tests {
     }
 
     #[test]
-    fn compares_merged_bigint_with_integer_without_losing_precision() {
+    fn compares_merged_bigint_with_numeric_without_losing_precision() {
         let decoder = Decoder::from(RowDescription::new(&[
             Field::bigint("__pgdog_having_0"),
-            integer_field("__pgdog_having_1"),
+            Field::numeric("__pgdog_having_1"),
         ]));
         let mut row = DataRow::new();
-        row.add(9_007_199_254_740_993_i64).add(2_i32);
+        row.add(9_007_199_254_740_993_i64)
+            .add(Numeric::from(9_007_199_254_740_992_i64));
 
         assert!(
             evaluate(
@@ -287,7 +319,10 @@ mod tests {
             .unwrap()
         );
         assert!(evaluate(&is_not_null, &row, &decoder).unwrap());
-        assert!(!evaluate(&HavingExpr::Not(Box::new(unknown)), &row, &decoder).unwrap());
+        assert_eq!(
+            evaluate_expression(&HavingExpr::Not(Box::new(unknown)), &row, &decoder).unwrap(),
+            TruthValue::Unknown
+        );
 
         let missing = HavingExpr::Compare {
             left: HavingValue::new("__pgdog_missing".into()),

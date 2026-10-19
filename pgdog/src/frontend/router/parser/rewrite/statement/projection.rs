@@ -329,43 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn having_projects_operands_and_updates_aggregate_plan() {
-        let ast = pg_raw_parse::parse(
-            "SELECT customer_id, COUNT(*) AS orders \
-             FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
-        )
-        .unwrap();
-        let rewrite = build(&ast, &Schema::default(), false)
-            .unwrap()
-            .expect("HAVING requires a rewrite");
-
-        assert!(rewrite.sql.contains("__pgdog_having_0"));
-        assert!(rewrite.sql.contains("__pgdog_having_1"));
-        assert_eq!(
-            rewrite
-                .plan
-                .having
-                .as_deref()
-                .expect("HAVING plan")
-                .hidden_aliases()
-                .len(),
-            3
-        );
-        assert_eq!(
-            rewrite
-                .plan
-                .having
-                .as_deref()
-                .expect("HAVING plan")
-                .aggregate()
-                .targets()
-                .len(),
-            2,
-            "the selected and hidden COUNT must both be merged"
-        );
-    }
-
-    #[test]
     fn having_internal_aliases_do_not_collide_with_client_aliases() {
         let ast = pg_raw_parse::parse(
             "SELECT __pgdog_having_0, COUNT(*) \

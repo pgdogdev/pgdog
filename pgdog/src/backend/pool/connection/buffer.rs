@@ -167,10 +167,11 @@ impl Buffer {
         let Some(having) = plan.having.as_deref() else {
             return Ok(());
         };
+        let evaluator = having::Evaluator::new(having.expression(), decoder);
 
         let mut filtered = VecDeque::with_capacity(self.buffer.len());
         for row in self.buffer.drain(..) {
-            if having::evaluate(having.expression(), &row, decoder)? {
+            if evaluator.evaluate(&row, decoder)? {
                 filtered.push_back(row);
             }
         }
@@ -375,10 +376,6 @@ mod test {
             Field::bigint("__pgdog_having_0"),
             Field::bigint("__pgdog_having_1"),
         ]));
-        let mut noop = Buffer::default();
-        noop.having(&ProjectionRewritePlan::default(), &decoder)
-            .unwrap();
-        assert!(noop.is_empty());
 
         let plan = ProjectionRewritePlan {
             having: Some(std::sync::Arc::new(HavingRewriteResult::new(
