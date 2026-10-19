@@ -480,28 +480,31 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
-        let mut execute_parse_pending = true;
-
-        for message in client_request.messages.iter() {
-            match (client_request.prepared_operation.as_deref(), message) {
-                (
-                    Some(PreparedOperation::PrepareOnExecute(prepare)),
-                    ProtocolMessage::Execute(_),
-                ) => {
-                    let result = self.prepared_statements.handle_execute_prepare(prepare);
-                    self.send_handled(message, result).await?;
-                }
-                (Some(PreparedOperation::RewriteExecute(parse)), ProtocolMessage::Bind(bind)) => {
+        if let Some(operation) = client_request.prepared_operation.as_deref() {
+            let mut execute_parse_pending = true;
+            for message in client_request.messages.iter() {
+                let result = if matches!(message, ProtocolMessage::Execute(_))
+                    && let PreparedOperation::PrepareOnExecute(prepare) = operation
+                {
+                    self.prepared_statements.handle_execute_prepare(prepare)
+                } else if let ProtocolMessage::Bind(bind) = message
+                    && let PreparedOperation::RewriteExecute(parse) = operation
+                {
                     Box::pin(
                         self.send_rewritten_execute(execute_parse_pending.then_some(parse), bind),
                     )
                     .await?;
                     execute_parse_pending = false;
-                }
-                _ => {
-                    let result = self.prepared_statements.handle(message)?;
-                    self.send_handled(message, result).await?;
-                }
+                    continue;
+                } else {
+                    self.prepared_statements.handle(message)?
+                };
+                self.send_handled(message, result).await?;
+            }
+        } else {
+            for message in client_request.messages.iter() {
+                let result = self.prepared_statements.handle(message)?;
+                self.send_handled(message, result).await?;
             }
         }
         self.flush().await?;
