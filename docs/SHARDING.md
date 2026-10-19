@@ -123,8 +123,11 @@ these rules:
    parameter (startup, `SET`, `SET LOCAL`), then the user `role` in `users.toml`.
    Inside a conservative read/write transaction (`BEGIN`, or an implicit transaction from a
    multi-`Execute` pipeline) the comment is ignored; the session role still applies.
-   Role `replica` gives `PreferReplica`. Role `primary` gives `Primary`. Write access is not
-   checked by pgdog: a replica rejects writes by itself.
+   Role `replica` gives `PreferReplica`. Role `primary` gives `Primary`. Role `auto` stops the
+   lookup without forcing a role: for example, `SET pgdog.role TO 'auto'` clears the user `role`,
+   and `/* pgdog_role: auto */` clears the session role for one query. Rules 2–3 then apply.
+   An invalid value is ignored. Write access is not checked by pgdog: a replica rejects writes
+   by itself.
 2. Without a role, a conservative read/write or implicit transaction gives `Primary`, and a
    read-only transaction (`BEGIN READ ONLY`) gives `Any` with every strategy.
 3. Otherwise nothing is forced: a read gives `Any`, a write gives `Primary`.

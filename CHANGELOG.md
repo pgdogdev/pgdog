@@ -9,6 +9,7 @@ For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [C
 #### Breaking changes
 
 - **[Breaking]** `<user>.read_only` setting in `users.toml` won't force traffic to replica only. That setting is now only used to set `default_transaction_read_only` on the connection pool and that could fit either primary or replica depending of the `general.read_write_split` configuration. To force traffic to replica only use `<user>.role = replica` or `pgdog.role` startup-parameter/SET/comment for session/transaction/single query.
+- **[Breaking]** `pgdog.role = auto` (startup parameter, `SET`, or `/* pgdog_role: auto */` comment) is no longer ignored. It now clears the role from lower levels (the `<user>.role` setting, or the session role for a comment), so pgdog routes the query by itself. `<user>.role = auto` is the same as no role.
 
 ### v0.1.62
 

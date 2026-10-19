@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
@@ -14,7 +14,7 @@ pub(super) static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
 pub(super) static ROLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica|auto)"#).unwrap());
 
 pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -25,7 +25,7 @@ pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a
 
 pub(crate) struct Directive {
     pub(crate) shard_or_lookup: Option<ShardOrLookup>,
-    pub(crate) role: Option<SessionRole>,
+    pub(crate) role: Option<Role>,
     pub(crate) sharding_key: Option<String>,
 }
 

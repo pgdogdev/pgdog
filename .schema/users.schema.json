@@ -98,6 +98,26 @@
         }
       ]
     },
+    "Role": {
+      "description": "Role a PostgreSQL server performs in a cluster.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role>",
+      "oneOf": [
+        {
+          "description": "Primary database that serves writes (and reads) (default).",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "PostgreSQL replica that can only serve reads.",
+          "type": "string",
+          "const": "replica"
+        },
+        {
+          "description": "Role is detected automatically by PgDog at runtime.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
     "ServerAuth": {
       "description": "Backend authentication mode used by PgDog for server connections.",
       "oneOf": [
@@ -125,21 +145,6 @@
           "description": "Fetch credentials for a Vault static database role.\nVault manages password rotation; the username is fixed.",
           "type": "string",
           "const": "vault_static"
-        }
-      ]
-    },
-    "SessionRole": {
-      "description": "Database role a client session wants its queries routed to.\n\n<https://docs.pgdog.dev/features/load-balancer/manual-routing/#parameters>",
-      "oneOf": [
-        {
-          "description": "Send queries to the primary.",
-          "type": "string",
-          "const": "primary"
-        },
-        {
-          "description": "Send queries to the replicas.",
-          "type": "string",
-          "const": "replica"
         }
       ]
     },
@@ -337,10 +342,10 @@
           ]
         },
         "role": {
-          "description": "Default value for the `pgdog.role` parameter for clients that don't set it.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
+          "description": "Default value for the `pgdog.role` parameter for clients that don't set it.\n`auto` means no default role: pgdog decides.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
           "anyOf": [
             {
-              "$ref": "#/$defs/SessionRole"
+              "$ref": "#/$defs/Role"
             },
             {
               "type": "null"

@@ -1,6 +1,6 @@
 //! Shortcut the parser given the cluster config.
 
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use crate::backend::pool::RoleTarget;
 
@@ -58,7 +58,7 @@ pub(crate) struct QueryParserContext<'a> {
     pub(super) bare_key_lookups: Vec<PendingLookup>,
     /// Role requested by the client session (`pgdog.role`), falling back
     /// to the role configured for the user.
-    pub(super) session_role: Option<SessionRole>,
+    pub(super) session_role: Option<Role>,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -104,6 +104,7 @@ impl<'a> QueryParserContext<'a> {
 
     /// Check if the role target was explicitly forced by the following entities:
     /// 1. `pgdog.role` through user.role/SET/sql comment - that will override any other source.
+    ///    `auto` stops the lookup without forcing a role, so the rules below apply.
     /// 2. BEGIN or implicit write transaction with [`ReadWriteStrategy::Conservative`].
     ///    Only the session role overrides it, not the sql comment.
     /// 3. `BEGIN READ ONLY` with any strategy: any server, whatever the statements are.
@@ -122,11 +123,11 @@ impl<'a> QueryParserContext<'a> {
         };
 
         match role {
-            Some(SessionRole::Primary) => Some(RoleTarget::Primary),
-            Some(SessionRole::Replica) => Some(RoleTarget::PreferReplica),
-            None if transaction_write => Some(RoleTarget::Primary),
-            None if transaction_read_only => Some(RoleTarget::Any),
-            None => None,
+            Some(Role::Primary) => Some(RoleTarget::Primary),
+            Some(Role::Replica) => Some(RoleTarget::PreferReplica),
+            Some(Role::Auto) | None if transaction_write => Some(RoleTarget::Primary),
+            Some(Role::Auto) | None if transaction_read_only => Some(RoleTarget::Any),
+            Some(Role::Auto) | None => None,
         }
     }
 
@@ -167,7 +168,7 @@ mod test {
     use std::sync::Arc;
 
     use pgdog_config::ReadWriteSplit;
-    use pgdog_config::SessionRole::{Primary, Replica};
+    use pgdog_config::Role::{Auto, Primary, Replica};
 
     use super::*;
     use crate::{
@@ -186,8 +187,8 @@ mod test {
     struct Input {
         transaction: Option<TransactionType>,
         param: Option<&'static str>,
-        user: Option<SessionRole>,
-        comment: Option<SessionRole>,
+        user: Option<Role>,
+        comment: Option<Role>,
         strategy: ReadWriteStrategy,
         split: ReadWriteSplit,
     }
@@ -245,7 +246,11 @@ mod test {
             (None, Some("primary"), Some(Replica), PRIMARY),
             (Some(Replica), Some("primary"), Some(Primary), REPLICA),
             (Some(Primary), Some("replica"), None, PRIMARY),
-            (None, Some("auto"), Some(Replica), REPLICA),
+            (None, Some("auto"), Some(Replica), STATEMENT),
+            (None, Some("invalid"), Some(Replica), REPLICA),
+            (Some(Auto), None, Some(Replica), STATEMENT),
+            (Some(Auto), Some("primary"), None, STATEMENT),
+            (None, None, Some(Auto), STATEMENT),
         ] {
             let input = Input {
                 comment,

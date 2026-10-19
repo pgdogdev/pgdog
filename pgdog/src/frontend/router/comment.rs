@@ -1,4 +1,4 @@
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use crate::frontend::router::sharding::ShardOrLookup;
 
@@ -7,6 +7,6 @@ use crate::frontend::router::sharding::ShardOrLookup;
 #[derive(Debug, Clone, Default)]
 pub(in crate::frontend) struct RoutingComment {
     pub(super) shard: Option<ShardOrLookup>,
-    pub(super) role: Option<SessionRole>,
+    pub(super) role: Option<Role>,
     pub(super) sharding_key: Option<String>,
 }

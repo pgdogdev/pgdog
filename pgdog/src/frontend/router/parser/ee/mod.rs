@@ -1,6 +1,6 @@
 //! Parser hooks for the Enterprise edition.
 
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use crate::frontend::router::parser::{Column, Shard, StatementParameters, Value};
 
@@ -28,5 +28,5 @@ impl ParserHooks {
     pub(crate) fn record_sharded_schema(&self, _shard: &Shard, _schema_name: &str) {}
 
     /// Record `SET pgdog.role` command.
-    pub(crate) fn record_set_role(&self, _role: &SessionRole) {}
+    pub(crate) fn record_set_role(&self, _role: &Role) {}
 }
