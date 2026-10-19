@@ -1,7 +1,8 @@
 use crate::frontend::SetParam;
-use crate::frontend::client::query_engine::fake::FakeResponse;
+use crate::frontend::client::query_engine::fake::{FakeCommand, FakeResponse};
 use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
+use crate::parameters::{ParameterNormalizer, ParameterValidator, ParameterValue};
 
 use super::*;
 
@@ -16,7 +17,6 @@ impl QueryEngine {
     pub(crate) async fn set(
         &mut self,
         context: &mut QueryEngineContext<'_>,
-        // FIXME(sage): Remove mut
         client_request: &mut ClientRequest,
         params: &[SetParam],
         set_config: bool,
@@ -29,38 +29,42 @@ impl QueryEngine {
             return Ok(());
         }
 
-        let set_local_outside_transaction =
-            !context.in_transaction() && params.iter().any(|param| param.local);
-        let mut fake_command = "SET";
-        for param in params {
-            if !context.in_transaction() && param.local {
-                continue;
+        // Validate and normalize before changing session state.
+        let mut params = params.to_vec();
+        let mut normalizer = ParameterNormalizer::new(context.params);
+        let error = params
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, param)| context.in_transaction() || !param.local)
+            .find_map(|(index, param)| {
+                ParameterValidator::validate(&*param)
+                    .or_else(|| normalizer.normalize_datestyle(param))
+                    .map(|error| (index, error))
+            });
+        if let Some((index, error)) = error {
+            if let Some(transaction) = context.transaction.as_mut() {
+                transaction.set_error();
             }
-
-            let is_pin = param.name == PGDOG_PIN;
-
-            if let Some(value) = param.value.clone() {
-                if param.local {
-                    context.params.set_local(&param.name, value);
-                } else {
-                    context.params.set(&param.name, value);
-                    if is_pin && !context.in_transaction() {
-                        self.manual_lock = param
-                            .value
-                            .as_ref()
-                            .and_then(|p| p.as_str())
-                            .map(|p| matches!(p, "true" | "t"))
-                            .unwrap_or_default();
-                    }
-                }
-            } else {
-                fake_command = "RESET";
-                context.params.reset(&param.name);
-                if is_pin {
-                    self.manual_lock = false;
-                }
-            }
+            // Earlier statements completed, but their changes are rolled back
+            // with this batch. Build their replies without applying parameters.
+            let commands = params[..index].iter().map(|param| {
+                Self::parameter_command(
+                    param,
+                    set_config,
+                    context.in_transaction(),
+                    param.value.as_ref(),
+                )
+            });
+            let response = FakeResponse::new(commands).with_error(error);
+            self.fake_command_response(context, &client_request.messages, &response)
+                .await?;
+            return Ok(());
         }
+
+        let commands = params
+            .iter()
+            .map(|param| self.handle_parameter(context, param, set_config))
+            .collect::<Vec<_>>();
 
         if !context.in_transaction() {
             self.comms.update_params(context.params);
@@ -69,23 +73,106 @@ impl QueryEngine {
         if self.backend.connected() {
             self.execute(context, client_request, None).await?;
         } else {
-            let mut response = FakeResponse::command(fake_command);
-            if set_config {
-                response = response.with_params(
-                    &["set_config"],
-                    params.iter().map(|param| param.value.as_ref()),
-                );
-            }
-            if set_local_outside_transaction {
-                response = response.with_notice(NoticeResponse::from(
-                    ErrorResponse::set_local_outside_transaction(),
-                ));
-            }
-            self.fake_command_response(context, &client_request.messages, &response)
-                .await?;
+            self.fake_command_response(
+                context,
+                &client_request.messages,
+                &FakeResponse::new(commands),
+            )
+            .await?;
         }
 
         Ok(())
+    }
+
+    /// Build the command result without applying parameter changes.
+    fn parameter_command(
+        param: &SetParam,
+        set_config: bool,
+        in_transaction: bool,
+        value: Option<&ParameterValue>,
+    ) -> FakeCommand {
+        let tag = if set_config {
+            "SELECT 1"
+        } else if param.value.is_some() {
+            "SET"
+        } else {
+            "RESET"
+        };
+        let mut command = FakeCommand::new(tag);
+        if set_config {
+            let default = if value.is_none() {
+                ParameterValidator::default_value(param)
+            } else {
+                None
+            };
+            let empty = ParameterValue::from("");
+            command = command.with_params(
+                &["set_config"],
+                [Some(value.or(default.as_ref()).unwrap_or(&empty))],
+            );
+        }
+
+        if !in_transaction && param.local {
+            command = command.with_notice(NoticeResponse::from(
+                ErrorResponse::set_local_outside_transaction(),
+            ));
+        }
+
+        command
+    }
+
+    /// Apply a validated parameter and build its command response.
+    fn handle_parameter(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        param: &SetParam,
+        set_config: bool,
+    ) -> FakeCommand {
+        if !context.in_transaction() && param.local {
+            return Self::parameter_command(
+                param,
+                set_config,
+                false,
+                param
+                    .value
+                    .as_ref()
+                    .or_else(|| context.params.get_startup(&param.name)),
+            );
+        }
+
+        let previous = context.params.get(&param.name).cloned();
+        let is_pin = param.name.eq_ignore_ascii_case(PGDOG_PIN);
+
+        if let Some(value) = param.value.clone() {
+            if param.local {
+                context.params.set_local(&param.name, value);
+            } else {
+                context.params.set(&param.name, value);
+
+                // Pin the backend to this client.
+                if is_pin && !context.in_transaction() {
+                    self.manual_lock = param
+                        .value
+                        .as_ref()
+                        .and_then(|p| p.as_str())
+                        .is_some_and(|p| matches!(p, "true" | "t"));
+                }
+            }
+        } else {
+            context.params.reset(&param.name);
+            if is_pin {
+                self.manual_lock = false;
+            }
+        }
+
+        let value = context.params.get(&param.name);
+        let mut command =
+            Self::parameter_command(param, set_config, context.in_transaction(), value);
+        if let Some(status) = ParameterValidator::notify_client(param, previous.as_ref(), value) {
+            command = command.with_parameter_status(status, previous);
+        }
+
+        command
     }
 
     /// Make sure the client isn't changing the route mid-transaction

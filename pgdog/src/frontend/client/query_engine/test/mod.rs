@@ -48,6 +48,7 @@ mod rewrite_projection;
 mod rewrite_simple_prepared;
 mod schema_changed;
 mod set;
+mod set_batch;
 mod set_schema_sharding;
 mod sharded;
 mod sharded_prepared;
