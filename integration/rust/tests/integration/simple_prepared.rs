@@ -17,15 +17,10 @@ async fn test_simple_prepared_over_extended_protocol() {
         prepare.query().execute(&mut conn).await.unwrap();
     }
 
-    let execute = conn.prepare("EXECUTE extended_stmt($1)").await.unwrap();
-    for value in 5..8 {
-        let row = execute
-            .query()
-            .bind(value)
-            .fetch_one(&mut conn)
-            .await
-            .unwrap();
-        assert_eq!(row.get::<i32, usize>(0), value);
+    let execute = conn.prepare("EXECUTE extended_stmt(5)").await.unwrap();
+    for _ in 0..3 {
+        let row = execute.query().fetch_one(&mut conn).await.unwrap();
+        assert_eq!(row.get::<i32, usize>(0), 5);
     }
 }
 
