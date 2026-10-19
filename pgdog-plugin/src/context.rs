@@ -49,7 +49,7 @@ pub struct Context<'a> {
     pub has_primary: bool,
     /// Is the query being executed inside a transaction?
     pub in_transaction: bool,
-    /// PgDog strongly believes this statement should go to a primary.
+    /// PgDog sends this statement to the primary only.
     pub write_override: bool,
     /// The parsed Abstract Syntax Tree of the statement.
     pub query: &'a pg_raw_parse::nodes::RawStmt,
@@ -148,8 +148,8 @@ impl Context<'_> {
         self.shards() > 1
     }
 
-    /// Returns true if PgDog strongly believes the statement should be sent to a primary. This indicates
-    /// that the statement is **not** a `SELECT` (e.g. `UPDATE`, `DELETE`, etc.), or a `SELECT` that is very likely to write data to the database, e.g.:
+    /// Returns true if PgDog sends the statement to the primary only. This is true for a statement
+    /// that is **not** a `SELECT` (e.g. `UPDATE`, `DELETE`, etc.), or a `SELECT` that is very likely to write data to the database, e.g.:
     ///
     /// ```sql
     /// WITH users AS (

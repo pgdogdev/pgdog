@@ -3,15 +3,15 @@ use tokio::time::Instant;
 use crate::net::messages::FrontendPid;
 
 /// Which servers a connection request can use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display)]
+#[display(rename_all = "snake_case")]
 pub(crate) enum RoleTarget {
-    /// The primary only: writes, conservative read/write transactions,
-    /// `prefer_primary`, role `primary`.
+    /// The primary only
     #[default]
     Primary,
-    /// Replicas; the primary only if no replica is available. Role `replica`.
+    /// Replica if available, but can use primary if no replicas
     PreferReplica,
-    /// Any server that `read_write_split` allows. Reads without an override.
+    /// Any, the `read_write_split` config will affect the routing
     Any,
 }
 

@@ -8,8 +8,20 @@ For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [C
 
 #### Breaking changes
 
-- **[Breaking]** `<user>.read_only` setting in `users.toml` won't force traffic to replica only. That setting is now only used to set `default_transaction_read_only` on the connection pool and that could fit either primary or replica depending of the `general.read_write_split` configuration. To force traffic to replica only use `<user>.role = replica` or `pgdog.role` startup-parameter/SET/comment for session/transaction/single query.
-- **[Breaking]** `pgdog.role = auto` (startup parameter, `SET`, or `/* pgdog_role: auto */` comment) is no longer ignored. It now clears the role from lower levels (the `<user>.role` setting, or the session role for a comment), so pgdog routes the query by itself. `<user>.role = auto` is the same as no role.
+- **[Breaking]** `<user>.read_only` setting in `users.toml` won't force traffic to replica only anymore. That setting is now only used to set `default_transaction_read_only` on the connection pool and that could go to either primary or replica depending on the `general.read_write_split` configuration. To force traffic to replica only also set the `<user>.role = replica` or `pgdog.role` startup-parameter/SET/comment for session/transaction/single query.
+- **[Breaking]** `SET pgdog.role TO 'replica'` or `/* pgdog_role: replica */` comment forces all queries to replicas, including writes despite the `query_parser` setting. Before, with `query_parser=on`, it only forced replicas for read queries to disable effect of `prefer_primary`, writes were always served by primary, and with `query_parser=off` the role was always forcing the replicas.
+- **[Breaking]** With `read_write_strategy = "conservative"`, a transaction now uses a replica when the session role is `replica` (startup parameter or `SET`). Before, only the startup parameter did that; `SET pgdog.role` was ignored and the transaction used the primary. Now writes in such a transaction fail with a read-only error.
+- **[Breaking]** With `read_write_split = "prefer_primary"`, `BEGIN READ ONLY` transactions now use the primary. Before, they used the replicas.
+- **[Breaking]** `SET pgdog.role` now returns an error after the client connects to a server: inside a transaction after the first query, or in session mode after the first query. The error aborts the current transaction. Before, pgdog accepted it but the client stayed on the same server. Set the role before the first query, like `pgdog.shard` and `pgdog.sharding_key`.
+- **[Breaking]** Plugin `Context`: `has_replicas()`, `has_primary()`, and `read_only()` now return the correct values. Before, the replica and primary values were swapped. `write_override()` is now true only when the query must use the primary. It is false for reads with `prefer_primary`, and for all queries with role `replica` or in a `BEGIN READ ONLY` transaction.
+
+#### Features
+
+- Add `<user>.role` in `users.toml`: the default `pgdog.role` for clients of this user that don't set it (`primary`, `replica`, or `auto`).
+
+#### Bug fixes
+
+- `SET pgdog.role` now overrides the `pgdog.role` startup parameter and `RESET pgdog.role` restores it. Before, the startup value always won.
 
 ### v0.1.62
 

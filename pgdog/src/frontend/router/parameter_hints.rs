@@ -17,7 +17,7 @@ use crate::{
 pub(crate) const PGDOG_SHARD: &str = "pgdog.shard";
 /// `SET pgdog.sharding_key` — pin queries to the shard a key resolves to.
 pub(crate) const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
-/// `SET pgdog.role` — pin queries to a primary or replica.
+/// `SET pgdog.role` — pin queries to a primary or replica, or `auto` to let pgdog decide.
 pub(crate) const PGDOG_ROLE: &str = "pgdog.role";
 /// Connection pinning.
 pub(crate) const PGDOG_PIN: &str = "pgdog.pin";

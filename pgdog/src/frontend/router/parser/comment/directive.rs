@@ -14,7 +14,7 @@ pub(super) static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"pgdog_sharding_key: *(?:"([^"]*)"|'([^']*)'|([0-9a-zA-Z-]+))"#).unwrap()
 });
 pub(super) static ROLE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica|auto)"#).unwrap());
+    Lazy::new(|| Regex::new(r#"pgdog_role: *((?i:primary|replica|auto))\b"#).unwrap());
 
 pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)

@@ -157,6 +157,12 @@ impl QueryParserTest {
         self
     }
 
+    /// Set the `role` configured for the user.
+    pub(crate) fn with_user_role(mut self, role: pgdog_config::Role) -> Self {
+        self.cluster.set_role(Some(role));
+        self
+    }
+
     /// Enable expanded explain for this test.
     pub(crate) fn with_expanded_explain(mut self) -> Self {
         let mut updated = config().deref().clone();

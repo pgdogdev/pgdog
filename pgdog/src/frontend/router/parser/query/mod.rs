@@ -466,9 +466,9 @@ impl QueryParser {
                 match &command {
                     Command::Query(query) => {
                         RoleTarget::new(context.explicit_role_target(), query.is_read())
-                            .allows_replica()
+                            == RoleTarget::Primary
                     }
-                    _ => false,
+                    _ => true,
                 },
             )?;
         }

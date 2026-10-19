@@ -16,11 +16,11 @@ pgdog is a connection pooler and query router. Clients connect to it using the P
 
 **`Guard` — RAII pool checkout.** `Guard` ([`backend/pool/guard.rs`](../pgdog/src/backend/pool/guard.rs)) wraps a `Box<Server>` with `Deref`/`DerefMut`. Its `Drop` implementation performs cleanup and check-in. When a `Guard` leaves scope, the connection is returned to the pool or closed.
 
-**`Route` — routing decision.** For each query the engine produces a `Route` ([`frontend/router/parser/route.rs`](../pgdog/src/frontend/router/parser/route.rs)) specifying the target shard(s), the role (primary or replica), and merge metadata for multi-shard results. Subsequent processing operates on the `Route` and does not re-inspect the SQL.
+**`Route` — routing decision.** For each query the engine produces a `Route` ([`frontend/router/parser/route.rs`](../pgdog/src/frontend/router/parser/route.rs)) specifying the target shard(s), the role target (`RoleTarget`: `Primary`, `PreferReplica`, or `Any`), and merge metadata for multi-shard results. Subsequent processing operates on the `Route` and does not re-inspect the SQL.
 
 **`ClientRequest` — extended-protocol buffer.** The extended protocol arrives as a sequence (Parse → Bind → Describe → Execute → Sync). pgdog buffers it into a `ClientRequest` ([`frontend/client_request.rs`](../pgdog/src/frontend/client_request.rs)) and dispatches once the sequence completes (Sync or Flush). A Simple Query (`Q`) is dispatched immediately.
 
-**`Sticky` — per-client routing pins.** `Sticky` ([`frontend/client/sticky.rs`](../pgdog/src/frontend/client/sticky.rs)) holds two values assigned at login: `omni_index` (a random value that pins all of a client's omni-shard queries to one shard — per client, not per statement) and `role` (from the `pgdog.role` startup parameter). Both are assigned once and do not change.
+**`Sticky` — per-client routing pin.** `Sticky` ([`frontend/client/sticky.rs`](../pgdog/src/frontend/client/sticky.rs)) holds `omni_index`, a random value assigned at login. It pins all of a client's omni-shard queries to one shard — per client, not per statement — and does not change. The `pgdog.role` parameter is not part of `Sticky`: the router reads it from the client parameters for each query, so `SET pgdog.role` and `RESET` apply.
 
 ---
 
@@ -100,7 +100,7 @@ Steps, in order:
 9. Send `ReadyForQuery(Idle)`.
 10. Call `comms.connect(id, addr, &params)` ([`frontend/comms.rs`](../pgdog/src/frontend/comms.rs)) to register the client in the process-wide map used for cancel routing and shutdown.
 
-`Sticky` ([`frontend/client/sticky.rs`](../pgdog/src/frontend/client/sticky.rs)) is initialised here via `Sticky::from_params(&params)`.
+`Sticky` ([`frontend/client/sticky.rs`](../pgdog/src/frontend/client/sticky.rs)) is initialised here via `Sticky::new()`.
 
 ---
 

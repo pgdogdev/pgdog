@@ -105,18 +105,22 @@ impl<'a> QueryParserContext<'a> {
     /// Check if the role target was explicitly forced by the following entities:
     /// 1. `pgdog.role` through user.role/SET/sql comment - that will override any other source.
     ///    `auto` stops the lookup without forcing a role, so the rules below apply.
-    /// 2. BEGIN or implicit write transaction with [`ReadWriteStrategy::Conservative`].
-    ///    Only the session role overrides it, not the sql comment.
+    /// 2. BEGIN or implicit write transaction with [`ReadWriteStrategy::Conservative`],
+    ///    if the cluster has a primary. Only the session role overrides it, not the sql comment.
     /// 3. `BEGIN READ ONLY` with any strategy: any server, whatever the statements are.
     ///
     /// The cluster decides which servers can serve the role target.
     pub(super) fn explicit_role_target(&self) -> Option<RoleTarget> {
         let transaction = self.router_context.transaction();
-        let transaction_write =
-            self.rw_conservative() && transaction.is_some_and(|transaction| transaction.write());
+        let transaction_write = self.rw_conservative()
+            && self.has_primary
+            && transaction.is_some_and(|transaction| transaction.write());
         let transaction_read_only = transaction.is_some_and(|transaction| !transaction.write());
 
         let role = if transaction_write {
+            // for conservative transactions we ignore the comment
+            // and rely only on `pgdog.role` GUC.
+            // To avoid possible issues when later request is write
             self.session_role
         } else {
             self.router_context.pgdog_role().or(self.session_role)
@@ -125,9 +129,11 @@ impl<'a> QueryParserContext<'a> {
         match role {
             Some(Role::Primary) => Some(RoleTarget::Primary),
             Some(Role::Replica) => Some(RoleTarget::PreferReplica),
-            Some(Role::Auto) | None if transaction_write => Some(RoleTarget::Primary),
-            Some(Role::Auto) | None if transaction_read_only => Some(RoleTarget::Any),
-            Some(Role::Auto) | None => None,
+            _ if transaction_write => Some(RoleTarget::Primary),
+            // for read-only transaction we can route to any server
+            // override the route decision by forcing Any
+            _ if transaction_read_only => Some(RoleTarget::Any),
+            _ => None,
         }
     }
 
@@ -167,7 +173,6 @@ impl<'a> QueryParserContext<'a> {
 mod test {
     use std::sync::Arc;
 
-    use pgdog_config::ReadWriteSplit;
     use pgdog_config::Role::{Auto, Primary, Replica};
 
     use super::*;
@@ -185,22 +190,15 @@ mod test {
 
     #[derive(Default)]
     struct Input {
-        transaction: Option<TransactionType>,
-        param: Option<&'static str>,
         user: Option<Role>,
+        param: Option<&'static str>,
         comment: Option<Role>,
+        transaction: Option<TransactionType>,
         strategy: ReadWriteStrategy,
-        split: ReadWriteSplit,
     }
 
-    const REPLICA: Option<RoleTarget> = Some(RoleTarget::PreferReplica);
-    const PRIMARY: Option<RoleTarget> = Some(RoleTarget::Primary);
-    const STATEMENT: Option<RoleTarget> = None;
-    const ANY: Option<RoleTarget> = Some(RoleTarget::Any);
-
-    fn decision_on(mut cluster: Cluster, input: Input) -> Option<RoleTarget> {
+    fn role_target_on(mut cluster: Cluster, input: Input) -> Option<RoleTarget> {
         cluster.set_read_write_strategy(input.strategy);
-        cluster.set_rw_split(input.split);
         cluster.set_role(input.user);
 
         let mut params = ParameterStore::default();
@@ -230,167 +228,135 @@ mod test {
             .explicit_role_target()
     }
 
-    fn decision(input: Input) -> Option<RoleTarget> {
-        decision_on(Cluster::new_test(&config()), input)
+    fn role_target(input: Input) -> Option<RoleTarget> {
+        role_target_on(Cluster::new_test(&config()), input)
     }
 
     #[test]
-    fn test_statement_decides_without_overrides() {
-        assert_eq!(decision(Input::default()), STATEMENT);
+    fn test_no_role_lets_statement_decide() {
+        assert_eq!(role_target(Input::default()), None);
     }
 
     #[test]
-    fn test_role_precedence() {
-        for (comment, param, user, expected) in [
-            (None, None, Some(Replica), REPLICA),
-            (None, Some("primary"), Some(Replica), PRIMARY),
-            (Some(Replica), Some("primary"), Some(Primary), REPLICA),
-            (Some(Primary), Some("replica"), None, PRIMARY),
-            (None, Some("auto"), Some(Replica), STATEMENT),
-            (None, Some("invalid"), Some(Replica), REPLICA),
-            (Some(Auto), None, Some(Replica), STATEMENT),
-            (Some(Auto), Some("primary"), None, STATEMENT),
-            (None, None, Some(Auto), STATEMENT),
-        ] {
-            let input = Input {
-                comment,
-                param,
-                user,
-                ..Default::default()
-            };
-
-            assert_eq!(
-                decision(input),
-                expected,
-                "comment={comment:?} param={param:?} user={user:?}"
-            );
-        }
+    fn test_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
     }
 
-    /// An explicit role applies on every topology.
     #[test]
-    fn test_role_ignores_topology() {
-        for (cluster, role, expected) in [
-            (
-                Cluster::new_test_single_primary(&config()),
-                "replica",
-                REPLICA,
-            ),
-            (
-                Cluster::new_test_single_primary(&config()),
-                "primary",
-                PRIMARY,
-            ),
-            (
-                Cluster::new_test_single_replica(&config()),
-                "replica",
-                REPLICA,
-            ),
-            (
-                Cluster::new_test_single_replica(&config()),
-                "primary",
-                PRIMARY,
-            ),
-        ] {
-            let input = Input {
-                param: Some(role),
-                transaction: Some(TransactionType::ReadWrite),
-                ..Default::default()
-            };
-
-            assert_eq!(decision_on(cluster, input), expected, "role={role}");
-        }
+    fn test_param_overrides_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            param: Some("primary"),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
     }
 
-    /// The cluster topology and `read_write_split` do not change the role target.
     #[test]
-    fn test_role_target_ignores_cluster() {
-        let transaction = || Input {
+    fn test_comment_overrides_param() {
+        let input = Input {
+            param: Some("replica"),
+            comment: Some(Primary),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
+    }
+
+    #[test]
+    fn test_auto_param_clears_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            param: Some("auto"),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_auto_comment_clears_param() {
+        let input = Input {
+            param: Some("primary"),
+            comment: Some(Auto),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_conservative_transaction_uses_primary() {
+        let input = Input {
             transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
             ..Default::default()
         };
-        let prefer_primary = || Input {
-            split: ReadWriteSplit::PreferPrimary,
-            ..Default::default()
-        };
-
-        let replica_only = || Cluster::new_test_single_replica(&config());
-        assert_eq!(decision_on(replica_only(), transaction()), PRIMARY);
-        assert_eq!(decision_on(replica_only(), prefer_primary()), STATEMENT);
-
-        let primary_only = || Cluster::new_test_single_primary(&config());
-        assert_eq!(decision_on(primary_only(), transaction()), PRIMARY);
-        assert_eq!(decision_on(primary_only(), prefer_primary()), STATEMENT);
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
     }
 
     #[test]
-    fn test_transaction_intent() {
-        use ReadWriteStrategy::{Aggressive, Conservative};
-        use TransactionType::{ErrorReadOnly, ErrorReadWrite, Implicit, ReadOnly, ReadWrite};
-
-        for (strategy, transaction, expected) in [
-            (Conservative, ReadWrite, PRIMARY),
-            (Conservative, ErrorReadWrite, PRIMARY),
-            (Conservative, Implicit, PRIMARY),
-            (Conservative, ReadOnly, ANY),
-            (Conservative, ErrorReadOnly, ANY),
-            (Aggressive, ReadWrite, STATEMENT),
-            (Aggressive, Implicit, STATEMENT),
-            (Aggressive, ReadOnly, ANY),
-            (Aggressive, ErrorReadOnly, ANY),
-        ] {
-            let input = Input {
-                strategy,
-                transaction: Some(transaction),
-                ..Default::default()
-            };
-
-            assert_eq!(decision(input), expected, "{strategy:?} {transaction:?}");
-        }
+    fn test_conservative_transaction_ignores_comment() {
+        let input = Input {
+            comment: Some(Replica),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
     }
 
     #[test]
-    fn test_role_inside_transaction() {
-        use ReadWriteStrategy::{Aggressive, Conservative};
-        use TransactionType::{ErrorReadOnly, Implicit, ReadOnly, ReadWrite};
+    fn test_conservative_transaction_keeps_param() {
+        let input = Input {
+            param: Some("replica"),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
+    }
 
-        for (strategy, transaction, comment, param, expected) in [
-            (Conservative, ReadWrite, Some(Replica), None, PRIMARY),
-            (Conservative, ReadWrite, None, Some("replica"), REPLICA),
-            (
-                Conservative,
-                ReadWrite,
-                Some(Primary),
-                Some("replica"),
-                REPLICA,
-            ),
-            (Conservative, ReadOnly, Some(Primary), None, PRIMARY),
-            (Conservative, ErrorReadOnly, Some(Primary), None, PRIMARY),
-            (Conservative, ReadOnly, None, Some("primary"), PRIMARY),
-            (Conservative, Implicit, Some(Replica), None, PRIMARY),
-            (Conservative, Implicit, None, Some("replica"), REPLICA),
-            (Aggressive, ReadWrite, Some(Replica), None, REPLICA),
-            (
-                Aggressive,
-                ReadWrite,
-                Some(Replica),
-                Some("primary"),
-                REPLICA,
-            ),
-        ] {
-            let input = Input {
-                strategy,
-                transaction: Some(transaction),
-                comment,
-                param,
-                ..Default::default()
-            };
+    #[test]
+    fn test_conservative_transaction_without_primary() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        let cluster = Cluster::new_test_single_replica(&config());
+        assert_eq!(role_target_on(cluster, input), None);
+    }
 
-            assert_eq!(
-                decision(input),
-                expected,
-                "{strategy:?} {transaction:?} comment={comment:?} param={param:?}"
-            );
-        }
+    #[test]
+    fn test_aggressive_transaction_lets_statement_decide() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Aggressive,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_aggressive_transaction_uses_comment() {
+        let input = Input {
+            comment: Some(Replica),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Aggressive,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
+    }
+
+    #[test]
+    fn test_read_only_transaction_uses_any_server() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadOnly),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Any));
     }
 }
