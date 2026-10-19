@@ -135,6 +135,9 @@ pub(crate) struct RewritePlan {
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
     pub(crate) prepare_rewrites: Vec<PrepareExecute>,
 
+    /// Mapping from SQL EXECUTE arguments to outer protocol Bind parameters.
+    pub(super) execute_bind_mapping: Option<Vec<usize>>,
+
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
@@ -328,6 +331,31 @@ impl RewritePlan {
             .prepare_rewrites
             .iter()
             .any(|rewrite| matches!(rewrite, PrepareExecute::Execute(_)));
+        let execute_prepare = self
+            .prepare_rewrites
+            .iter()
+            .find_map(|rewrite| match rewrite {
+                PrepareExecute::Execute(prepare) => Some(prepare),
+                PrepareExecute::Prepare(_) => None,
+            });
+        let bound_execute = if request
+            .parameters()?
+            .is_some_and(|bind| !bind.params_raw().is_empty())
+            && let Some(prepare) = execute_prepare
+        {
+            if self.offset.is_some() {
+                return Err(Error::UnsupportedBoundExecute("LIMIT/OFFSET rewrites"));
+            }
+            let mapping =
+                self.execute_bind_mapping
+                    .as_ref()
+                    .ok_or(Error::UnsupportedBoundExecute(
+                        "mixed literal and protocol parameters",
+                    ))?;
+            Some((prepare.name(), mapping))
+        } else {
+            None
+        };
 
         // Add the internal state required by SQL PREPARE/EXECUTE.
         if !self.prepare_rewrites.is_empty() {
@@ -367,6 +395,11 @@ impl RewritePlan {
                     anonymous_client_params = self.apply_parse(parse);
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
+                ProtocolMessage::Bind(bind) if let Some((statement, mapping)) = &bound_execute => {
+                    bind.remap_params(mapping)?;
+                    bind.rename(statement);
+                    self.apply_bind(bind, timezone, timestamps).await?;
+                }
                 ProtocolMessage::Bind(bind) if self.prepare_rewrites.is_empty() => {
                     self.apply_bind(bind, timezone, timestamps).await?
                 }
@@ -374,7 +407,8 @@ impl RewritePlan {
             }
         }
 
-        if executes_sql_prepared
+        if bound_execute.is_none()
+            && executes_sql_prepared
             && request.parameters()?.is_some()
             && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
         {

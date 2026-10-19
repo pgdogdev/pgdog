@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use pg_raw_parse::{
-    ConstValue, NodeMut,
+    ConstValue, Node, NodeMut,
     make::MemoryToken,
     nodes::{ExecuteStmtMut, ParamRef, PrepareStmtMut},
 };
@@ -153,6 +153,20 @@ impl StatementRewrite<'_> {
                     // TODO: Should we be setting this on Plan? Pros? Cons?
                     // TODO: Double check that this only runs on omnisharded (as well as Bind/Execute, etc)
                     plan.bind_params = bind_params;
+                    let client_params = plan.bind_params.num_client_params() as usize;
+                    if stmt.params().len() >= client_params {
+                        plan.execute_bind_mapping = stmt
+                            .params()
+                            .iter()
+                            .take(client_params)
+                            .map(|param| match param {
+                                Node::ParamRef(param) if param.number > 0 => {
+                                    Some(param.number as usize - 1)
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                    }
                     self.insert_generated_ids(
                         &mut stmt,
                         mem,

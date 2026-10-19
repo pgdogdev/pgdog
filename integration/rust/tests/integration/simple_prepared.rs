@@ -25,6 +25,32 @@ async fn test_simple_prepared_over_extended_protocol() {
 }
 
 #[tokio::test]
+async fn test_extended_sql_execute_with_bound_values() {
+    let mut conn =
+        sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")
+            .await
+            .unwrap();
+    let name = format!("bound_{}", uuid::Uuid::new_v4().simple());
+
+    let prepare_sql = format!("PREPARE {name}(int, int) AS SELECT $1 - $2");
+    let prepare = conn.prepare(&prepare_sql).await.unwrap();
+    prepare.query().execute(&mut conn).await.unwrap();
+
+    let execute_sql = format!("EXECUTE {name}($2, $1)");
+    let execute = conn.prepare(&execute_sql).await.unwrap();
+    for value in 5..8 {
+        let row = execute
+            .query()
+            .bind(value)
+            .bind(20_i32)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i32, usize>(0), 20 - value);
+    }
+}
+
+#[tokio::test]
 async fn test_extended_sql_execute_rewrites() {
     let mut conn =
         sqlx::PgConnection::connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog_sharded")

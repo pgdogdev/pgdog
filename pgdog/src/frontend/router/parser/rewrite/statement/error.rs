@@ -44,6 +44,9 @@ pub(crate) enum Error {
     #[error("missing or invalid parameters in Execute")]
     IncorrectExecuteParameters,
 
+    #[error("bound SQL EXECUTE does not support {0}")]
+    UnsupportedBoundExecute(&'static str),
+
     #[error(
         "TimeZone {0} is not supported for time functions on omnisharded tables, only IANA names like UTC or America/New_York are (other formats are future work)"
     )]

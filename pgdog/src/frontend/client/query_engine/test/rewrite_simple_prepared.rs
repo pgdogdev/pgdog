@@ -143,15 +143,12 @@ async fn test_rewrite_prepare_and_execute_preserves_extended_protocol() {
     assert!(
         matches!(&messages[1], ProtocolMessage::Parse(parse) if parse.query() == format!("EXECUTE {sql_prepared_name}($1)"))
     );
-    assert!(
-        matches!(&messages[2], ProtocolMessage::Bind(bind) if bind.params_raw() == [Parameter::new(b"5")])
-    );
+    assert!(matches!(&messages[2], ProtocolMessage::Bind(bind)
+            if bind.statement() == sql_prepared_name
+                && bind.params_raw() == [Parameter::new(b"5")]));
     assert!(matches!(&messages[3], ProtocolMessage::Execute(_)));
     assert!(matches!(&messages[4], ProtocolMessage::Sync(_)));
-    assert!(matches!(
-        client.client_request.prepared_operation.as_deref(),
-        Some(PreparedOperation::RewriteExecute(_))
-    ));
+    assert!(client.client_request.prepared_operation.is_none());
 }
 
 fn rewritten_query(messages: &[ProtocolMessage]) -> String {
