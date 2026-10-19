@@ -1059,6 +1059,7 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+ "terminal_size",
 ]
 
 [[package]]
@@ -1144,6 +1145,12 @@ checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "condtype"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "const-oid"
@@ -1599,6 +1606,31 @@ name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "divan"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a405457ec78b8fe08b0e32b4a3570ab5dff6dd16eb9e76a5ee0a9d9cbd898933"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "condtype",
+ "divan-macros",
+ "libc",
+ "regex-lite",
+]
+
+[[package]]
+name = "divan-macros"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9556bc800956545d6420a640173e5ba7dfa82f38d3ea5a167eb555bc69ac3323"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2454,6 +2486,7 @@ dependencies = [
  "native-tls",
  "ordered-float",
  "parking_lot",
+ "pg_stream",
  "pgdog-stats",
  "postgres-native-tls",
  "rand 0.9.4",
@@ -2776,6 +2809,12 @@ name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"
@@ -3110,8 +3149,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg_stream"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "210dabdb4e8d3735c03f5af0ef125f2ffa48948de592b92b81e9a574e6ffdf98"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "md5 0.8.1",
+ "tokio",
+]
+
+[[package]]
 name = "pgdog"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3134,6 +3186,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "derive_more",
+ "divan",
  "dyn-clone",
  "fnv",
  "futures",
@@ -3148,7 +3201,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "lru",
- "md5",
+ "md5 0.7.0",
  "memchr",
  "moka",
  "once_cell",
@@ -4808,6 +4861,16 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.2",
  "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]

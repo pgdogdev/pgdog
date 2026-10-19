@@ -146,6 +146,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_subqueries" => {
+                config.config.rewrite.subqueries = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }

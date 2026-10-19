@@ -57,11 +57,14 @@ impl QueryEngine {
             return Ok(None);
         };
         let cluster = self.backend.cluster()?;
-        let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
+        let timezone = context
+            .params
+            .get("timezone")
+            .or_else(|| cluster.default_timezone());
 
         let mut rewrite_result = ast
             .rewrite_plan
-            .apply(client_request, ast_ctx.timezone, ast_ctx.query_timestamps)
+            .apply(client_request, timezone, context.timestamps())
             .await?;
         client_request.ast = Some(ast);
 

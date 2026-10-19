@@ -20,6 +20,7 @@ pub(crate) mod order_by;
 pub(crate) mod plan;
 pub(crate) mod projection;
 pub(crate) mod simple_prepared;
+pub(crate) mod subquery;
 pub(crate) mod unique_id;
 pub(crate) mod update;
 
@@ -195,13 +196,19 @@ impl<'a> StatementRewrite<'a> {
 
         if nd_function_rewrite {
             match stmt.stmt_mut() {
-                NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_) => {
+                NodeMut::InsertStmt(_)
+                | NodeMut::SelectStmt(_)
+                | NodeMut::UpdateStmt(_)
+                | NodeMut::DeleteStmt(_) => {
                     self.rewrite_nd_functions(stmt.stmt_mut(), mem, &mut plan.bind_params)?;
                 }
                 NodeMut::PrepareStmt(mut prepare) => {
                     if matches!(
                         prepare.query_mut(),
-                        NodeMut::InsertStmt(_) | NodeMut::SelectStmt(_) | NodeMut::UpdateStmt(_)
+                        NodeMut::InsertStmt(_)
+                            | NodeMut::SelectStmt(_)
+                            | NodeMut::UpdateStmt(_)
+                            | NodeMut::DeleteStmt(_)
                     ) {
                         self.rewrite_nd_functions(prepare.query_mut(), mem, &mut plan.bind_params)?;
                     }
@@ -224,6 +231,11 @@ impl<'a> StatementRewrite<'a> {
 
         if let Node::InsertStmt(insert) = stmt.stmt() {
             self.split_insert(insert, &mut plan)?;
+        }
+
+        // Handle planning subqueries
+        if config().config.rewrite.subqueries == RewriteMode::Rewrite {
+            self.plan_subquery(stmt.stmt(), &mut plan);
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {

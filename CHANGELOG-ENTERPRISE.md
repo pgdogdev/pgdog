@@ -3,6 +3,23 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-10-16
+
+**OS version**: [v0.1.62](CHANGELOG.md#v0162)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-10-16`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-10-16` |
+
+#### Features
+
+- **Experimental** QoS write backoff: make clients sleep for a configurable amount of time before starting a transaction on the primary. This allows to reduce the write load on the database, allowing the vacuum to catch up.
+
+#### Bug fixes
+
+- Deployments with many RDS databases would hit RDS API limits. Control plane can now accept a list of tags which would cause it to only fetch data from those databases instead.
+
 ### v2026-10-09
 
 **OS version**: [v0.1.61](CHANGELOG.md#v0161)
