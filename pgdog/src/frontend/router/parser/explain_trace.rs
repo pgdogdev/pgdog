@@ -1,4 +1,4 @@
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use crate::frontend::router::parser::route::Shard;
 
@@ -88,7 +88,7 @@ impl ExplainRecorder {
         self.entries.extend(entries);
     }
 
-    pub(crate) fn record_comment_override(&mut self, shard: Shard, role: Option<SessionRole>) {
+    pub(crate) fn record_comment_override(&mut self, shard: Shard, role: Option<Role>) {
         let mut description = match shard {
             Shard::Direct(_) | Shard::Multi(_) | Shard::All => {
                 format!("manual override to shard={}", shard)
@@ -174,7 +174,7 @@ mod tests {
     fn finalize_inserts_comment_and_plugin_entries() {
         let mut recorder = ExplainRecorder::new();
         recorder.record_entry(Some(Shard::Direct(7)), "matched sharding key");
-        recorder.record_comment_override(Shard::Direct(3), Some(SessionRole::Primary));
+        recorder.record_comment_override(Shard::Direct(3), Some(Role::Primary));
         recorder.record_plugin_override("test_plugin", Some(Shard::Direct(9)), Some(true));
 
         let trace = recorder.finalize(ExplainSummary {

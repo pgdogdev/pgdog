@@ -1,4 +1,4 @@
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use super::parser::Error;
 use crate::{
@@ -107,7 +107,7 @@ impl ParameterHints<'_> {
     }
 
     /// Compute role from parameter value.
-    pub(crate) fn compute_role(&self) -> Option<SessionRole> {
+    pub(crate) fn compute_role(&self) -> Option<Role> {
         let role = self
             .pgdog_role
             .and_then(|value| value.as_str())

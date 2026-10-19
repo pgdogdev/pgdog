@@ -89,7 +89,7 @@ pub(crate) struct Cluster {
     failover_signal: ClusterFailoverSignalWatcher,
     cancellation_token: CancellationToken,
     auth_type: AuthType,
-    role: Option<pgdog_config::SessionRole>,
+    role: Option<pgdog_config::Role>,
 }
 
 /// Bare test clusters carry the same defaults the config would apply,
@@ -225,7 +225,7 @@ pub(crate) struct ClusterConfig<'a> {
     schema_cache: SchemaCache,
     canonicalize_oids: bool,
     auth_type: AuthType,
-    role: Option<pgdog_config::SessionRole>,
+    role: Option<pgdog_config::Role>,
 }
 
 impl<'a> ClusterConfig<'a> {
@@ -718,7 +718,7 @@ impl Cluster {
     }
 
     /// Default `pgdog.role` for clients of this user.
-    pub(crate) fn role(&self) -> Option<pgdog_config::SessionRole> {
+    pub(crate) fn role(&self) -> Option<pgdog_config::Role> {
         self.role
     }
 
@@ -1011,7 +1011,7 @@ mod test {
             self.rw_split = rw_split;
         }
 
-        pub(crate) fn set_role(&mut self, role: Option<pgdog_config::SessionRole>) {
+        pub(crate) fn set_role(&mut self, role: Option<pgdog_config::Role>) {
             self.role = role;
         }
     }

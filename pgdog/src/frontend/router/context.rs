@@ -1,4 +1,4 @@
-use pgdog_config::SessionRole;
+use pgdog_config::Role;
 
 use super::sharding::ShardOrLookup;
 use super::{Error, ParameterHints};
@@ -96,7 +96,7 @@ impl<'a> RouterContext<'a> {
         &self.transaction
     }
 
-    pub(crate) fn pgdog_role(&self) -> Option<SessionRole> {
+    pub(crate) fn pgdog_role(&self) -> Option<Role> {
         self.comment.and_then(|c| c.role)
     }
 

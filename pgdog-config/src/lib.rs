@@ -17,7 +17,6 @@ pub mod resharding;
 pub mod rewrite;
 pub mod role_config;
 pub mod server_tls;
-pub mod session_role;
 pub mod sharding;
 pub mod system_catalogs;
 #[cfg(test)]
@@ -45,7 +44,6 @@ pub use replication::*;
 pub use rewrite::{Rewrite, RewriteMode};
 pub use role_config::RoleConfig;
 pub use server_tls::ServerTls;
-pub use session_role::SessionRole;
 pub use sharding::*;
 pub use system_catalogs::system_catalogs;
 pub use users::{Admin, Plugin, ServerAuth, User, Users};

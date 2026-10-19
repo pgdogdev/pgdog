@@ -1,6 +1,6 @@
 use std::{ops::Deref, time::Duration};
 
-use pgdog_config::{ReadWriteSplit, ReadWriteStrategy, SessionRole};
+use pgdog_config::{ReadWriteSplit, ReadWriteStrategy, Role};
 use tokio::time::timeout;
 
 use crate::{
@@ -23,7 +23,7 @@ const ATTEMPTS: usize = 2;
 const READ_ONLY_QUERY: &str =
     "SELECT (current_setting('default_transaction_read_only') = 'on')::int";
 
-fn configure(user_role: Option<SessionRole>, strategy: ReadWriteStrategy, split: ReadWriteSplit) {
+fn configure(user_role: Option<Role>, strategy: ReadWriteStrategy, split: ReadWriteSplit) {
     load_test_replicas();
 
     let mut config = config().deref().clone();
@@ -45,13 +45,13 @@ async fn new_client(startup_role: Option<&str>) -> TestClient {
     TestClient::new(params).await
 }
 
-async fn setup(table: &str, user_role: Option<SessionRole>) -> TestClient {
+async fn setup(table: &str, user_role: Option<Role>) -> TestClient {
     setup_with_strategy(table, user_role, ReadWriteStrategy::Conservative).await
 }
 
 async fn setup_with_strategy(
     table: &str,
-    user_role: Option<SessionRole>,
+    user_role: Option<Role>,
     strategy: ReadWriteStrategy,
 ) -> TestClient {
     setup_with_config(table, user_role, strategy, ReadWriteSplit::IncludePrimary).await
@@ -63,7 +63,7 @@ async fn setup_with_split(table: &str, split: ReadWriteSplit) -> TestClient {
 
 async fn setup_with_config(
     table: &str,
-    user_role: Option<SessionRole>,
+    user_role: Option<Role>,
     strategy: ReadWriteStrategy,
     split: ReadWriteSplit,
 ) -> TestClient {
@@ -467,7 +467,7 @@ async fn test_startup_replica_set_primary_reset_all() {
 #[tokio::test]
 async fn test_user_replica() {
     let table = "test_user_replica";
-    let mut primary = setup(table, Some(SessionRole::Replica)).await;
+    let mut primary = setup(table, Some(Role::Replica)).await;
     let mut client = new_client(None).await;
 
     assert_replica(&mut client, &mut primary, table).await;
@@ -476,7 +476,7 @@ async fn test_user_replica() {
 #[tokio::test]
 async fn test_user_primary() {
     let table = "test_user_primary";
-    setup(table, Some(SessionRole::Primary)).await;
+    setup(table, Some(Role::Primary)).await;
     let mut client = new_client(None).await;
 
     assert_primary(&mut client, table).await;
@@ -485,7 +485,7 @@ async fn test_user_primary() {
 #[tokio::test]
 async fn test_user_replica_startup_primary() {
     let table = "test_user_replica_startup_primary";
-    setup(table, Some(SessionRole::Replica)).await;
+    setup(table, Some(Role::Replica)).await;
     let mut client = new_client(Some("primary")).await;
 
     assert_primary(&mut client, table).await;
@@ -494,7 +494,7 @@ async fn test_user_replica_startup_primary() {
 #[tokio::test]
 async fn test_user_primary_startup_replica() {
     let table = "test_user_primary_startup_replica";
-    let mut primary = setup(table, Some(SessionRole::Primary)).await;
+    let mut primary = setup(table, Some(Role::Primary)).await;
     let mut client = new_client(Some("replica")).await;
 
     assert_replica(&mut client, &mut primary, table).await;
@@ -503,7 +503,7 @@ async fn test_user_primary_startup_replica() {
 #[tokio::test]
 async fn test_user_replica_set_primary() {
     let table = "test_user_replica_set_primary";
-    setup(table, Some(SessionRole::Replica)).await;
+    setup(table, Some(Role::Replica)).await;
     let mut client = new_client(None).await;
     execute(&mut client, "SET pgdog.role TO 'primary'")
         .await
@@ -515,7 +515,7 @@ async fn test_user_replica_set_primary() {
 #[tokio::test]
 async fn test_user_primary_set_replica() {
     let table = "test_user_primary_set_replica";
-    let mut primary = setup(table, Some(SessionRole::Primary)).await;
+    let mut primary = setup(table, Some(Role::Primary)).await;
     let mut client = new_client(None).await;
     execute(&mut client, "SET pgdog.role TO 'replica'")
         .await
@@ -527,7 +527,7 @@ async fn test_user_primary_set_replica() {
 #[tokio::test]
 async fn test_user_replica_set_local_primary() {
     let table = "test_user_replica_set_local_primary";
-    setup(table, Some(SessionRole::Replica)).await;
+    setup(table, Some(Role::Replica)).await;
     let mut client = new_client(None).await;
 
     assert_primary_in_transaction(
@@ -542,7 +542,7 @@ async fn test_user_replica_set_local_primary() {
 #[tokio::test]
 async fn test_user_primary_set_local_replica() {
     let table = "test_user_primary_set_local_replica";
-    let mut primary = setup(table, Some(SessionRole::Primary)).await;
+    let mut primary = setup(table, Some(Role::Primary)).await;
     let mut client = new_client(None).await;
 
     assert_replica_in_transaction(
@@ -558,7 +558,7 @@ async fn test_user_primary_set_local_replica() {
 #[tokio::test]
 async fn test_user_replica_comment_primary() {
     let table = "test_user_replica_comment_primary";
-    setup(table, Some(SessionRole::Replica)).await;
+    setup(table, Some(Role::Replica)).await;
     let mut client = new_client(None).await;
 
     assert_primary_with_comment(&mut client, table, "/* pgdog_role: primary */").await;
@@ -567,7 +567,7 @@ async fn test_user_replica_comment_primary() {
 #[tokio::test]
 async fn test_user_primary_comment_replica() {
     let table = "test_user_primary_comment_replica";
-    let mut primary = setup(table, Some(SessionRole::Primary)).await;
+    let mut primary = setup(table, Some(Role::Primary)).await;
     let mut client = new_client(None).await;
 
     assert_replica_with_comment(
@@ -582,7 +582,7 @@ async fn test_user_primary_comment_replica() {
 #[tokio::test]
 async fn test_user_replica_set_primary_reset() {
     let table = "test_user_replica_set_primary_reset";
-    let mut primary = setup(table, Some(SessionRole::Replica)).await;
+    let mut primary = setup(table, Some(Role::Replica)).await;
     let mut client = new_client(None).await;
     execute(&mut client, "SET pgdog.role TO 'primary'")
         .await
@@ -592,22 +592,73 @@ async fn test_user_replica_set_primary_reset() {
     assert_replica(&mut client, &mut primary, table).await;
 }
 
+/// With `exclude_primary`, reads use the replica and writes use the primary
+/// only when no role is forced.
+async fn assert_statement_decides(client: &mut TestClient, table: &str, comment: &str) {
+    for _ in 0..ATTEMPTS {
+        assert!(read_only(client, comment).await, "read went to the primary");
+        execute(client, &format!("{comment} UPDATE {table} SET id = 1"))
+            .await
+            .expect("write went to a replica");
+    }
+}
+
+async fn setup_auto(table: &str, user_role: Option<Role>) -> TestClient {
+    setup_with_config(
+        table,
+        user_role,
+        ReadWriteStrategy::Conservative,
+        ReadWriteSplit::ExcludePrimary,
+    )
+    .await
+}
+
 #[tokio::test]
 async fn test_user_replica_startup_invalid() {
     let table = "test_user_replica_startup_invalid";
-    let mut primary = setup(table, Some(SessionRole::Replica)).await;
-    let mut client = new_client(Some("auto")).await;
+    let mut primary = setup(table, Some(Role::Replica)).await;
+    let mut client = new_client(Some("invalid")).await;
 
     assert_replica(&mut client, &mut primary, table).await;
 }
 
 #[tokio::test]
-async fn test_user_primary_startup_invalid() {
-    let table = "test_user_primary_startup_invalid";
-    setup(table, Some(SessionRole::Primary)).await;
+async fn test_user_replica_startup_auto() {
+    let table = "test_user_replica_startup_auto";
+    setup_auto(table, Some(Role::Replica)).await;
     let mut client = new_client(Some("auto")).await;
 
-    assert_primary(&mut client, table).await;
+    assert_statement_decides(&mut client, table, "").await;
+}
+
+#[tokio::test]
+async fn test_user_primary_startup_auto() {
+    let table = "test_user_primary_startup_auto";
+    setup_auto(table, Some(Role::Primary)).await;
+    let mut client = new_client(Some("auto")).await;
+
+    assert_statement_decides(&mut client, table, "").await;
+}
+
+#[tokio::test]
+async fn test_user_primary_set_auto() {
+    let table = "test_user_primary_set_auto";
+    setup_auto(table, Some(Role::Primary)).await;
+    let mut client = new_client(None).await;
+    execute(&mut client, "SET pgdog.role TO 'auto'")
+        .await
+        .unwrap();
+
+    assert_statement_decides(&mut client, table, "").await;
+}
+
+#[tokio::test]
+async fn test_startup_primary_comment_auto() {
+    let table = "test_startup_primary_comment_auto";
+    setup_auto(table, None).await;
+    let mut client = new_client(Some("primary")).await;
+
+    assert_statement_decides(&mut client, table, "/* pgdog_role: auto */").await;
 }
 
 #[tokio::test]
