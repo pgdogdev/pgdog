@@ -409,7 +409,7 @@ async fn test_read_write_split_exclude_primary() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
@@ -516,7 +516,7 @@ async fn test_read_write_split_include_primary() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Try getting connections multiple times and verify both primary and replica can be used
     let mut used_pool_ids = HashSet::new();
@@ -606,7 +606,7 @@ async fn test_read_write_split_exclude_primary_no_replicas() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Try getting connections multiple times and we have primary in the set
     let mut used_pool_ids = HashSet::new();
@@ -643,7 +643,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
@@ -674,7 +674,7 @@ async fn test_read_write_split_include_primary_no_primary() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Should work normally with just replicas
     let mut replica_ids = HashSet::new();
@@ -710,7 +710,7 @@ async fn test_read_write_split_with_banned_primary() {
     let primary_ban = &replicas.targets.last().unwrap().ban;
     primary_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Should only use replica even though primary inclusion is enabled
     let mut used_pool_ids = HashSet::new();
@@ -751,7 +751,7 @@ async fn test_read_write_split_with_banned_replicas() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Should only use primary since replica is banned
     let mut used_pool_ids = HashSet::new();
@@ -791,7 +791,7 @@ async fn test_prefer_primary_with_banned_replicas_falls_back_to_primary() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     let mut used_pool_ids = HashSet::new();
     for _ in 0..10 {
@@ -827,7 +827,7 @@ async fn test_read_write_split_exclude_primary_with_round_robin() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // Collect pool IDs from multiple requests to verify round-robin behavior
     let mut pool_sequence = Vec::new();
@@ -1059,7 +1059,7 @@ async fn test_include_primary_if_replica_banned_no_bans() {
     );
     replicas.launch();
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // When no replicas are banned, primary should NOT be used
     let mut used_pool_ids = HashSet::new();
@@ -1100,7 +1100,7 @@ async fn test_include_primary_if_replica_banned_with_ban() {
     let replica_ban = &replicas.targets[0].ban;
     replica_ban.ban(Error::ServerError, Duration::from_millis(1000));
 
-    let request = Request::default();
+    let request = Request::new(Default::default(), RoleTarget::Any);
 
     // When replica is banned, primary SHOULD be used
     let mut used_pool_ids = HashSet::new();

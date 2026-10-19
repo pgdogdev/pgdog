@@ -1,16 +1,18 @@
 use crate::frontend::SetParam;
 use crate::frontend::client::query_engine::fake::{FakeCommand, FakeResponse};
-use crate::frontend::router::parameter_hints::{PGDOG_PIN, PGDOG_SHARD, PGDOG_SHARDING_KEY};
+use crate::frontend::router::parameter_hints::{
+    PGDOG_PIN, PGDOG_ROLE, PGDOG_SHARD, PGDOG_SHARDING_KEY,
+};
 use crate::net::messages::{ErrorResponse, NoticeResponse};
 use crate::parameters::{ParameterNormalizer, ParameterValidator, ParameterValue};
 
 use super::*;
 
-/// Shard-targeting parameters that pick the destination shard for a query.
+/// Parameters that pick the destination shard or role for a query.
 /// Changing them after we've already connected to a server would let subsequent
-/// queries route to a different shard than the one we're pinned to, so they may
+/// queries route to a different server than the one we're pinned to, so they may
 /// only be set before any query connects to a backend.
-const SHARD_TARGETING_PARAMS: [&str; 2] = [PGDOG_SHARD, PGDOG_SHARDING_KEY];
+const ROUTE_TARGETING_PARAMS: [&str; 3] = [PGDOG_SHARD, PGDOG_SHARDING_KEY, PGDOG_ROLE];
 
 impl QueryEngine {
     /// Handle a `SET` statement or equivalent `SELECT set_config([...])` query.
@@ -176,7 +178,7 @@ impl QueryEngine {
     }
 
     /// Make sure the client isn't changing the route mid-transaction
-    /// by issuing a `SET pgdog.shard` or `SET pgdog.sharding_key` command.
+    /// by issuing a `SET pgdog.shard`, `SET pgdog.sharding_key` or `SET pgdog.role` command.
     async fn route_change_check(
         &mut self,
         context: &mut QueryEngineContext<'_>,
@@ -189,12 +191,16 @@ impl QueryEngine {
 
         let Some(param) = params.iter().find(|param| {
             (context.in_transaction() || !param.local)
-                && SHARD_TARGETING_PARAMS
+                && ROUTE_TARGETING_PARAMS
                     .iter()
                     .any(|name| param.name.eq_ignore_ascii_case(name))
         }) else {
             return Ok(false);
         };
+
+        if let Some(transaction) = context.transaction.as_mut() {
+            transaction.set_error();
+        }
 
         self.error_response(
             context,

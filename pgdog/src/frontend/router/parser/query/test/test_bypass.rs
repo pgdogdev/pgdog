@@ -3,12 +3,15 @@
 //!
 //! QueryParser::query_parser_bypass.
 //!
-use pgdog_config::{QueryParserLevel, ReadWriteSplit};
+use pgdog_config::{QueryParserLevel, ReadWriteSplit, ReadWriteStrategy, Role};
 
 use crate::{
     backend::pool::RoleTarget,
     config::config,
-    frontend::router::parser::{Error, Shard},
+    frontend::{
+        client::TransactionType,
+        router::parser::{Error, Shard},
+    },
     net::Query,
 };
 
@@ -181,4 +184,79 @@ async fn test_sharded_no_hints() {
             .unwrap_err();
         assert!(matches!(result, Error::QueryParserRequired));
     }
+}
+
+fn assert_role_target(test: &mut QueryParserTest, expected: RoleTarget) {
+    for query in QUERIES {
+        let result = test.try_execute(vec![Query::new(query).into()]).unwrap();
+        assert_eq!(result.route().role_target(), expected, "{query}");
+        assert_eq!(result.route().shard(), &Shard::Direct(0), "{query}");
+    }
+}
+
+#[tokio::test]
+async fn test_user_role() {
+    for (role, expected) in [
+        (Role::Replica, RoleTarget::PreferReplica),
+        (Role::Primary, RoleTarget::Primary),
+        (Role::Auto, RoleTarget::Primary),
+    ] {
+        let mut test = setup().with_user_role(role);
+        assert_role_target(&mut test, expected);
+    }
+}
+
+/// `auto` clears the user role; an invalid value falls back to it.
+#[tokio::test]
+async fn test_param_over_user_role() {
+    let mut test = setup()
+        .with_rw_split(ReadWriteSplit::ExcludePrimary)
+        .with_user_role(Role::Primary)
+        .with_param("pgdog.role", "auto");
+    assert_role_target(&mut test, RoleTarget::Any);
+
+    let mut test = setup()
+        .with_user_role(Role::Replica)
+        .with_param("pgdog.role", "invalid");
+    assert_role_target(&mut test, RoleTarget::PreferReplica);
+}
+
+#[tokio::test]
+async fn test_transaction() {
+    use ReadWriteStrategy::{Aggressive, Conservative};
+    use TransactionType::{ReadOnly, ReadWrite};
+
+    for (strategy, transaction, expected) in [
+        (Conservative, ReadWrite, RoleTarget::Primary),
+        (Conservative, ReadOnly, RoleTarget::Any),
+        (Aggressive, ReadWrite, RoleTarget::Any),
+        (Aggressive, ReadOnly, RoleTarget::Any),
+    ] {
+        let mut test = setup()
+            .with_rw_split(ReadWriteSplit::ExcludePrimary)
+            .with_read_write_strategy(strategy)
+            .with_transaction(transaction);
+        assert_role_target(&mut test, expected);
+    }
+}
+
+/// The session role wins over the transaction.
+#[tokio::test]
+async fn test_transaction_with_role() {
+    let mut test = setup()
+        .with_transaction(TransactionType::ReadWrite)
+        .with_param("pgdog.role", "replica");
+    assert_role_target(&mut test, RoleTarget::PreferReplica);
+
+    let mut test = setup()
+        .with_transaction(TransactionType::ReadOnly)
+        .with_user_role(Role::Primary);
+    assert_role_target(&mut test, RoleTarget::Primary);
+}
+
+/// Without a primary, a transaction does not force one, like `main`.
+#[tokio::test]
+async fn test_read_only_cluster_transaction() {
+    let mut test = setup_single_replica().with_transaction(TransactionType::ReadWrite);
+    assert_role_target(&mut test, RoleTarget::Any);
 }

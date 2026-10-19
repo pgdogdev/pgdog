@@ -342,7 +342,7 @@
           ]
         },
         "role": {
-          "description": "Default value for the `pgdog.role` parameter for clients that don't set it.\n`auto` means no default role: pgdog decides.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
+          "description": "Default value of the `pgdog.role` parameter for clients of this user that don't set it.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
           "anyOf": [
             {
               "$ref": "#/$defs/Role"

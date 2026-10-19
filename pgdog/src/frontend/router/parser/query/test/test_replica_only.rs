@@ -4,11 +4,7 @@ use pgdog_config::{ConfigAndUsers, Database, QueryParserLevel, Role, User};
 use pgdog_stats::LsnStats;
 
 use crate::{
-    backend::{
-        Cluster, databases,
-        pool::{Pool, RoleTarget},
-        replication::publisher::Lsn,
-    },
+    backend::{Cluster, databases, pool::Pool, replication::publisher::Lsn},
     net::{Bind, Execute, Parse, ProtocolMessage, Query, Sync},
 };
 
@@ -33,16 +29,16 @@ fn query(sql: &str, protocol: &str) -> Vec<ProtocolMessage> {
     }
 }
 
-/// The cluster resolves the primary at checkout, so the route ignores the topology.
-fn assert_transaction_route(cluster: &Cluster) {
+/// A transaction uses replicas when the cluster has no primary, like `main`.
+fn assert_transaction_route(cluster: &Cluster, read: bool) {
     for protocol in ["simple", "extended", "prepared"] {
         let mut test = QueryParserTest::new().with_cluster(cluster.clone());
         test.execute(query("BEGIN", protocol));
         let mut test = test.in_transaction(true);
         let command = test.execute(query("SELECT 1", protocol));
         assert_eq!(
-            command.route().role_target(),
-            RoleTarget::Primary,
+            command.route().role_target().allows_replica(),
+            read,
             "{protocol}: {command:?}"
         );
         test.execute(query("COMMIT", protocol));
@@ -89,7 +85,7 @@ fn test_replica_only_transactions_after_role_detection() {
         let shard = &cluster.shards()[0];
         let pools = shard.pools();
         assert!(cluster.has_primary());
-        assert_transaction_route(&cluster);
+        assert_transaction_route(&cluster, false);
 
         set_replica(&pools[0], true);
         shard.redetect_roles();
@@ -101,17 +97,17 @@ fn test_replica_only_transactions_after_role_detection() {
             !cluster.has_primary(),
             "all configured servers are replicas"
         );
-        assert_transaction_route(&cluster);
+        assert_transaction_route(&cluster, true);
 
         set_replica(&pools[1], false);
         shard.redetect_roles();
         assert!(cluster.has_primary(), "a replica was promoted");
-        assert_transaction_route(&cluster);
+        assert_transaction_route(&cluster, false);
 
         set_replica(&pools[1], true);
         shard.redetect_roles();
         assert!(!cluster.has_primary());
-        assert_transaction_route(&cluster);
+        assert_transaction_route(&cluster, true);
     }
 }
 
@@ -120,5 +116,5 @@ fn test_static_replica_only_transactions_with_parser_enabled() {
     let mut config = ConfigAndUsers::default();
     config.config.general.query_parser = QueryParserLevel::On;
     let test = QueryParserTest::new_single_replica(&config);
-    assert_transaction_route(test.cluster());
+    assert_transaction_route(test.cluster(), true);
 }

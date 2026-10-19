@@ -445,7 +445,7 @@ impl Client {
 
         params.set_server_defaults(&server_params);
 
-        let sticky = Sticky::from_params(&params);
+        let sticky = Sticky::new();
 
         Ok(Some(Self {
             addr,

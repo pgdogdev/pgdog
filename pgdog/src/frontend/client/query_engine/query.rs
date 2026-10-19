@@ -50,7 +50,11 @@ impl QueryEngine {
         // Rewriter can tell us how many shards we need.
         let rewrite_connect_route = query_planner
             .as_ref()
-            .and_then(|rewrite| rewrite.connect_route());
+            .and_then(|rewrite| rewrite.connect_route())
+            .map(|mut route| {
+                route.set_explicit_role_target(client_request.route().explicit_role_target());
+                route
+            });
 
         let connect_route = if let Some(ref rewrite_connect_route) = rewrite_connect_route {
             rewrite_connect_route

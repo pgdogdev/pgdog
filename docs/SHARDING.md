@@ -62,9 +62,11 @@ The rest of the system only needs to know which variant it received.
   every row gets `CopyRow::omnishard` — `Shard::All`.
 
 `Route` (also in [`route.rs`](../pgdog/src/frontend/router/parser/route.rs)) wraps a `Shard` together with metadata the connection pool and response
-merger need: `read: bool` (primary vs replica), `order_by`, `aggregate`, `limit`, `distinct`, and
-`rewrite_plan`. The connection pool reads `route.shard()` to select the backend; the response merger
-reads the rest to reassemble cross-shard results.
+merger need: `is_read` (the statement classification), `explicit_role_target`, `order_by`, `aggregate`,
+`limit`, `distinct`, and `rewrite_plan`. The query engine puts `route.role_target()` on the connection
+`Request`, and `ClusterConnection::get_conn_internal()` uses it with `route.shard()` to select the
+servers (see [Primary or replica](#primary-or-replica)); the response merger reads the rest to
+reassemble cross-shard results.
 
 ---
 
@@ -116,20 +118,22 @@ a `RoleTarget`, which the query engine puts on the connection `Request`:
 | `PreferReplica` | replicas; the primary only if no replica is available |
 | `Any` | any server that `read_write_split` allows |
 
-`explicit_role_target()` does not look at the cluster topology or `read_write_split`. It applies
-these rules:
+`explicit_role_target()` does not look at `read_write_split`. It looks at the cluster topology only
+through `Cluster::has_primary()`. It applies these rules:
 
 1. An explicit role always wins: the `/* pgdog_role */` comment, then the `pgdog.role`
    parameter (startup, `SET`, `SET LOCAL`), then the user `role` in `users.toml`.
    Inside a conservative read/write transaction (`BEGIN`, or an implicit transaction from a
-   multi-`Execute` pipeline) the comment is ignored; the session role still applies.
+   multi-`Execute` pipeline) on a cluster with a primary, the comment is ignored; the session
+   role still applies.
    Role `replica` gives `PreferReplica`. Role `primary` gives `Primary`. Role `auto` stops the
    lookup without forcing a role: for example, `SET pgdog.role TO 'auto'` clears the user `role`,
    and `/* pgdog_role: auto */` clears the session role for one query. Rules 2–3 then apply.
    An invalid value is ignored. Write access is not checked by pgdog: a replica rejects writes
    by itself.
-2. Without a role, a conservative read/write or implicit transaction gives `Primary`, and a
-   read-only transaction (`BEGIN READ ONLY`) gives `Any` with every strategy.
+2. Without a role, a conservative read/write or implicit transaction gives `Primary` if the cluster
+   has a primary (`Cluster::has_primary()`), and a read-only transaction (`BEGIN READ ONLY`) gives
+   `Any` with every strategy.
 3. Otherwise nothing is forced: a read gives `Any`, a write gives `Primary`.
 
 Plugins get the resulting read/write as `write_override` input. A plugin's read/write result
@@ -138,15 +142,19 @@ replaces the statement's classification in rule 3 and in the omnisharded coverag
 
 `ClusterConnection::get_conn_internal()` picks the shard method for the role target at checkout:
 
-| `RoleTarget` | Shard method | Shard has a primary | Static shard without a primary | `role = auto`, no elected primary |
-|---|---|---|---|---|
-| `Primary` | `primary()`; `replica()` if `!can_have_primary()` | the primary | the replicas | wait for an election, then fail |
-| `PreferReplica` | `replica()` | replicas; the primary if no replica is available | the replicas | the replicas |
-| `Any`, `prefer_primary` | `primary()`; `replica()` if `!can_have_primary()` | the primary | the replicas | wait for an election, then fail |
-| `Any` | `replica()` | as `read_write_split` allows | the replicas | the replicas |
+| `RoleTarget` | Shard method | Shard has a primary | Static shard without a primary | `role = auto`, detection pending | `role = auto`, no primary detected |
+|---|---|---|---|---|---|
+| `Primary` | `primary()`; `replica()` if `!has_primary()` | the primary | the replicas | wait for the primary | the replicas |
+| `PreferReplica` | `replica()` | replicas; the primary if no replica is available | the replicas | the replicas | the replicas |
+| `Any`, `prefer_primary` | `primary()`; `replica()` if `!has_primary()` | the primary | the replicas | wait for the primary | the replicas |
+| `Any` | `replica()` | as `read_write_split` allows | the replicas | the replicas | the replicas |
 
-Without the parser, an unknown statement is a read if the cluster has no primary
-(`Cluster::has_primary()`), so a replica-only `role = auto` cluster does not wait for an election.
+`Shard::has_primary()` is true while role detection is pending. After detection finds no primary,
+every statement goes to a replica, also a write: the replica rejects it.
+
+Without the parser, the statement is unknown. `query_parser_bypass()` gives a read if the cluster
+has no primary (`Cluster::has_primary()`), or if `read_write_split = "exclude_primary"` and the
+cluster has replicas; otherwise a write. Rules 1–2 apply on top of it.
 
 The connection uses the role target only to choose the servers for a statement with no bound
 server. A bound transaction keeps its role target until it ends, also for new shards.

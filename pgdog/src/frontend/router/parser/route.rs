@@ -144,11 +144,7 @@ impl Display for Route {
             f,
             "shard={}, role={}",
             self.shard.deref(),
-            if self.role_target().allows_replica() {
-                "replica"
-            } else {
-                "primary"
-            }
+            self.role_target()
         )
     }
 }
@@ -346,6 +342,10 @@ impl Route {
 
     pub(crate) fn set_explicit_role_target(&mut self, role_target: Option<RoleTarget>) {
         self.explicit_role_target = role_target;
+    }
+
+    pub(crate) fn explicit_role_target(&self) -> Option<RoleTarget> {
+        self.explicit_role_target
     }
 
     /// Servers this route can use: the explicit role target combined with the statement.

@@ -26,7 +26,7 @@ impl QueryParser {
         &mut self,
         context: &QueryParserContext,
         statement: &Ast,
-        read: bool,
+        write_override: bool,
     ) -> Result<(), Error> {
         let plugins = if let Some(plugins) = plugins() {
             plugins
@@ -69,7 +69,7 @@ impl QueryParser {
             has_replicas: context.has_replicas,
             has_primary: context.has_primary,
             in_transaction: context.router_context.in_transaction(),
-            write_override: !read,
+            write_override,
             query: statement.ast.first().ok_or(Error::EmptyQuery)?,
             params,
         };

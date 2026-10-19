@@ -92,7 +92,7 @@ impl QueryEngine {
             }
         };
 
-        if self.router.skip(cluster, client_request, &context.sticky) {
+        if self.router.skip(cluster, client_request) {
             client_request.route = Some(self.router.command().route().clone());
             return Ok(true);
         }
