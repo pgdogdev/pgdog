@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::{
     StatementParameters,
     advisory_lock::{AdvisoryLocks, advisory_locks_from_func_call, collect_values_columns},
+    function::Function,
 };
 use crate::util::ResultControlFlowExt;
 use itertools::*;
@@ -27,6 +28,8 @@ struct Walk<'a> {
     /// Names introduced by `WITH` clauses. An unqualified reference to one
     /// of these is the CTE, not a table.
     cte_names: HashSet<&'a str>,
+    mutates: bool,
+    cross_shard: bool,
 }
 
 /// Cursor over the client-visible SELECT targets, before any star expansion.
@@ -481,6 +484,14 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
         self.walk().advisory_locks.clone()
     }
 
+    pub(crate) fn mutates(&mut self) -> bool {
+        self.walk().mutates
+    }
+
+    pub(crate) fn is_cross_shard(&mut self) -> bool {
+        self.walk().cross_shard
+    }
+
     // Are we running? Or walking? MAKE UP YOUR MIND DAMMIT
     fn run_walk(&self) -> Walk<'a> {
         let mut walk = Walk {
@@ -562,6 +573,13 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // Extract any advisory locks that this function call may
             // represent, using the values clause of the current statement
             Node::FuncCall(func) => {
+                if let Some(function) =
+                    Function::from_strings(func.funcname().into_iter().filter_map(Node::as_str))
+                {
+                    let behavior = function.behavior();
+                    walk.cross_shard |= behavior.cross_shard;
+                    walk.mutates |= behavior.writes;
+                }
                 let column_index = walk
                     .projection
                     .as_ref()
@@ -586,6 +604,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                 if let Some(name) = cte.ctename() {
                     walk.cte_names.insert(name);
                 }
+                walk.mutates |= !matches!(cte.ctequery(), Node::SelectStmt(_));
+                Recurse::yes()
+            }
+
+            Node::LockingClause(_) => {
+                walk.mutates = true;
                 Recurse::yes()
             }
 
