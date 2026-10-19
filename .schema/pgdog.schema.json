@@ -2366,6 +2366,11 @@
           ],
           "default": null
         },
+        "prefix": {
+          "description": "Treat `name` as a prefix, e.g. `name = \"users\"` also matches `users_1` and `users_archive`.\n\n_Default:_ `false`",
+          "type": "boolean",
+          "default": false
+        },
         "primary": {
           "description": "Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary>",
           "type": "boolean",

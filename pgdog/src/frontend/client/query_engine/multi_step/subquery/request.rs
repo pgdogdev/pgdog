@@ -113,8 +113,7 @@ impl<'a> SubqueryMulti<'a> {
                 }
 
                 Some(RewriteResult::Subquery(_subquery)) => {
-                    // TODO(jkaczman): Recursive (nested) subqueries
-                    todo!("Subqueries: recursive subqueries are not implemented yet")
+                    todo!("Subqueries: recursive subqueries are not supported yet")
                 }
 
                 // Seems unlikely we'll need to support INSERT split / Sharding Key Updates
