@@ -12,6 +12,21 @@ use super::ParameterValue;
 
 mod numeric;
 
+/// Accept any value for these settings and continue the normal parameter flow.
+/// Their accepted values vary by PostgreSQL version or build options.
+const VALIDATION_EXCLUDED_PARAMS: &[&str] = &[
+    // Debug-enabled PostgreSQL builds allow 0..=5; other builds only allow 0.
+    "debug_discard_caches",
+    // LZ4 support depends on the backend's build options.
+    "default_toast_compression",
+    // The clone option depends on operating system file-copy support.
+    "file_copy_method",
+    // The tsc option depends on architecture and build support.
+    "timing_clock_source",
+    // Boolean in PostgreSQL 14; later versions use an enum with optional codecs.
+    "wal_compression",
+];
+
 /// Parameter with name and value.
 pub(crate) struct Parameter<'a> {
     name: &'a str,
@@ -90,6 +105,12 @@ impl ParameterValidator {
         let param = param.into();
 
         let name = param.name();
+        if VALIDATION_EXCLUDED_PARAMS
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+        {
+            return None;
+        }
         let value = param.value()?;
 
         let guc = GUC.get(name)?;
@@ -188,6 +209,13 @@ mod tests {
                     "{name:?} = {value:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn excluded_parameters_bypass_validation() {
+        for name in VALIDATION_EXCLUDED_PARAMS {
+            assert!(validate(name, "anything").is_none(), "{name}");
         }
     }
 
