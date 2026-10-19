@@ -112,6 +112,14 @@ pub struct Rewrite {
     /// <https://docs.pgdog.dev/configuration/pgdog.toml/rewrite/#non_deterministic_functions>
     #[serde(default = "Rewrite::default_non_deterministic_functions")]
     pub non_deterministic_functions: RewriteMode,
+
+    /// Behavior for queries containing subqueries: `rewrite` executes the subquery separately and injects its results into the outer query
+    ///
+    /// **Note:** Highly experimental and in development. Do not use in production.
+    ///
+    /// _Default:_ `ignore`
+    #[serde(default = "Rewrite::default_subqueries")]
+    pub subqueries: RewriteMode,
 }
 
 impl Default for Rewrite {
@@ -122,6 +130,7 @@ impl Default for Rewrite {
             split_inserts: Self::default_split_inserts(),
             primary_key: Self::default_primary_key(),
             non_deterministic_functions: Self::default_non_deterministic_functions(),
+            subqueries: Self::default_subqueries(),
         }
     }
 }
@@ -140,6 +149,10 @@ impl Rewrite {
     }
 
     const fn default_non_deterministic_functions() -> RewriteMode {
+        RewriteMode::Ignore
+    }
+
+    const fn default_subqueries() -> RewriteMode {
         RewriteMode::Ignore
     }
 }

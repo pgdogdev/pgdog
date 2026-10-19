@@ -45,6 +45,11 @@ futures-util = "0.3.32"
 lto = true
 codegen-units = 1
 
+[profile.microbench]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
 [profile.flamegraph]
 inherits = "release"
 debug = true

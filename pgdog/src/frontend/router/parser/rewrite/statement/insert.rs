@@ -9,6 +9,13 @@ use crate::net::{Bind, Parse, ProtocolMessage, Query};
 use super::{Error, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
+pub(crate) struct Subquery {
+    /// The inner-SQL of the outer statement (the Subquery's SQL) that we wish to execute
+    /// and re-write in our multi-step code.
+    pub(crate) inner_stmt: String,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct InsertSplit {
     /// Parameter positions in the original Bind message
     /// that should be used to build the Bind message specific to this
