@@ -6,7 +6,7 @@ use itertools::Itertools;
 use pg_raw_parse::{ConstValue, Node, make, nodes};
 
 use crate::frontend::router::parser::{
-    CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
+    AggregateFunction, CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
 };
 
 use super::Error;
@@ -47,9 +47,9 @@ pub(super) fn rewrite_select<'a>(
 ) -> Result<HavingRewritePlan, Error> {
     let having = select.having_clause();
     if matches!(having, Node::None) {
-        return Err(Error::UnsupportedHaving(String::from(
+        return Err(Error::UnsupportedHaving(
             "HAVING rewrite requested without a HAVING clause",
-        )));
+        ));
     }
     let having_source = mem.make_unique(having);
     let having = having_source.as_ref();
@@ -84,9 +84,9 @@ pub(super) fn rewrite_select<'a>(
             }
             Node::A_Const(_) => {}
             _ => {
-                return Err(Error::UnsupportedHaving(String::from(
+                return Err(Error::UnsupportedHaving(
                     "GROUP BY expressions other than columns and ordinals are unsupported",
-                )));
+                ));
             }
         }
     }
@@ -186,9 +186,9 @@ impl<'a> Parser<'a> {
                     .and_then(Node::as_str)
                     .and_then(Self::comparison_operator)
                     .ok_or_else(|| {
-                        Error::UnsupportedHaving(String::from(
+                        Error::UnsupportedHaving(
                             "only =, <>, !=, <, <=, > and >= comparisons are supported",
-                        ))
+                        )
                     })?;
                 Ok(HavingTemplate::Compare {
                     left: self.parse_value(expression.lexpr())?,
@@ -206,20 +206,13 @@ impl<'a> Parser<'a> {
                     nodes::BoolExprType::AND_EXPR => Ok(HavingTemplate::And(expressions)),
                     nodes::BoolExprType::OR_EXPR => Ok(HavingTemplate::Or(expressions)),
                     nodes::BoolExprType::NOT_EXPR => {
-                        let mut expressions = expressions.into_iter();
-                        let expression = expressions.next().ok_or_else(|| {
-                            Error::UnsupportedHaving(String::from("NOT requires one expression"))
-                        })?;
-                        if expressions.next().is_some() {
-                            return Err(Error::UnsupportedHaving(String::from(
-                                "NOT requires one expression",
-                            )));
-                        }
+                        let expression = expressions
+                            .into_iter()
+                            .exactly_one()
+                            .map_err(|_| Error::UnsupportedHaving("NOT requires one expression"))?;
                         Ok(HavingTemplate::Not(Box::new(expression)))
                     }
-                    _ => Err(Error::UnsupportedHaving(String::from(
-                        "unsupported boolean expression",
-                    ))),
+                    _ => Err(Error::UnsupportedHaving("unsupported boolean expression")),
                 }
             }
             Node::NullTest(test) => {
@@ -227,9 +220,9 @@ impl<'a> Parser<'a> {
                     nodes::NullTestType::IS_NULL => false,
                     nodes::NullTestType::IS_NOT_NULL => true,
                     _ => {
-                        return Err(Error::UnsupportedHaving(String::from(
+                        return Err(Error::UnsupportedHaving(
                             "only IS NULL and IS NOT NULL are supported",
-                        )));
+                        ));
                     }
                 };
                 Ok(HavingTemplate::IsNull {
@@ -237,23 +230,17 @@ impl<'a> Parser<'a> {
                     negated,
                 })
             }
-            _ => Err(Error::UnsupportedHaving(String::from(
+            _ => Err(Error::UnsupportedHaving(
                 "supported predicates are comparisons, AND, OR, NOT and NULL tests",
-            ))),
+            )),
         }
     }
 
     fn parse_value(&mut self, node: Node<'a>) -> Result<ValueTemplate, Error> {
-        let supported = match node {
-            Node::A_Const(_) | Node::ParamRef(_) | Node::ColumnRef(_) => true,
-            Node::TypeCast(cast) => Self::supported_value(cast.arg()),
-            Node::FuncCall(_) => Self::supported_aggregate(node),
-            _ => false,
-        };
-        if !supported {
-            return Err(Error::UnsupportedHaving(String::from(
+        if !Self::supported_value(node) {
+            return Err(Error::UnsupportedHaving(
                 "operands must be aggregate calls, grouped columns, constants or parameters",
-            )));
+            ));
         }
 
         let alias = self.next_alias();
@@ -271,22 +258,8 @@ impl<'a> Parser<'a> {
     }
 
     fn supported_aggregate(node: Node<'_>) -> bool {
-        Function::try_from(node).is_ok_and(|function| {
-            matches!(
-                function.name,
-                "count"
-                    | "max"
-                    | "min"
-                    | "sum"
-                    | "avg"
-                    | "stddev"
-                    | "stddev_samp"
-                    | "stddev_pop"
-                    | "variance"
-                    | "var_samp"
-                    | "var_pop"
-            )
-        })
+        Function::try_from(node)
+            .is_ok_and(|function| AggregateFunction::from_builtin_name(function.name).is_some())
     }
 
     fn comparison_operator(operator: &str) -> Option<CompareOperator> {

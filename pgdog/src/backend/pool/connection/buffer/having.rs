@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use pgdog_postgres_types::{Datum, Numeric};
+use pgdog_postgres_types::{Datum, Double, Numeric};
 
 use crate::{
     frontend::router::parser::{CompareOperator, HavingExpr, HavingValue},
@@ -103,7 +103,7 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
     }
 
     let ordering = numeric_ordering(left, right)
-        .or_else(|| comparable_ordering(left, right))
+        .or_else(|| left.partial_cmp(right))
         .ok_or_else(|| {
             Error::UnsupportedHaving(format!(
                 "cannot compare {} with {}",
@@ -126,19 +126,6 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
     })
 }
 
-fn comparable_ordering(left: &Datum, right: &Datum) -> Option<Ordering> {
-    match (left, right) {
-        (Datum::Text(_), Datum::Text(_))
-        | (Datum::Interval(_), Datum::Interval(_))
-        | (Datum::Timestamp(_), Datum::Timestamp(_))
-        | (Datum::TimestampTz(_), Datum::TimestampTz(_))
-        | (Datum::Uuid(_), Datum::Uuid(_))
-        | (Datum::Boolean(_), Datum::Boolean(_))
-        | (Datum::Oid(_), Datum::Oid(_)) => left.partial_cmp(right),
-        _ => None,
-    }
-}
-
 fn numeric_ordering(left: &Datum, right: &Datum) -> Option<Ordering> {
     if let (Some(left), Some(right)) = (integer(left), integer(right)) {
         return Some(left.cmp(&right));
@@ -149,21 +136,10 @@ fn numeric_ordering(left: &Datum, right: &Datum) -> Option<Ordering> {
     }
 
     if let (Some(left), Some(right)) = (float(left), float(right)) {
-        return Some(postgres_float_ordering(left, right));
+        return Some(Double(left).cmp(&Double(right)));
     }
 
     None
-}
-
-fn postgres_float_ordering(left: f64, right: f64) -> Ordering {
-    match (left.is_nan(), right.is_nan()) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => left
-            .partial_cmp(&right)
-            .expect("non-NaN floats always have an ordering"),
-    }
 }
 
 fn integer(value: &Datum) -> Option<i128> {
@@ -206,7 +182,7 @@ mod tests {
             messages::{DataRow, Datum},
         },
     };
-    use pgdog_postgres_types::{Double, Float};
+    use pgdog_postgres_types::Float;
 
     fn compare_expression(operator: CompareOperator) -> HavingExpr {
         HavingExpr::Compare {
@@ -384,8 +360,17 @@ mod tests {
             numeric_ordering(&Datum::Double(Double(f64::NAN)), &Datum::Float(Float(1.0))),
             Some(Ordering::Greater)
         );
-        assert_eq!(postgres_float_ordering(f64::NAN, f64::NAN), Ordering::Equal);
-        assert_eq!(postgres_float_ordering(1.0, f64::NAN), Ordering::Less);
+        assert_eq!(
+            numeric_ordering(
+                &Datum::Double(Double(f64::NAN)),
+                &Datum::Double(Double(f64::NAN))
+            ),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_ordering(&Datum::Float(Float(1.0)), &Datum::Double(Double(f64::NAN))),
+            Some(Ordering::Less)
+        );
         assert!(matches!(
             compare(
                 &Datum::Text("2".into()),

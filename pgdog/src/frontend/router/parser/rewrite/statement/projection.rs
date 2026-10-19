@@ -58,16 +58,20 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
-    pub(crate) having: Option<Arc<HavingPostRoutePlan>>,
+    pub(crate) having: Option<Arc<HavingRewriteResult>>,
 }
 
+/// The filter and aggregate metadata produced by rewriting a HAVING query.
+///
+/// Keeping them together behind one `Arc` avoids storing HAVING only aggregate
+/// metadata inline on the common query path.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HavingPostRoutePlan {
+pub(crate) struct HavingRewriteResult {
     rewrite: HavingRewritePlan,
     aggregate: Aggregate,
 }
 
-impl HavingPostRoutePlan {
+impl HavingRewriteResult {
     pub(crate) fn new(rewrite: HavingRewritePlan, aggregate: Aggregate) -> Self {
         Self { rewrite, aggregate }
     }
@@ -218,10 +222,15 @@ fn build(
     };
 
     let has_having = !matches!(select.having_clause(), Node::None);
-    let aggregate = Aggregate::parse(select, schema);
-    if aggregate.is_empty() && !has_having && select.sort_clause().is_empty() && !rewrite_offset {
-        return Ok(None);
-    }
+    let aggregate = if has_having {
+        None
+    } else {
+        let aggregate = Aggregate::parse(select, schema);
+        if aggregate.is_empty() && select.sort_clause().is_empty() && !rewrite_offset {
+            return Ok(None);
+        }
+        Some(aggregate)
+    };
 
     let mut plan = ProjectionRewritePlan::default();
     let rewritten = make::try_owned(|mem| {
@@ -230,16 +239,18 @@ fn build(
             let having = having::rewrite_select(&mut select.as_mut(), mem)?;
             let rewritten_aggregate = Aggregate::parse(&select, schema);
             if rewritten_aggregate.is_empty() {
-                return Err(Error::UnsupportedHaving(String::from(
+                return Err(Error::UnsupportedHaving(
                     "at least one aggregate function is required",
-                )));
+                ));
             }
+            // Aggregate::parse skips GROUP BY items it cannot resolve. Require
+            // every item here so unrelated groups are never merged together.
             if rewritten_aggregate.group_by().len() != select.group_clause().len() {
-                return Err(Error::UnsupportedHaving(String::from(
+                return Err(Error::UnsupportedHaving(
                     "every GROUP BY expression must be a selected column or ordinal",
-                )));
+                ));
             }
-            plan.having = Some(Arc::new(HavingPostRoutePlan::new(
+            plan.having = Some(Arc::new(HavingRewriteResult::new(
                 having,
                 rewritten_aggregate,
             )));
@@ -247,8 +258,9 @@ fn build(
         let aggregate = plan
             .having
             .as_deref()
-            .map(HavingPostRoutePlan::aggregate)
-            .unwrap_or(&aggregate);
+            .map(HavingRewriteResult::aggregate)
+            .or(aggregate.as_ref())
+            .expect("non-HAVING aggregate parsed before projection rewrite");
         if !aggregate.is_empty() {
             let aggregate_plan =
                 AggregatesRewrite::rewrite_select(&mut select.as_mut(), mem, aggregate);

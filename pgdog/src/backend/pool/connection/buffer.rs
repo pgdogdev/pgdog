@@ -269,7 +269,7 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::projection::HavingPostRoutePlan;
+    use crate::frontend::router::parser::rewrite::statement::projection::HavingRewriteResult;
     use crate::frontend::router::parser::{CompareOperator, HavingExpr, HavingValue};
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
@@ -381,7 +381,7 @@ mod test {
         assert!(noop.is_empty());
 
         let plan = ProjectionRewritePlan {
-            having: Some(std::sync::Arc::new(HavingPostRoutePlan::new(
+            having: Some(std::sync::Arc::new(HavingRewriteResult::new(
                 crate::frontend::router::parser::HavingRewritePlan::new(
                     HavingExpr::Compare {
                         left: HavingValue::new("__pgdog_having_0".into()),

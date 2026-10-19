@@ -15,7 +15,7 @@ pub(crate) enum Error {
     UnsupportedShardingKeyUpdate(String),
 
     #[error("cross-shard HAVING is unsupported: {0}")]
-    UnsupportedHaving(String),
+    UnsupportedHaving(&'static str),
 
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
