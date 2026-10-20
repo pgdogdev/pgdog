@@ -392,9 +392,12 @@ impl QueryParser {
             Node::SelectStmt(stmt) => {
                 if context.is_canonicalizing_oids() && references_pg_type(stmt) {
                     // Shard 0 is considered the canonical source for now
-                    return Ok(Command::Query(Route::read(
-                        ShardWithPriority::new_override_canonical_schema_info(Shard::Direct(0)),
-                    )));
+                    return Ok(Command::Query(
+                        Route::read(ShardWithPriority::new_override_canonical_schema_info(
+                            Shard::Direct(0),
+                        ))
+                        .dml(),
+                    ));
                 } else {
                     self.select(stmt, context)
                 }
@@ -583,13 +586,13 @@ impl QueryParser {
                 .shards_calculator
                 .push(ShardWithPriority::new_table(shard));
             if !stmt.is_from {
-                return Ok(Command::Query(Route::read(
-                    context.shards_calculator.shard(),
-                )));
+                return Ok(Command::Query(
+                    Route::read(context.shards_calculator.shard()).dml(),
+                ));
             } else {
-                return Ok(Command::Query(Route::write(
-                    context.shards_calculator.shard(),
-                )));
+                return Ok(Command::Query(
+                    Route::write(context.shards_calculator.shard()).dml(),
+                ));
             }
         }
 
@@ -598,13 +601,13 @@ impl QueryParser {
             context
                 .shards_calculator
                 .push(ShardWithPriority::new_table(Shard::All));
-            Ok(Command::Query(Route::read(
-                context.shards_calculator.shard(),
-            )))
+            Ok(Command::Query(
+                Route::read(context.shards_calculator.shard()).dml(),
+            ))
         } else {
             Ok(Command::Copy {
                 copy: Box::new(parser),
-                route: Route::write(ShardWithPriority::new_override_copy()),
+                route: Route::write(ShardWithPriority::new_override_copy()).dml(),
             })
         }
     }
@@ -667,7 +670,7 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(shard).with_omnisharded(omnisharded),
+            Route::write(shard).with_omnisharded(omnisharded).dml(),
         ))
     }
 }

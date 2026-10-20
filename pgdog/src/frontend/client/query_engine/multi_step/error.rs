@@ -7,6 +7,9 @@ pub(crate) enum Error {
     #[error("{0}")]
     Update(#[from] UpdateError),
 
+    #[error("parser: {0}")]
+    Parser(Box<crate::frontend::router::parser::Error>),
+
     #[error("frontend: {0}")]
     Frontend(Box<crate::frontend::Error>),
 
@@ -47,6 +50,12 @@ pub(crate) enum UpdateError {
 impl From<crate::frontend::Error> for Error {
     fn from(value: crate::frontend::Error) -> Self {
         Self::Frontend(Box::new(value))
+    }
+}
+
+impl From<crate::frontend::router::parser::Error> for Error {
+    fn from(value: crate::frontend::router::parser::Error) -> Self {
+        Self::Parser(Box::new(value))
     }
 }
 

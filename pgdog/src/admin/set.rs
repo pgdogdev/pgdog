@@ -79,6 +79,10 @@ impl Command for Set {
                 config.config.general.passthrough_auth = Self::from_json(&self.value)?;
             }
 
+            "passthrough_auth_debounce_delay" => {
+                config.config.general.passthrough_auth_debounce_delay = self.value.parse()?;
+            }
+
             "read_write_strategy" => {
                 config.config.general.read_write_strategy = Self::from_json(&self.value)?;
             }
@@ -142,6 +146,13 @@ impl Command for Set {
                     .map_err(|_| Error::Syntax)?;
             }
 
+            "rewrite_subqueries" => {
+                config.config.rewrite.subqueries = self
+                    .value
+                    .parse::<RewriteMode>()
+                    .map_err(|_| Error::Syntax)?;
+            }
+
             "rewrite_enabled" => {
                 config.config.rewrite.enabled = Self::from_json(&self.value)?;
             }
@@ -200,6 +211,13 @@ impl Command for Set {
 
             "dry_run" => {
                 config.config.general.dry_run = Self::from_json(&self.value)?;
+            }
+
+            "resharding_parallel_within_table_copies" => {
+                config
+                    .config
+                    .general
+                    .resharding_parallel_within_table_copies = self.value.parse()?;
             }
 
             _ => return Ok(vec![]),

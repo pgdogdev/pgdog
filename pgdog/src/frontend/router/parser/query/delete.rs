@@ -50,7 +50,9 @@ impl QueryParser {
         }
 
         Ok(Command::Query(
-            Route::write(context.shards_calculator.shard()).with_omnisharded(omnisharded),
+            Route::write(context.shards_calculator.shard())
+                .with_omnisharded(omnisharded)
+                .dml(),
         ))
     }
 }

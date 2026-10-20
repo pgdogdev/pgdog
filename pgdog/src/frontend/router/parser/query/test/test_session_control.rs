@@ -66,32 +66,142 @@ fn test_discard_variants() {
 
 #[test]
 fn test_begin() {
-    let mut test = setup();
-    let command = test.execute(vec![Query::new("BEGIN").into()]);
-    assert!(
-        matches!(command, Command::StartTransaction { .. }),
-        "expected Command::StartTransaction, got {command:#?}",
-    );
+    for query in [
+        "BEGIN",
+        "BEGIN READ WRITE",
+        "BEGIN READ ONLY",
+        "BEGIN ISOLATION LEVEL SERIALIZABLE",
+        "BEGIN ISOLATION LEVEL REPEATABLE READ",
+        "BEGIN ISOLATION LEVEL READ COMMITTED",
+        "BEGIN ISOLATION LEVEL READ UNCOMMITTED",
+        "BEGIN DEFERRABLE",
+        "BEGIN NOT DEFERRABLE",
+        "BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE",
+        "BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE NOT DEFERRABLE",
+        "BEGIN READ ONLY, ISOLATION LEVEL SERIALIZABLE, NOT DEFERRABLE",
+        "BEGIN WORK",
+        "BEGIN WORK READ WRITE",
+        "BEGIN WORK READ ONLY",
+        "BEGIN WORK ISOLATION LEVEL SERIALIZABLE",
+        "BEGIN WORK ISOLATION LEVEL REPEATABLE READ",
+        "BEGIN WORK ISOLATION LEVEL READ COMMITTED",
+        "BEGIN WORK ISOLATION LEVEL READ UNCOMMITTED",
+        "BEGIN WORK DEFERRABLE",
+        "BEGIN WORK NOT DEFERRABLE",
+        "BEGIN WORK ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE",
+        "BEGIN WORK ISOLATION LEVEL REPEATABLE READ READ WRITE NOT DEFERRABLE",
+        "BEGIN WORK READ ONLY, ISOLATION LEVEL SERIALIZABLE, NOT DEFERRABLE",
+        "BEGIN TRANSACTION",
+        "BEGIN TRANSACTION READ WRITE",
+        "BEGIN TRANSACTION READ ONLY",
+        "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        "BEGIN TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+        "BEGIN TRANSACTION DEFERRABLE",
+        "BEGIN TRANSACTION NOT DEFERRABLE",
+        "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE",
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ WRITE NOT DEFERRABLE",
+        "BEGIN TRANSACTION READ ONLY, ISOLATION LEVEL SERIALIZABLE, NOT DEFERRABLE",
+        "START TRANSACTION",
+        "START TRANSACTION READ WRITE",
+        "START TRANSACTION READ ONLY",
+        "START TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "START TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "START TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        "START TRANSACTION ISOLATION LEVEL READ UNCOMMITTED",
+        "START TRANSACTION DEFERRABLE",
+        "START TRANSACTION NOT DEFERRABLE",
+        "START TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE",
+        "START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ WRITE NOT DEFERRABLE",
+        "START TRANSACTION READ ONLY, ISOLATION LEVEL SERIALIZABLE, NOT DEFERRABLE",
+        "begin;",
+        "bEgIn WoRk;",
+        "start transaction;",
+        "  BEGIN  ",
+        "/* transaction */ BEGIN",
+    ] {
+        let mut test = setup();
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(command, Command::StartTransaction { .. }),
+            "expected Command::StartTransaction, for {query:?}, got {command:#?}",
+        );
+    }
 }
 
 #[test]
 fn test_commit() {
-    let mut test = setup();
-    let command = test.execute(vec![Query::new("COMMIT").into()]);
-    assert!(
-        matches!(command, Command::CommitTransaction { .. }),
-        "expected Command::CommitTransaction, got {command:#?}",
-    );
+    for query in [
+        "COMMIT",
+        "COMMIT AND CHAIN",
+        "COMMIT AND NO CHAIN",
+        "COMMIT WORK",
+        "COMMIT WORK AND CHAIN",
+        "COMMIT WORK AND NO CHAIN",
+        "COMMIT TRANSACTION",
+        "COMMIT TRANSACTION AND CHAIN",
+        "COMMIT TRANSACTION AND NO CHAIN",
+        "commit;",
+        "  COMMIT  ",
+        "/* transaction */ COMMIT",
+        "END",
+        "END AND CHAIN",
+        "END AND NO CHAIN",
+        "END WORK",
+        "END WORK AND CHAIN",
+        "END WORK AND NO CHAIN",
+        "END TRANSACTION",
+        "END TRANSACTION AND CHAIN",
+        "END TRANSACTION AND NO CHAIN",
+        "end;",
+        "  END  ",
+        "/* transaction */ END",
+    ] {
+        let mut test = setup();
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(command, Command::CommitTransaction { .. }),
+            "expected Command::CommitTransaction, for {query:?}, got {command:#?}",
+        );
+    }
 }
 
 #[test]
 fn test_rollback() {
-    let mut test = setup();
-    let command = test.execute(vec![Query::new("ROLLBACK").into()]);
-    assert!(
-        matches!(command, Command::RollbackTransaction { .. }),
-        "expected Command::RollbackTransaction, got {command:#?}",
-    );
+    for query in [
+        "ROLLBACK",
+        "ROLLBACK AND CHAIN",
+        "ROLLBACK AND NO CHAIN",
+        "ROLLBACK WORK",
+        "ROLLBACK WORK AND CHAIN",
+        "ROLLBACK WORK AND NO CHAIN",
+        "ROLLBACK TRANSACTION",
+        "ROLLBACK TRANSACTION AND CHAIN",
+        "ROLLBACK TRANSACTION AND NO CHAIN",
+        "rollback;",
+        "  ROLLBACK  ",
+        "/* transaction */ ROLLBACK",
+        "ABORT",
+        "ABORT AND CHAIN",
+        "ABORT AND NO CHAIN",
+        "ABORT WORK",
+        "ABORT WORK AND CHAIN",
+        "ABORT WORK AND NO CHAIN",
+        "ABORT TRANSACTION",
+        "ABORT TRANSACTION AND CHAIN",
+        "ABORT TRANSACTION AND NO CHAIN",
+        "abort;",
+        "  ABORT  ",
+        "/* transaction */ ABORT",
+    ] {
+        let mut test = setup();
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(command, Command::RollbackTransaction { .. }),
+            "expected Command::RollbackTransaction, for {query:?}, got {command:#?}",
+        );
+    }
 }
 
 #[test]

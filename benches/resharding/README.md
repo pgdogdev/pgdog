@@ -69,14 +69,18 @@ Two proxies are created:
 | `resharding_source` | 15400 | pgdog1, pgdog2, pgdog3 | downstream (PG → pgdog) |
 | `resharding_destination` | 15401 | shard_0–shard_3 | upstream (pgdog → PG) |
 
-Toxic settings are configurable via environment variables:
+The default toxics model a cross-region setup: pgdog next to the source, and the
+destination in another region (for example us-east-1 → us-east-2). Latency is
+one-way, so it adds the same amount to each round trip.
 
-| Variable | Effect |
-|---|---|
-| `SOURCE_LATENCY_MS` | Added latency on source reads |
-| `DEST_LATENCY_MS` | Added latency on destination writes |
-| `SOURCE_BW_KBPS` | Bandwidth cap on source reads (KB/s) |
-| `DEST_BW_KBPS` | Bandwidth cap on destination writes (KB/s) |
+These environment variables change the toxics:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SOURCE_LATENCY_MS` | `1` | Added latency on source reads |
+| `DEST_LATENCY_MS` | `15` | Added latency on destination writes |
+| `SOURCE_BW_KBPS` | `125000` | Bandwidth cap on source reads (KB/s per connection, `0` = no cap) |
+| `DEST_BW_KBPS` | `125000` | Bandwidth cap on destination writes (KB/s per connection, `0` = no cap) |
 
 ```sh
 # run with default toxic settings

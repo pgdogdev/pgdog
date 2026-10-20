@@ -249,14 +249,14 @@ A stream stopped with drain does these steps:
 1. It reads `pg_current_wal_lsn()` on the source shard at once.
    Traffic is paused, so this LSN covers every committed change.
 2. It keeps reading until its committed LSN reaches that position. The committed LSN moves only
-   after every destination shard flushed a commit. Keepalive messages move it past WAL that has
+   after every destination shard that received changes has the commit durable. Keepalive messages move it past WAL that has
    no published changes when no transaction is open. A connection error is retried as usual.
    A retry rolls back the open transactions, so the stream reads them again before it stops.
 
 The triggers above therefore only decide when the drain starts. A drain never skips committed changes.
 
 Then every stop works in the same way. The stream stops reading after the open transaction,
-so new data cannot keep it busy. It waits until every destination shard flushed the applied changes,
+so new data cannot keep it busy. It waits until the applied changes are durable on every destination shard that received them,
 sends a status update, and sends `CopyDone`. The WAL that is not read stays in the slot.
 
 If a draining stream does not reach its position in `DRAIN_TIMEOUT` (120 s), it stops in the same way

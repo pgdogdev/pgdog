@@ -20,6 +20,7 @@ impl QueryEngine {
         extended: bool,
     ) -> Result<(), Error> {
         context.transaction = Some(Transaction::new(transaction_type));
+        context.params.begin();
 
         self.backend
             .start_transaction(transaction_type.read_only(), begin)?;

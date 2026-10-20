@@ -98,6 +98,16 @@ impl Pools {
         let mut avg_rows_updated = vec![];
         let mut total_rows_deleted = vec![];
         let mut avg_rows_deleted = vec![];
+        let mut total_rows_copied = vec![];
+        let mut avg_rows_copied = vec![];
+        let mut total_tables_created = vec![];
+        let mut avg_tables_created = vec![];
+        let mut total_tables_dropped = vec![];
+        let mut avg_tables_dropped = vec![];
+        let mut total_ddl_commands = vec![];
+        let mut avg_ddl_commands = vec![];
+        let mut total_dml_commands = vec![];
+        let mut avg_dml_commands = vec![];
         let mut total_checkout_timeouts = vec![];
         let mut avg_checkout_timeouts = vec![];
 
@@ -388,6 +398,56 @@ impl Pools {
                     avg_rows_deleted.push(Measurement {
                         labels: labels.clone(),
                         measurement: averages.rows_deleted.into(),
+                    });
+
+                    total_rows_copied.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.rows_copied.into(),
+                    });
+
+                    avg_rows_copied.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.rows_copied.into(),
+                    });
+
+                    total_tables_created.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.tables_created.into(),
+                    });
+
+                    avg_tables_created.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.tables_created.into(),
+                    });
+
+                    total_tables_dropped.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.tables_dropped.into(),
+                    });
+
+                    avg_tables_dropped.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.tables_dropped.into(),
+                    });
+
+                    total_ddl_commands.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.ddl_commands.into(),
+                    });
+
+                    avg_ddl_commands.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.ddl_commands.into(),
+                    });
+
+                    total_dml_commands.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: totals.dml_commands.into(),
+                    });
+
+                    avg_dml_commands.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: averages.dml_commands.into(),
                     });
 
                     total_checkout_timeouts.push(Measurement {
@@ -864,6 +924,86 @@ impl Pools {
             name: "avg_rows_deleted".into(),
             measurements: avg_rows_deleted,
             help: "Average rows deleted per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_rows_copied".into(),
+            measurements: total_rows_copied,
+            help: "Total rows reported by COPY command tags.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_rows_copied".into(),
+            measurements: avg_rows_copied,
+            help: "Average rows copied per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_tables_created".into(),
+            measurements: total_tables_created,
+            help: "Total tables created by successfully executed parsed statements.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_tables_created".into(),
+            measurements: avg_tables_created,
+            help: "Average tables created per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_tables_dropped".into(),
+            measurements: total_tables_dropped,
+            help: "Total tables dropped by successfully executed parsed statements.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_tables_dropped".into(),
+            measurements: avg_tables_dropped,
+            help: "Average tables dropped per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_ddl_commands".into(),
+            measurements: total_ddl_commands,
+            help: "Total successfully executed DDL commands identified by the query parser.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_ddl_commands".into(),
+            measurements: avg_ddl_commands,
+            help: "Average successfully executed DDL commands per statistics period.".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "total_dml_commands".into(),
+            measurements: total_dml_commands,
+            help: "Total successfully executed DML commands identified by the query parser.".into(),
+            unit: None,
+            metric_type: Some("counter".into()),
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "avg_dml_commands".into(),
+            measurements: avg_dml_commands,
+            help: "Average successfully executed DML commands per statistics period.".into(),
             unit: None,
             metric_type: None,
         }));

@@ -8,11 +8,12 @@ pub(crate) mod stream;
 pub(crate) mod tls;
 pub(crate) mod tweaks;
 
+pub(crate) use crate::parameters::Parameters;
 use bytes::{Buf, Bytes};
 pub(crate) use decoder::Decoder;
 pub(crate) use error::Error;
 pub(crate) use messages::*;
-pub(crate) use parameter::{Parameter, Parameters};
+pub(crate) use parameter::Parameter;
 pub(crate) use protocol_message::ProtocolMessage;
 pub(crate) use stream::{Liveness, Stream};
 pub(crate) use tweaks::tweak;

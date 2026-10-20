@@ -9,6 +9,8 @@ use crate::{
 
 mod advisory_lock;
 mod advisory_unlock;
+
+mod bench;
 mod close_parse;
 mod close_parse_global_cache;
 mod cross_shard_disabled;
@@ -46,6 +48,7 @@ mod rewrite_projection;
 mod rewrite_simple_prepared;
 mod schema_changed;
 mod set;
+mod set_batch;
 mod set_schema_sharding;
 mod sharded;
 mod sharded_prepared;
@@ -54,6 +57,7 @@ mod temp_table;
 mod test_omnisharded;
 mod transaction_state;
 mod two_pc_single_shard;
+mod unsupported_aggregation;
 
 pub(super) fn test_client() -> Client {
     load_test();

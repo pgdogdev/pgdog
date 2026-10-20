@@ -1,4 +1,5 @@
-use crate::net::{FrontendPid, Parameters};
+use crate::net::FrontendPid;
+use crate::parameters::ParameterStore;
 
 use super::Guard;
 use std::ops::{Deref, DerefMut};
@@ -20,7 +21,7 @@ impl LinkedServer {
     pub(super) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
         transaction_stmt: Option<&str>,
     ) -> Result<usize, super::Error> {
         if self.linked {
@@ -55,7 +56,7 @@ impl DerefMut for LinkedServer {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::{backend::Pool, net::Parameter};
+    use crate::{backend::Pool, net::Parameter, parameters::Parameters};
 
     pub(crate) struct TestLinkedServer {
         pub(crate) server: Option<LinkedServer>,
@@ -111,6 +112,7 @@ pub(crate) mod test {
             "application_name".to_string(),
             "test_link_client_idempotent".to_string(),
         ))]);
+        let params = ParameterStore::new(params);
 
         let linked = link.link_client(pid, &params, None).await.unwrap();
 

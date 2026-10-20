@@ -135,18 +135,9 @@ impl Cache {
             let parse_time = ast.stats.lock().parse_time;
 
             let mut guard = self.inner.lock();
-            // Don't cache when a shard comment routed the query AND a rewrite
-            // was applied: the cache key is the comment-stripped body, so a
-            // subsequent uncommented lookup would hit this entry and receive an
-            // already-rewritten plan that was built against the commented
-            // (direct-shard) variant.
-            let cacheable =
-                query_and_comment.comment.shard.is_none() || ast.rewrite_plan.is_empty();
-            if cacheable {
-                guard
-                    .queries
-                    .put(ast.query_without_comment.clone(), Arc::clone(&ast));
-            }
+            guard
+                .queries
+                .put(ast.query_without_comment.clone(), Arc::clone(&ast));
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
             Ok(ast)

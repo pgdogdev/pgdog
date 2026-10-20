@@ -1,5 +1,5 @@
 use super::prelude::*;
-use crate::{frontend::router::parser::statement::AdvisoryLockId, net::DataRow};
+use crate::{frontend::router::parser::advisory_lock::AdvisoryLockId, net::DataRow};
 
 #[tokio::test]
 async fn test_pg_catalog_advisory_lock_pins_until_qualified_unlock() {
@@ -106,7 +106,91 @@ async fn test_session_lock_resolves_to_same_shard() {
         // returns false! not allowed to get the lock
         let returns_false = row.get_text(0).as_deref() == Some("f");
         assert!(returns_false);
+        assert_eq!(client2.engine.advisory_locks().len(), 0);
+        assert!(!client2.backend_locked());
+
+        // Binary Execute results must work without a Describe/RowDescription.
+        let statement = format!("try_lock_{lock}");
+        client2
+            .send(Parse::named(
+                &statement,
+                format!("SELECT true, pg_try_advisory_lock({lock})"),
+            ))
+            .await;
+        client2
+            .send(Bind::new_params_codes_results(&statement, &[], &[], &[1]))
+            .await;
+        client2.send(Execute::new()).await;
+        client2.send(Sync).await;
+        client2
+            .try_process()
+            .await
+            .expect("execute binary try-lock");
+        let messages = client2
+            .read_until('Z')
+            .await
+            .expect("binary try-lock result");
+        assert!(!messages.iter().any(|message| message.code() == 'T'));
+        let row = messages
+            .iter()
+            .find(|message| message.code() == 'D')
+            .map(|message| DataRow::try_from(message.clone()).expect("data row"))
+            .expect("one result row");
+        assert_eq!(row.column(1).as_deref(), Some(&[0][..]));
+        assert_eq!(client2.engine.advisory_locks().len(), 0);
+        assert!(!client2.backend_locked());
     }
+
+    // Match each outcome by row and column: only the second key is available.
+    client2
+        .send_simple(Query::new(
+            "SELECT 99, pg_try_advisory_lock(key) FROM (VALUES (505), (507)) AS t(key)",
+        ))
+        .await;
+    let messages = client2
+        .read_until('Z')
+        .await
+        .expect("mixed try-lock results");
+    let results: Vec<_> = messages
+        .into_iter()
+        .filter(|message| message.code() == 'D')
+        .map(|message| DataRow::try_from(message).expect("data row").get_text(1))
+        .collect();
+    assert_eq!(results, vec![Some("f".into()), Some("t".into())]);
+    assert!(
+        client2
+            .engine
+            .advisory_locks()
+            .contains(AdvisoryLockId::OneParameter(507))
+    );
+    assert_eq!(client2.engine.advisory_locks().len(), 1);
+    assert!(client2.backend_locked());
+
+    client2
+        .send_simple(Query::new("SELECT pg_try_advisory_lock(505)"))
+        .await;
+    client2
+        .read_until('Z')
+        .await
+        .expect("failed attempt while pinned");
+    assert_eq!(client2.engine.advisory_locks().len(), 1);
+    assert!(client2.backend_locked());
+
+    client2
+        .send_simple(Query::new("SELECT pg_advisory_unlock_all()"))
+        .await;
+    client2
+        .read_until('Z')
+        .await
+        .expect("release successful try-lock");
+    assert!(!client2.backend_locked());
+
+    client2
+        .send_simple(Query::new("SELECT pg_try_advisory_lock(509) WHERE false"))
+        .await;
+    client2.read_until('Z').await.expect("no lock attempted");
+    assert_eq!(client2.engine.advisory_locks().len(), 0);
+    assert!(!client2.backend_locked());
 }
 
 #[tokio::test]

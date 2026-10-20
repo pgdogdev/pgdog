@@ -1,6 +1,7 @@
 //! Load balanced connection pool.
 
 use std::{
+    cmp::Reverse,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
@@ -185,15 +186,14 @@ impl LoadBalancer {
             .map(|target| (target.pool.lsn_stats(), target))
             .collect::<Vec<_>>();
 
-        // Pick primary by latest data. The one with the most
-        // up-to-date lsn number and pg_is_in_recovery() = false
-        // is the new primary.
+        // Pick the primary with the greatest timeline, then the freshest
+        // LSN stats, among targets with pg_is_in_recovery() = false.
         //
         // The old primary is still part of the config and will be demoted
         // to replica. If it's down, it will be banned from serving traffic.
         //
         let now = SystemTime::now();
-        targets.sort_by_cached_key(|target| target.0.lsn_age(now));
+        targets.sort_by_cached_key(|target| (Reverse(target.0.timeline), target.0.lsn_age(now)));
 
         let primary = targets
             .iter()

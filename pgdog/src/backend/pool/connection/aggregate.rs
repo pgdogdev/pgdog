@@ -15,10 +15,11 @@ use crate::{
 };
 use pgdog_postgres_types::Error as TypeError;
 
-use super::Error;
+pub(crate) use error::Error;
 
 mod avg;
 mod cmp;
+mod error;
 mod sum;
 mod variance;
 #[path = "aggregate/count.rs"]

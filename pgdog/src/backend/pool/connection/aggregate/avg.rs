@@ -31,16 +31,17 @@ impl Avg {
             return Ok(Datum::Null);
         }
 
-        // Ensure we limit numeric results to the number of significant digits
-        // that PG would have provided
-        let numeric_scale = self
+        // A shard average's scale includes both the input scale and extra
+        // precision selected from that shard's result magnitude. The minimum
+        // observed scale is therefore the best available input-scale hint.
+        let numeric_scale_hint = self
             .values_and_weights
             .iter()
             .filter_map(|(value, _)| match value {
-                Datum::Numeric(n) => n.as_decimal().map(|d| d.normalize().scale()),
+                Datum::Numeric(n) => n.as_decimal().map(|d| d.scale()),
                 _ => None,
             })
-            .max();
+            .min();
 
         let mut result = self
             .values_and_weights
@@ -50,12 +51,40 @@ impl Avg {
             });
         if let Ok(Datum::Numeric(n)) = &mut result
             && let Some(d) = n.as_decimal_mut()
-            && let Some(scale) = numeric_scale
+            && let Some(scale_hint) = numeric_scale_hint
         {
-            d.rescale(scale)
+            d.rescale(scale_hint.max(numeric_avg_scale(d)))
         }
         result
     }
+}
+
+/// Approximate PostgreSQL's numeric division scale from the quotient.
+///
+/// PostgreSQL keeps at least 16 significant digits and stores numeric digits
+/// in base 10,000, so display scale changes in groups of four. The exact
+/// algorithm uses the numerator and denominator, which aren't available when
+/// merging shard averages.
+fn numeric_avg_scale(value: &Decimal) -> u32 {
+    const MIN_SIGNIFICANT_DIGITS: i32 = 16;
+    const NUMERIC_BASE_DIGITS: i32 = 4;
+    const MAX_DECIMAL_SCALE: i32 = 28;
+
+    if value.is_zero() {
+        return 20;
+    }
+
+    let mut mantissa = value.mantissa().unsigned_abs();
+    let mut digits = 1_i32;
+    while mantissa >= 10 {
+        mantissa /= 10;
+        digits += 1;
+    }
+
+    let decimal_weight = digits - value.scale() as i32 - 1;
+    let numeric_weight = decimal_weight.div_euclid(NUMERIC_BASE_DIGITS);
+    (MIN_SIGNIFICANT_DIGITS - numeric_weight * NUMERIC_BASE_DIGITS).clamp(0, MAX_DECIMAL_SCALE)
+        as u32
 }
 
 fn checked_mul_add(lhs: Datum, mul: Decimal, rhs: Datum) -> Result<Datum, Error> {
@@ -126,7 +155,7 @@ mod tests {
         for &(avg, count) in TEST_DATA {
             state.accumulate(Decimal::from_f64(avg).unwrap().into(), count);
         }
-        let expected: Datum = Decimal::from_f64(36_758.559_474_168_589).unwrap().into();
+        let expected: Datum = dec!(36_758.559_474_168_591).into();
         assert_eq!(state.finalize().unwrap(), expected);
     }
 
@@ -167,14 +196,31 @@ mod tests {
     }
 
     #[test]
-    fn integer_numerics_have_trailing_zeroes_removed() {
+    fn avg_of_integers_keeps_fractional_scale() {
+        let mut state = Avg::new(0, 0);
+        for average in [
+            dec!(2.9700000000000000),
+            dec!(3.0100000000000000),
+            dec!(3.0500000000000000),
+            dec!(2.9500000000000000),
+        ] {
+            state.accumulate(average.into(), 100);
+        }
+
+        let result = state.finalize().unwrap();
+        let encoded = result.encode(crate::net::messages::Format::Text).unwrap();
+        assert_eq!(&encoded[..], b"2.9950000000000000");
+    }
+
+    #[test]
+    fn large_integer_avg_uses_zero_scale() {
         let mut state = Avg::new(0, 0);
         state.accumulate(dec!(85_0.000_000_000_000_000_0).into(), 6);
         state.accumulate(dec!(48_343_436_988_849_539).into(), 9);
-        assert_eq!(
-            state.finalize().unwrap(),
-            dec!(29_006_062_193_310_063).into()
-        )
+
+        let result = state.finalize().unwrap();
+        let encoded = result.encode(crate::net::messages::Format::Text).unwrap();
+        assert_eq!(&encoded[..], b"29006062193310063");
     }
 
     #[test]

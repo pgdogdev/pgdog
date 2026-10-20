@@ -99,25 +99,79 @@ fn test_analyze() {
 
 #[test]
 fn test_commit() {
-    let mut test = QueryParserTest::new();
+    for query in [
+        "COMMIT",
+        "COMMIT AND CHAIN",
+        "COMMIT AND NO CHAIN",
+        "COMMIT WORK",
+        "COMMIT WORK AND CHAIN",
+        "COMMIT WORK AND NO CHAIN",
+        "COMMIT TRANSACTION",
+        "COMMIT TRANSACTION AND CHAIN",
+        "COMMIT TRANSACTION AND NO CHAIN",
+        "commit;",
+        "  COMMIT  ",
+        "/* transaction */ COMMIT",
+        "END",
+        "END AND CHAIN",
+        "END AND NO CHAIN",
+        "END WORK",
+        "END WORK AND CHAIN",
+        "END WORK AND NO CHAIN",
+        "END TRANSACTION",
+        "END TRANSACTION AND CHAIN",
+        "END TRANSACTION AND NO CHAIN",
+        "end;",
+        "  END  ",
+        "/* transaction */ END",
+    ] {
+        let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new("COMMIT").into()]);
+        let command = test.execute(vec![Query::new(query).into()]);
 
-    match command {
-        Command::CommitTransaction { .. } => {}
-        _ => panic!("expected CommitTransaction, got {command:?}"),
+        match command {
+            Command::CommitTransaction { .. } => {}
+            _ => panic!("expected CommitTransaction, for {query:?}, got {command:?}"),
+        }
     }
 }
 
 #[test]
 fn test_rollback() {
-    let mut test = QueryParserTest::new();
+    for query in [
+        "ROLLBACK",
+        "ROLLBACK AND CHAIN",
+        "ROLLBACK AND NO CHAIN",
+        "ROLLBACK WORK",
+        "ROLLBACK WORK AND CHAIN",
+        "ROLLBACK WORK AND NO CHAIN",
+        "ROLLBACK TRANSACTION",
+        "ROLLBACK TRANSACTION AND CHAIN",
+        "ROLLBACK TRANSACTION AND NO CHAIN",
+        "rollback;",
+        "  ROLLBACK  ",
+        "/* transaction */ ROLLBACK",
+        "ABORT",
+        "ABORT AND CHAIN",
+        "ABORT AND NO CHAIN",
+        "ABORT WORK",
+        "ABORT WORK AND CHAIN",
+        "ABORT WORK AND NO CHAIN",
+        "ABORT TRANSACTION",
+        "ABORT TRANSACTION AND CHAIN",
+        "ABORT TRANSACTION AND NO CHAIN",
+        "abort;",
+        "  ABORT  ",
+        "/* transaction */ ABORT",
+    ] {
+        let mut test = QueryParserTest::new();
 
-    let command = test.execute(vec![Query::new("ROLLBACK").into()]);
+        let command = test.execute(vec![Query::new(query).into()]);
 
-    match command {
-        Command::RollbackTransaction { .. } => {}
-        _ => panic!("expected RollbackTransaction, got {command:?}"),
+        match command {
+            Command::RollbackTransaction { .. } => {}
+            _ => panic!("expected RollbackTransaction, for {query:?}, got {command:?}"),
+        }
     }
 }
 

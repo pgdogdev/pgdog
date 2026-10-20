@@ -30,11 +30,7 @@ pub(crate) fn route_query(context: Context<'_>) -> Result<Route, PluginError> {
     // sure you checked the AST first.
     let write_override = context.write_override();
 
-    let root = context
-        .query
-        .stmts()
-        .next()
-        .ok_or(PluginError::EmptyQuery)?;
+    let root = context.query.stmt();
 
     match root {
         Node::SelectStmt(stmt) => {
@@ -110,7 +106,6 @@ mod test {
 
     #[test]
     fn test_routing_plugin() {
-        // Keep protobuf in memory.
         let query = pg_raw_parse::parse("SELECT * FROM users").unwrap();
         let context = pgdog_plugin::Context {
             shards: 1,
@@ -118,7 +113,7 @@ mod test {
             has_primary: true,
             in_transaction: false,
             write_override: false,
-            query: &query,
+            query: query.first().unwrap(),
             params: Parameters::default(),
         };
         let route = route_query(context).unwrap();

@@ -45,6 +45,13 @@ _pg_check_str wal_level                 logical
 _pg_check_int max_worker_processes      64
 _pg_check_int max_wal_senders           32
 _pg_check_int max_replication_slots     32
+# PostgreSQL 18 moved the replication origin limit from max_replication_slots to
+# max_active_replication_origins. Older versions do not have it and are covered above.
+# https://www.postgresql.org/docs/release/18.0/
+# https://www.postgresql.org/docs/18/runtime-config-replication.html#GUC-MAX-ACTIVE-REPLICATION-ORIGINS
+if [[ -n "$(psql -tAc "SELECT current_setting('max_active_replication_origins', true)")" ]]; then
+    _pg_check_int max_active_replication_origins 32
+fi
 
 if [[ "$_pg_needs_restart" == true ]]; then
     echo 'PostgreSQL settings changed. Restart PostgreSQL and re-run this script.'
@@ -68,7 +75,7 @@ export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGUSER='pgdog'
 
-for db in pgdog shard_0 shard_1 shard_2 shard_3; do
+for db in testing pgdog shard_0 shard_1 shard_2 shard_3; do
     psql -c "DROP DATABASE $db" || true
     psql -c "CREATE DATABASE $db" || true
     for user in pgdog pgdog1 pgdog2 pgdog3; do
@@ -77,7 +84,7 @@ for db in pgdog shard_0 shard_1 shard_2 shard_3; do
     done
 done
 
-for db in pgdog shard_0 shard_1 shard_2 shard_3; do
+for db in testing pgdog shard_0 shard_1 shard_2 shard_3; do
     for table in sharded sharded_omni; do
             psql -c "DROP TABLE IF EXISTS ${table}" ${db} -U pgdog
             psql -c "CREATE TABLE IF NOT EXISTS ${table} (

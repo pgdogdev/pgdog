@@ -17,6 +17,7 @@ use super::{
     pool::Address,
     prepared_statements::{HandleResult, Prepare},
 };
+use crate::parameters::{ParameterStore, Parameters};
 use crate::{
     auth::{md5, scram::Client},
     backend::pool::stats::MemoryStats,
@@ -34,11 +35,10 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{PoolerMode, TlsVerifyMode, config},
+    config::{ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
-        parameter::Parameters,
         tls::UpstreamTlsSettings,
     },
 };
@@ -134,7 +134,7 @@ pub(crate) struct Server {
     id: BackendPid,
     params: Parameters,
     changed_params: Parameters,
-    client_params: Parameters,
+    client_params: ParameterStore,
     stats: Stats,
     prepared_statements: PreparedStatements,
     dirty: bool,
@@ -320,7 +320,11 @@ impl Server {
 
         // Perform authentication.
         let mut scram = Client::new(user, auth_secret);
-        let mut auth_type = AuthType::Trust;
+        let mut auth_type = if addr.server_auth.is_external_identity() {
+            AuthType::ExternalToken
+        } else {
+            AuthType::Trust
+        };
         loop {
             let message = stream.read().await?;
 
@@ -335,6 +339,7 @@ impl Server {
                     match auth {
                         Authentication::Ok => break,
                         Authentication::ClearTextPassword => {
+                            auth_type = AuthType::Plain;
                             let password = Password::new_password(auth_secret.deref());
                             stream.send_flush(&password).await?;
                         }
@@ -426,7 +431,7 @@ impl Server {
             replication_mode: options.replication_mode(),
             params,
             changed_params: Parameters::default(),
-            client_params: Parameters::default(),
+            client_params: ParameterStore::default(),
             prepared_statements: PreparedStatements::new(oids),
             dirty: false,
             streaming: false,
@@ -683,9 +688,9 @@ impl Server {
                     "DEALLOCATE ALL" => self.prepared_statements.clear(),
                     "DISCARD ALL" => {
                         self.prepared_statements.clear();
-                        self.client_params.clear();
+                        self.client_params.server_reset();
                     }
-                    "RESET" => self.client_params.clear(), // Someone reset params, we're gonna need to re-sync.
+                    "RESET" => self.client_params.server_reset(), // Someone reset params, we're gonna need to re-sync.
                     _ => (),
                 }
                 self.stats.rows_affected(&cmd);
@@ -710,78 +715,58 @@ impl Server {
     pub(crate) async fn link_client(
         &mut self,
         id: FrontendPid,
-        params: &Parameters,
+        params: &ParameterStore,
         start_transaction: Option<&str>,
     ) -> Result<usize, Error> {
-        // Sync application_name parameter
-        // and update it in the stats.
+        let mut executed = 0;
+
+        // Sync application_name parameter and update it in the stats.
         let server_name = self.client_params.get_default("application_name", "PgDog");
         let client_name = params.get_default("application_name", "PgDog");
 
         self.stats.link_client(client_name, server_name, id);
 
-        // Clear any params previously tracked by SET.
-        self.changed_params.clear();
-        let mut clear_params = false;
+        let sync = self.client_params.sync(params);
 
-        // Compare client and server params.
-        let mut executed = if !params.identical(&self.client_params) {
-            // Construct client parameter SET queries.
-            let tracked = params.tracked_and_different(&self.client_params);
-            // Construct RESET queries to reset any current params
-            // to their default values.
-            let mut queries = self.client_params.reset_queries(params);
+        if !sync.is_empty() {
+            // If sync fails, the client will drop this server, and the
+            // Guard cleanup routine will reset parameters back to their original state.
+            self.mark_dirty(true);
 
-            // Combine both to create a new, fresh session state
-            // on this connection.
-            queries.extend(tracked.set_queries(false));
+            debug!("syncing {} params", sync.len());
+            self.execute_batch(sync.deref()).await?;
 
-            // Set state on the connection only if
-            // there are any params to change.
-            if !queries.is_empty() {
-                debug!("syncing {} params", queries.len());
+            executed += sync.len();
+        }
 
-                self.execute_batch(&queries).await?;
-                clear_params = true;
-            }
-
-            // Update params on this connection.
-            self.client_params = params.tracked();
-
-            queries.len()
-        } else {
-            0
-        };
-
-        // Sync any parameters set inside the transaction. These will
-        // need to be revered on rollback or commited on commit.
+        // Sync any parameters set inside the transaction. These will be
+        // automatically reverted on rollback or committed on commit.
         if let Some(start_transaction) = start_transaction {
             self.execute(start_transaction).await?;
-            let transaction_sets = params.set_queries(true);
+            let queries = sync.transaction_sync();
 
-            if !transaction_sets.is_empty() {
-                debug!("syncing {} in-transaction params", transaction_sets.len());
-
-                self.execute_batch(&transaction_sets).await?;
-                clear_params = true;
-
-                self.client_params.copy_in_transaction(params);
+            if !queries.is_empty() {
+                debug!("syncing {} in-transaction params", queries.len());
+                self.execute_batch(&queries).await?;
+                executed += queries.len();
             }
-
-            executed += transaction_sets.len();
         }
 
-        if clear_params {
-            // We can receive ParameterStatus messages here,
-            // but we should ignore them since we are managing the session state.
-            self.changed_params.clear();
-        }
+        // Sync completed successfully.
+        self.client_params.sync_complete(sync);
+
+        // Executing `SET` will trigger the server to send `ParameterStatus` for some of them,
+        // which will not be relevant for clients syncing params.
+        self.changed_params.clear();
+
+        // The server synced successfully, so we disarm the Guard cleanup routine.
+        self.mark_dirty(false);
 
         Ok(executed)
     }
 
     // Handle COMMIT/ROLLBACK for in-transaction params tracking.
-    pub(crate) fn transaction_params_hook(&mut self, rollback: bool) {
+    pub(crate) fn transaction_complete(&mut self, rollback: bool) {
         if rollback {
             self.client_params.rollback();
         } else {
@@ -851,6 +836,11 @@ impl Server {
     /// Server is still inside a transaction.
     pub(crate) fn in_transaction(&self) -> bool {
         self.in_transaction
+    }
+
+    /// A statement completed since the last ReadyForQuery.
+    pub(crate) fn statement_executed(&self) -> bool {
+        self.statement_executed
     }
 
     /// The server connection permanently failed.
@@ -1017,7 +1007,7 @@ impl Server {
         }
 
         // Reset any params left over.
-        self.transaction_params_hook(true);
+        self.transaction_complete(true);
 
         if !self.done() {
             Err(Error::RollbackFailed)
@@ -1044,13 +1034,80 @@ impl Server {
         Ok(())
     }
 
-    /// Drain any remaining messages on the server connection,
-    /// attempting to return the connection into a synchronized state.
-    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+    /// Abort a successful extended-protocol execution before synchronizing.
+    ///
+    /// A Sync by itself would commit PostgreSQL's implicit transaction.
+    /// Pending replies must be drained before calling this method.
+    pub(super) async fn rollback_and_synchronize(&mut self) -> Result<(), Error> {
+        let request = ServerRequest::parameterized("ROLLBACK", &[]);
+        self.send(&request.messages.into()).await?;
+
+        while !self.in_sync() {
+            self.read().await?;
+        }
+
+        if !self.done() {
+            return Err(Error::RollbackFailed);
+        }
+
+        self.stats.rollback();
+        self.transaction_complete(true);
+        self.re_synced = true;
+
+        Ok(())
+    }
+
+    /// Drain replies already owed by the server without changing transaction state.
+    pub(super) async fn drain_pending(&mut self) -> Result<(), Error> {
         while self.has_more_messages() {
             self.read().await?;
         }
 
+        Ok(())
+    }
+
+    /// Return an unfinished extended-protocol exchange to a reusable state.
+    ///
+    /// Returns false when the configured recovery policy cannot safely recover
+    /// the connection.
+    pub(super) async fn recover_protocol(
+        &mut self,
+        recovery: ConnectionRecovery,
+    ) -> Result<bool, Error> {
+        if self.has_more_messages() {
+            if !recovery.can_recover() || self.is_sending_request() {
+                return Ok(false);
+            }
+
+            debug!(
+                "[cleanup] draining data from \"{}\" server [{}]",
+                self.stats().get_state(),
+                self.addr()
+            );
+            self.drain_pending().await?;
+        }
+
+        if self.out_of_sync() || !self.statement_executed() {
+            self.synchronize().await?;
+        } else if recovery.can_rollback() {
+            debug!(
+                "[cleanup] rolling back extended transaction, in \"{}\" state [{}]",
+                self.stats().get_state(),
+                self.addr(),
+            );
+            self.rollback_and_synchronize().await?;
+        } else {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Drain any remaining messages on the server connection,
+    /// attempting to return the connection into a synchronized state.
+    #[cfg(test)]
+    pub(super) async fn drain(&mut self) -> Result<(), Error> {
+        self.drain_pending().await?;
         self.synchronize().await
     }
 
@@ -1129,24 +1186,27 @@ impl Server {
     }
 
     /// Reset error state caused by schema change.
-    pub(crate) fn reset_schema_changed(&mut self) {
+    pub(super) fn reset_schema_changed(&mut self) {
         self.schema_changed = false;
         self.prepared_statements.clear();
     }
 
-    pub(crate) fn reset_params(&mut self) {
-        self.client_params.clear();
+    /// Reset server params to their original startup state.
+    pub(super) fn reset_params(&mut self) {
+        self.client_params.server_reset();
     }
 
-    pub(crate) fn reset_re_synced(&mut self) {
+    /// Reset the connection re_synced state to default.
+    pub(super) fn reset_re_synced(&mut self) {
         self.re_synced = false;
     }
 
-    pub(crate) fn re_synced(&self) -> bool {
+    /// Get server connection re_synced state.
+    pub(super) fn re_synced(&self) -> bool {
         self.re_synced
     }
 
-    pub(crate) fn disconnect_reason(&mut self, reason: DisconnectReason) {
+    pub(super) fn disconnect_reason(&mut self, reason: DisconnectReason) {
         if self.disconnect_reason.is_none() {
             self.disconnect_reason = Some(reason);
         }
@@ -1365,7 +1425,7 @@ pub(crate) mod test {
                 id,
                 params: Parameters::default(),
                 changed_params: Parameters::default(),
-                client_params: Parameters::default(),
+                client_params: ParameterStore::default(),
                 stats: Stats::connect(id, &addr, &Parameters::default(), &Memory::default()),
                 prepared_statements: super::PreparedStatements::default(),
                 addr,
@@ -2345,9 +2405,9 @@ pub(crate) mod test {
             "on"
         };
 
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_sync_params");
-        params.insert("is_superuser", opposite);
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_sync_params");
+        params.set("is_superuser", opposite);
         let changed = server
             .link_client(FrontendPid::new(), &params, None)
             .await
@@ -2454,8 +2514,8 @@ pub(crate) mod test {
 
     #[tokio::test]
     async fn test_params_sync() -> Result<(), Box<dyn std::error::Error>> {
-        let mut params = Parameters::default();
-        params.insert("application_name", "test");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test");
 
         let mut server = test_server().await;
 
@@ -2471,7 +2531,7 @@ pub(crate) mod test {
 
         for i in 0..25 {
             let value = format!("apples_{}", i);
-            params.insert("application_name", value);
+            params.set("application_name", value);
 
             let changed = server
                 .link_client(FrontendPid::new(), &params, None)
@@ -3154,8 +3214,8 @@ pub(crate) mod test {
     #[tokio::test]
     async fn test_reset_clears_client_params() {
         let mut server = test_server().await;
-        let mut params = Parameters::default();
-        params.insert("application_name", "test_reset");
+        let mut params = ParameterStore::default();
+        params.set("application_name", "test_reset");
 
         // Sync params to server
         let changed = server
