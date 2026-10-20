@@ -20,7 +20,7 @@ impl QueryParser {
         let mut parser = StatementParser::new(
             stmt.into(),
             context.router_context.bind,
-            &context.sharding_schema,
+            context.sharding_schema,
         )
         .with_explain(self.recorder_mut().is_some());
 
@@ -125,7 +125,7 @@ impl QueryParser {
             true
         } else {
             parser.is_sharded(
-                &context.router_context.schema,
+                context.router_context.schema,
                 context.router_context.cluster.user(),
                 context.router_context.parameter_hints.search_path,
             )
@@ -203,7 +203,7 @@ impl QueryParser {
         }
 
         let shard = Self::converge(&shards, ConvergeAlgorithm::default());
-        let aggregates = Aggregate::parse(stmt, &context.router_context.schema);
+        let aggregates = Aggregate::parse(stmt, context.router_context.schema);
         let limit = LimitClause::new(stmt, context.router_context.bind).limit_offset()?;
         let distinct = Distinct::new(stmt).distinct();
 

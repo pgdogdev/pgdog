@@ -105,7 +105,7 @@ impl CopyParser {
                 parser.schema_shard = Some(schema.shard().into());
             }
 
-            if let Some(key) = Tables::new(&cluster.sharding_schema()).key(table, &columns) {
+            if let Some(key) = Tables::new(cluster.sharding_schema()).key(table, &columns) {
                 parser.sharded_table = Some(key.table.clone());
                 parser.sharded_column = key.position;
             }
@@ -159,7 +159,7 @@ impl CopyParser {
                 &null_string,
             )))
         };
-        parser.sharding_schema = cluster.sharding_schema();
+        parser.sharding_schema = cluster.sharding_schema().clone();
         parser.lookup_cluster = Some(cluster.clone());
         parser.null_string = null_string;
 

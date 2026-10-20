@@ -29,7 +29,7 @@ pub(crate) struct QueryParserContext<'a> {
     /// Are there any sharding tables in the database?
     pub(super) sharded_tables: bool,
     /// Which tables are sharded and using which columns.
-    pub(super) sharding_schema: ShardingSchema,
+    pub(super) sharding_schema: &'a ShardingSchema,
     /// Context created by the router.
     pub(super) router_context: RouterContext<'a>,
     /// How aggressively we want to send reads to replicas.
@@ -72,7 +72,7 @@ impl<'a> QueryParserContext<'a> {
             &mut shards_calculator,
             &mut bare_key_lookups,
             &router_context.resolved_lookups,
-            &sharding_schema,
+            sharding_schema,
         )?;
 
         Ok(Self {

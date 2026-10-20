@@ -13,7 +13,7 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         let command = Self::shard_ddl(
             node,
-            &context.sharding_schema,
+            context.sharding_schema,
             &mut context.shards_calculator,
         )?;
 
