@@ -63,21 +63,6 @@ impl CommandComplete {
         Ok(Self::from_str(&parts.join(" ")))
     }
 
-    /// Start transaction.
-    pub(crate) fn new_begin() -> Self {
-        Self::from_str("BEGIN")
-    }
-
-    /// Rollback transaction.
-    pub(crate) fn new_rollback() -> Self {
-        Self::from_str("ROLLBACK")
-    }
-
-    /// Commit transaction.
-    pub(crate) fn new_commit() -> Self {
-        Self::from_str("COMMIT")
-    }
-
     pub(crate) fn new(command: impl AsRef<str>) -> Self {
         Self::from_str(command.as_ref())
     }

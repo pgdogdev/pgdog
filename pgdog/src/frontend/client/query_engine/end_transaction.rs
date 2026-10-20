@@ -9,7 +9,6 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
         rollback: bool,
-        _extended: bool,
     ) -> Result<(), Error> {
         let executable = client_request.is_executable();
 
@@ -45,7 +44,6 @@ impl QueryEngine {
         // FIXME(sage): Remove mut
         client_request: &mut ClientRequest,
         rollback: bool,
-        extended: bool,
     ) -> Result<(), Error> {
         self.backend.transaction_complete(rollback);
         let cluster = self.backend.cluster()?;
@@ -65,7 +63,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, client_request, true, extended)
+            self.end_not_connected(context, client_request, true)
                 .await?;
 
             return Ok(());
@@ -91,7 +89,7 @@ impl QueryEngine {
             self.cleanup_backend(context).await?;
 
             // Tell client we finished the transaction.
-            self.end_not_connected(context, client_request, false, extended)
+            self.end_not_connected(context, client_request, false)
                 .await?;
         } else {
             if rollback {
@@ -163,7 +161,7 @@ mod tests {
         client_request.messages.push(Query::new("COMMIT").into());
 
         let result = engine
-            .end_not_connected(&mut context, client_request, false, false)
+            .end_not_connected(&mut context, client_request, false)
             .await;
         assert!(result.is_ok(), "end_transaction should succeed");
 
