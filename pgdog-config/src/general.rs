@@ -1508,7 +1508,7 @@ impl General {
     }
 
     pub fn prepared_statements_limit() -> usize {
-        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", 5_000)
     }
 
     fn default_prepared_statements_ttl() -> Option<u64> {
