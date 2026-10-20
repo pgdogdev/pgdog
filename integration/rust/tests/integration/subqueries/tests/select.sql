@@ -71,3 +71,59 @@ SELECT * FROM suborders WHERE state NOT IN (
 SELECT * FROM suborders WHERE id IN (
     WITH c AS (SELECT id FROM subusers WHERE status = 'VIP') SELECT id FROM c
 ) ORDER BY id;
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = count
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id = (
+    SELECT count(status) FROM subusers
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = sum
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id + 1 = (
+    SELECT sum(id) FROM subusers WHERE status = 'VIP'
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = min
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id = (
+    SELECT min(id) FROM subusers WHERE id > 1
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = max
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id = (
+    SELECT max(id) FROM subusers WHERE id < 4
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = avg
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id = (
+    SELECT avg(id) FROM subusers WHERE id < 4
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT DISTINCT .. FROM <st2>)
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM subusers WHERE status = (
+    SELECT DISTINCT status FROM subusers WHERE id IN (1, 3)
+) ORDER BY id;
+
+-- case
+-- what: .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
+-- route select: 0,1
+-- route select: 0,1
+SELECT * FROM suborders WHERE id IN (
+    SELECT id FROM subusers ORDER BY id DESC LIMIT 3
+) ORDER BY id;

@@ -62,3 +62,10 @@ UPDATE suborders SET state = 'CA' WHERE id = (SELECT max(id) FROM subusers WHERE
 -- route update: 1
 -- verify: SELECT * FROM subusers ORDER BY id
 UPDATE subusers SET status = 'changed' WHERE id IN (SELECT id FROM suborders WHERE state = 'NC')
+
+-- case
+-- what: .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
+-- route select: 0,1
+-- route update: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+UPDATE suborders SET state = 'NC' WHERE id IN (SELECT id FROM subusers ORDER BY id DESC LIMIT 3)
