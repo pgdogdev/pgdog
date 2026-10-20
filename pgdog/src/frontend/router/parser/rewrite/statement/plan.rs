@@ -41,7 +41,6 @@ impl BindParams {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn is_original(&self) -> bool {
         matches!(self, Self::Original { .. })
     }
@@ -211,12 +210,12 @@ impl RewritePlan {
     /// True if the plan would not modify the query or its messages.
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.bind_params.is_original()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
+            && self.subquery.is_none()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
