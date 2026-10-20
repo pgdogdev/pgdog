@@ -1,6 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
-use crate::frontend::{ClientRequest, router::parser::Shard};
+use super::{Error, insert::group_split_requests_by_shard};
+use crate::frontend::{ClientRequest, PreparedStatements, router::parser::Shard};
 
 #[derive(Debug, Clone)]
 pub(crate) struct InsertSplitRewriteResult {
@@ -22,6 +23,18 @@ impl DerefMut for InsertSplitRewriteResult {
 }
 
 impl InsertSplitRewriteResult {
+    /// Send one multi-tuple INSERT per shard.
+    /// Requests must be routed first.
+    pub(crate) fn group_by_shard(
+        &mut self,
+        request: &ClientRequest,
+        prepared_statements: &mut PreparedStatements,
+    ) -> Result<(), Error> {
+        self.requests =
+            group_split_requests_by_shard(&self.requests, request, prepared_statements)?;
+        Ok(())
+    }
+
     /// Check that the insert split actually targets
     /// the same shard.
     pub(crate) fn same_shard(&self) -> Option<Shard> {
