@@ -40,6 +40,8 @@ impl<'a> Rewrite<'a> {
         let name = self.statements.name(bind.statement());
         if let Some(name) = name {
             bind.rename(name);
+        } else if !bind.anonymous() {
+            return Err(Error::MissingStatement(bind.statement().to_owned()));
         }
 
         Ok(())
@@ -53,6 +55,8 @@ impl<'a> Rewrite<'a> {
             let name = self.statements.name(describe.statement());
             if let Some(name) = name {
                 describe.rename(name);
+            } else if !describe.anonymous() {
+                return Err(Error::MissingStatement(describe.statement().to_owned()));
             }
             Ok(())
         }

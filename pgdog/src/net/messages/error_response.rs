@@ -252,6 +252,14 @@ impl ErrorResponse {
         }
     }
 
+    pub(crate) fn missing_prepared_statement(name: &str) -> Self {
+        Self {
+            code: "26000".into(),
+            message: format!("prepared statement \"{name}\" does not exist"),
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn protocol_violation(err: &str) -> ErrorResponse {
         Self {
             severity: "ERROR".into(),

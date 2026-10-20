@@ -9,7 +9,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_messages: &mut [ProtocolMessage],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PreparedStatementError> {
         for message in client_messages {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
