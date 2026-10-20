@@ -5,6 +5,7 @@ use crate::{
         BufferedQuery, Client, ClientComms, ClientRequest, Command, DiscardTarget, Error, Router,
         RouterContext, Stats,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
+        prepared_statements::Error as PreparedStatementError,
         router::{Route, parser::Shard},
     },
     net::{ErrorResponse, Message, Parameters},
@@ -152,7 +153,14 @@ impl QueryEngine {
         log_query_stdout(context, client_request);
 
         // Rewrite prepared statements.
-        self.rewrite_extended(context, &mut client_request.messages)?;
+        if let Err(error) = self.rewrite_extended(context, &mut client_request.messages) {
+            if let PreparedStatementError::MissingStatement(name) = &error {
+                self.send_error_response(context, ErrorResponse::missing_prepared_statement(name))
+                    .await?;
+                return Ok(QueryEngineResult::Done(context.transaction()));
+            }
+            return Err(error.into());
+        }
 
         if let ClusterCheck::Offline = self.cluster_check(context, client_request).await? {
             return Ok(QueryEngineResult::Done(context.transaction()));
