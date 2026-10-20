@@ -145,7 +145,7 @@ impl Cache {
         prepared_statements: &mut PreparedStatements,
     ) -> Result<ClientQuery, Error> {
         // Separate query from comment, if one is present.
-        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        let query_and_comment = parse_edge_comment(query.query(), ctx.sharding_schema)?;
         let ast = {
             let guard = self.inner.read();
 
@@ -196,7 +196,7 @@ impl Cache {
         ctx: &AstContext<'_>,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<ClientQuery, Error> {
-        let query_and_comment = parse_edge_comment(query.query(), &ctx.sharding_schema)?;
+        let query_and_comment = parse_edge_comment(query.query(), ctx.sharding_schema)?;
 
         let ast = Arc::new(Ast::parse_and_rewrite(
             &AstQuery {
