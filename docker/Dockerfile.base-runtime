@@ -3,7 +3,9 @@ ARG PSQL_VERSION=18
 ENV PSQL_VERSION=${PSQL_VERSION}
 
 RUN apt update && \
-    apt install -y curl ca-certificates ssl-cert && \
+    apt install -y curl ca-certificates ssl-cert \
+        dnsutils iproute2 iputils-ping net-tools netcat-openbsd traceroute \
+        lsof procps strace tcpdump && \
     update-ca-certificates
 
 RUN install -d /usr/share/postgresql-common/pgdg && \
