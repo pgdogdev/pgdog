@@ -4,26 +4,23 @@
 //! Re-writing subqueries are a work in progress (still in development), and are not recommended to be used in production yet.
 //! Please do not work on this code without contacting @jkaczman to discuss first.
 
-use pg_stream::PgConnection;
 use sqlx::{Executor, postgres::PgPoolOptions};
 use std::{
     fs::{self, DirEntry},
     path::PathBuf,
-    sync::Arc,
 };
-use tokio::{
-    net::TcpStream,
-    sync::{Mutex, mpsc},
-    task::JoinSet,
-};
+use tokio::task::JoinSet;
 
 use integration_tests_rust::setup::{admin_sqlx, connection_sqlx_testing_direct};
 
-use crate::integration::subqueries::wire::Protocol;
+use crate::integration::subqueries::test_case::TestCase;
 
 // Test for exact wire protocol messages match
 // between Postgres and PgDog
 mod wire;
+
+// Parsing, loading and executing tests in parallel
+mod test_case;
 
 /// Run this amount of data-modifying (e.g., INSERT, UPDATE, DELETE) tests in parallel
 /// with separate tables (subpackages_X, suborders_X) where X = (1, 2, ..., PARALLEL_DATA_MODIFYING_TESTS)
@@ -142,9 +139,8 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
         .unwrap();
 }
 
-#[tokio::test]
-async fn test_subqueries_suite() {
-    // Setup the tables we'll be using to test with
+/// Create tables. Reset pg_stat_monitor.
+async fn initial_setup() {
     {
         setup_subqueries_suite(REGULAR_TEST_TABLE_NAME, true).await;
 
@@ -153,10 +149,37 @@ async fn test_subqueries_suite() {
         }
     }
 
+    for shard in [0, 1] {
+        let sharded_conn = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(
+                format!(
+                    "postgres://pgdog:pgdog@127.0.0.1:5432/shard_{shard}?application_name=sqlx"
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+
+        // Note: this will error if pg_stat_monitor extension is not installed.
+        sqlx::raw_sql("SELECT pg_stat_monitor_reset();")
+            .execute(&sharded_conn)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_subqueries_suite() {
+    initial_setup().await;
+
     let (mut regular_cases, mut data_modifying_cases) = (Vec::new(), Vec::new());
+    // Run a single case by name, e.g. SUBQUERY_TEST=<case_name>
+    let test_target: Option<String> = std::env::var("SUBQUERY_TEST").ok();
 
     // Load all cases from the 'tests' folder
     let list_of_files: fs::ReadDir = fs::read_dir("tests/integration/subqueries/tests").unwrap();
+    let mut identifier: usize = 0;
     for file in list_of_files {
         let file_contents: String = {
             let dir_entry: DirEntry = file.unwrap();
@@ -180,192 +203,87 @@ async fn test_subqueries_suite() {
 
             let test_case_stripped = test_case.replace(sql.as_str(), "");
 
-            let is_data_modifying_case =
-                sql.contains("INSERT") || sql.contains("DELETE") || sql.contains("UPDATE");
+            let test_case: TestCase = TestCase::new(sql, test_case_stripped.as_str(), identifier);
+            if let Some(name) = test_case.name.as_ref()
+                && let Some(test_target) = test_target.as_ref()
+                && name.eq(test_target)
+            {
+                // Run the targeted test now. Afterwards, DO NOT proceed.
 
-            let test_case: TestCase = TestCase::new(sql, test_case_stripped.as_str());
+                let mut direct_conn = wire::connect(5432, "testing").await;
+                let mut sharded_conn = wire::connect(6432, "pgdog_sharded_subqueries").await;
+
+                test_case::execute_test_case(
+                    &test_case,
+                    "read",
+                    &mut direct_conn,
+                    &mut sharded_conn,
+                )
+                .await
+                .unwrap();
+
+                return;
+            }
 
             // Fetch text for series of comments to get special test commands
-            if is_data_modifying_case {
+            if test_case.data_modifying {
                 data_modifying_cases.push(test_case);
             } else {
                 regular_cases.push(test_case);
             }
+
+            identifier += 1;
         }
     }
-    {
+
+    // If the test target environmental variable is specified, but we don't come
+    // across a valid target, then we should panic instead of running the full suite.
+    if test_target.is_some() {
+        panic!("No match for test target")
+    }
+
+    let success_fail = {
         let mut all_tests = JoinSet::new();
-        all_tests.spawn(run_tests_for_case(
+
+        all_tests.spawn(test_case::run_tests_for_case(
             regular_cases,
             (1..=PARALLEL_REGULAR_TESTS)
                 .map(|_| REGULAR_TEST_TABLE_NAME.to_string())
                 .collect(),
         ));
 
-        all_tests.spawn(run_tests_for_case(
+        all_tests.spawn(test_case::run_tests_for_case(
             data_modifying_cases,
             (1..=PARALLEL_DATA_MODIFYING_TESTS)
                 .map(|i| i.to_string())
                 .collect(),
         ));
 
-        all_tests.join_all().await;
-    }
+        all_tests.join_all().await
+    };
 
-    // TODO(jkaczman): total success & failure
-}
+    let (total_success, total_failure) = {
+        let mut total_success = 0;
+        let mut total_failure: Vec<TestCase> = Vec::new();
 
-/// Execute `tests` with `workers_names` amount of workers, using the table suffixes
-/// provided in `worker_names`. This occurs in parallel
-pub async fn run_tests_for_case(tests: Vec<TestCase>, worker_names: Vec<String>) {
-    let (tx, rx) = mpsc::channel::<TestCase>(1000);
-    let rx = Arc::new(Mutex::new(rx));
-
-    let mut join_set = JoinSet::new();
-    for worker_name in worker_names {
-        let rx = Arc::clone(&rx);
-
-        join_set.spawn(async move {
-            let mut direct_conn = wire::connect(5432, "testing").await;
-            let mut sharded_conn = wire::connect(6432, "pgdog_sharded_subqueries").await;
-            loop {
-                let job: Option<TestCase> = {
-                    let mut lock = rx.lock().await;
-                    lock.recv().await
-                };
-
-                let Some(job) = job else {
-                    break;
-                };
-
-                execute_test_case(
-                    job,
-                    worker_name.as_str(),
-                    &mut direct_conn,
-                    &mut sharded_conn,
-                )
-                .await;
-            }
-        });
-    }
-
-    for test in tests {
-        tx.send(test).await.unwrap();
-    }
-
-    drop(tx);
-
-    join_set.join_all().await;
-}
-
-// TODO(jkaczman): complete context in nearby comment to assert...
-//         - (1) correct routing,
-//         - (2) expected error,
-//         - (3) ordered vs unordered
-//
-// TODO(jkaczman): PREPARE
-pub(crate) async fn execute_test_case(
-    commands: TestCase,
-    suffix: &str,
-    direct_conn: &mut PgConnection<TcpStream>,
-    sharded_conn: &mut PgConnection<TcpStream>,
-) {
-    let mut sql = commands.sql.clone();
-    for table in TABLES {
-        sql = sql.replace(table, format!("{table}_{suffix}").as_str());
-    }
-
-    for protocol in [Protocol::Simple, Protocol::Extended] {
-        let expected = wire::run(direct_conn, sql.to_string(), protocol, Some(&commands)).await;
-        let actual = wire::run(sharded_conn, sql.to_string(), protocol, Some(&commands)).await;
-        assert_eq!(actual, expected, "{protocol:?} protocol: {sql}");
-
-        // Run `command_to_verify` (e.g., SELECT * ALL ...) to ensure the rows are equal on each.
-        if let Some(command_to_verify) = commands.command_to_verify.as_ref() {
-            let mut command_to_verify = command_to_verify.to_string();
-
-            for table in TABLES {
-                command_to_verify =
-                    command_to_verify.replace(table, format!("{table}_{suffix}").as_str());
-            }
-
-            let expected =
-                wire::run(direct_conn, command_to_verify.to_string(), protocol, None).await;
-            let actual =
-                wire::run(sharded_conn, command_to_verify.to_string(), protocol, None).await;
-
-            assert_eq!(
-                actual, expected,
-                "{protocol:?} protocol: {command_to_verify}\n(verifying: {sql})"
-            );
-        }
-
-        // Run after potentially modifying something with an INSERT/UPDATE/etc to reset
-        // back to the original tables + data, if requested by the test case.
-        if let Some(setup_command) = commands.setup_command.as_ref() {
-            // TODO(jkaczman): make automatic based on kind of worker (data-modifying vs. not)
-            if setup_command.eq("reset tables with fresh data") {
-                setup_subqueries_suite(suffix, false).await;
-            } else {
-                panic!("unsupported command: {setup_command}");
+        for case_block in success_fail {
+            for worker in case_block {
+                total_success += worker.0;
+                total_failure.extend(worker.1);
             }
         }
 
-        println!("[SUCCESS] {protocol:?} with {sql}!");
-    }
-}
+        (total_success, total_failure)
+    };
 
-pub struct TestCase {
-    // SQL to execute as the test
-    sql: String,
+    println!("Total success: {total_success}");
+    if !total_failure.is_empty() {
+        println!("Failures: ");
 
-    /// Runs this after performing the action to determine
-    /// if the test was successful, e.g., if we don't want to add
-    /// a RETURNING * after an UPDATE, DELETE, etc. to ensure
-    /// that the table is in the same state as the Postgres
-    /// instance.
-    pub command_to_verify: Option<String>,
-
-    /// Used to specify a certain test setup; e.g., if we want
-    /// the tables reset beforehand with fresh data.
-    pub setup_command: Option<String>,
-
-    /// Assuming an continuous increasing order: $1, $2, $3...
-    /// Not all of these will be Strings; they haven't been parsed yet,
-    /// so they could be integers, floats... or Strings.
-    pub bind_params: Vec<String>,
-}
-
-impl TestCase {
-    pub(crate) fn new(sql: String, stripped_case: &str) -> Self {
-        let lines = stripped_case.split("--");
-
-        let mut command_to_verify: Option<String> = None;
-        let mut setup_command: Option<String> = None;
-
-        // Assume an order of $1, $2, $3... (continuous increasing)
-        let mut bind_params: Vec<String> = Vec::new();
-        for line in lines {
-            let line = line.trim();
-            if line.starts_with("verify: ") {
-                command_to_verify = Some(line.trim().replace("verify: ", ""));
-            } else if line.starts_with("setup") {
-                setup_command = Some(line.trim().replace("setup: ", ""));
-            } else if line.starts_with("$") {
-                // We'll support any number of arbitrary bind parameters (one per line)
-                // $<number> = <content>
-                let content_for_param: &str = line.split("=").nth(1).unwrap();
-                let content_for_param: &str = content_for_param.trim();
-
-                bind_params.push(content_for_param.to_string());
-            }
+        for fail_case in total_failure {
+            println!("   FAIL: {fail_case}");
         }
 
-        Self {
-            sql,
-            command_to_verify,
-            setup_command,
-            bind_params,
-        }
+        panic!("at least 1 failure");
     }
 }
