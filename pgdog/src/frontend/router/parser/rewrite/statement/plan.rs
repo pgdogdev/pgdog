@@ -9,7 +9,7 @@ use crate::frontend::router::Route;
 use crate::frontend::router::parser::ShardWithPriority;
 use crate::frontend::router::parser::rewrite::statement::insert::{Subquery, build_split_requests};
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
-use crate::frontend::{ClientRequest, PreparedStatements};
+use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query, parameter::ParameterValue};
 use crate::unique_id::UniqueId;
@@ -41,7 +41,6 @@ impl BindParams {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn is_original(&self) -> bool {
         matches!(self, Self::Original { .. })
     }
@@ -211,12 +210,12 @@ impl RewritePlan {
     /// True if the plan would not modify the query or its messages.
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.bind_params.is_original()
             && self.stmt.is_none()
             && self.prepare_rewrites.is_empty()
             && self.insert_split.is_empty()
+            && self.subquery.is_none()
             && self.sharding_key_update.is_none()
             && self.offset.is_none()
     }
@@ -330,8 +329,18 @@ impl RewritePlan {
                 .iter()
                 .for_each(|prepare| match prepare {
                     PrepareExecute::Prepare(prepare) => {
-                        request.messages.clear();
-                        request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        if request
+                            .messages
+                            .iter()
+                            .any(|message| matches!(message, ProtocolMessage::Query(_)))
+                        {
+                            request.messages.clear();
+                            request.push(ProtocolMessage::PrepareFromClient(prepare.clone()));
+                        } else {
+                            // Keep Parse/Bind/Describe/Sync and their corresponding replies.
+                            // Preparing the outer statement must not execute the SQL PREPARE.
+                            request.sql_prepare = Some(Box::new(prepare.clone()));
+                        }
                     }
                     PrepareExecute::Execute(prepare) => {
                         request
@@ -349,7 +358,14 @@ impl RewritePlan {
                     anonymous_client_params = self.apply_parse(parse);
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
-                ProtocolMessage::Bind(bind) => self.apply_bind(bind, timezone, timestamps).await?,
+                // Only ordinary statements need generated values appended to Bind.
+                // A nonempty prepare_rewrites means SQL PREPARE/EXECUTE: in
+                // `PREPARE foo AS INSERT INTO t VALUES ($1)`, $1 is supplied by
+                // a later EXECUTE, not this Bind. EXECUTE's generated values
+                // are already written into its SQL arguments.
+                ProtocolMessage::Bind(bind) if self.prepare_rewrites.is_empty() => {
+                    self.apply_bind(bind, timezone, timestamps).await?
+                }
                 _ => {}
             }
         }
@@ -362,6 +378,23 @@ impl RewritePlan {
         }
 
         request.anonymous_client_params = anonymous_client_params;
+
+        if self
+            .prepare_rewrites
+            .iter()
+            .any(|rewrite| matches!(rewrite, PrepareExecute::Execute(_)))
+            && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
+            && request.parameters()?.is_some()
+        {
+            // A cached outer EXECUTE can contain per-execution values and shard-
+            // dependent LIMIT/OFFSET. Parse it again without adding cache entries.
+            parse.anonymize();
+            request.anonymous_client_params = self.apply_parse(&mut parse);
+            request.last_parse = None;
+            // Keep the original Bind name for cross-shard result decoding.
+            // The backend binds this rewritten unnamed statement instead.
+            request.rewritten_parse = Some(Box::new(parse));
+        }
 
         self.apply_after_messages(request)
     }
