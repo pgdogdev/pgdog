@@ -1,5 +1,6 @@
 //! What's a project without a util module.
 
+pub(crate) mod retry;
 pub(crate) mod sql;
 pub(crate) mod stats;
 pub(crate) mod sync;
@@ -249,6 +250,7 @@ pub(crate) fn user_database_from_params(params: &Parameters) -> (&str, &str) {
 /// while keeping a high hard limit. This causes "Too many open files"
 /// errors under load. Raising the soft limit on startup avoids this.
 /// Raise the NOFILE soft limit to the hard limit and return the new value.
+#[allow(clippy::unnecessary_cast)]
 #[cfg(unix)]
 pub(crate) fn raise_nofile_limit() -> u64 {
     use libc::{RLIMIT_NOFILE, getrlimit, rlimit, setrlimit};
@@ -276,12 +278,12 @@ pub(crate) fn raise_nofile_limit() -> u64 {
                     "failed to raise NOFILE soft limit from {} to {}",
                     prev, rlim.rlim_max
                 );
-                return prev;
+                return prev as u64;
             }
         }
     }
 
-    rlim.rlim_cur
+    rlim.rlim_cur as u64
 }
 
 #[cfg(not(unix))]

@@ -29,10 +29,12 @@ impl QueryParser {
         let mut shard = Shard::All;
         let mut schema_changed = false;
         let mut temp_table = None;
+        let mut table_change = TableChange::None;
 
         match node {
             Node::CreateStmt(stmt) => {
                 schema_changed = true;
+                table_change = TableChange::Created;
                 shard = Self::shard_ddl_table(stmt.relation(), schema)?.unwrap_or(Shard::All);
                 if let Some(rv) = stmt.relation()
                     && rv.relpersistence == b't' as c_char
@@ -63,8 +65,20 @@ impl QueryParser {
             }
 
             Node::DropStmt(stmt) => match stmt.remove_type {
-                ObjectType::OBJECT_TABLE
-                | ObjectType::OBJECT_INDEX
+                ObjectType::OBJECT_TABLE => {
+                    table_change =
+                        TableChange::Dropped(stmt.objects().len().try_into().unwrap_or(u32::MAX));
+                    let table = Table::try_from(stmt.objects()).ok();
+                    if let Some(table) = table {
+                        temp_table = Some(TempTableChange::Drop(table.name.to_owned()));
+                        if let Some(schema) = schema.schemas.get(table.schema()) {
+                            shard = schema.shard().into();
+                        }
+                    }
+                    schema_changed = true;
+                }
+
+                ObjectType::OBJECT_INDEX
                 | ObjectType::OBJECT_VIEW
                 | ObjectType::OBJECT_SEQUENCE => {
                     let table = Table::try_from(stmt.objects()).ok();
@@ -105,6 +119,7 @@ impl QueryParser {
 
             Node::CreateTableAsStmt(stmt) => {
                 schema_changed = true;
+                table_change = TableChange::Created;
                 if let Some(into) = stmt.into() {
                     shard = Self::shard_ddl_table(into.rel(), schema)?.unwrap_or(Shard::All);
                 }
@@ -237,6 +252,7 @@ impl QueryParser {
             Route::write(calculator.shard())
                 .with_schema_changed(schema_changed)
                 .with_temp_table_change(temp_table)
+                .with_table_change(table_change)
                 .ddl(),
         ))
     }
@@ -308,6 +324,7 @@ mod test {
         let command = parse_stmt("CREATE TABLE test (id BIGINT)");
         assert_eq!(command.route().shard(), &Shard::All);
         assert!(command.route().is_schema_changed());
+        assert_eq!(command.route().table_change(), TableChange::Created);
     }
 
     #[test]
@@ -352,6 +369,13 @@ mod test {
         let command = parse_stmt("DROP TABLE shard_0.test");
         assert_eq!(command.route().shard(), &Shard::Direct(0));
         assert!(command.route().is_schema_changed());
+        assert_eq!(command.route().table_change(), TableChange::Dropped(1));
+    }
+
+    #[test]
+    fn test_drop_multiple_tables_counts_each_table() {
+        let command = parse_stmt("DROP TABLE public.one, public.two");
+        assert_eq!(command.route().table_change(), TableChange::Dropped(2));
     }
 
     #[test]
@@ -366,6 +390,7 @@ mod test {
         let command = parse_stmt("DROP INDEX shard_1.test_idx");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
         assert!(command.route().is_schema_changed());
+        assert_eq!(command.route().table_change(), TableChange::None);
     }
 
     #[test]
@@ -460,6 +485,7 @@ mod test {
         let command = parse_stmt("CREATE TABLE shard_1.new_table AS SELECT * FROM other");
         assert_eq!(command.route().shard(), &Shard::Direct(1));
         assert!(command.route().is_schema_changed());
+        assert_eq!(command.route().table_change(), TableChange::Created);
     }
 
     #[test]

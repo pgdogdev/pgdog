@@ -43,18 +43,17 @@
 //! The loop exits when the pool shuts down (e.g. on config reload), preventing
 //! refresh tasks from leaking across reloads.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::{Error, Guard, Healtcheck, Pool, Request};
 use crate::backend::auth::{azure_workload_identity, rds_iam, vault};
 use crate::backend::pool::inner::ShouldCreate;
 use crate::backend::pool::token_cache::TokenCache;
-use crate::backend::{ConnectReason, DisconnectReason, Server};
+use crate::backend::{ConnectReason, DisconnectReason};
 use crate::config::ServerAuth;
 use crate::tasks;
 
-use crate::util::{safe_interval, safe_sleep, safe_timeout};
+use crate::util::{safe_interval, safe_sleep};
 use tokio::select;
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
@@ -333,7 +332,9 @@ impl Monitor {
 
     /// Replenish pool with one new connection.
     async fn replenish(&self, reason: ConnectReason) -> Result<bool, Error> {
-        match Self::create_connection(&self.pool, reason).await {
+        let args = super::ConnectionArgs::from_pool(&self.pool, reason);
+
+        match super::connection_creation::create(args).await {
             Ok(conn) => {
                 let now = Instant::now();
                 let server = Box::new(conn);
@@ -386,7 +387,9 @@ impl Monitor {
             // Create a new one and close it.
             info!("creating new healthcheck connection [{}]", pool.addr());
 
-            let mut server = Self::create_connection(pool, ConnectReason::Healthcheck)
+            let args = super::ConnectionArgs::from_pool(pool, ConnectReason::Healthcheck);
+
+            let mut server = super::connection_creation::create(args)
                 .await
                 .map_err(|_| Error::HealthcheckError)?;
 
@@ -425,86 +428,6 @@ impl Monitor {
                 }
             }
         }
-    }
-
-    pub(super) async fn create_connection(
-        pool: &Pool,
-        reason: ConnectReason,
-    ) -> Result<Server, Error> {
-        let connect_timeout = pool.config().connect_timeout;
-        let connect_attempts = pool.config().connect_attempts;
-        let connect_attempt_delay = pool.config().connect_attempt_delay;
-        let options = pool.server_options();
-
-        let mut error = Error::ServerError;
-        let now = Instant::now();
-
-        let max_age = pool.config().max_age;
-        let max_age_jitter = pool.config().max_age_jitter;
-
-        for attempt in 0..connect_attempts {
-            match safe_timeout(
-                connect_timeout,
-                Box::pin(Server::connect(
-                    pool.addr(),
-                    options.clone(),
-                    reason,
-                    Arc::clone(&pool.inner().oids),
-                )),
-            )
-            .await
-            {
-                Ok(Ok(mut conn)) => {
-                    conn.stats_mut().set_pool_id(pool.id());
-                    let elapsed = now.elapsed();
-                    {
-                        let mut guard = pool.lock();
-                        guard.stats.counts.connect_count += 1;
-                        guard.stats.counts.connect_time += elapsed;
-                        guard.stats.counts.auth_attempts += conn.password_attempts();
-                        conn.set_credentials_generation(guard.credentials_generation());
-                    }
-                    conn.apply_lifetime_jitter(max_age, max_age_jitter);
-                    pool.cache_params(conn.params());
-                    return Ok(conn);
-                }
-
-                Ok(Err(err)) => {
-                    // We tried all passwords and they were all wrong.
-                    if err.is_auth() {
-                        pool.lock().stats.counts.auth_attempts += pool.addr().passwords.len();
-                    }
-                    error!(
-                        "{}error connecting to server: {} [{}]",
-                        if attempt > 0 {
-                            format!("[attempt {}] ", attempt)
-                        } else {
-                            String::new()
-                        },
-                        err,
-                        pool.addr(),
-                    );
-                    error = Error::ServerError;
-                }
-
-                Err(_) => {
-                    error!(
-                        "{}server connection timeout [{}]",
-                        if attempt > 0 {
-                            format!("[attempt {}] ", attempt)
-                        } else {
-                            String::new()
-                        },
-                        pool.addr(),
-                    );
-                    error = Error::ConnectTimeout;
-                }
-            }
-
-            safe_sleep(connect_attempt_delay).await;
-        }
-
-        Err(error)
     }
 }
 

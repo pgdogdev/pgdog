@@ -43,16 +43,20 @@ impl Readiness {
 }
 
 impl Cluster {
-    /// Launch the connection pools.
+    /// Launch the connection pools and all associated
+    /// machinery to make the cluster ready for use.
     pub(crate) fn launch(&self) {
+        self.launch_pools();
+        self.launch_schema_sync();
+        self.launch_readiness_monitor();
+    }
+
+    pub(crate) fn launch_pools(&self) {
         for shard in self.shards() {
             shard.launch();
         }
 
         self.readiness.set_online(true);
-
-        self.launch_schema_sync();
-        self.launch_readiness_monitor();
     }
 
     /// Shutdown the connection pools.

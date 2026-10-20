@@ -23,4 +23,5 @@ jobs:
           --job "$JOB_UUID" \
           --error-on-alert \
           --ci-only-on-alert \
+          --ci-only-thresholds \
           --github-actions '${{ secrets.GITHUB_TOKEN }}'

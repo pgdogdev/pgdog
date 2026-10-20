@@ -114,6 +114,7 @@ impl QueryParser {
                 Node::VariableSetStmt(_) => (),
                 Node::VariableShowStmt(_) => (),
                 Node::DeallocateStmt(_) => (),
+                Node::ClosePortalStmt(_) | Node::UnlistenStmt(_) | Node::DiscardStmt(_) => (),
                 Node::VacuumRelation(_) | Node::VacuumStmt(_) => (),
                 Node::PrepareStmt(_) => (), // We intercept prepared statements and handle them ourselves.
                 Node::SelectStmt(_)

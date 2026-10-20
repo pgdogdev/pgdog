@@ -1,0 +1,453 @@
+//! Validate that the params the client attempts
+//! to SET are valid without talking to Postgres.
+
+use pg_internals::guc::{GUC, Guc, Value};
+
+use crate::{
+    frontend::SetParam,
+    net::{ErrorResponse, ParameterStatus},
+};
+
+use super::ParameterValue;
+
+mod numeric;
+
+/// Accept any value for these settings and continue the normal parameter flow.
+/// Their accepted values vary by PostgreSQL version or build options.
+const VALIDATION_EXCLUDED_PARAMS: &[&str] = &[
+    // Debug-enabled PostgreSQL builds allow 0..=5; other builds only allow 0.
+    "debug_discard_caches",
+    // LZ4 support depends on the backend's build options.
+    "default_toast_compression",
+    // The clone option depends on operating system file-copy support.
+    "file_copy_method",
+    // The tsc option depends on architecture and build support.
+    "timing_clock_source",
+    // Boolean in PostgreSQL 14; later versions use an enum with optional codecs.
+    "wal_compression",
+];
+
+/// Parameter with name and value.
+pub(crate) struct Parameter<'a> {
+    name: &'a str,
+    value: Option<&'a str>,
+}
+
+impl<'a> Parameter<'a> {
+    fn name(&'a self) -> &'a str {
+        match self.name {
+            // Postgres is weird.
+            "timezone" => "TimeZone",
+            "intervalstyle" => "IntervalStyle",
+            "datestyle" => "DateStyle",
+            name => name,
+        }
+    }
+
+    fn value(&self) -> Option<&'a str> {
+        self.value
+    }
+}
+
+impl<'a> From<&'a SetParam> for Parameter<'a> {
+    fn from(value: &'a SetParam) -> Self {
+        Self {
+            name: value.name.as_str(),
+            value: value.value.as_ref().and_then(|value| value.as_str()),
+        }
+    }
+}
+
+impl<'a> From<&'a str> for Parameter<'a> {
+    fn from(name: &'a str) -> Self {
+        Self { name, value: None }
+    }
+}
+
+/// Ergonomic interface around the GUC.
+pub(crate) struct ParameterValidator;
+
+impl ParameterValidator {
+    /// Built-in scalar default when no startup value is available locally.
+    /// This does not include server, database, or role configuration overrides.
+    pub(crate) fn default_value<'a>(param: impl Into<Parameter<'a>>) -> Option<ParameterValue> {
+        let param = param.into();
+        let value = match GUC.get(param.name())?.boot_val {
+            Value::Bool(value) => if value { "on" } else { "off" }.into(),
+            Value::Int(value) => value.to_string().into(),
+            Value::Real(value) => value.to_string().into(),
+            Value::String(value) => value.into(),
+            // Enum metadata contains numeric values without their name mapping.
+            Value::Enum(_) | Value::Null => return None,
+        };
+        Some(value)
+    }
+
+    /// Report a parameter whose effective value changed.
+    pub(crate) fn notify_client<'a>(
+        param: impl Into<Parameter<'a>>,
+        previous: Option<&ParameterValue>,
+        value: Option<&ParameterValue>,
+    ) -> Option<ParameterStatus> {
+        let param = param.into();
+        if value != previous && GUC.get(param.name()).is_some_and(|guc| guc.report) {
+            Some(ParameterStatus {
+                name: param.name().to_string(),
+                value: value.cloned().unwrap_or_else(|| "".into()),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Validate values for parameters present in GUC.
+    pub(crate) fn validate<'a>(param: impl Into<Parameter<'a>>) -> Option<ErrorResponse> {
+        let param = param.into();
+
+        let name = param.name();
+        if VALIDATION_EXCLUDED_PARAMS
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+        {
+            return None;
+        }
+        let value = param.value()?;
+
+        let guc = GUC.get(name)?;
+
+        if !Self::validate_value(guc, value) {
+            let mut error = ErrorResponse {
+                code: "22023".into(),
+                message: format!("invalid value for parameter \"{name}\": \"{value}\""),
+                ..Default::default()
+            };
+            if let Some(message) = numeric::range_error(guc, value) {
+                error.message = message;
+            }
+            if !guc.options.is_empty() {
+                error.hint = Some(format!("Available values: {}.", guc.options.join(", ")));
+            }
+            return Some(error);
+        }
+
+        None
+    }
+
+    fn validate_value(guc: &Guc, value: &str) -> bool {
+        if !guc.options.is_empty() {
+            return guc
+                .options
+                .iter()
+                .any(|option| option.eq_ignore_ascii_case(value));
+        }
+
+        match guc.parse_numeric(value) {
+            Some(Value::Int(value)) => {
+                guc.min
+                    .is_none_or(|min| matches!(min, Value::Int(min) if value >= min))
+                    && guc
+                        .max
+                        .is_none_or(|max| matches!(max, Value::Int(max) if value <= max))
+            }
+            Some(Value::Real(value)) => {
+                value.is_finite()
+                    && guc
+                        .min
+                        .is_none_or(|min| matches!(min, Value::Real(min) if value >= min))
+                    && guc
+                        .max
+                        .is_none_or(|max| matches!(max, Value::Real(max) if value <= max))
+            }
+            // A failed numeric parse is invalid; other GUC types are unrestricted here.
+            _ => !matches!(guc.boot_val, Value::Int(_) | Value::Real(_)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parameters::ParameterValue;
+
+    fn validate(name: &str, value: &str) -> Option<ErrorResponse> {
+        ParameterValidator::validate(&SetParam {
+            name: name.into(),
+            value: Some(value.into()),
+            local: false,
+        })
+    }
+
+    #[test]
+    fn unknown_parameters_allow_any_name_and_value() {
+        for name in [
+            "no_such_variable",
+            "",
+            "some setting",
+            "app.setting",
+            ".setting",
+            "app.",
+            "app..setting",
+            "1app.setting",
+            "app.1setting",
+            "app.bad-name",
+            "app.$name",
+            "app.é",
+        ] {
+            for value in [
+                None,
+                Some("anything"),
+                Some(""),
+                Some("-999999999999999999"),
+            ] {
+                assert!(
+                    ParameterValidator::validate(&SetParam {
+                        name: name.into(),
+                        value: value.map(Into::into),
+                        local: false,
+                    })
+                    .is_none(),
+                    "{name:?} = {value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn excluded_parameters_bypass_validation() {
+        for name in VALIDATION_EXCLUDED_PARAMS {
+            assert!(validate(name, "anything").is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn enum_options() {
+        for name in ["intervalstyle", "IntervalStyle"] {
+            for value in ["postgres", "iso_8601", "SQL_STANDARD"] {
+                assert!(validate(name, value).is_none());
+            }
+            for value in ["", "invalid", "post"] {
+                assert_eq!(
+                    validate(name, value).expect("invalid enum option").code,
+                    "22023"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn integer_bounds() {
+        for value in [
+            "-15", "0", "3", " +3 ", "1.5", "2.5", "3.49", "-15.4", "0x3", "03", "3e0",
+        ] {
+            assert!(validate("extra_float_digits", value).is_none(), "{value}");
+        }
+        for value in [
+            "-16",
+            "4",
+            "3.5",
+            "-15.5",
+            "0x4",
+            "04",
+            "NaN",
+            "invalid",
+            "",
+            "2147483648",
+            "1\0",
+            "3ms",
+        ] {
+            assert!(validate("extra_float_digits", value).is_some(), "{value}");
+        }
+    }
+
+    #[test]
+    fn integer_units_and_bounds() {
+        for (name, value) in [
+            ("statement_timeout", "5s"),
+            ("statement_timeout", "12345ms"),
+            ("statement_timeout", "1.5 min"),
+            ("statement_timeout", " 5 ms \t"),
+            ("statement_timeout", "24d"),
+            ("statement_timeout", "2147483647ms"),
+            ("work_mem", "16MB"),
+            ("work_mem", "65536B"),
+            ("work_mem", "63.5kB"),
+            ("work_mem", "0.0625MB"),
+        ] {
+            assert!(validate(name, value).is_none(), "{name} = {value}");
+        }
+        for value in [
+            "invalidms",
+            "NaNms",
+            "1e309ms",
+            "5invalid",
+            "5MB",
+            "5MS",
+            "-1ms",
+            "25d",
+            "2147483648ms",
+            "5ms junk",
+            "5\0ms",
+        ] {
+            assert!(validate("statement_timeout", value).is_some(), "{value}");
+        }
+        for value in ["63kB", "0.01MB", "2TB", "5s"] {
+            assert!(validate("work_mem", value).is_some(), "{value}");
+        }
+    }
+
+    #[test]
+    fn numeric_range_messages_use_converted_values_and_units() {
+        for (name, value, expected) in [
+            (
+                "vacuum_cost_delay",
+                "10s",
+                "10000 ms is outside the valid range for parameter \"vacuum_cost_delay\" (0 ms .. 100 ms)",
+            ),
+            (
+                "vacuum_cost_delay",
+                "100.125",
+                "100.125 ms is outside the valid range for parameter \"vacuum_cost_delay\" (0 ms .. 100 ms)",
+            ),
+            (
+                "extra_float_digits",
+                "3.5",
+                "4 is outside the valid range for parameter \"extra_float_digits\" (-15 .. 3)",
+            ),
+            (
+                "work_mem",
+                "1B",
+                "0 kB is outside the valid range for parameter \"work_mem\" (64 kB .. 2147483647 kB)",
+            ),
+            (
+                "statement_timeout",
+                "-1s",
+                "-1000 ms is outside the valid range for parameter \"statement_timeout\" (0 ms .. 2147483647 ms)",
+            ),
+            (
+                "geqo_selection_bias",
+                "2.1",
+                "2.1 is outside the valid range for parameter \"geqo_selection_bias\" (1.5 .. 2)",
+            ),
+            (
+                "seq_page_cost",
+                "-1",
+                "-1 is outside the valid range for parameter \"seq_page_cost\" (0 .. 1.79769e+308)",
+            ),
+            (
+                "seq_page_cost",
+                "inf",
+                "Infinity is outside the valid range for parameter \"seq_page_cost\" (0 .. 1.79769e+308)",
+            ),
+        ] {
+            let error = validate(name, value).expect("out of range");
+            assert_eq!(error.code, "22023");
+            assert_eq!(error.message, expected);
+            assert!(error.hint.is_none());
+            assert!(error.detail.is_none());
+        }
+        for value in ["NaN", "invalid"] {
+            assert_eq!(
+                validate("seq_page_cost", value)
+                    .expect("invalid number")
+                    .message,
+                format!("invalid value for parameter \"seq_page_cost\": \"{value}\"")
+            );
+        }
+    }
+
+    #[test]
+    fn real_units_and_bounds() {
+        // vacuum_cost_delay is measured in milliseconds, with bounds 0..100.
+        for value in ["0", "0.5ms", "0.1s", "100000us", "0.1004s"] {
+            assert!(validate("vacuum_cost_delay", value).is_none(), "{value}");
+        }
+        for value in ["0.101s", "0.1006s", "-1ms", "1MB", "NaNms", "inf", "1\0ms"] {
+            assert!(validate("vacuum_cost_delay", value).is_some(), "{value}");
+        }
+    }
+
+    #[test]
+    fn real_bounds() {
+        for value in ["0", "0.5", "1", "1e-2"] {
+            assert!(validate("geqo_selection_bias", value).is_some(), "{value}");
+        }
+        for value in ["1.5", "1.75", "2", " 2.0 "] {
+            assert!(validate("geqo_selection_bias", value).is_none(), "{value}");
+        }
+        for value in ["2.1", "NaN", "inf", "-inf", "1e309", "invalid", ""] {
+            assert!(validate("geqo_selection_bias", value).is_some(), "{value}");
+        }
+    }
+
+    #[test]
+    fn optional_bounds() {
+        for (name, min, max, below, inside, above) in [
+            (
+                "extra_float_digits",
+                Value::Int(1),
+                Value::Int(2),
+                "0",
+                "1",
+                "3",
+            ),
+            (
+                "geqo_selection_bias",
+                Value::Real(1.0),
+                Value::Real(2.0),
+                "0.5",
+                "1.5",
+                "2.5",
+            ),
+        ] {
+            let mut guc = *GUC.get(name).expect("known numeric parameter");
+            guc.min = Some(min);
+            guc.max = None;
+            assert!(!ParameterValidator::validate_value(&guc, below));
+            assert!(ParameterValidator::validate_value(&guc, inside));
+            assert!(ParameterValidator::validate_value(&guc, above));
+
+            guc.min = None;
+            guc.max = Some(max);
+            assert!(ParameterValidator::validate_value(&guc, below));
+            assert!(ParameterValidator::validate_value(&guc, inside));
+            assert!(!ParameterValidator::validate_value(&guc, above));
+
+            guc.max = None;
+            assert!(ParameterValidator::validate_value(&guc, below));
+            assert!(ParameterValidator::validate_value(&guc, above));
+            assert!(!ParameterValidator::validate_value(&guc, "invalid"));
+        }
+    }
+
+    #[test]
+    fn unconstrained_values() {
+        assert!(validate("application_name", "any application").is_none());
+        assert!(validate("custom.parameter", "any value").is_none());
+
+        let params = vec![
+            SetParam {
+                name: "timezone".into(),
+                value: None,
+                local: false,
+            },
+            SetParam {
+                name: "search_path".into(),
+                value: Some(ParameterValue::Tuple(vec!["public".into(), "app".into()])),
+                local: false,
+            },
+        ];
+
+        for param in &params {
+            assert!(ParameterValidator::validate(param).is_none());
+        }
+
+        assert!(
+            ParameterValidator::validate(&SetParam {
+                name: "extra_float_digits".into(),
+                value: Some("4".into()),
+                local: true,
+            })
+            .is_some()
+        );
+    }
+}

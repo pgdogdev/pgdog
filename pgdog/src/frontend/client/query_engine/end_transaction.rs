@@ -1,5 +1,6 @@
-use crate::net::{CommandComplete, NoticeResponse, Protocol, ReadyForQuery};
+use crate::net::NoticeResponse;
 
+use super::fake::{FakeCommand, FakeResponse};
 use super::*;
 
 impl QueryEngine {
@@ -8,43 +9,28 @@ impl QueryEngine {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
         rollback: bool,
-        extended: bool,
+        _extended: bool,
     ) -> Result<(), Error> {
         let executable = client_request.is_executable();
 
-        let bytes_sent = if extended {
-            self.extended_transaction_reply(
-                context,
-                &client_request.messages,
-                !executable && context.in_transaction(), // Only tell client we are ending transaction if we actually are.
-                rollback,
-            )
-            .await?
-        } else {
-            let cmd = if rollback {
-                CommandComplete::new_rollback()
-            } else {
-                CommandComplete::new_commit()
-            };
-            let mut messages = if !context.in_transaction() {
-                vec![NoticeResponse::from(ErrorResponse::no_transaction()).message()]
-            } else {
-                vec![]
-            };
-            messages.push(cmd.message());
-
-            if context.pipeline.is_done() || !context.pipeline.is_simple() {
-                messages.push(ReadyForQuery::idle().message());
-            }
-
-            context.stream.send_many(&messages).await?
-        };
-
-        self.stats.sent(bytes_sent);
+        let mut command = FakeCommand::new(if rollback { "ROLLBACK" } else { "COMMIT" });
+        if !context.in_transaction() {
+            command = command.with_notice(NoticeResponse::from(ErrorResponse::no_transaction()));
+        }
         if executable {
+            for status in context.params.transaction_end_status(rollback) {
+                command = command.with_parameter_status(status, None);
+            }
             self.backend.end_transaction();
             context.transaction = None; // Clear transaction state
         }
+
+        self.fake_command_response(
+            context,
+            &client_request.messages,
+            &FakeResponse::new([command]),
+        )
+        .await?;
 
         if rollback {
             self.notify_buffer.clear();
@@ -61,7 +47,7 @@ impl QueryEngine {
         rollback: bool,
         extended: bool,
     ) -> Result<(), Error> {
-        self.backend.transaction_params_hook(rollback);
+        self.backend.transaction_complete(rollback);
         let cluster = self.backend.cluster()?;
 
         // If we experienced an error and client

@@ -456,6 +456,11 @@ impl Connection {
         self.binding.execute(query).await
     }
 
+    /// Record a successfully executed parser-classified statement.
+    pub(crate) fn statement_completed(&mut self, route: &Route) {
+        self.binding.statement_completed(route);
+    }
+
     /// We are done and can disconnect from this server.
     pub(crate) fn done(&self) -> bool {
         self.binding.done() && !self.binding.is_locked()

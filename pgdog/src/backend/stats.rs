@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use crate::{
     backend::{Pool, pool::stats::MemoryStats},
     config::Memory,
+    frontend::router::parser::{StatementType, TableChange},
     net::{
         Parameters,
         messages::{BackendPid, CommandComplete, FrontendPid},
@@ -209,7 +210,42 @@ impl Stats {
                 self.local.total.rows_deleted += rows;
                 self.local.last_checkout.rows_deleted += rows;
             }
+            "COPY" => {
+                self.local.total.rows_copied += rows;
+                self.local.last_checkout.rows_copied += rows;
+            }
             _ => {}
+        }
+    }
+
+    /// Record a successfully executed statement classified by the query parser.
+    pub(crate) fn statement_completed(
+        &mut self,
+        statement_type: StatementType,
+        table_change: TableChange,
+    ) {
+        match statement_type {
+            StatementType::Ddl => {
+                self.local.total.ddl_commands += 1;
+                self.local.last_checkout.ddl_commands += 1;
+            }
+            StatementType::Dml => {
+                self.local.total.dml_commands += 1;
+                self.local.last_checkout.dml_commands += 1;
+            }
+            StatementType::SessionControl | StatementType::TransactionControl => {}
+        }
+
+        match table_change {
+            TableChange::Created => {
+                self.local.total.tables_created += 1;
+                self.local.last_checkout.tables_created += 1;
+            }
+            TableChange::Dropped(tables) => {
+                self.local.total.tables_dropped += tables as usize;
+                self.local.last_checkout.tables_dropped += tables as usize;
+            }
+            TableChange::None => {}
         }
     }
 
@@ -392,5 +428,55 @@ impl Stats {
     /// Legacy update method - syncs local to shared.
     pub(crate) fn update(&self) {
         self.sync_to_shared();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::router::parser::{StatementType, TableChange};
+
+    fn stats() -> Stats {
+        let now = Instant::now();
+        let local = ServerStats {
+            inner: pgdog_stats::server::Stats::default(),
+            id: BackendPid::for_test(1),
+            last_used: now,
+            last_healthcheck: None,
+            created_at: now,
+            client_id: None,
+            query_timer: None,
+            transaction_timer: None,
+            idle_in_transaction_timer: None,
+        };
+        let shared = Arc::new(Mutex::new(ConnectedServer {
+            stats: local,
+            addr: Address::default(),
+            application_name: "PgDog".into(),
+        }));
+
+        Stats { local, shared }
+    }
+
+    #[test]
+    fn copy_rows_are_counted() {
+        let mut stats = stats();
+        stats.rows_affected(&CommandComplete::from_str("COPY 42"));
+
+        assert_eq!(stats.total().rows_copied, 42);
+        assert_eq!(stats.last_checkout().rows_copied, 42);
+    }
+
+    #[test]
+    fn parsed_statement_metrics_are_counted() {
+        let mut stats = stats();
+        stats.statement_completed(StatementType::Dml, TableChange::None);
+        stats.statement_completed(StatementType::Ddl, TableChange::Created);
+        stats.statement_completed(StatementType::Ddl, TableChange::Dropped(2));
+
+        assert_eq!(stats.total().dml_commands, 1);
+        assert_eq!(stats.total().ddl_commands, 2);
+        assert_eq!(stats.total().tables_created, 1);
+        assert_eq!(stats.total().tables_dropped, 2);
     }
 }

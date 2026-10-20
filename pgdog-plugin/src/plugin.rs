@@ -43,7 +43,7 @@ pub struct PluginVtable {
         bool,
         bool,
         bool,
-        &pg_raw_parse::StmtList,
+        &pg_raw_parse::nodes::RawStmt,
         RawParameters<'_>,
     ) -> Route,
     /// Logging initialization.
@@ -82,7 +82,7 @@ pub trait Plugin {
         has_primary: bool,
         in_transaction: bool,
         write_override: bool,
-        query: &pg_raw_parse::StmtList,
+        query: &pg_raw_parse::nodes::RawStmt,
         params: RawParameters<'_>,
     ) -> Route {
         let context = Context {

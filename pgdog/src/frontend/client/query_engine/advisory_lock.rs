@@ -1,18 +1,16 @@
-use fnv::FnvHashSet;
+use fnv::FnvHashMap;
 
-use crate::frontend::router::parser::statement::{
-    AdvisoryLockId, AdvisoryLocks as ParserAdvisoryLocks, LockScope,
-};
+use crate::frontend::router::parser::advisory_lock::{AdvisoryLock, AdvisoryLockId, LockScope};
 
 /// Tracks advisory locks held by the current client across requests.
 #[derive(Default, Debug)]
 pub(crate) struct AdvisoryLocks {
-    locks: FnvHashSet<AdvisoryLockId>,
+    locks: FnvHashMap<AdvisoryLockId, AdvisoryLock>,
 }
 
 impl AdvisoryLocks {
-    pub(crate) fn merge(&mut self, locks: &ParserAdvisoryLocks) {
-        for lock in locks.iter() {
+    pub(crate) fn merge<'a>(&mut self, locks: impl IntoIterator<Item = &'a AdvisoryLock>) {
+        for lock in locks {
             if lock.unlock_all {
                 self.locks.clear();
             } else if lock.unlock {
@@ -22,8 +20,9 @@ impl AdvisoryLocks {
                 }
             } else if let Some(id) = lock.id
                 && lock.scope == LockScope::Session
+                && !self.locks.contains_key(&id)
             {
-                self.locks.insert(id);
+                self.locks.insert(id, *lock);
             }
         }
     }
@@ -38,7 +37,7 @@ impl AdvisoryLocks {
 
     #[cfg(test)]
     pub(crate) fn contains(&self, id: AdvisoryLockId) -> bool {
-        self.locks.contains(&id)
+        self.locks.contains_key(&id)
     }
 
     #[cfg(test)]

@@ -10,7 +10,6 @@ pub(crate) mod replication_progress;
 pub(crate) mod replication_stream;
 pub(crate) mod resharding_replicas;
 pub(crate) mod table;
-pub(crate) use copy::*;
 pub(crate) use queries::*;
 pub(crate) use resharding_replicas::*;
 pub(crate) use table::*;
@@ -98,6 +97,52 @@ pub(crate) mod test {
             test.tables.join(", ")
         );
         test.server.execute(create_publication).await.unwrap();
+
+        test
+    }
+
+    /// Test wrapper for setting up a publication table with a specific kind of
+    /// identity column, if we wanted to test out how different types interact
+    /// with our functionality.
+    ///
+    /// Also performs a 10,000 row INSERT, so we have some data to test with
+    /// (e.g., how ctid ranges are generated)
+    pub(crate) async fn setup_publication_table_with_data_type_identity_col(
+        publication: &str,
+        table: &str,
+        data_type: &str,
+    ) -> PublicationTest {
+        let mut test = PublicationTest {
+            server: test_replication_server().await,
+            publication: publication.to_owned(),
+            tables: vec![table.to_owned()],
+        };
+
+        test.cleanup().await;
+
+        test.server
+            .execute(format!(
+                "CREATE TABLE {} (id {data_type}, value TEXT)",
+                table
+            ))
+            .await
+            .unwrap();
+
+        test.server
+            .execute(format!(
+                "INSERT INTO {table} (value) SELECT 'some random text' FROM generate_series(1, 100000)"
+            ))
+            .await
+            .unwrap();
+
+        test.server
+            .execute(format!(
+                "CREATE PUBLICATION {} FOR TABLE {}",
+                test.publication,
+                test.tables.join(", "),
+            ))
+            .await
+            .unwrap();
 
         test
     }

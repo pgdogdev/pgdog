@@ -94,6 +94,9 @@ pub(crate) enum Error {
     #[error("multi-statement queries cannot mix SET with other commands")]
     MultiStatementMixedSet,
 
+    #[error("unsupported SET statement kind: {0}")]
+    UnsupportedSetKind(u32),
+
     #[error("multi-query statement cannot be safely executed")]
     MultiStatementSafety,
 

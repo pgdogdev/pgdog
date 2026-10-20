@@ -723,6 +723,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1059,6 +1065,7 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+ "terminal_size",
 ]
 
 [[package]]
@@ -1144,6 +1151,12 @@ checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "condtype"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf0a07a401f374238ab8e2f11a104d2851bf9ce711ec69804834de8af45c7af"
 
 [[package]]
 name = "const-oid"
@@ -1599,6 +1612,31 @@ name = "displaydoc"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "divan"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a405457ec78b8fe08b0e32b4a3570ab5dff6dd16eb9e76a5ee0a9d9cbd898933"
+dependencies = [
+ "cfg-if",
+ "clap",
+ "condtype",
+ "divan-macros",
+ "libc",
+ "regex-lite",
+]
+
+[[package]]
+name = "divan-macros"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9556bc800956545d6420a640173e5ba7dfa82f38d3ea5a167eb555bc69ac3323"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2419,6 +2457,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2454,6 +2511,8 @@ dependencies = [
  "native-tls",
  "ordered-float",
  "parking_lot",
+ "pg_stream",
+ "pgdog-regress",
  "pgdog-stats",
  "postgres-native-tls",
  "rand 0.9.4",
@@ -2778,6 +2837,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3093,6 +3158,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "pg_internals"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/pg-internals?rev=ce5c26f2501d787cdb84f610176a92880944dbcd#ce5c26f2501d787cdb84f610176a92880944dbcd"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "clang-sys",
+ "phf 0.13.1",
+ "phf_codegen",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.118",
+ "thiserror",
+]
+
+[[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
 source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1#89937b1a9c39bbb53b679f12aba3ff7c5ab3c093"
@@ -3110,8 +3193,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg_raw_parse"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85#a4784fc603563d3db8e9f381347f039f39b1dd85"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "convert_case 0.11.0",
+ "generativity",
+ "glob",
+ "include_dir",
+ "libc",
+ "prettyplease",
+ "regex",
+ "syn 2.0.118",
+ "thiserror",
+]
+
+[[package]]
+name = "pg_stream"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "210dabdb4e8d3735c03f5af0ef125f2ffa48948de592b92b81e9a574e6ffdf98"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "bytes",
+ "md5 0.8.1",
+ "tokio",
+]
+
+[[package]]
 name = "pgdog"
-version = "0.1.60"
+version = "0.1.62"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3134,6 +3248,7 @@ dependencies = [
  "dashmap",
  "derive_builder",
  "derive_more",
+ "divan",
  "dyn-clone",
  "fnv",
  "futures",
@@ -3148,12 +3263,13 @@ dependencies = [
  "lazy_static",
  "libc",
  "lru",
- "md5",
+ "md5 0.7.0",
  "memchr",
  "moka",
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_internals",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-config",
  "pgdog-macros",
  "pgdog-plugin",
@@ -3221,7 +3337,7 @@ version = "0.1.0"
 dependencies = [
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-plugin",
  "thiserror",
 ]
@@ -3250,11 +3366,11 @@ dependencies = [
 
 [[package]]
 name = "pgdog-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
@@ -3282,12 +3398,24 @@ dependencies = [
  "arc-swap",
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-plugin",
  "serde",
  "thiserror",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "pgdog-regress"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
+dependencies = [
+ "bytes",
+ "fallible-iterator",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85)",
+ "postgres-protocol 0.6.12",
+ "tokio",
 ]
 
 [[package]]
@@ -3331,6 +3459,26 @@ checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
  "phf_shared 0.13.1",
  "serde",
+]
+
+[[package]]
+name = "phf_codegen"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49aa7f9d80421bca176ca8dbfebe668cc7a2684708594ec9f3c0db0805d5d6e1"
+dependencies = [
+ "phf_generator",
+ "phf_shared 0.13.1",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737"
+dependencies = [
+ "fastrand",
+ "phf_shared 0.13.1",
 ]
 
 [[package]]
@@ -3462,6 +3610,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-protocol"
+version = "0.6.12"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
+dependencies = [
+ "base64 0.23.1",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac 0.13.0",
+ "md-5 0.11.0",
+ "memchr",
+ "rand 0.10.1",
+ "sha2 0.11.0",
+ "stringprep",
+]
+
+[[package]]
 name = "postgres-types"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3469,7 +3634,7 @@ checksum = "8dc729a129e682e8d24170cd30ae1aa01b336b096cbb56df6d534ffec133d186"
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.11",
  "uuid",
 ]
 
@@ -4813,6 +4978,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4983,7 +5158,7 @@ dependencies = [
  "percent-encoding",
  "phf 0.13.1",
  "pin-project-lite",
- "postgres-protocol",
+ "postgres-protocol 0.6.11",
  "postgres-types",
  "rand 0.10.1",
  "socket2 0.6.3",

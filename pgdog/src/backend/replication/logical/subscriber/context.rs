@@ -11,7 +11,8 @@ use crate::{
             sharding::lookup,
         },
     },
-    net::{Bind, Parameters, Parse, replication::TupleData},
+    net::{Bind, Parse, replication::TupleData},
+    parameters::ParameterStore,
 };
 
 /// Holds the pre-computed `Bind` message and destination `Shard` for a single replication event.
@@ -44,7 +45,7 @@ impl StreamContext {
     /// logic can be read, tested, and changed independently of bind construction.
     async fn resolve_shard(cluster: &Cluster, bind: &Bind, stmt: &Parse) -> Result<Shard, Error> {
         lazy_static! {
-            static ref PARAMS: Parameters = Parameters::default();
+            static ref PARAMS: ParameterStore = ParameterStore::default();
         }
 
         let parse = stmt.clone();
@@ -58,7 +59,7 @@ impl StreamContext {
         )?;
         request.ast = Some(entry.ast);
 
-        let router_context = RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?;
+        let router_context = RouterContext::new(&request, cluster, &*PARAMS, None, Sticky::new())?;
         let mut router = Router::new();
         router.query(router_context)?;
 
@@ -73,7 +74,7 @@ impl StreamContext {
                 .await
                 .map_err(|err| Error::Lookup(err.message.clone()))?;
             let router_context =
-                RouterContext::new(&request, cluster, &PARAMS, None, Sticky::new())?
+                RouterContext::new(&request, cluster, &*PARAMS, None, Sticky::new())?
                     .with_resolved_lookups(resolved);
             router.query(router_context)?;
 

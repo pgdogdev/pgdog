@@ -1,5 +1,5 @@
 use super::super::ee;
-use super::insert::{build_resolved_split_requests, build_split_requests};
+use super::insert::build_resolved_split_requests;
 use super::nextval::SequenceCall;
 use super::offset::OffsetPlan;
 use super::{Error, InsertSplit, InsertSplitRewriteResult, PrepareExecute, ShardingKeyUpdate};
@@ -7,6 +7,7 @@ use crate::frontend::client::QueryTimestamps;
 
 use crate::frontend::router::Route;
 use crate::frontend::router::parser::ShardWithPriority;
+use crate::frontend::router::parser::rewrite::statement::insert::{Subquery, build_split_requests};
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
 use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
@@ -40,6 +41,7 @@ impl BindParams {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn is_original(&self) -> bool {
         matches!(self, Self::Original { .. })
     }
@@ -137,6 +139,10 @@ pub(crate) struct RewritePlan {
     /// multiple queries.
     pub(crate) insert_split: Vec<InsertSplit>,
 
+    /// Executing an inner subquery separately to ensure proper routing
+    /// Involves injecting the results of the inner query into the outer query
+    pub(crate) subquery: Option<Subquery>,
+
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
     pub(crate) sharding_key_update: Option<ShardingKeyUpdate>,
@@ -149,6 +155,7 @@ pub(crate) struct RewritePlan {
 pub(crate) enum RewriteResult {
     InPlace { offset: Option<OffsetPlan> },
     InsertSplit(InsertSplitRewriteResult),
+    Subquery(Subquery),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
@@ -164,6 +171,8 @@ impl RewriteResult {
                     Some(Route::write(ShardWithPriority::new_table(Shard::All)))
                 }
             }
+            // TODO(jkaczman): check if it evaluates to the same shard like insert split
+            Self::Subquery(_) => Some(Route::write(ShardWithPriority::new_table(Shard::All))),
             Self::ShardingKeyUpdate(_) => {
                 Some(Route::write(ShardWithPriority::new_table(Shard::All)))
             }
@@ -202,6 +211,7 @@ impl RewritePlan {
     /// True if the plan would not modify the query or its messages.
     /// `params` is purely informational (count of original `$N` placeholders)
     /// and doesn't count as a rewrite.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.bind_params.is_original()
             && self.stmt.is_none()
@@ -424,6 +434,12 @@ impl RewritePlan {
             return Ok(RewriteResult::ShardingKeyUpdate(
                 sharding_key_update.clone(),
             ));
+        }
+
+        if let Some(subqueries) = &self.subquery
+            && request.is_executable()
+        {
+            return Ok(RewriteResult::Subquery(subqueries.clone()));
         }
 
         Ok(RewriteResult::InPlace {

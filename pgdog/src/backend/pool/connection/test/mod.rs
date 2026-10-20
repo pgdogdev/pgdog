@@ -1,7 +1,8 @@
+use crate::parameters::ParameterStore;
 use std::collections::HashSet;
 
 use crate::net::FrontendPid;
-use crate::net::parameter::test::new_test;
+use crate::parameters::test::new_test;
 
 use super::*;
 
@@ -15,7 +16,7 @@ async fn two_pc_subset_commit_counts() {
             BufferedQuery,
             client::query_engine::{TwoPcPhase, TwoPcTransaction},
         },
-        net::Parameters,
+        parameters::ParameterStore,
     };
 
     let mut connection = test_connection();
@@ -29,7 +30,7 @@ async fn two_pc_subset_commit_counts() {
             .await
             .unwrap();
         connection
-            .link_client(pid, &Parameters::default())
+            .link_client(pid, &ParameterStore::default())
             .await
             .unwrap();
     }
@@ -81,7 +82,7 @@ async fn two_pc_recovery_subset() {
         BufferedQuery,
         client::query_engine::{TwoPcPhase, TwoPcTransaction},
     };
-    use crate::net::Parameters;
+    use crate::parameters::ParameterStore;
     let mut connection = test_connection();
     connection
         .start_transaction(false, BufferedQuery::Query(Query::new("BEGIN")))
@@ -93,7 +94,7 @@ async fn two_pc_recovery_subset() {
             .await
             .unwrap();
         connection
-            .link_client(pid, &Parameters::default())
+            .link_client(pid, &ParameterStore::default())
             .await
             .unwrap();
     }
@@ -138,7 +139,7 @@ async fn test_connection_upgrade() {
 
     let mut connection = test_connection();
     let pid = FrontendPid::new();
-    let params = new_test("test_connection_connect_upgrade");
+    let params = ParameterStore::new(new_test("test_connection_connect_upgrade"));
 
     connection
         .connect(&Request::default(), &route(Shard::Direct(0), true))

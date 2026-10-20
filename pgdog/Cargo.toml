@@ -1,6 +1,6 @@
 [package]
 name = "pgdog"
-version = "0.1.60"
+version = "0.1.62"
 edition = "2024"
 description = "Modern PostgreSQL proxy, pooler, load balancer and database sharder."
 authors = ["PgDog <hi@pgdog.dev>"]
@@ -12,6 +12,7 @@ default-run = "pgdog"
 
 [features]
 fips = ["tokio-rustls/fips"]
+bench = []
 
 [dependencies]
 bon.workspace = true
@@ -85,12 +86,13 @@ x509-parser = "0.18"
 pg_raw_parse.workspace = true
 itertools = "0.15.0"
 dyn-clone = "1.0.20"
+pg_internals = {  git = "https://github.com/pgdogdev/pg-internals", rev = "ce5c26f2501d787cdb84f610176a92880944dbcd" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-tikv-jemallocator = "0.7"
+tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
 tikv-jemalloc-ctl = "0.7"
 
 
@@ -103,3 +105,4 @@ stats_alloc = "0.1.10"
 brunch = "0.5"
 wiremock = "0.6"
 tokio = { version = "1", features = ["full", "test-util"] }
+divan = "0.1.21"

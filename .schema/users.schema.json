@@ -48,6 +48,36 @@
       },
       "additionalProperties": false
     },
+    "AuthType": {
+      "description": "authentication mechanism for client connections.\n\nSee [authentication](https://docs.pgdog.dev/features/authentication/).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#auth_type>",
+      "oneOf": [
+        {
+          "description": "MD5 password hashing; very quick but not secure.",
+          "type": "string",
+          "const": "md5"
+        },
+        {
+          "description": "SCRAM-SHA-256 authentication; slow but has better security features (default).",
+          "type": "string",
+          "const": "scram"
+        },
+        {
+          "description": "No authentication required; clients are trusted unconditionally.",
+          "type": "string",
+          "const": "trust"
+        },
+        {
+          "description": "Plaintext password.",
+          "type": "string",
+          "const": "plain"
+        },
+        {
+          "description": "RDS IAM or Azure Workload identity.",
+          "type": "string",
+          "const": "external_token"
+        }
+      ]
+    },
     "PoolerMode": {
       "description": "connection pooling mode for database pools.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#pooler_mode>",
       "oneOf": [
@@ -106,6 +136,17 @@
           "description": "User belongs to all databases.",
           "type": "boolean",
           "default": false
+        },
+        "auth_type": {
+          "description": "Client auth type, overrides the same setting in [general].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthType"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cross_shard_disabled": {
           "description": "Disable cross-shard queries for this user.",

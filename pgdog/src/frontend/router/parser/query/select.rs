@@ -1,6 +1,5 @@
 use super::*;
-use crate::frontend::router::parser::statement::AdvisoryLockId;
-use pg_raw_parse::walk;
+use crate::frontend::router::parser::advisory_lock::AdvisoryLockId;
 use pg_raw_parse::{Node, nodes};
 use pgdog_config::system_catalogs;
 use shared::ConvergeAlgorithm;
@@ -18,41 +17,24 @@ impl QueryParser {
         stmt: &nodes::SelectStmt,
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
-        let mut cross_shard = false;
-        // Does the statement itself change data: data-modifying CTEs,
-        // locking clauses, write functions. This decides omnisharded
-        // coverage; the primary/replica decision (`writes`) additionally
-        // honours the conservative read/write split's transaction override.
-        let mut mutates = false;
-        walk::walk(stmt.into(), |node| match node {
-            Node::CommonTableExpr(expr) => match expr.ctequery() {
-                Node::SelectStmt(_) => (),
-                _ => mutates = true,
-            },
-            Node::LockingClause(_) => mutates = true,
-            Node::FuncCall(f) => {
-                if let Some(f) =
-                    Function::from_strings(f.funcname().into_iter().filter_map(Node::as_str))
-                {
-                    cross_shard = cross_shard || f.behavior().cross_shard;
-                    mutates = mutates || f.behavior().writes;
-                }
-            }
-            _ => (),
-        });
-
-        if cross_shard {
-            context
-                .shards_calculator
-                .push(ShardWithPriority::new_override_cross_shard_function());
-        }
-
         let mut parser = StatementParser::new(
             stmt.into(),
             context.router_context.bind,
             &context.sharding_schema,
         )
         .with_explain(self.recorder_mut().is_some());
+
+        if parser.is_cross_shard() {
+            context
+                .shards_calculator
+                .push(ShardWithPriority::new_override_cross_shard_function());
+        }
+
+        // Does the statement itself change data: data-modifying CTEs,
+        // locking clauses, write functions. This decides omnisharded
+        // coverage; the primary/replica decision (`writes`) additionally
+        // honours the conservative read/write split's transaction override.
+        let mut mutates = parser.mutates();
         let (advisory_locks, mut omnisharded) =
             (parser.extract_advisory_locks(), parser.is_all_omnisharded());
 
@@ -122,7 +104,8 @@ impl QueryParser {
                     .with_read(!writes)
                     .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
+                    .with_advisory_locks(advisory_locks)
+                    .dml(),
             ));
         }
 
@@ -184,7 +167,8 @@ impl QueryParser {
                     .with_read(!writes)
                     .with_mutates(mutates)
                     .with_omnisharded(omnisharded)
-                    .with_advisory_locks(advisory_locks),
+                    .with_advisory_locks(advisory_locks)
+                    .dml(),
             ));
         }
 
@@ -199,7 +183,8 @@ impl QueryParser {
             if let Some((vector, column_name)) = order.vector() {
                 for table in context.sharding_schema.tables.tables() {
                     if &table.column == column_name
-                        && (table.name.is_none() || table.name.as_deref() == from_clause_table_name)
+                        && (table.name.is_none()
+                            || from_clause_table_name.is_some_and(|name| table.name_matches(name)))
                     {
                         let centroids = Centroids::from(&table.centroids);
                         let shard: Shard = centroids
