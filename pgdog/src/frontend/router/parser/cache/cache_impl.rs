@@ -60,10 +60,10 @@ impl Inner {
     /// Eviction follows the CLOCK (second-chance) policy:
     ///
     /// - cache hits mark the statement as used (instead of moving the statement to front of list)
-    /// allowing hits to just need the read lock
+    ///   allowing hits to just need the read lock
     ///
     /// - when the cache is full, used statements at the back of the list move to the front with the mark
-    /// cleared, and when the first **unmarked** statement is found, it's evicted.
+    ///   cleared, and when the first **unmarked** statement is found, it's evicted.
     fn insert(&mut self, query: Arc<str>, ast: Arc<Ast>) {
         if self.queries.len() == self.queries.cap().get() {
             while let Some((oldest, entry)) = self.queries.peek_lru()
