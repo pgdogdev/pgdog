@@ -3,8 +3,8 @@ use crate::{
     config::{config, load_test, set},
     expect_message,
     net::{
-        CommandComplete, DataRow, ErrorResponse, Parameters, ParseComplete, ReadyForQuery,
-        RowDescription, parameter::ParameterValue,
+        BindComplete, CommandComplete, DataRow, ErrorResponse, NoData, Parameters, ParseComplete,
+        ReadyForQuery, RowDescription, parameter::ParameterValue,
     },
 };
 
@@ -14,7 +14,13 @@ use super::prelude::*;
 async fn run_simple(client: &mut TestClient, query: &str) -> ReadyForQuery {
     client.send_simple(Query::new(query)).await;
     expect_message!(client.read().await, CommandComplete);
-    expect_message!(client.read().await, ReadyForQuery)
+    let messages = client.read_until('Z').await.expect("command completed");
+    assert!(
+        messages[..messages.len() - 1]
+            .iter()
+            .all(|message| message.code() == 'S')
+    );
+    ReadyForQuery::try_from(messages.last().expect("ReadyForQuery").clone()).expect("ReadyForQuery")
 }
 
 /// Ask the server what a parameter is actually set to.
@@ -68,7 +74,10 @@ async fn test_discard_clears_prepared_statement_cache() {
 
     client.send_simple(Query::new("DISCARD ALL")).await;
 
-    expect_message!(client.read().await, CommandComplete);
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "DISCARD ALL"
+    );
     expect_message!(client.read().await, ReadyForQuery);
 
     assert_eq!(client.client().prepared_statements.num_statements(), 0);
@@ -95,7 +104,10 @@ async fn test_non_all_discard_keeps_prepared_statement_cache() {
 
         client.send_simple(Query::new(query)).await;
 
-        expect_message!(client.read().await, CommandComplete);
+        assert_eq!(
+            expect_message!(client.read().await, CommandComplete).command(),
+            query
+        );
         expect_message!(client.read().await, ReadyForQuery);
 
         assert_eq!(
@@ -104,6 +116,39 @@ async fn test_non_all_discard_keeps_prepared_statement_cache() {
             "{query} should not clear prepared statements",
         );
         assert_eq!(global.read().statements().iter().next().unwrap().1.used, 1);
+    }
+}
+
+/// JDBC relies on these tags even when DISCARD uses the extended protocol.
+#[tokio::test]
+async fn test_discard_extended_command_tags() {
+    for (query, tag) in [
+        ("DISCARD ALL", "DISCARD ALL"),
+        ("DISCARD PLANS", "DISCARD PLANS"),
+        ("DISCARD SEQUENCES", "DISCARD SEQUENCES"),
+        ("DISCARD TEMP", "DISCARD TEMP"),
+        ("DISCARD TEMPORARY", "DISCARD TEMP"),
+    ] {
+        let mut client = TestClient::new_replicas(Parameters::default()).await;
+        client.send(Parse::new_anonymous(query)).await;
+        client.send(Bind::new_statement("")).await;
+        client.send(Describe::new_portal("")).await;
+        client.send(Execute::new()).await;
+        client.send(Sync).await;
+        client.try_process().await.expect("DISCARD should succeed");
+
+        expect_message!(client.read().await, ParseComplete);
+        expect_message!(client.read().await, BindComplete);
+        expect_message!(client.read().await, NoData);
+        assert_eq!(
+            expect_message!(client.read().await, CommandComplete).command(),
+            tag,
+            "{query} should return the PostgreSQL command tag"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
     }
 }
 
@@ -121,7 +166,7 @@ async fn test_discard_all_restores_startup_parameters() {
     client.send_simple(Query::new("DISCARD ALL")).await;
     assert_eq!(
         expect_message!(client.read().await, CommandComplete).command(),
-        "DISCARD"
+        "DISCARD ALL"
     );
     assert_eq!(
         expect_message!(client.read().await, ReadyForQuery).status,

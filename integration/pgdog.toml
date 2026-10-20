@@ -45,6 +45,7 @@ shard_key = "ignore"
 split_inserts = "error"
 # primary_key = "rewrite"
 non_deterministic_functions = "rewrite"
+subqueries = "ignore"
 
 # ------------------------------------------------------------------------------
 # ----- Database :: pgdog ------------------------------------------------------
@@ -75,6 +76,18 @@ database_name = "shard_1"
 shard = 1
 
 [[databases]]
+name = "pgdog_sharded_subqueries"
+host = "localhost"
+database_name = "shard_0"
+shard = 0
+
+[[databases]]
+name = "pgdog_sharded_subqueries"
+host = "localhost"
+database_name = "shard_1"
+shard = 1
+
+[[databases]]
 name = "pgdog_sharded"
 host = "localhost"
 database_name = "shard_0"
@@ -83,6 +96,20 @@ role = "replica"
 
 [[databases]]
 name = "pgdog_sharded"
+host = "localhost"
+database_name = "shard_1"
+shard = 1
+role = "replica"
+
+[[databases]]
+name = "pgdog_sharded_subqueries"
+host = "localhost"
+database_name = "shard_0"
+shard = 0
+role = "replica"
+
+[[databases]]
+name = "pgdog_sharded_subqueries"
 host = "localhost"
 database_name = "shard_1"
 shard = 1
@@ -184,6 +211,27 @@ name = "sharded"
 column = "id"
 data_type = "bigint"
 primary = true
+
+[[sharded_tables]]
+database = "pgdog_sharded_subqueries"
+name = "subusers"
+column = "id"
+data_type = "bigint"
+prefix = true
+
+[[sharded_tables]]
+database = "pgdog_sharded_subqueries"
+name = "suborders"
+column = "user_id"
+data_type = "bigint"
+prefix = true
+
+[[sharded_tables]]
+database = "pgdog_sharded_subqueries"
+name = "subpackages"
+column = "user_id"
+data_type = "bigint"
+prefix = true
 
 [[sharded_tables]]
 database = "pgdog_sharded"

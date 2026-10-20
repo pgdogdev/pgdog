@@ -193,6 +193,19 @@ impl Address {
         }
     }
 
+    /// Create an instance of the same address, but swap the password
+    /// and authentication mechanism so the server is forced to use this password
+    /// no matter what `server_auth` is configured.
+    ///
+    /// This is used for validating RDS IAM tokens we receive from clients.
+    pub(super) fn into_client_token(self, token: &str) -> Self {
+        Self {
+            passwords: vec![Password::new(token, PasswordSource::ClientToken)],
+            server_auth: ServerAuth::Password,
+            ..self
+        }
+    }
+
     /// Test convention: `new_test()` represents a primary. Tests that need
     /// a replica do `Address { configured_role: Role::Replica, ..new_test() }`.
     #[cfg(test)]

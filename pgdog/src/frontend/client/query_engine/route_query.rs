@@ -94,7 +94,7 @@ impl QueryEngine {
         let router_context = RouterContext::new(
             client_request,
             cluster,
-            context.params,
+            &*context.params,
             context.transaction,
             context.sticky,
         )?;
@@ -115,7 +115,7 @@ impl QueryEngine {
                         let router_context = RouterContext::new(
                             client_request,
                             cluster,
-                            context.params,
+                            &*context.params,
                             context.transaction,
                             context.sticky,
                         )?

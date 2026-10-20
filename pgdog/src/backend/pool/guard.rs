@@ -104,6 +104,8 @@ mod test {
     use pgdog_config::prepared_statements::PreparedStatementsConfig;
     use tokio::time::Instant;
 
+    use crate::net::{FrontendPid, Parameters};
+    use crate::parameters::ParameterStore;
     use crate::util::{safe_sleep, safe_timeout};
     use crate::{
         backend::{
@@ -760,6 +762,40 @@ mod test {
         assert_eq!(
             state.force_close, 1,
             "force_close should be incremented when connection has interrupted send"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bad_param_sync() {
+        let pool = pool();
+        let mut server = pool.get_test().await.unwrap();
+
+        let store = ParameterStore::new(Parameters::from(
+            [("application_name", "random"), ("statement_timeout", "sff")].as_slice(),
+        ));
+
+        server
+            .link_client(FrontendPid::new(), &store, None)
+            .await
+            .expect_err("statement_timeout has an invalid value");
+
+        drop(server);
+
+        let mut server = pool.get_test().await.unwrap();
+        // Default, should revert application_name change.
+        let application_name: Vec<String> =
+            server.fetch_all("SHOW application_name").await.unwrap();
+        assert_eq!(application_name[0], "PgDog");
+
+        assert!(server.params().get("statement_timeout").is_none());
+        assert_eq!(
+            server
+                .params()
+                .get("application_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "PgDog"
         );
     }
 }

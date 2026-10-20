@@ -53,10 +53,8 @@ mod tests {
     use crate::frontend::client::{QueryTimestamps, Sticky};
     use crate::frontend::router::parser::{AstContext, Cache};
     use crate::frontend::{BufferedQuery, ClientRequest, PreparedStatements, RouterContext};
-    use crate::net::{
-        Parameters,
-        messages::{Bind, Parse, Query, bind::Parameter},
-    };
+    use crate::net::messages::{Bind, Parse, Query, bind::Parameter};
+    use crate::parameters::ParameterStore;
     use bytes::Bytes;
     use std::sync::Once;
 
@@ -74,7 +72,7 @@ mod tests {
         enable_expanded_explain();
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ast_ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
 
         let buffered = BufferedQuery::Query(Query::new(sql));
@@ -108,7 +106,7 @@ mod tests {
 
         let cluster = Cluster::new_test(&config());
         let mut stmts = PreparedStatements::default();
-        let params = Parameters::default();
+        let params = ParameterStore::default();
         let ast_ctx = AstContext::from_cluster(&cluster, &params, QueryTimestamps::default());
 
         let buffered = BufferedQuery::Prepared(Parse::new_anonymous(sql));

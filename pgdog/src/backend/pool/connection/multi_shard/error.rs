@@ -2,6 +2,10 @@
 
 use thiserror::Error;
 
+use crate::{backend::Error as BackendError, net::Error as NetError};
+
+use super::super::aggregate::Error as AggregateError;
+
 #[derive(Debug, Error)]
 pub(crate) enum Error {
     #[error(
@@ -23,19 +27,48 @@ pub(crate) enum Error {
     )]
     InconsistentDataRowCount { expected: usize, actual: usize },
 
-    #[error("net error: {0}")]
-    Net(#[from] crate::net::Error),
+    #[error("unexpected message, expected {0} got {1}")]
+    UnexpectedMessage(char, char),
+
+    #[error("CommandComplete contains no row counts")]
+    CommandCompleteNoRows,
+
+    #[error("not utf-8")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    #[error("{0}")]
+    Aggregate(#[from] AggregateError),
+
+    #[error("unexpected multi-shard error: {0}")]
+    Unexpected(String),
 }
 
-impl From<crate::backend::Error> for Error {
-    fn from(value: crate::backend::Error) -> Self {
-        // Convert backend error to net error if it contains one, otherwise wrap as IO error
+impl Error {
+    /// Caller attempted an aggregate we don't support.
+    pub(crate) fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Aggregate(..))
+    }
+}
+
+impl From<NetError> for Error {
+    fn from(value: NetError) -> Self {
         match value {
-            crate::backend::Error::Net(net_err) => Self::Net(net_err),
-            other => Self::Net(crate::net::Error::Io(std::io::Error::other(format!(
-                "{}",
-                other
-            )))),
+            NetError::UnexpectedMessage(expected, actual) => {
+                Self::UnexpectedMessage(expected, actual)
+            }
+            NetError::CommandCompleteNoRows => Self::CommandCompleteNoRows,
+            NetError::Utf8(error) => Self::Utf8(error),
+            other => Self::Unexpected(other.to_string()),
+        }
+    }
+}
+
+impl From<BackendError> for Error {
+    fn from(value: BackendError) -> Self {
+        match value {
+            BackendError::Aggregate(error) => Self::Aggregate(error),
+            BackendError::Net(error) => error.into(),
+            other => Self::Unexpected(other.to_string()),
         }
     }
 }

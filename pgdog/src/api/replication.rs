@@ -22,6 +22,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
     databases::{cancel_all, cutover},
@@ -591,6 +592,7 @@ impl ReplicationClusterTask {
         for source_shard in 0..state.source.shards().len() {
             let tables = state.pop_tables(source_shard)?;
             let slot = state.slot(source_shard)?;
+            let origins = state.origins(source_shard)?;
             let updater = progress.updater_for_shard(source_shard);
             let replication_stream = Arc::new(ReplicationStream::new(
                 &state.source,
@@ -601,6 +603,7 @@ impl ReplicationClusterTask {
             let task = ReplicationShardTask::builder()
                 .source_shard(source_shard)
                 .slot(slot)
+                .origins(origins)
                 .tables(tables)
                 .replication_stream(replication_stream)
                 .build();
@@ -652,6 +655,7 @@ impl ReplicationClusterTask {
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationShardTask {
     pub(crate) slot: ReplicationSlot<Permanent>,
+    pub(crate) origins: Vec<ReplicationOrigin>,
     pub(crate) source_shard: usize,
     pub(crate) tables: Vec<Table>,
     pub(crate) replication_stream: Arc<ReplicationStream>,
@@ -679,6 +683,7 @@ impl Task for ReplicationShardTask {
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {
         let Self {
             slot,
+            origins,
             tables,
             replication_stream,
             source_shard,
@@ -709,7 +714,7 @@ impl Task for ReplicationShardTask {
             shard = source_shard,
             "[replication] stream starting at {initial_lsn}"
         );
-        let mut replication_run = Box::pin(replication_stream.run(&mut stream, tables));
+        let mut replication_run = Box::pin(replication_stream.run(&mut stream, tables, origins));
 
         let report_interval = Duration::from_secs(5);
         let mut report = safe_interval(report_interval);

@@ -75,6 +75,8 @@ pub(crate) struct QueryEngine {
     // or disconnect.
     manual_lock: bool,
     temp_tables: TempTables,
+    // Count how many rows we received from the query we are currently executing.
+    result_row_counter: usize,
 }
 
 impl QueryEngine {
@@ -102,6 +104,7 @@ impl QueryEngine {
             advisory_locks: AdvisoryLocks::default(),
             manual_lock: false,
             temp_tables: Default::default(),
+            result_row_counter: 0,
         })
     }
 
@@ -196,7 +199,7 @@ impl QueryEngine {
         // This is here because ROLLBACK and COMMIT
         // can be handled by a separate path than [`QueryEngine::execute`],
         // e.g., if using two-phase commit.
-        self.check_lock();
+        self.sync_lock();
 
         let command = self.router.command();
 

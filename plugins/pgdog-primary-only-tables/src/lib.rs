@@ -76,11 +76,9 @@ fn read_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn route_query(context: Context<'_>) -> Route {
-    let ast = &context.query;
-
-    let select = match ast.stmts().next() {
-        Some(Node::SelectStmt(s)) => s,
-        Some(Node::ExplainStmt(stmt)) if let Node::SelectStmt(s) = stmt.query() => s,
+    let select = match &context.query.stmt() {
+        Node::SelectStmt(s) => s,
+        Node::ExplainStmt(stmt) if let Node::SelectStmt(s) = stmt.query() => s,
         _ => return Route::default(),
     };
 

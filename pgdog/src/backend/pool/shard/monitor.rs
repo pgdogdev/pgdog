@@ -209,6 +209,7 @@ mod test {
             timestamp: TimestampTz::decode(timestamp.as_bytes(), Format::Text).unwrap(),
             fetched: SystemTime::now(),
             aurora: false,
+            timeline: 0,
         }
         .into()
     }

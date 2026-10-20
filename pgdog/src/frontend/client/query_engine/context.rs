@@ -8,7 +8,8 @@ use crate::{
             transaction_type::{QueryTimestamps, Transaction},
         },
     },
-    net::{FrontendPid, Parameters, Stream},
+    net::{FrontendPid, Stream},
+    parameters::ParameterStore,
 };
 use chrono::{DateTime, Utc};
 
@@ -21,9 +22,7 @@ pub(crate) struct QueryEngineContext<'a> {
     /// Prepared statements cache.
     pub(super) prepared_statements: &'a mut PreparedStatements,
     /// Client session parameters.
-    pub(super) params: &'a mut Parameters,
-    /// Parameters from the client's startup message.
-    pub(super) startup_params: &'a Parameters,
+    pub(super) params: &'a mut ParameterStore,
     /// How many requests are left to execute in an extended pipeline.
     pub(super) pipeline: Pipeline,
     /// Client's socket to send responses to.
@@ -59,7 +58,6 @@ impl<'a> QueryEngineContext<'a> {
                 id: FrontendPid::from(&client.key),
                 prepared_statements: &mut client.prepared_statements,
                 params: &mut client.params,
-                startup_params: &client.startup_params,
                 stream: &mut client.stream,
                 transaction: client.transaction,
                 timeouts: client.timeouts,
@@ -90,7 +88,6 @@ impl<'a> QueryEngineContext<'a> {
             id: mirror.id,
             prepared_statements: &mut mirror.prepared_statements,
             params: &mut mirror.params,
-            startup_params: &mirror.startup_params,
             stream: &mut mirror.stream,
             transaction: mirror.transaction,
             timeouts: mirror.timeouts,

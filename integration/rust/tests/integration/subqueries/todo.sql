@@ -1,0 +1,540 @@
+-- PLACEHOLDERS
+--   <st1>, <st2>   sharded tables
+--   <omni>         omni table 
+--   <a>, <b>       a table that is either sharded or omni (given by case)
+--   <key>          sharding key column
+--   <col>          any column that is not the sharding key
+--   <cols>         column list
+--   <x>            a column that is either <key> or <col> (given by case) 
+--   <k1>, <k2>     sharding key values on different shards
+--   $1             bind parameter
+--   <sq>           a subquery
+--   <q1>, <q2>     whole SELECT statements
+--   <agg>          aggregate function (count, sum, avg, ..)
+--   <fn>           any other function, <expr> any expression
+--   <op>           comparison operator (given by case)
+--   <filter>       extra WHERE predicate
+--   <n>            row count
+--   <join>, <setop>, <dml>, <lock>, <src>, <pred>, <order>  given by case
+--   <schema>       schema name, <alias> table alias
+--   a, b, c, s     CTE and derived-table aliases
+--   ..             anything.
+
+-- SOURCES
+--   A  app test suite
+--   O  ORM 
+--   Q  job queue
+-- 
+--   A1 Mastodon   A2 Discourse   A3 Zulip   A4 Mattermost   A5 Lemmy   A6 GitLab
+--   O1 Rails   O2 Django   O3 Laravel   O4 SQLAlchemy   O5 Ecto   O6 Diesel   O7 Prisma   O8 Hibernate   O9 EF Core   Oa TypeORM   Ob Sequelize   Oc Drizzle
+--   Q1 River   Q2 Oban   Q3 GoodJob   Q4 graphile-worker   Q5 pg-boss   Q6 Que   Q7 Solid Queue   Q8 Hangfire   Q9 Procrastinate
+
+-- FIRST
+--   basis: Mastodon's test suite (highest to lowest share of subquery calls)
+--
+-- [DONE EXCEPT INSERT] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
+--       case: <x> is <col>
+--       case: <x> is <key>
+-- [DONE]  [A1 A2 A3 A4 A5 A6 O9 Q7] [update, delete] .. WHERE <col> <op> (<sq>)
+--       case: <op> = IN
+--       case: <op> = NOT IN (with NULLs)
+--       case: <op> = EXISTS
+--       case: <op> = NOT EXISTS
+--       case: <op> = scalar comparison
+-- [DONE]  [A1 A2 A3 A4 A6 O1 O2 O3 O9] [update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <st1>)
+--       condition: self-reference
+--  [DONE] [A1 A2 A3 A4 A6] [select] .. WHERE <col> IN (<sq>)
+--  [DONE)] [A1 A3] [select, update, delete] .. WHERE <key> IN (<sq>)
+--   [A1 A2 A3 A4 A5 A6] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
+--       condition: no sharding key value anywhere in the INSERT statement
+--   [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
+--       condition: source rows are on other shards than their destination
+--   [A1 A2 A3] [insert] INSERT INTO <st1> SELECT .. RETURNING ..
+--       condition: cross-shard; row count and rows from all shards
+--   [A1 A2 A4] [insert] INSERT INTO <st1> SELECT .. FROM <st1>
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <key> = $1)
+--   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>)
+--       condition: <sq> has no key
+--   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k1>)
+--       condition: same shard; single-shard route
+--   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1)
+--       condition: same parameter in outer and inner
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <col> = $1)
+--   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
+--       case: <op> = AND
+--       case: <op> = OR
+--       case: <op> = AND NOT
+--   [A1 A2 A3 A4 A6 O1 O2 O3 O4 O5 O7] [select] SELECT <agg>(..) FROM (<sq>) s
+--       condition: <sq> is cross-shard
+-- [DONE] [A1 A2 A3 A4 A5 A6 O2 O7 Q5] [select] .. WHERE NOT EXISTS (<sq>)
+-- [DONE] [A1 A2 A3 A4 A6 Q3] [select] .. WHERE <col> NOT IN (<sq>)
+--       condition: <sq> result with and without NULLs
+--   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
+--   [A1 A2 A3 A4 A6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
+--   [A1 A2 A4 A5 A6] [select, insert, delete] .. (SELECT <agg>(<col>) FROM <st2>)
+--       condition: computed across all shards
+--       case: <agg> = count
+--       case: <agg> = sum
+--       case: <agg> = min
+--       case: <agg> = max
+--       case: <agg> = avg
+--   [A1 A2 A3 A4 A5 A6] [select, update, delete] .. WHERE <col> IN (<sq> WHERE <col> IN (<sq> WHERE <col> IN (<sq>)))
+--       condition: mix of single-shard and cross-shard levels
+-- [DONE] [A1 A2 A3 A6 Q3] [select] .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
+--   [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
+--   [A1 A2 A3 A4 A6 O7 O9 Ob] [select] .. WHERE EXISTS (<sq> WHERE <st2>.<x> = <st1>.<x> AND <filter>)
+--   [A1 A2 A6 O9 Oc Q6] [select] .. FROM <st1> <join> LATERAL (<sq> WHERE <st2>.<x> = <st1>.<x>) s ..
+--       case: <join> = comma
+--       case: <join> = LEFT JOIN .. ON TRUE
+--       case: <join> = CROSS JOIN
+--       case: <join> = JOIN .. ON TRUE
+--   [A1 A2 A3 A4 A5 A6] [select, insert, update] .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
+--       condition: <sq> is cross-shard; the <n> rows come from several shards
+--   [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
+--   [A1 A2 A3 A4 A6 O3 O9 Q5] [select, insert] .. (SELECT .., <fn>() OVER (..) FROM <st2>)
+--   [A1 A2 A6 Q6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM c, LATERAL (<sq>) s) SELECT .. FROM c
+--   [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq>)
+--       case: key in outer only
+--       case: key in both, same shard
+--   [A1 A2 A4 A5 A6] [select] SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s
+--       condition: <sq> is cross-shard; the <n> rows come from several shards
+--   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
+--   [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
+--   [A1 A2 A4 A6] [select] SELECT .. FROM (<q1> UNION <q2>) s
+--   [A1 A2 A4 A6 O7 O9] [select] SELECT .. FROM <st1> JOIN (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col>) s ON ..
+--   [A1 A2 A3 A4 A6] [select] .. (SELECT .. FROM <st2> ORDER BY .. OFFSET <n>)
+--   [A1 A2 A4 A6 Oa] [select] SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>
+--       condition: <sq> is cross-shard
+--   [A1 A2 A4 A5 A6] [select] SELECT <col>, (<sq> WHERE <st2>.<x> = <st1>.<x>) FROM <st1>
+--   [A1 A2 A3] [select] SELECT ARRAY(<sq>) FROM <st1>
+--   [A1 A2 A3 A4 A5 A6] [select, insert] .. (SELECT DISTINCT .. FROM <st2>)
+--   [A1 A2 A5 A6] [select] WITH c AS (<q1> UNION <q2>) SELECT .. FROM c
+--   [A1 A2 A3 A4 A6 Q1 Q5] [insert] INSERT INTO <st1> SELECT .. ON CONFLICT ..
+--       case: DO NOTHING
+--       case: DO UPDATE SET <col> = EXCLUDED.<col>
+--   [A1 A2 A3 A4 A6] [select] SELECT EXISTS (<sq>) FROM <st1>
+--   [A1 A2 A3 A4 Q5] [insert] INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
+--   [A1 A2 A3 A4 A5 A6] [select, insert] WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b ..
+--       case: one CTE over another
+--       case: same CTE referenced more than once
+--   [A1 A2 A3 A4 A6] [select, insert] .. (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col> HAVING ..)
+--       condition: groups split across shards
+--   [A1 A2 A4 A5 O4] [update] UPDATE <st1> SET .. FROM <st2> WHERE <st1>.<x> = <st2>.<x>
+--       case: <x> is <key> (co-located)
+
+
+-- CORE
+--   basis: 1%+ of subquery calls in the test suite of Discourse / Zulip / Mattermost / Lemmy / GitLab
+
+-- Sharding key placement and routing
+--   [A2 A4 A5] [select] SELECT (SELECT count(*) FROM <st1>)
+--       condition: outer query has no FROM; <sq> is cross-shard
+--   [A3 A4 A5 O3 O6 O9] [select] SELECT EXISTS (<sq>)
+--       condition: outer query has no FROM; <sq> is cross-shard
+--       case: EXISTS (<sq>)
+--       case: NOT EXISTS (<sq>)
+--       case: EXISTS (<sq>) OR EXISTS (<sq>)
+--   [A2 A3 A5 Q1] [insert] INSERT INTO <st1> SELECT .. FROM <src>
+--       condition: row keys are on several shards
+--       case: <src> = generate_series(..)
+--       case: <src> = unnest($1, ..)
+
+-- Sharded, omni and co-location
+--   [?] [insert] INSERT INTO <a> SELECT .. FROM <b>
+--       case: <a> sharded, <b> sharded (same key)
+
+-- Subqueries in predicates and expressions
+--   [A2 A4 A6] [select] SELECT COALESCE((<sq>), ..) FROM <st1>
+--   [A2 A4 A5 A6 O1 Q5] [select, update, delete] .. WHERE (<col>, <col>) <op> (<sq>)
+--       case: <op> = IN
+--       case: <op> = NOT IN
+--   [A2 A4 A5 O9] [select] .. WHERE (<sq> WHERE <st2>.<x> = <st1>.<x>) = ..
+--       condition: correlated scalar subquery on the left of the comparison
+--   [A2 A3] [select] .. WHERE <col> IN (<q1> UNION <q2>)
+--   [A2 A3 A4 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <st2>.<x> = <st1>.<x>)
+--       case: <x> is <key>
+--       case: <x> is <col>
+--   [A2 A3 A4 A6] [update] UPDATE <st1> SET <col> = (<sq>)
+
+-- Derived tables and joins
+--   [A6] [select, delete] .. FROM (VALUES ..) v, LATERAL (<sq> WHERE <st1>.<x> = v.<x> ORDER BY .. LIMIT <n>) s
+--       case: in the FROM of a SELECT
+--       case: DELETE .. WHERE (<col>, <col>) IN (SELECT .. FROM (VALUES ..) v, LATERAL (<sq> .. FOR UPDATE SKIP LOCKED) s)
+--   [A2 O9] [delete] DELETE FROM <st1> USING (<sq>) s WHERE ..
+--   [A2] [select] .. FROM <st1> <join> JOIN (<sq>) s ON ..
+--       case: <join> = RIGHT
+--       case: <join> = FULL
+--       case: <join> = CROSS
+--   [A3] [update] UPDATE <st1> SET .. FROM (VALUES ..) s (..) WHERE ..
+--       condition: rows are on several shards
+--   [A2] [insert] INSERT INTO <st1> SELECT .. FROM <src>
+--       condition: row keys are on several shards
+--       case: <src> = (VALUES ..)
+--       case: <src> = (SELECT 1)
+
+-- Cross-shard results: aggregates, ordering, limits
+--   [A2 A3 A4 A6 O1 O3] [delete] DELETE FROM <st1> WHERE <col> IN (SELECT .. FROM <st1> ORDER BY .. LIMIT <n>)
+--       condition: <sq> is cross-shard; the <n> rows come from several shards
+--   [A2 A3 A4 A6] [update] UPDATE <st1> SET <col> = (SELECT <agg>(<col>) FROM <st2>)
+--       condition: computed across all shards
+--       case: <agg> = count
+--       case: <agg> = sum
+--       case: <agg> = avg
+
+-- CTEs
+--   [A2 A4 A5 A6 Q5] [update] WITH c AS (SELECT ..) UPDATE <st1> SET .. FROM c WHERE ..
+--   [A2 A6] [insert, update, delete] WITH RECURSIVE c AS (..) .. (SELECT .. FROM c)
+--       condition: for DELETE: removes a row and all its descendants
+--   [A2 A6 Q3 Q5] [select, insert, update, delete] WITH c AS [NOT] MATERIALIZED (..) ..
+--   [A2 A4 Q1 Q6] [insert] WITH c AS (SELECT ..) INSERT INTO <st1> SELECT .. FROM c
+
+-- Data-modifying CTEs
+--   [A2 A3 A4 A5 A6 O8] [select, insert, update, delete] WITH c AS (<dml> .. RETURNING ..) .. FROM c
+--       condition: routes to primary, not replica
+--       case: DELETE in the CTE + outer INSERT moves rows
+--       case: <dml> = INSERT
+--       case: <dml> = UPDATE
+--       case: <dml> = DELETE
+--   [A4 A5 Q5] [select] WITH c AS (UPDATE <st1> SET .. RETURNING ..) SELECT <agg>(..) FROM c
+--   [A5] [select] WITH a AS (SELECT .. FOR UPDATE), b AS (UPDATE <st1> .. WHERE (<col>, <col>) = ANY (SELECT .. FROM a) RETURNING 1), c AS (DELETE FROM <st1> .. RETURNING 1) SELECT (SELECT count(*) FROM b), (SELECT count(*) FROM c)
+--       condition: UPDATE and DELETE on the same table; outer query has no FROM
+--   [A2] [select] WITH c AS (INSERT INTO <st1> .. ON CONFLICT DO NOTHING RETURNING ..) SELECT COALESCE((SELECT .. FROM c), (<sq>))
+--       condition: insert or fetch; outer query has no FROM
+
+-- Statement-specific clauses and features
+--   [A2 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq>) RETURNING ..
+--       condition: cross-shard; rows from all shards
+--   [A3 A5 Q3 Q5] [select, update, delete] .. (<sq> <lock>)
+--       case: <lock> = FOR UPDATE
+--       case: <lock> = FOR SHARE
+--       case: <lock> = FOR NO KEY UPDATE SKIP LOCKED
+--       case: <lock> = FOR UPDATE OF <alias> SKIP LOCKED
+--   [A3 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq>) <lock>
+--       case: <lock> = FOR UPDATE
+--       case: <lock> = FOR SHARE
+--   [A5 Q1 Q2 Q3 Q4 Q5] [update] WITH c AS (SELECT .. FROM <st1> ORDER BY .. LIMIT <n> FOR UPDATE SKIP LOCKED) UPDATE <st1> SET .. FROM c WHERE .. RETURNING ..
+--       condition: queue pattern
+--   [?] [insert] INSERT INTO <st1> (<cols>) SELECT ..
+--       condition: column order differs from the table
+
+
+-- COMMON (seen regularly in application queries)
+--   basis: request-based in one of those apps, or in background jobs in several
+
+-- Sharding key placement and routing
+--   [A2 Q8] [insert] INSERT INTO <st1> (<key>, ..) SELECT <k1>, .. WHERE NOT EXISTS (<sq>)
+--       condition: SELECT has no FROM
+--   [?] [update] UPDATE <st1> SET .. FROM <st2> s WHERE .. AND s.<key> = <k1>
+--       condition: key only on the joined table, not on the target
+--   [?] [delete] DELETE FROM <st1> USING <st2> s WHERE .. AND s.<key> = <k1>
+--       condition: key only on the joined table, not on the target
+--   [?] [insert] INSERT INTO <st1> (<key>, ..) SELECT <k1>, .. FROM <st2>
+--   [?] [select] .. WHERE <key> IN (<k1>, <k2>) AND <col> IN (<sq>)
+--   [O9] [select] SELECT $1 IN (<sq>)
+--       condition: outer query has no FROM
+
+-- Sharded, omni and co-location
+--   [A2 A4 O4 O9] [delete] DELETE FROM <st1> USING <st2> WHERE <st1>.<x> = <st2>.<x>
+--       case: <x> is <key> (co-located)
+--   [A2 A4 A5 A6] [select] .. <st1> .. WHERE <col> IN (SELECT .. FROM <omni>)
+--   [A2 A4 A5 A6] [update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <omni>)
+--   [?] [select, update, delete] .. <omni> .. WHERE <col> IN (SELECT .. FROM <omni>)
+--       case: reads go to one shard, no duplicate rows
+--       case: writes applied to all shards
+--   [?] [select] .. FROM <st1> WHERE EXISTS (<sq> WHERE <st2>.<x> = <st1>.<x>)
+--       case: <x> is <key> (co-located)
+--       case: <x> is <col>
+--   [?] [select] .. FROM <st1> JOIN (<sq>) s ON s.<x> = <st1>.<x>
+--       case: <x> is <key> (co-located)
+--       case: <x> is <col>
+--   [?] [insert] INSERT INTO <a> SELECT .. FROM <b>
+--       case: <a> sharded, <b> omni
+--       case: <a> omni, <b> sharded
+--       case: <a> omni, <b> omni
+--   [?] [update] UPDATE <st1> SET .. FROM <st2> WHERE <st1>.<x> = <st2>.<x>
+--       case: <x> is <col>
+--   [?] [delete] DELETE FROM <st1> USING <st2> WHERE <st1>.<x> = <st2>.<x>
+--       case: <x> is <col>
+
+-- Subqueries in predicates and expressions
+--   [A2 A3 A4 A6] [select] .. WHERE <col> = (<sq>)
+--   [A3] [select] .. WHERE <col> IN (<q1> EXCEPT <q2>)
+--   [A4 A6 Q5] [select, update, delete] .. WHERE <col> = ANY (ARRAY(<sq>))
+--   [A2 A3 A4 A6] [update] UPDATE <st1> SET <col> = (<sq> WHERE <st2>.<x> = <st1>.<x>)
+--   [A2 A3] [insert] INSERT INTO <st1> VALUES ((<sq>), ..)
+--   [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2> WHERE <filter>
+--       condition: SELECT returns zero rows
+--   [?] [delete] DELETE FROM <st1> WHERE <col> IN (<sq>)
+--       condition: <sq> returns zero rows; nothing deleted
+--   [?] [select] .. WHERE <col> IN (SELECT .. FROM unnest($1))
+--   [O2] [select] .. WHERE NOT EXISTS (<sq> LIMIT 1)
+--   [Q3] [select] .. WHERE <col> && ARRAY(<sq>)
+--   [Q8] [delete] DELETE FROM <st1> a WHERE <col> NOT IN (SELECT .. FROM <st1> b WHERE b.<x> = a.<x> ORDER BY .. OFFSET <n> LIMIT <n>)
+--   [O7] [select] SELECT <col>, (SELECT json_agg(..) FROM (<sq> WHERE <st2>.<x> = <st1>.<x>) s) FROM <st1>
+--       condition: relation loading; the correlation is inside a derived table
+--   [O9] [update, delete] .. <st1> .. WHERE EXISTS (SELECT 1 FROM (SELECT .. FROM <st1> ORDER BY .. LIMIT <n> OFFSET <n>) s WHERE s.<col> = <st1>.<col>)
+--   [Oa] [select] SELECT 1 FROM (SELECT 1) s WHERE EXISTS (<sq>) LIMIT 1
+--   [O7] [select] .. FROM <st1> WHERE <col> >= (SELECT <col> FROM <st1> WHERE ..)
+--       condition: cursor pagination; subquery on the same table
+
+-- Derived tables and joins
+--   [A2 A3 A4 A6] [select] .. FROM <st1> LEFT JOIN (<sq>) s ON ..
+--   [A2 A3 A4 A6] [select] SELECT .. FROM (SELECT <col>, <agg>(..) FROM <st1> GROUP BY <col>) s WHERE .. ORDER BY ..
+--   [O1 O8] [update] UPDATE <st1> AS a SET .. FROM <st1> JOIN <st2> ON .. WHERE <st1>.<col> = a.<col>
+--       condition: target table joined to itself in FROM
+--   [O4 O8 O9 Ob] [select] SELECT .. FROM (SELECT .. FROM <st1> LIMIT <n>) s LEFT JOIN <st2> ON ..
+--   [Q4 Q5] [update] UPDATE <st1> SET .. FROM <src> s WHERE ..
+--       case: <src> = json_array_elements($1)
+--       case: <src> = json_to_recordset($1)
+--       case: <src> = (SELECT unnest($1), unnest($2))
+--   [Q4] [delete] DELETE FROM <st1> USING unnest($1) s WHERE ..
+--   [Q4] [select] SELECT .. FROM <fn>(ARRAY(<sq>), ..)
+--   [Oc] [select] .. FROM <st1> LEFT JOIN LATERAL (SELECT json_agg(..) FROM (<sq> WHERE <st2>.<x> = <st1>.<x> ORDER BY .. LIMIT <n>) s) t ON TRUE
+--       condition: relation loading
+--   [O9] [update] UPDATE <st1> SET .. FROM (<q1> UNION <q2>) s WHERE ..
+--   [Ob] [select] SELECT .. FROM (SELECT * FROM (<sq> ORDER BY .. LIMIT <n>) a UNION ALL SELECT * FROM (<sq> ORDER BY .. LIMIT <n>) b) s
+
+-- Cross-shard results: aggregates, ordering, limits
+--   [A2 A3 A4 A6 Q4 Q5] [select] .. (SELECT DISTINCT ON (<col>) .. FROM <st2> ORDER BY ..)
+--   [?] [select] SELECT <col>, <agg>(..) FROM (<sq>) s GROUP BY <col>
+--       condition: groups split across shards
+--   [O2 O3] [select] SELECT .. FROM (SELECT .., row_number() OVER (PARTITION BY <col> ORDER BY ..) AS r FROM <st1>) s WHERE s.r <= <n>
+--       condition: partitions split across shards
+--   [Oa] [select] SELECT DISTINCT .. FROM (<sq>) s ORDER BY .. LIMIT <n> OFFSET <n>
+--       condition: pagination with joins
+
+-- CTEs
+--   [A2 A3 A6 Q6 Q7] [select] WITH RECURSIVE c AS ((<sq> ORDER BY .. LIMIT 1) UNION ALL SELECT (<sq> WHERE <col> > c.<col> ORDER BY .. LIMIT 1) FROM c) SELECT .. FROM c
+--       condition: loose index scan
+--   [A2 A4] [delete] WITH c AS (SELECT ..) DELETE FROM <st1> WHERE <col> IN (SELECT .. FROM c)
+--   [A2 A6] [select, insert, update, delete] WITH <st1> AS (..) .. FROM <st1>
+--       condition: CTE has the same name as a sharded table
+--   [Q9] [select] SELECT <col>, (WITH c AS (<sq> WHERE <st2>.<x> = <st1>.<x>) SELECT <agg>(..) FROM c) FROM <st1>
+
+-- Data-modifying CTEs
+--   [A4 Q4] [select] WITH a AS (SELECT ..), b AS (UPDATE <st1> SET .. FROM a WHERE ..) SELECT .. FROM a
+--       condition: b has no RETURNING and is never referenced; routes to primary
+--   [A2 A3 Q5 Q8] [insert] WITH c AS (<dml> .. RETURNING ..) INSERT INTO <st1> SELECT .. FROM c
+--       condition: source and destination on different shards
+--       case: <dml> = DELETE
+--       case: <dml> = UPDATE
+--       case: <dml> = INSERT
+--   [A3 Q4 Q8] [update] WITH c AS (<dml> .. RETURNING ..) UPDATE <st1> SET .. FROM c WHERE ..
+--       condition: source and destination on different shards
+--       case: <dml> = DELETE
+--       case: <dml> = INSERT
+--       case: <dml> = UPDATE
+--   [Q1] [select] WITH c AS (<dml> .. RETURNING ..) SELECT .. FROM <st1> WHERE <col> NOT IN (SELECT .. FROM c) UNION ALL SELECT .. FROM c
+--       case: <dml> = UPDATE
+--       case: <dml> = DELETE
+--   [Q5] [select] WITH a AS (DELETE FROM <st1> .. RETURNING ..), b AS (INSERT INTO <st1> SELECT .. FROM a RETURNING ..), c AS (INSERT INTO <st1> SELECT .. FROM a WHERE <col> NOT IN (SELECT .. FROM b)) SELECT <agg>(..) FROM b
+--       condition: three data-modifying CTEs on the same table
+--   [Q4] [update] WITH a AS (SELECT .. FOR UPDATE SKIP LOCKED), b AS (UPDATE <st2> SET .. FROM a WHERE ..) UPDATE <st1> SET .. FROM a WHERE .. RETURNING ..
+--       condition: b has no RETURNING and is never referenced
+--   [Q8] [insert] WITH a AS (SELECT $1, ..), b AS (UPDATE <st1> SET .. FROM a WHERE .. RETURNING ..) INSERT INTO <st1> SELECT .. FROM a WHERE NOT EXISTS (SELECT .. FROM b)
+--       condition: update-or-insert without ON CONFLICT
+--   [O8] [select] WITH a AS (SELECT ..), b AS (DELETE FROM <st1> WHERE <col> IN (SELECT .. FROM a) RETURNING ..) SELECT count(*) FROM a
+--       condition: b is never referenced
+
+-- Statement-specific clauses and features
+--   [Q4] [select, delete] .. WHERE <col> IN (SELECT .. FROM <st1> ORDER BY .. LIMIT <n> FOR UPDATE SKIP LOCKED)
+--       condition: queue pattern
+--   [?] [select, insert, update, delete] .. (SELECT <fn> ..)
+--       case: <fn> = now()
+--   [?] [insert] INSERT INTO <st1> (<cols>) SELECT .. FROM <st2>
+--       condition: id column omitted
+--       case: filled by pgdog unique id
+--       case: filled by a sequence
+--   [?] [select] .. FROM <schema>.<st1> WHERE <col> IN (SELECT .. FROM <schema>."<st2>" <alias>)
+--       condition: schema-qualified, quoted identifiers, alias same as a table name
+--   [O3] [update, delete] .. <st1> .. WHERE ctid IN (SELECT <st1>.ctid FROM <st1> JOIN ..)
+--       condition: a ctid is only valid on the shard it came from
+--   [O5 Q1] [delete] WITH c AS (SELECT .. FOR UPDATE SKIP LOCKED) DELETE FROM <st1> USING c WHERE .. RETURNING ..
+--       condition: queue pattern
+--   [Q8] [update] UPDATE <st1> SET .. WHERE <col> = (SELECT .. FROM <st1> ORDER BY .. FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING ..
+--       condition: queue pattern
+--   [Q3] [select] .. WHERE <col> IN (WITH c AS MATERIALIZED (..) SELECT .. FROM c WHERE pg_try_advisory_lock(..) LIMIT 1)
+--       condition: queue pattern; session advisory lock taken inside the subquery
+--   [Q6] [select] .. JOIN LATERAL (SELECT * FROM pg_temp.<fn>(..)) s ON TRUE
+--       condition: <fn> is created per connection and takes an advisory lock
+--   [Q1] [insert] INSERT INTO <st1> SELECT unnest($1), unnest($2), .. ON CONFLICT ..
+--       condition: no FROM; rows come from set-returning functions in the select list
+--   [O5] [insert] INSERT INTO <st1> (<cols>) (SELECT ..)
+--       condition: SELECT in parentheses
+--   [Q8] [insert, delete] BEGIN; INSERT INTO <st1> SELECT ..; DELETE FROM <st2> WHERE <col> IN (<sq>); COMMIT
+--       condition: sent as one simple-query string
+
+
+-- OCCASIONAL: valid, and in use, but not often
+--   basis: a few uses in those apps (mostly admin or batch code)
+
+-- Sharding key placement and routing
+--   [] [select] SELECT ARRAY(<sq>)
+--       condition: outer query has no FROM; <sq> is cross-shard
+--   [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2> WHERE <st2>.<key> = <k1>
+--       condition: <st2> not co-located with <st1>
+--   [?] [insert] INSERT INTO <st1> (<key>, ..) SELECT <expr>(<col>), .. FROM <st2>
+--       case: key computed by an expression
+--       case: key computed by a function
+--   [?] [select, update, delete] .. WHERE <pred>
+--       condition: key not usable for routing; in the outer query and inside <sq>
+--       case: <pred> = <key> = <k1> OR ..
+--       case: <pred> = NOT (<key> = <k1>)
+--       case: <pred> = <key> > <k1>
+--   [?] [select] .. WHERE <col> IN (<sq> WHERE <pred>)
+--       case: <pred> = <key> = NULL
+--       case: <pred> = <key> IS NULL
+--   [?] [select] WITH <st1> AS (SELECT ..) SELECT .. FROM <st1> WHERE <key> = <k1>
+--       condition: CTE has the same name as a sharded table
+--   [?] [update] UPDATE <st1> SET <key> = (<sq>) WHERE ..
+--       condition: row must move shards
+--       case: shard_key rewrite enabled
+--       case: shard_key rewrite set to ignore
+--       case: shard_key rewrite set to error
+--   [?] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k2>)
+--       condition: keys on different shards
+--   [?] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k2>)
+--       condition: keys on different shards
+--   [?] [select, update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <st2> WHERE <st2>.<key> = <k1>)
+--       condition: <st2> not co-located with <st1>
+--   [?] [insert] INSERT INTO <st1> (<key>, ..) VALUES ((<sq>), ..)
+--   [?] [select] SELECT .. FROM (<q1> UNION <q2>) s WHERE s.<key> = <k1>
+--       condition: outer query has the sharding key
+--       case: set operation in a derived table
+--       case: set operation in a CTE
+--   [] [select, update, delete] .. WHERE <key> = (<sq>)
+
+-- Sharded, omni and co-location
+--   [?] [update, delete] .. WHERE <col> IN (<sq>)
+--       condition: <sq> rows are on a different shard than the row being changed
+--   [] [select, update, delete] .. <omni> .. WHERE <col> IN (SELECT .. FROM <st1>)
+
+-- Subqueries in predicates and expressions
+--   [A2 A4 A6] [select] SELECT CASE WHEN <col> IN (<sq>) THEN .. ELSE .. END FROM <st1>
+--   [A2 A5 A6] [select, update, delete] .. WHERE <col> = ANY (<sq>)
+--   [A2 A6] [select] .. ORDER BY (<sq>)
+--   [A2 A4] [select] SELECT <expr> FROM <st1>
+--       case: <expr> = <fn>((<sq>))
+--       case: <expr> = <agg>((<sq>))
+--       case: <expr> = NULLIF((<sq>), ..)
+--   [A2 A6] [select] .. FROM <st1> JOIN <st2> ON <st1>.<col> IN (<sq>)
+--   [A6] [select] .. GROUP BY (<sq>)
+--   [] [select] SELECT <col>, <agg>(..) FROM <st1> GROUP BY <col> HAVING <agg>(..) > (<sq> WHERE <st2>.<x> = <st1>.<col>)
+--   [?] [select] .. WHERE <pred> (<sq>)
+--       condition: <sq> returns zero rows
+--       case: <pred> = <col> IN
+--       case: <pred> = <col> = ANY
+--       case: <pred> = <col> = ALL
+--       case: <pred> = EXISTS
+--   [?] [select] SELECT (<sq>) FROM <st1>
+--       case: <sq> returns zero rows (NULL)
+--       case: <sq> returns more than one row (error)
+--   [?] [update] UPDATE <st1> SET <col> = (<sq>)
+--       case: <sq> returns zero rows (NULL)
+--       case: <sq> returns more than one row (error)
+--   [?] [select] .. FROM <st1> WHERE EXISTS (<sq> WHERE EXISTS (<sq> WHERE .. = <st1>.<x>))
+--       condition: innermost subquery references the outermost query
+--   [?] [select] SELECT <agg>(..) FILTER (WHERE <col> IN (<sq>)) FROM <st1>
+--   [?] [delete] DELETE FROM <st1> WHERE <col> IN (SELECT .. FROM <st1>)
+--       condition: de-duplication
+--       case: with ctid
+--       case: with row_number()
+--   [?] [select] .. WHERE EXISTS (<q1> UNION <q2>)
+
+-- Derived tables and joins
+--   [A6] [select] SELECT .. FROM (<sq>) s (a, b)
+--   [] [insert] INSERT INTO <st1> <q1> <setop> <q2>
+--       case: <setop> = UNION
+--       case: <setop> = INTERSECT
+--       case: <setop> = EXCEPT
+--   [?] [update] UPDATE <st1> SET .. FROM <st2>, LATERAL (<sq>) s WHERE ..
+--   [?] [delete] DELETE FROM <st1> USING LATERAL (<sq>) s WHERE ..
+--   [?] [select] .. WHERE <col> IN (<src>)
+--       case: <src> = SELECT 1
+--       case: <src> = VALUES ..
+--       case: <src> = SELECT .. FROM generate_series(..)
+--   [?] [select] .. FROM (<sq>) a JOIN (<sq>) b ON ..
+--       condition: both cross-shard
+
+-- Cross-shard results: aggregates, ordering, limits
+--   [?] [select] SELECT .. FROM (<sq>) s ORDER BY <expr>
+--       case: <expr> = s.<col>
+--       case: <expr> = <fn>(s.<col>)
+--   [?] [select, insert, delete] .. (SELECT <agg>(<col>) FROM <st2>)
+--       condition: computed across all shards
+--       case: <agg> = count(DISTINCT)
+--       case: <agg> = stddev
+--   [O2 O3 O5] [select] SELECT <agg>(..) FROM (<q1> UNION <q2>) s
+
+-- CTEs
+--   [A6] [select] WITH c AS (..) SELECT .. FROM <st1>
+--       condition: c is never referenced
+--   [?] [update, delete] WITH a AS (..), b AS (SELECT .. FROM a) .. WHERE <col> IN (SELECT .. FROM a JOIN b ..)
+--   [?] [select] WITH a AS (.. WHERE <key> = <k1>), b AS (SELECT .. FROM a, <st2> WHERE <st2>.<key> = <k2>) SELECT .. FROM b
+--       condition: the two CTEs are on different shards
+
+-- Data-modifying CTEs
+--   [A4] [delete] WITH c AS (DELETE FROM <st1> .. RETURNING ..) DELETE FROM <st2> WHERE <col> IN (SELECT .. FROM c)
+--   [?] [select] WITH c AS (UPDATE <st1> SET .. RETURNING *) SELECT 1
+--       condition: no key and no outer FROM
+--   [?] [select] WITH c AS (UPDATE <omni> SET .. RETURNING ..) SELECT <agg>(..) FROM c
+--       condition: write runs on every shard
+--       case: <agg> = count
+--       case: <agg> = sum
+
+-- Statement-specific clauses and features
+--   [A2] [insert] INSERT .. ON CONFLICT .. DO UPDATE SET <col> = (<sq>)
+--   [?] [insert] INSERT INTO <st1> VALUES (<k1>, ..), (<k2>, (<sq>))
+--       condition: tuples on different shards, subquery in only some
+--       case: split_inserts rewrite enabled
+--       case: split_inserts rewrite disabled
+--   [?] [insert] INSERT INTO <st1> (..) [OVERRIDING SYSTEM VALUE] SELECT ..
+--       condition: DEFAULT values, generated columns
+--   [?] [select] EXPLAIN [ANALYZE] SELECT .. WHERE <col> IN (<sq>)
+--   [?] [insert] INSERT INTO <st1> (<cols>) SELECT ..
+--       condition: <key> column omitted
+--   [?] [select, insert, update, delete] .. (SELECT <fn> ..)
+--       case: <fn> = random()
+--       case: <fn> = nextval(..)
+--   [?] [select] CREATE VIEW v AS SELECT .. WHERE <col> IN (<sq>); SELECT .. FROM v
+--   [] [update] UPDATE <st1> SET .. WHERE <col> IN (SELECT .. FROM <st1> ORDER BY .. LIMIT <n> FOR UPDATE SKIP LOCKED)
+--       condition: queue pattern
+
+
+-- RARE: unusual syntax, unlikely in app code
+--   basis: no use found in those apps
+
+-- Subqueries in predicates and expressions
+--   [] [select] .. LIMIT (<sq>) OFFSET (<sq>)
+--   [] [select, update, delete] .. WHERE <col> > ALL (<sq>)
+--   [?] [select] .. WHERE <col> = SOME (<sq>)
+--   [?] [select] .. WHERE <col> IS [NOT] DISTINCT FROM (<sq>)
+--   [?] [select] .. WHERE <col> BETWEEN (<sq>) AND (<sq>)
+--   [?] [select] SELECT <fn>() OVER (PARTITION BY (<sq>) ORDER BY (<sq>)) FROM <st1>
+
+-- Derived tables and joins
+--   [?] [select] SELECT .. FROM (<sq>)
+--       condition: no alias (PG 16+)
+
+-- CTEs
+--   [?] [select] WITH RECURSIVE c AS (..) SEARCH <order> FIRST BY .. SET .. CYCLE .. SET .. USING .. SELECT .. FROM c
+--       case: <order> = DEPTH
+--       case: <order> = BREADTH
+--   [?] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
+--       condition: recursive step joins rows on other shards
+
+-- Statement-specific clauses and features
+--   [] [insert] INSERT INTO <st1> SELECT ..
+--       condition: no column list; columns resolved from the schema
+--   [] [insert, update, delete] .. RETURNING (<sq>)
+--   [] [update] UPDATE <st1> SET (<col>, <col>) = (<sq>)
+--   [?] [insert] INSERT .. ON CONFLICT .. DO UPDATE SET .. WHERE <col> IN (<sq>)
+
+
+
+
+
+
+
+-- TODO: likely missing other kinds from other apps / libs / ORMs / queues / etc.

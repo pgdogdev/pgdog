@@ -90,33 +90,9 @@ impl Recovery {
         server: &mut Server,
         recovery: ConnectionRecovery,
     ) -> Result<bool, Error> {
-        if server.needs_drain() {
-            if server.has_more_messages() {
-                if !recovery.can_recover() || server.is_sending_request() {
-                    server.force_close();
-                    return Ok(false);
-                }
-                debug!(
-                    "[cleanup] draining data from \"{}\" server [{}]",
-                    server.stats().get_state(),
-                    server.addr()
-                );
-
-                // Drain replies without Sync, which could commit an implicit transaction.
-                while server.has_more_messages() {
-                    server.read().await?;
-                }
-            }
-
-            if !server.in_sync() && server.in_transaction() && !server.out_of_sync() {
-                if !recovery.can_rollback() {
-                    server.force_close();
-                    return Ok(false);
-                }
-                server.rollback_and_synchronize().await?;
-            } else {
-                server.drain().await?;
-            }
+        if server.needs_drain() && !server.recover_protocol(recovery).await? {
+            server.force_close();
+            return Ok(false);
         }
 
         Ok(true)
@@ -396,6 +372,63 @@ mod test {
             assert_eq!(state.errors, 0);
             let rows: Vec<i32> = guard.fetch_all("SELECT 1").await?;
             assert_eq!(rows, vec![1]);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_recovery_rolls_back_execute_without_sync()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for read_responses in [true, false] {
+            let pool = pool(ConnectionRecovery::Recover);
+            let mut guard = pool.get(&Request::default()).await?;
+            let id = guard.id();
+
+            guard
+                .execute(
+                    "CREATE TEMP TABLE recovery_execute_flush (value integer); \
+                     INSERT INTO recovery_execute_flush VALUES (10)",
+                )
+                .await?;
+            guard
+                .send(
+                    &vec![
+                        Parse::named(
+                            "recovery_update",
+                            "UPDATE recovery_execute_flush SET value = 77",
+                        )
+                        .into(),
+                        Bind::new_statement("recovery_update").into(),
+                        Execute::new().into(),
+                        Flush.into(),
+                    ]
+                    .into(),
+                )
+                .await?;
+
+            if read_responses {
+                for code in ['1', '2', 'C'] {
+                    assert_eq!(guard.read().await?.code(), code);
+                }
+                assert!(!guard.has_more_messages());
+                assert!(guard.statement_executed());
+            } else {
+                assert!(guard.has_more_messages());
+            }
+            assert!(guard.needs_drain());
+            drop(guard);
+
+            let mut guard = pool.get(&Request::default()).await?;
+            assert_eq!(
+                guard.id(),
+                id,
+                "backend should be reused when read_responses={read_responses}"
+            );
+            let values: Vec<i32> = guard
+                .fetch_all("SELECT value FROM recovery_execute_flush")
+                .await?;
+            assert_eq!(values, vec![10]);
         }
 
         Ok(())

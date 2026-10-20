@@ -3,8 +3,8 @@
 use crate::net::{
     Error, c_string,
     messages::{BackendKeyData, ProtocolVersion},
-    parameter::{ParameterValue, Parameters},
 };
+use crate::parameters::{ParameterValue, Parameters};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::debug;
@@ -72,7 +72,7 @@ impl Startup {
                     return Err(Error::UnsupportedStartup(code));
                 }
 
-                let mut params = Parameters::default();
+                let mut startup = vec![];
                 let mut unrecognized_options = vec![];
                 loop {
                     let name = c_string(stream).await?;
@@ -90,7 +90,7 @@ impl Startup {
                         unrecognized_options.push(name);
                     } else if name == "search_path" {
                         let value = search_path(&value);
-                        params.insert(name, value);
+                        startup.push((name, value));
                     } else if name == "options" {
                         let value = value.replace('+', " ");
                         let kvs = value.split("-c");
@@ -110,14 +110,16 @@ impl Startup {
                                     } else {
                                         ParameterValue::from(value)
                                     };
-                                    params.insert(name, value);
+                                    startup.push((name.to_string(), value));
                                 }
                             }
                         }
                     } else {
-                        params.insert(name, value);
+                        startup.push((name, value.into()));
                     }
                 }
+
+                let params = Parameters::new(startup);
 
                 Ok(Startup::Startup {
                     version,
@@ -203,7 +205,7 @@ impl super::ToBytes for Startup {
 
                 for (name, value) in params.deref() {
                     if let ParameterValue::String(value) = value {
-                        params_buf.put_slice(name.as_bytes());
+                        params_buf.put_slice(name.as_str().as_bytes());
                         params_buf.put_u8(0);
 
                         params_buf.put(value.as_bytes());

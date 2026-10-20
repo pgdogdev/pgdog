@@ -11,7 +11,8 @@ use tokio::select;
 use tracing::{info, warn};
 
 use super::{
-    Clients, ClientsLocked, Listeners, LookupMetrics, MirrorStatsMetrics, Pools, QueryCache, TwoPc,
+    Clients, ClientsLocked, Listeners, LookupMetrics, MirrorStatsMetrics, Pools, QueryCache,
+    TokenCache, TwoPc,
 };
 use crate::tasks;
 
@@ -40,6 +41,12 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .map(|m| m.to_string())
         .collect();
     let query_cache = query_cache.join("\n");
+    let token_cache: Vec<_> = TokenCache::load()
+        .metrics()
+        .into_iter()
+        .map(|m| m.to_string())
+        .collect();
+    let token_cache = token_cache.join("\n");
     let two_pc = TwoPc::load();
     let metrics_data = clients.to_string()
         + "\n"
@@ -54,6 +61,8 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         + &listeners
         + "\n"
         + &query_cache
+        + "\n"
+        + &token_cache
         + "\n"
         + &two_pc.to_string();
     let response = Response::builder()

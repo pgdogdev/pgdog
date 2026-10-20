@@ -1,7 +1,9 @@
 FROM ubuntu:latest
 
+# pg-internals runs PostgreSQL configure and generates bindings/catalogs.
 RUN apt update && \
-    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold
+    apt install -y build-essential cmake clang curl pkg-config libssl-dev git mold \
+        libclang-dev libicu-dev libreadline-dev zlib1g-dev bison flex perl
 
 # Install Rust.
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y

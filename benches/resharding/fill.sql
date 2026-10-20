@@ -9,6 +9,7 @@
 --   documents  : scale/100 rows — body ≈ 32 KB (STORAGE EXTERNAL).
 --   files      : scale/100 rows — content ≈ 4 KB bytea (TOAST).
 --   ledger     : scale/100 rows — notes ≈ 16 KB (STORAGE EXTERNAL).
+--   small txns : scale/25 single-row sessions inserts, each its own transaction.
 --
 -- The TOAST tables share their row count so a single BENCH_SCALE knob controls
 -- everything: inline rows = scale, TOAST rows = scale/100.
@@ -19,6 +20,7 @@
 \getenv scale BENCH_SCALE
 \set QUIET on
 SET client_min_messages TO warning;
+SET synchronous_commit TO off;
 \if :{?scale}
 \else
 \set scale 100000
@@ -119,3 +121,16 @@ SELECT format(
 )
 FROM unnest(ARRAY['sessions', 'documents', 'files', 'ledger']) AS t,
      generate_series(2, :copies) AS g \gexec
+
+-- ── small transactions (scale/25 single-row inserts, autocommit) ──────────────
+SELECT format(
+    'INSERT INTO bench_copy.sessions (tenant_id, user_id, device_id, session_id, correlation_id, '
+    'request_id, trace_id, started_at, ended_at, last_seen_at, expires_at) '
+    'VALUES (%s, %L, %L, gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), %L, '
+    'now(), now() + interval ''1 hour'', now(), now() + interval ''30 days'')',
+    gs.i,
+    md5((gs.i % 100000)::text)::uuid,
+    md5((gs.i % 10000)::text)::uuid,
+    md5(gs.i::text)::uuid
+)
+FROM generate_series(:shard_index + 1, :scale / 25, :num_shards) AS gs(i) \gexec
