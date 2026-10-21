@@ -24,12 +24,12 @@ impl<'a> StatementRewrite<'a> {
             let mut parser =
                 StatementParser::new_that_ignore_subqueries(outer_stmt, None, self.schema);
 
-            parser.shard().map_err(|_| Error::OuterQuerySharding)?
+            parser.shard().map_err(|_| Error::SubqueryShardingError)?
         };
 
         // Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
         if let Some((sub_link, _)) = where_clause::has_sub_link_in_where(outer_stmt) {
-            return Ok(self.handle_subquery_in_where(outer_statement_shard, sub_link));
+            return self.handle_subquery_in_where(outer_statement_shard, sub_link);
         }
 
         // Determine if there's a SELECT FROM in an INSERT.

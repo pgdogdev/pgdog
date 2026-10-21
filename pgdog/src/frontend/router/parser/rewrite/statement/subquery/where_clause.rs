@@ -1,7 +1,8 @@
 use pg_raw_parse::{Node, deparse, nodes::SubLink};
 
 use crate::frontend::router::parser::{
-    Shard, StatementParser, StatementRewrite, rewrite::statement::insert::Subquery,
+    Shard, StatementParser, StatementRewrite,
+    rewrite::statement::{Error, insert::Subquery},
 };
 
 impl<'a> StatementRewrite<'a> {
@@ -9,7 +10,7 @@ impl<'a> StatementRewrite<'a> {
         &mut self,
         outer_statement_shard: Option<Shard>,
         sub_link: &SubLink,
-    ) -> Option<Subquery> {
+    ) -> Result<Option<Subquery>, Error> {
         let subselect = sub_link.subselect();
 
         // Is it sharded? if not, doesn't need to be separate (strictly for WHERE).
@@ -19,24 +20,25 @@ impl<'a> StatementRewrite<'a> {
         let is_subselect_sharded = parser.is_sharded(self.db_schema, self.user, None);
 
         if is_subselect_sharded {
-            if let Some(subselect_shard) = parser.shard().unwrap()
+            if let Some(subselect_shard) =
+                parser.shard().map_err(|_| Error::SubqueryShardingError)?
                 && let Some(outer_statement_shard) = outer_statement_shard
                 && subselect_shard == outer_statement_shard
             {
                 // If they evaluate to the same shard, then we shouldn't send
                 // them separately; proceed as-is.
-                return None;
+                return Ok(None);
             }
 
             let subselect_sql = deparse(subselect).unwrap();
             let subselect_sql = subselect_sql.as_str().to_string();
 
-            return Some(Subquery {
+            return Ok(Some(Subquery {
                 inner_stmt: subselect_sql,
-            });
+            }));
         }
 
-        None
+        Ok(None)
     }
 }
 
