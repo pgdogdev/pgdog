@@ -74,6 +74,7 @@ apt-get install -y --no-install-recommends postgresql-server-dev-18 libkrb5-dev
 cd /tmp
 git clone --depth 1 --branch 2.4.0 https://github.com/percona/pg_stat_monitor
 make -C pg_stat_monitor install
+echo "shared_preload_libraries = 'pg_stat_monitor'" > /etc/postgresql/18/main/conf.d/pg_stat_monitor.conf
 rm -rf pg_stat_monitor /var/lib/apt/lists/*
 EOF
 
