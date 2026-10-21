@@ -1,6 +1,7 @@
 use indexmap::{IndexMap, IndexSet};
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
+use smallvec::SmallVec;
 
 use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::{ClientRequest, PreparedStatements};
@@ -141,19 +142,18 @@ pub(super) fn build_resolved_split_requests(
 /// Combine split requests that were routed to the same shard
 /// into one multi-tuple INSERT per shard.
 pub(crate) fn group_split_requests_by_shard(
-    requests: &[ClientRequest],
+    requests: Vec<ClientRequest>,
     request: &ClientRequest,
     prepared_statements: &mut PreparedStatements,
 ) -> Result<InsertSplitRewriteResult, Error> {
-    let mut groups: IndexMap<Shard, Vec<usize>> = IndexMap::new();
-
-    for (tuple, split) in requests.iter().enumerate() {
-        let shard = split.route().shard().clone();
-        groups.entry(shard).or_default().push(tuple);
+    if !needs_grouping(&requests) {
+        return Ok(InsertSplitRewriteResult::new(requests));
     }
 
-    if groups.len() == requests.len() || groups.len() == 1 {
-        return Ok(InsertSplitRewriteResult::new(requests.to_vec()));
+    let mut groups: IndexMap<&Shard, Vec<usize>> = IndexMap::new();
+
+    for (tuple, split) in requests.iter().enumerate() {
+        groups.entry(split.route().shard()).or_default().push(tuple);
     }
 
     let query = request.query()?.ok_or(Error::EmptyQuery)?;
@@ -162,7 +162,7 @@ pub(crate) fn group_split_requests_by_shard(
         return Err(Error::EmptyQuery);
     };
 
-    let tuple_groups: Vec<Vec<usize>> = groups.values().cloned().collect();
+    let tuple_groups: Vec<Vec<usize>> = groups.into_values().collect();
     let statements = group_insert_statements(insert, &tuple_groups)?;
 
     // TODO(jkaczman): This'll need some consideration in the future w.r.t subquery re-writes,
@@ -196,6 +196,24 @@ pub(crate) fn group_split_requests_by_shard(
         requests: grouped,
         tuples: reordered.then_some(tuple_groups),
     })
+}
+
+fn needs_grouping(requests: &[ClientRequest]) -> bool {
+    let Some((first, rest)) = requests.split_first() else {
+        return false;
+    };
+
+    let same_shard = rest
+        .iter()
+        .all(|split| split.route().shard() == first.route().shard());
+
+    let distinct_shards = requests.iter().enumerate().all(|(index, split)| {
+        requests[..index]
+            .iter()
+            .all(|other| other.route().shard() != split.route().shard())
+    });
+
+    !same_shard && !distinct_shards
 }
 
 fn split_insert_statements(
@@ -312,7 +330,7 @@ impl StatementRewrite<'_> {
         values_lists: &[Node<'_>],
     ) -> (IndexSet<u16>, make::Unique<'mem, &'mem nodes::SelectStmt>) {
         let mut params = IndexSet::new();
-        let mut tuples = Vec::new();
+        let mut tuples: SmallVec<[_; 8]> = SmallVec::new();
 
         for values_list in values_lists {
             let mut tuple = mem.make_unique(*values_list);
@@ -596,7 +614,7 @@ mod tests {
         }
 
         let mut prepared = PreparedStatements::default();
-        let grouped = group_split_requests_by_shard(&requests, &request, &mut prepared).unwrap();
+        let grouped = group_split_requests_by_shard(requests, &request, &mut prepared).unwrap();
 
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped.tuples, Some(vec![vec![0, 1, 3], vec![2]]));

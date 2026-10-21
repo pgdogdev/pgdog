@@ -40,7 +40,8 @@ impl InsertSplitRewriteResult {
         request: &ClientRequest,
         prepared_statements: &mut PreparedStatements,
     ) -> Result<(), Error> {
-        *self = group_split_requests_by_shard(&self.requests, request, prepared_statements)?;
+        let requests = std::mem::take(&mut self.requests);
+        *self = group_split_requests_by_shard(requests, request, prepared_statements)?;
         Ok(())
     }
 
