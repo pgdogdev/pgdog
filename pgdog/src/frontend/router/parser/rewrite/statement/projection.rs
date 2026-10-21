@@ -58,7 +58,7 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
-    pub(crate) having: Option<HavingRewriteResult>,
+    pub(crate) having: Option<Box<HavingRewriteResult>>,
 }
 
 /// The filter and aggregate metadata produced by rewriting a HAVING query.
@@ -247,11 +247,14 @@ fn build(
                     "every GROUP BY expression must be a selected column or ordinal",
                 ));
             }
-            plan.having = Some(HavingRewriteResult::new(having, rewritten_aggregate));
+            plan.having = Some(Box::new(HavingRewriteResult::new(
+                having,
+                rewritten_aggregate,
+            )));
         }
         let aggregate = plan
             .having
-            .as_ref()
+            .as_deref()
             .map(HavingRewriteResult::aggregate)
             .or(aggregate.as_ref())
             .expect("non-HAVING aggregate parsed before projection rewrite");

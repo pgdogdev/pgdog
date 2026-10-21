@@ -383,7 +383,7 @@ mod test {
         ]));
 
         let plan = ProjectionRewritePlan {
-            having: Some(HavingRewriteResult::new(
+            having: Some(Box::new(HavingRewriteResult::new(
                 crate::frontend::router::parser::HavingRewritePlan::new(
                     HavingExpr::Compare {
                         left: HavingValue::new("__pgdog_having_0".into()),
@@ -393,7 +393,7 @@ mod test {
                     vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
                 ),
                 aggregate.clone(),
-            )),
+            ))),
             ..Default::default()
         };
 
