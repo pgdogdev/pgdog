@@ -38,14 +38,14 @@ impl Command for ShowQueryCache {
             .message(),
         ];
 
-        queries.sort_by_cached_key(|v| v.1.stats.lock().hits);
+        queries.sort_by_cached_key(|v| v.1.stats().hits);
 
         for query in queries.into_iter().rev() {
             if !self.filter.is_empty() && !query.0.to_lowercase().contains(&self.filter) {
                 continue;
             }
             let mut data_row = DataRow::new();
-            let stats = { *query.1.stats.lock() };
+            let stats = query.1.stats();
             data_row
                 .add(&*query.0)
                 .add(stats.hits)

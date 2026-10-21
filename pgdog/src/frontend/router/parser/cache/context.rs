@@ -8,17 +8,12 @@ use crate::frontend::client::QueryTimestamps;
 use crate::parameters::{ParameterStore, ParameterValue};
 
 /// Context for AST parsing and rewriting.
-///
-/// This struct owns the sharding schema and db schema since they are
-/// typically computed from the cluster. The user and search_path are
-/// borrowed references.
 #[derive(Debug)]
-#[cfg_attr(test, derive(Default))]
 pub(crate) struct AstContext<'a> {
     /// Sharding schema configuration.
-    pub(crate) sharding_schema: ShardingSchema,
+    pub(crate) sharding_schema: &'a ShardingSchema,
     /// Database schema with table/column info.
-    pub(crate) db_schema: Schema,
+    pub(crate) db_schema: &'a Schema,
     /// User name for search_path resolution.
     pub(crate) user: &'a str,
     /// Search path for table lookups.
@@ -38,13 +33,32 @@ impl<'a> AstContext<'a> {
     ) -> Self {
         Self {
             sharding_schema: cluster.sharding_schema(),
-            db_schema: cluster.schema(),
+            db_schema: cluster.loaded_schema(),
             user: cluster.user(),
             search_path: params.get("search_path"),
             timezone: params
                 .get("timezone")
                 .or_else(|| cluster.default_timezone()),
             query_timestamps,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for AstContext<'static> {
+    fn default() -> Self {
+        use once_cell::sync::Lazy;
+
+        static EMPTY_SHARDING_SCHEMA: Lazy<ShardingSchema> = Lazy::new(ShardingSchema::default);
+        static EMPTY_SCHEMA: Lazy<Schema> = Lazy::new(Schema::default);
+
+        Self {
+            sharding_schema: &EMPTY_SHARDING_SCHEMA,
+            db_schema: &EMPTY_SCHEMA,
+            user: Default::default(),
+            search_path: Default::default(),
+            timezone: Default::default(),
+            query_timestamps: Default::default(),
         }
     }
 }

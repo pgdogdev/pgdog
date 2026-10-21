@@ -36,7 +36,7 @@ pub(crate) struct RouterContext<'a> {
     /// Routing comment on the original query
     pub(super) comment: Option<&'a RoutingComment>,
     /// Schema.
-    pub(super) schema: Schema,
+    pub(super) schema: &'a Schema,
     /// Sharding key translations resolved for this statement. Routing
     /// reads these before the lookup cache, so a second routing pass
     /// after resolving lookups can't miss.
@@ -74,7 +74,7 @@ impl<'a> RouterContext<'a> {
             ast: buffer.ast.as_deref(),
             cached: buffer.cached,
             comment: buffer.routing_comment.as_deref(),
-            schema: cluster.schema(),
+            schema: cluster.loaded_schema(),
             resolved_lookups: ResolvedLookups::default(),
         })
     }

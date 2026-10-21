@@ -431,14 +431,14 @@ impl RewritePlan {
                     _ => None,
                 })
             {
-                return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
-                    requests: build_resolved_split_requests(query, request)?,
-                }));
+                return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult::new(
+                    build_resolved_split_requests(query, request)?,
+                )));
             }
             let requests = build_split_requests(&self.insert_split, request)?;
-            return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult {
+            return Ok(RewriteResult::InsertSplit(InsertSplitRewriteResult::new(
                 requests,
-            }));
+            )));
         }
 
         if let Some(sharding_key_update) = &self.sharding_key_update

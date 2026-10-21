@@ -14,7 +14,13 @@ use super::prelude::*;
 async fn run_simple(client: &mut TestClient, query: &str) -> ReadyForQuery {
     client.send_simple(Query::new(query)).await;
     expect_message!(client.read().await, CommandComplete);
-    expect_message!(client.read().await, ReadyForQuery)
+    let messages = client.read_until('Z').await.expect("command completed");
+    assert!(
+        messages[..messages.len() - 1]
+            .iter()
+            .all(|message| message.code() == 'S')
+    );
+    ReadyForQuery::try_from(messages.last().expect("ReadyForQuery").clone()).expect("ReadyForQuery")
 }
 
 /// Ask the server what a parameter is actually set to.

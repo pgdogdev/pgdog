@@ -96,7 +96,7 @@ async fn commit_statement_describe() {
     let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
     client
         .engine
-        .end_not_connected(&mut context, client_request, false, true)
+        .end_not_connected(&mut context, client_request, false)
         .await
         .unwrap();
 
@@ -125,7 +125,7 @@ async fn rollback_without_transaction_describe() {
     let (mut context, client_request) = QueryEngineContext::new(&mut client.client);
     client
         .engine
-        .end_not_connected(&mut context, client_request, true, true)
+        .end_not_connected(&mut context, client_request, true)
         .await
         .unwrap();
 
@@ -133,8 +133,12 @@ async fn rollback_without_transaction_describe() {
     expect_message!(client.read().await, BindComplete);
     expect_message!(client.read().await, ParameterDescription);
     expect_message!(client.read().await, NoData);
-    expect_message!(client.read().await, CommandComplete);
-    expect_message!(client.read().await, NoticeResponse);
+    let notice = expect_message!(client.read().await, NoticeResponse);
+    assert_eq!(notice.message.code, "25P01");
+    assert_eq!(
+        expect_message!(client.read().await, CommandComplete).command(),
+        "ROLLBACK"
+    );
     let rfq = expect_message!(client.read().await, ReadyForQuery);
     assert_eq!(rfq.status, 'I');
 }

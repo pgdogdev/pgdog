@@ -605,10 +605,7 @@ fn test_insert_do_update() {
 #[test]
 fn test_begin_extended() {
     let command = query_parser!(QueryParser::default(), Parse::new_anonymous("BEGIN"), false);
-    match command {
-        Command::StartTransaction { extended, .. } => assert!(extended),
-        _ => panic!("not a transaction"),
-    }
+    assert!(matches!(command, Command::StartTransaction { .. }));
 }
 
 #[test]

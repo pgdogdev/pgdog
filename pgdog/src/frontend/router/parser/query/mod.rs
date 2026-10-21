@@ -301,7 +301,7 @@ impl QueryParser {
                 Some(ShardOrLookup::Lookup(pending)) => {
                     match sharding::lookup::shard_for_pending(
                         pending,
-                        &context.sharding_schema,
+                        context.sharding_schema,
                         &context.router_context.resolved_lookups,
                     )? {
                         Some(shard) => {
@@ -625,18 +625,18 @@ impl QueryParser {
         context: &mut QueryParserContext,
     ) -> Result<Command, Error> {
         let schema_lookup = SchemaLookupContext {
-            db_schema: &context.router_context.schema,
+            db_schema: context.router_context.schema,
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
         let mut parser =
-            StatementParser::new(stmt, context.router_context.bind, &context.sharding_schema)
+            StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)
                 .with_schema_lookup(schema_lookup)
                 .with_explain(self.recorder_mut().is_some());
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
-            &context.router_context.schema,
+            context.router_context.schema,
             context.router_context.cluster.user(),
             context.router_context.parameter_hints.search_path,
         );

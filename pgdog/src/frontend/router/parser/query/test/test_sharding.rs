@@ -40,8 +40,8 @@ fn test_dry_run_simple() {
 
     let cache = Cache::queries();
     let stmt = cache.values().next().unwrap();
-    assert_eq!(stmt.stats.lock().direct, 1);
-    assert_eq!(stmt.stats.lock().multi, 0);
+    assert_eq!(stmt.stats().direct, 1);
+    assert_eq!(stmt.stats().multi, 0);
     assert_eq!(command.route().shard(), &Shard::Direct(0));
 }
 

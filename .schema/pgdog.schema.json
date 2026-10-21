@@ -87,7 +87,7 @@
         "pooler_mode": "transaction",
         "port": 6432,
         "prepared_statements": "extended",
-        "prepared_statements_limit": 9223372036854775807,
+        "prepared_statements_limit": 5000,
         "prepared_statements_ttl": null,
         "prepared_statements_ttl_jitter": 30000,
         "pub_sub_channel_size": 0,
@@ -1112,7 +1112,7 @@
           "description": "Number of prepared statements that will be allowed for each server connection.\n\n**Note:** If this limit is reached, the least used statement is closed and replaced with the newest one. Additionally, any unused statements in the global cache above this limit will be removed.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#prepared_statements_limit>",
           "type": "integer",
           "format": "uint",
-          "default": 9223372036854775807,
+          "default": 5000,
           "minimum": 0
         },
         "prepared_statements_ttl": {
@@ -2365,6 +2365,11 @@
             "null"
           ],
           "default": null
+        },
+        "prefix": {
+          "description": "Treat `name` as a prefix, e.g. `name = \"users\"` also matches `users_1` and `users_archive`.\n\n_Default:_ `false`",
+          "type": "boolean",
+          "default": false
         },
         "primary": {
           "description": "Marks this table as the primary sharding anchor (e.g. `users`). PgDog uses the primary table to resolve foreign-key relationships when routing queries.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/sharded_tables/#primary>",

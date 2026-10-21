@@ -470,6 +470,7 @@ fn resolve_sharded_table(
     ShardedTable {
         database: config.database.clone(),
         name: config.name.as_deref().map(normalize_identifier),
+        prefix: config.prefix,
         schema: config.schema.as_deref().map(normalize_identifier),
         column: normalize_identifier(&config.column),
         primary: config.primary,

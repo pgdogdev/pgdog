@@ -89,7 +89,15 @@ impl FromBytes for ParameterStatus {
         let _len = bytes.get_i32();
 
         let name = c_string_buf(&mut bytes);
-        let mut value = c_string_buf(&mut bytes)
+        let raw_value = c_string_buf(&mut bytes);
+        // DateStyle is special.
+        if name.eq_ignore_ascii_case("DateStyle") {
+            return Ok(Self {
+                name,
+                value: raw_value.into(),
+            });
+        }
+        let mut value = raw_value
             .split(",")
             .map(|s| s.trim().to_string())
             .collect::<Vec<_>>();
@@ -125,6 +133,14 @@ mod test {
         buf.put_slice(value.as_bytes());
         buf.put_u8(0);
         buf.freeze()
+    }
+
+    #[test]
+    fn datestyle_roundtrip_preserves_canonical_value() {
+        let original = ParameterStatus::from(("DateStyle", "SQL, YMD"));
+        let parsed = ParameterStatus::from_bytes(original.to_bytes()).expect("DateStyle status");
+        assert_eq!(parsed.name, original.name);
+        assert_eq!(parsed.value, original.value);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt::Display, ops::Deref};
 
 use crate::{
-    net::{Error, Parameter},
+    net::{Error, Parameter, ParameterStatus},
     stats::memory::MemoryUsage,
 };
 
@@ -22,6 +22,18 @@ impl Deref for Parameters {
 }
 
 impl Parameters {
+    /// Add server parameters that the client didn't supply. We'll
+    /// use them to handle RESET without talking to the server again.
+    pub(crate) fn set_server_defaults(&mut self, server_params: &[ParameterStatus]) {
+        for param in server_params {
+            // RESET DateStyle must reset server's original value,
+            // even if client supplied one.
+            if param.name.eq_ignore_ascii_case("DateStyle") && !self.contains_key(&param.name) {
+                self.insert(&param.name, param.value.clone());
+            }
+        }
+    }
+
     /// Look up a parameter by name without allocating.
     pub(crate) fn get(&self, name: impl AsRef<str>) -> Option<&ParameterValue> {
         self.parameters.get(ParameterNameRef::new(name.as_ref()))
