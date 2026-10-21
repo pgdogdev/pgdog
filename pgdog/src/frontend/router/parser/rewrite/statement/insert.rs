@@ -6,7 +6,7 @@ use crate::frontend::router::parser::{Cache, Shard};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{Bind, Parse, ProtocolMessage, Query};
 
-use super::{Error, RewritePlan, StatementRewrite};
+use super::{Error, InsertSplitRewriteResult, RewritePlan, StatementRewrite};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Subquery {
@@ -144,15 +144,16 @@ pub(crate) fn group_split_requests_by_shard(
     requests: &[ClientRequest],
     request: &ClientRequest,
     prepared_statements: &mut PreparedStatements,
-) -> Result<Vec<ClientRequest>, Error> {
+) -> Result<InsertSplitRewriteResult, Error> {
     let mut groups: IndexMap<Shard, Vec<usize>> = IndexMap::new();
+
     for (tuple, split) in requests.iter().enumerate() {
         let shard = split.route().shard().clone();
         groups.entry(shard).or_default().push(tuple);
     }
 
     if groups.len() == requests.len() || groups.len() == 1 {
-        return Ok(requests.to_vec());
+        return Ok(InsertSplitRewriteResult::new(requests.to_vec()));
     }
 
     let query = request.query()?.ok_or(Error::EmptyQuery)?;
@@ -170,7 +171,7 @@ pub(crate) fn group_split_requests_by_shard(
     // a query size limit or Bind param limit.
 
     let mut grouped = Vec::new();
-    for ((params, stmt), tuples) in statements.into_iter().zip(tuple_groups) {
+    for ((params, stmt), tuples) in statements.into_iter().zip(&tuple_groups) {
         let statement_name = if query.prepared() {
             let mut parse = Parse::named("", &stmt);
             prepared_statements.insert(&mut parse);
@@ -189,7 +190,12 @@ pub(crate) fn group_split_requests_by_shard(
         grouped.push(new_request);
     }
 
-    Ok(grouped)
+    let reordered = !tuple_groups.iter().flatten().is_sorted();
+
+    Ok(InsertSplitRewriteResult {
+        requests: grouped,
+        tuples: reordered.then_some(tuple_groups),
+    })
 }
 
 fn split_insert_statements(
@@ -593,6 +599,7 @@ mod tests {
         let grouped = group_split_requests_by_shard(&requests, &request, &mut prepared).unwrap();
 
         assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped.tuples, Some(vec![vec![0, 1, 3], vec![2]]));
 
         assert_eq!(grouped[0].route().shard(), &Shard::Direct(0));
 
