@@ -229,26 +229,18 @@ impl QueryEngine {
             Command::StartTransaction {
                 query,
                 transaction_type,
-                extended,
                 ..
             } => {
-                self.start_transaction(
-                    context,
-                    client_request,
-                    query.clone(),
-                    *transaction_type,
-                    *extended,
-                )
-                .await?
+                self.start_transaction(context, client_request, query.clone(), *transaction_type)
+                    .await?
             }
-            Command::CommitTransaction { extended, .. } => {
+            Command::CommitTransaction { .. } => {
                 if self.backend.connected() {
                     // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, false, *extended)
-                        .await?;
+                    self.end_connected(context, client_request, false).await?;
                 } else {
-                    self.end_not_connected(context, client_request, false, *extended)
+                    self.end_not_connected(context, client_request, false)
                         .await?
                 }
 
@@ -256,14 +248,13 @@ impl QueryEngine {
                     self.comms.update_params(context.params);
                 }
             }
-            Command::RollbackTransaction { extended, .. } => {
+            Command::RollbackTransaction { .. } => {
                 if self.backend.connected() {
                     // Transaction control statements should be excluded from cross-shard checks.
                     context.cross_shard_disabled = Some(false);
-                    self.end_connected(context, client_request, true, *extended)
-                        .await?;
+                    self.end_connected(context, client_request, true).await?;
                 } else {
-                    self.end_not_connected(context, client_request, true, *extended)
+                    self.end_not_connected(context, client_request, true)
                         .await?
                 }
 

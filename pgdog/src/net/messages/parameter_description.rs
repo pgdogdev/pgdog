@@ -40,8 +40,9 @@ impl Protocol for ParameterDescription {
 
 impl ParameterDescription {
     /// Create an empty parameter description.
+    #[cfg(test)]
     pub(crate) fn empty() -> Self {
-        Self { params: Vec::new() }
+        Self::default()
     }
 
     /// Keep only the first `len` parameters.
