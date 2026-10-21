@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Deref};
+use std::{fmt::Display, ops::Deref, sync::Arc};
 
 use super::{
     Aggregate, DistinctBy, Limit, OrderBy, StatementType, advisory_lock::AdvisoryLocks,
@@ -119,8 +119,8 @@ pub(crate) struct Route {
     advisory_locks: AdvisoryLocks,
     /// `DISTINCT` clause, if set.
     distinct: Option<DistinctBy>,
-    /// Temporary columns projected for cross-shard result processing.
-    pub(crate) projection_rewrite_plan: ProjectionRewritePlan,
+    /// Shared metadata for temporary cross-shard projections, absent on the common path.
+    pub(crate) projection_rewrite_plan: Option<Arc<ProjectionRewritePlan>>,
     /// Our query explain plan. We attach
     /// this to the `EXPLAIN` output.
     explain: Option<ExplainTrace>,
@@ -347,7 +347,10 @@ impl Route {
     pub(crate) fn requires_post_processing(&self) -> bool {
         !self.order_by().is_empty()
             || !self.aggregate().is_empty()
-            || self.projection_rewrite_plan.having.is_some()
+            || self
+                .projection_rewrite_plan
+                .as_ref()
+                .is_some_and(|plan| plan.having.is_some())
             || self.distinct().is_some()
             || self.limit().limit.is_some()
             || self.limit().offset.is_some()

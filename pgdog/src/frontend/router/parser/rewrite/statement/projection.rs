@@ -54,18 +54,15 @@ impl OrderByHelper {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
-    pub(crate) having: Option<Arc<HavingRewriteResult>>,
+    pub(crate) having: Option<HavingRewriteResult>,
 }
 
 /// The filter and aggregate metadata produced by rewriting a HAVING query.
-///
-/// Keeping them together behind one `Arc` avoids storing HAVING only aggregate
-/// metadata inline on the common query path.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct HavingRewriteResult {
     rewrite: HavingRewritePlan,
     aggregate: Aggregate,
@@ -119,7 +116,7 @@ impl ProjectionRewritePlan {
 #[derive(Debug, Clone)]
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
-    plan: ProjectionRewritePlan,
+    plan: Option<Arc<ProjectionRewritePlan>>,
 }
 
 pub(crate) fn finalize_after_route(
@@ -181,15 +178,15 @@ pub(crate) fn finalize_after_route(
     {
         parse.set_query(&rewrite.sql);
     }
-    if !rewrite.plan.is_noop()
+    if let Some(plan) = &rewrite.plan
         && let Some(route) = request.route.as_mut()
     {
-        route.projection_rewrite_plan = rewrite.plan.clone();
-        if let Some(having) = &rewrite.plan.having {
+        route.projection_rewrite_plan = Some(plan.clone());
+        if let Some(having) = &plan.having {
             route.set_aggregate(having.aggregate().clone());
         }
         let mut order_by = route.order_by().to_vec();
-        for helper in &rewrite.plan.order_by_helpers {
+        for helper in &plan.order_by_helpers {
             // Prefer the structural position. The source fallback handles a
             // bind-dependent vector sort omitted from this execution's route.
             let position = order_by
@@ -250,14 +247,11 @@ fn build(
                     "every GROUP BY expression must be a selected column or ordinal",
                 ));
             }
-            plan.having = Some(Arc::new(HavingRewriteResult::new(
-                having,
-                rewritten_aggregate,
-            )));
+            plan.having = Some(HavingRewriteResult::new(having, rewritten_aggregate));
         }
         let aggregate = plan
             .having
-            .as_deref()
+            .as_ref()
             .map(HavingRewriteResult::aggregate)
             .or(aggregate.as_ref())
             .expect("non-HAVING aggregate parsed before projection rewrite");
@@ -276,6 +270,7 @@ fn build(
         return Ok(None);
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
+    let plan = (!plan.is_noop()).then(|| Arc::new(plan));
 
     Ok(Some(PostRouteRewrite { sql, plan }))
 }
@@ -342,8 +337,10 @@ mod tests {
         assert_eq!(
             rewrite
                 .plan
-                .having
                 .as_deref()
+                .expect("projection plan")
+                .having
+                .as_ref()
                 .expect("HAVING plan")
                 .hidden_aliases(),
             &["__pgdog_having_1", "__pgdog_having_2", "__pgdog_having_3"]
@@ -360,7 +357,8 @@ mod tests {
         let rewrite = build(&ast, &Schema::default(), false)
             .unwrap()
             .expect("HAVING requires a rewrite");
-        let aggregate = rewrite.plan.having.expect("HAVING plan");
+        let plan = rewrite.plan.expect("projection plan");
+        let aggregate = plan.having.as_ref().expect("HAVING plan");
 
         assert_eq!(aggregate.aggregate().group_by().len(), 1);
         assert_eq!(aggregate.aggregate().targets().len(), 2);
@@ -380,8 +378,10 @@ mod tests {
         assert_eq!(
             rewrite
                 .plan
-                .having
                 .as_deref()
+                .expect("projection plan")
+                .having
+                .as_ref()
                 .expect("HAVING plan")
                 .aggregate()
                 .targets()
@@ -389,7 +389,12 @@ mod tests {
             2
         );
         assert_eq!(
-            rewrite.plan.aggregate_helpers.len(),
+            rewrite
+                .plan
+                .as_deref()
+                .expect("projection plan")
+                .aggregate_helpers
+                .len(),
             2,
             "selected and hidden AVG each require their own COUNT"
         );
@@ -405,7 +410,8 @@ mod tests {
         let rewrite = build(&ast, &Schema::default(), false)
             .unwrap()
             .expect("HAVING requires a rewrite");
-        let aggregate = rewrite.plan.having.expect("HAVING plan");
+        let plan = rewrite.plan.expect("projection plan");
+        let aggregate = plan.having.as_ref().expect("HAVING plan");
 
         assert_eq!(aggregate.aggregate().targets().len(), 1);
         assert_eq!(aggregate.aggregate().group_by().len(), 1);

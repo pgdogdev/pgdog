@@ -142,7 +142,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let rows = if aggregate.is_empty() {
@@ -161,10 +161,13 @@ impl Buffer {
     /// Apply `HAVING` after all partial aggregate rows have been merged.
     pub(super) fn having(
         &mut self,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
         decoder: &Decoder,
     ) -> Result<(), super::Error> {
-        let Some(having) = plan.having.as_deref() else {
+        let Some(plan) = plan else {
+            return Ok(());
+        };
+        let Some(having) = plan.having.as_ref() else {
             return Ok(());
         };
         let evaluator = having::Evaluator::new(having.expression(), decoder);
@@ -179,10 +182,14 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
-        if plan.is_noop() {
+    pub(super) fn drop_helper_columns(
+        &mut self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) {
+        let Some(plan) = plan else {
             return;
-        }
+        };
 
         let drop = plan.drop_columns(decoder.row_description());
 
@@ -318,8 +325,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 1);
@@ -345,8 +351,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 2);
@@ -378,7 +383,7 @@ mod test {
         ]));
 
         let plan = ProjectionRewritePlan {
-            having: Some(std::sync::Arc::new(HavingRewriteResult::new(
+            having: Some(HavingRewriteResult::new(
                 crate::frontend::router::parser::HavingRewritePlan::new(
                     HavingExpr::Compare {
                         left: HavingValue::new("__pgdog_having_0".into()),
@@ -388,7 +393,7 @@ mod test {
                     vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
                 ),
                 aggregate.clone(),
-            ))),
+            )),
             ..Default::default()
         };
 
@@ -402,8 +407,8 @@ mod test {
             buffer.add(row.message()).unwrap();
         }
 
-        buffer.aggregate(&aggregate, &decoder, &plan).unwrap();
-        buffer.having(&plan, &decoder).unwrap();
+        buffer.aggregate(&aggregate, &decoder, Some(&plan)).unwrap();
+        buffer.having(Some(&plan), &decoder).unwrap();
 
         assert_eq!(buffer.len(), 1);
         assert_eq!(buffer.buffer[0].get::<i64>(0, Format::Text).unwrap(), 1);
