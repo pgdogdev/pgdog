@@ -1,7 +1,8 @@
 # Instead of running downloads in every single one of our 30 jobs, this builds an image
 # we can re-use across all of our jobs, saving us roughly 60 secs end-to-end (and 10-15 mins of runner mins in aggregate)
 
-FROM ubuntu:24.04
+# Keep the same Ubuntu release as the base images. Bump the pgdog-ci tag in the workflows when this changes.
+FROM ubuntu:26.04
 
 ARG GO_VERSION=1.26.8
 ARG NODE_VERSION=24.21.0
@@ -90,9 +91,9 @@ done
 EOF
 
 RUN <<EOF
-otp_path="ubuntu-24.04"
+otp_path="ubuntu-26.04"
 if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
-    otp_path="arm64/ubuntu-24.04"
+    otp_path="arm64/ubuntu-26.04"
 fi
 mkdir -p /usr/local/otp
 curl -fsSL "https://builds.hex.pm/builds/otp/${otp_path}/OTP-${OTP_VERSION}.tar.gz" | tar xzf - -C /usr/local/otp --strip-components=1
