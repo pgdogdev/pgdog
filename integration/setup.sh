@@ -75,9 +75,14 @@ export PGHOST=127.0.0.1
 export PGPORT=5432
 export PGUSER='pgdog'
 
+pg_stat_monitor_available=$(psql -tAc "SELECT EXISTS (SELECT FROM pg_available_extensions WHERE name = 'pg_stat_monitor')")
+
 for db in testing pgdog shard_0 shard_1 shard_2 shard_3; do
     psql -c "DROP DATABASE $db" || true
     psql -c "CREATE DATABASE $db" || true
+    if [[ "$pg_stat_monitor_available" == t ]]; then
+        psql -c "CREATE EXTENSION IF NOT EXISTS pg_stat_monitor" ${db}
+    fi
     for user in pgdog pgdog1 pgdog2 pgdog3; do
         psql -c "GRANT ALL ON DATABASE $db TO ${user}"
         psql -c "GRANT ALL ON SCHEMA public TO ${user}" ${db}
