@@ -1,5 +1,14 @@
 version: 2
 updates:
+  # Ubuntu base images in docker/. Minor updates are ignored to skip interim
+  # releases (for example 26.10); only new LTS releases should be proposed.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: ubuntu
+        update-types: ["version-update:semver-minor"]
   # ignore integration tests security alerts
   - package-ecosystem: composer
     directory: /

@@ -1,12 +1,22 @@
-FROM ubuntu:latest
+# Pinned release: ubuntu:latest can move to a new major release without review.
+FROM ubuntu:26.04
 ARG PSQL_VERSION=18
 ENV PSQL_VERSION=${PSQL_VERSION}
 
+
 RUN apt update && \
-    apt install -y curl ca-certificates ssl-cert \
+    # apt upgrade picks up security fixes released after the Ubuntu image was built.
+    apt upgrade -y && \
+    apt install -y curl ca-certificates \
         dnsutils iproute2 iputils-ping net-tools netcat-openbsd traceroute \
         lsof procps strace tcpdump && \
     update-ca-certificates
+
+# SECURITY: Ubuntu 26.04 images ship pebble (a Go binary) that triggers security monitoring.
+# pebble is installed externally without apt in base layer for ubuntu and apt never updates it,
+# so scanners report its old Go standard library.
+# PgDog don't need this to work, we can remove.
+RUN rm -rf /usr/bin/pebble /var/lib/pebble
 
 RUN install -d /usr/share/postgresql-common/pgdg && \
     curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
