@@ -103,6 +103,22 @@ impl ClientRequest {
         self.ast = None;
     }
 
+    /// Discard messages before [`crate::net::Sync`] after an extended protocol error.
+    /// Return true if the entire request was discarded.
+    pub(crate) fn discard_until_sync(&mut self) -> bool {
+        let discard = self
+            .messages
+            .iter()
+            .position(|message| message.code() == 'S')
+            .unwrap_or(self.messages.len());
+        self.messages.drain(..discard);
+
+        // Don't replay Parse in a failed transaction.
+        self.last_parse = None;
+
+        self.messages.is_empty()
+    }
+
     /// We received a complete request and we are ready to
     /// send it to the query engine.
     pub(crate) fn is_complete(&self) -> bool {

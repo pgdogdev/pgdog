@@ -146,7 +146,8 @@ impl QueryEngine {
         self.stats.received(client_request.total_message_len());
         self.set_state(State::Active); // Client is active.
 
-        if self.in_extended_pipeline_error(context, client_request) {
+        if self.discard_until_sync(client_request) {
+            self.update_stats(context);
             return Ok(QueryEngineResult::Done(context.transaction()));
         }
 
