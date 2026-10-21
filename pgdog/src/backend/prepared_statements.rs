@@ -524,7 +524,6 @@ impl PreparedStatements {
                 // and not to copy the name just to remove by name
                 if let Some(pending) = self.pending_statements.pop_front() {
                     if let Some(name) = pending.name() {
-                        let name = name.to_owned();
                         self.remove(&name);
                     }
                     self.pending_statements.push_front(pending);
