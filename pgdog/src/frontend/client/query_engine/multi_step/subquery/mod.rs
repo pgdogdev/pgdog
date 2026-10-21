@@ -7,8 +7,10 @@ use pg_raw_parse::{
     make::{MemoryToken, Unique},
 };
 use pgdog_postgres_types::Datum;
+use rust_decimal::prelude::ToPrimitive;
 
 // These are all internal modules; don't need to be exported out.
+mod insert_select;
 mod request;
 mod where_clause;
 
@@ -120,8 +122,14 @@ impl<'a> SubqueryMulti<'a> {
         if let Some(ast) = client_request.ast.as_ref()
             && let Some(stmt) = ast.ast.stmts().next()
         {
-            // SELECT / UPDATE / DELETE
+            // SELECT / UPDATE / DELETE with a subquery in a WHERE clause.
             if let Some(sql) = self.handle_where_clause(stmt, row_description, data_rows)? {
+                return Ok(Some(sql));
+            }
+
+            // Select subquery within an INSERT statement with a SELECT FROM
+            // e.g., INSERT INTO .. SELECT FROM generate_series(..)
+            if let Some(sql) = self.handle_insert_select(stmt, row_description, data_rows)? {
                 return Ok(Some(sql));
             }
         }
@@ -136,8 +144,24 @@ impl<'a> SubqueryMulti<'a> {
     ) -> Unique<'mem, Node<'mem>> {
         match datum {
             Datum::Integer(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
-            Datum::Bigint(num) => mem.make_a_const(ConstValue::Integer(num as i32)).uncast(),
+            Datum::Bigint(num) => match i32::try_from(num) {
+                Ok(num) => mem.make_a_const(ConstValue::Integer(num)).uncast(),
+                Err(_) => mem
+                    .make_a_const(ConstValue::Float(num.to_string().as_str()))
+                    .uncast(),
+            },
             Datum::Text(text) => mem.make_a_const(ConstValue::String(text.as_str())).uncast(),
+            Datum::Numeric(num) => match num.as_decimal() {
+                Some(decimal) => match decimal.to_i64().filter(|_| decimal.is_integer()) {
+                    Some(whole) => Self::convert_datum_to_a_const(Datum::Bigint(whole), mem),
+                    None => mem
+                        .make_a_const(ConstValue::Float(decimal.to_string().as_str()))
+                        .uncast(),
+                },
+                None => mem
+                    .make_a_const(ConstValue::String(num.to_string().as_str()))
+                    .uncast(),
+            },
             Datum::Null => mem.make_null().uncast(),
             _ => panic!("Subqueries: unsupported datum {datum:?}!"),
         }

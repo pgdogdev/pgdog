@@ -131,7 +131,7 @@ pub(crate) async fn run(
                 // run it in the simple protocol too.
                 for (index, param) in commands.bind_params.iter().enumerate() {
                     let index = format!("${}", index + 1);
-                    if sql.contains(format!("{index}::text").as_str()) {
+                    if sql.contains(format!("{index}::").as_str()) {
                         sql = sql.replace(index.as_str(), format!("'{param}'").as_str());
                     } else {
                         sql = sql.replace(index.as_str(), param.as_str());

@@ -7,7 +7,10 @@ use crate::{
             QueryEngineContext,
             multi_step::{self, Error, SubqueryMulti},
         },
-        router::parser::{AstContext, Cache, rewrite::statement::plan::RewriteResult},
+        router::parser::{
+            AstContext, Cache,
+            rewrite::statement::{plan::RewriteResult, projection},
+        },
     },
     net::{
         Bind, DataRow, Describe, ErrorResponse, Parse, Protocol, ProtocolMessage, Query,
@@ -38,7 +41,15 @@ impl<'a> SubqueryMulti<'a> {
                 .await?;
 
             match rewrite_result {
-                Some(RewriteResult::InPlace { offset: _ }) => {
+                Some(rewrite_result @ RewriteResult::InPlace { .. }) => {
+                    let cluster = self.engine.backend.cluster()?;
+                    projection::finalize_after_route(
+                        &mut client_request,
+                        &cluster.schema(),
+                        rewrite_result.offset_plan(),
+                    )?;
+                    rewrite_result.apply_after_route(&mut client_request)?;
+
                     Ok(Some(self.send_request(&mut client_request).await?))
                 }
 

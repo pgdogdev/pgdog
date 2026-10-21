@@ -137,6 +137,10 @@ async fn setup_subqueries_suite(suffix: &str, first_time_running: bool) {
         .execute("SET rewrite_subqueries TO rewrite")
         .await
         .unwrap();
+    admin_conn
+        .execute("SET rewrite_split_inserts TO rewrite")
+        .await
+        .unwrap();
 }
 
 /// Create tables. Reset pg_stat_monitor.

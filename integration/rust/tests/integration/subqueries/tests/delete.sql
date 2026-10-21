@@ -62,3 +62,38 @@ DELETE FROM suborders WHERE id = (SELECT max(id) FROM subusers WHERE status = 'V
 -- route delete: 1
 -- verify: SELECT * FROM subusers ORDER BY id
 DELETE FROM subusers WHERE id IN (SELECT id FROM suborders WHERE state = 'NC')
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = count
+-- route select: 0,1
+-- route delete: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+DELETE FROM suborders WHERE id = (SELECT count(status) FROM subusers)
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = sum
+-- route select: 0,1
+-- route delete: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+DELETE FROM suborders WHERE id + 1 = (SELECT sum(id) FROM subusers WHERE status = 'VIP')
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = min
+-- route select: 0,1
+-- route delete: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+DELETE FROM suborders WHERE id = (SELECT min(id) FROM subusers WHERE id > 1)
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = max
+-- route select: 0,1
+-- route delete: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+DELETE FROM suborders WHERE id = (SELECT max(id) FROM subusers WHERE id < 4)
+
+-- case
+-- what: .. (SELECT <agg>(<col>) FROM <st2>), <agg> = avg
+-- route select: 0,1
+-- route delete: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+DELETE FROM suborders WHERE id = (SELECT avg(id) FROM subusers WHERE id < 4)
