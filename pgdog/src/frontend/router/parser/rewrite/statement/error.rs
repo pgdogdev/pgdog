@@ -20,6 +20,9 @@ pub(crate) enum Error {
     #[error("missing parameter: ${0}")]
     MissingParameter(u16),
 
+    #[error("Failed to compute shard for outer-query when planning for potential subquery")]
+    OuterQuerySharding,
+
     #[error("empty query")]
     EmptyQuery,
 

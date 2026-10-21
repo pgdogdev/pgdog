@@ -29,7 +29,7 @@ impl<'a> SubqueryMulti<'a> {
         is_subquery: bool,
     ) -> Result<Option<(Vec<DataRow>, Option<RowDescription>)>, Error> {
         let mut client_request: ClientRequest = self
-            .form_client_request(query_string, original_request, context)
+            .form_client_request(query_string.clone(), original_request, context)
             .await?;
 
         multi_step::update::route(self.engine, &mut client_request, context)?;

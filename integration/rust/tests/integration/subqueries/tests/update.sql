@@ -69,3 +69,24 @@ UPDATE subusers SET status = 'changed' WHERE id IN (SELECT id FROM suborders WHE
 -- route update: 0,1
 -- verify: SELECT * FROM suborders ORDER BY id
 UPDATE suborders SET state = 'NC' WHERE id IN (SELECT id FROM subusers ORDER BY id DESC LIMIT 3)
+
+-- case
+-- what: .. WHERE <key> = <k1> AND <col> IN (<sq>), key in outer only
+-- route select: 0,1
+-- route update: 1
+-- verify: SELECT * FROM subusers ORDER BY id
+UPDATE subusers SET status = 'changed' WHERE id = 3 AND status IN (SELECT status FROM subusers WHERE username = 'test')
+
+-- case
+-- what: .. WHERE <key> = <k1> AND <col> IN (<sq>), key in both, same shard
+-- route select: 1
+-- verify: SELECT * FROM subusers ORDER BY id
+UPDATE subusers SET status = 'changed' WHERE id = 3 AND status IN (SELECT status FROM subusers WHERE id = 3)
+
+-- case
+-- what: .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- route select: 1
+-- route update: 0,1
+-- verify: SELECT * FROM subusers ORDER BY id
+UPDATE subusers SET status = 'changed' WHERE status IN (SELECT status FROM subusers WHERE id = 3)
+
