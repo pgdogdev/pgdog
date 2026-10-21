@@ -31,7 +31,7 @@
 
 -- FIRST
 --   basis: Mastodon's test suite (highest to lowest share of subquery calls)
---   progress: 19 out of 49 done
+--   progress: 24 out of 49 done
 --
 -- [DONE] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
 --       case: <x> is <col>
