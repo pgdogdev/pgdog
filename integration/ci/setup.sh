@@ -40,7 +40,8 @@ sudo pg_ctlcluster "$PSQL_VERSION" main start
 sudo -u postgres psql \
     -c "ALTER SYSTEM SET fsync TO off" \
     -c "ALTER SYSTEM SET full_page_writes TO off" \
-    -c "SELECT pg_reload_conf()"
+    -c "ALTER SYSTEM SET shared_preload_libraries TO 'pg_stat_monitor'"
+sudo pg_ctlcluster "$PSQL_VERSION" main restart
 
 USER_NAME="$(id -un)"
 sudo -u postgres createuser --superuser --login "$USER_NAME"
