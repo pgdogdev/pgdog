@@ -72,6 +72,7 @@ impl QueryEngine {
         // if all of them go to the same shard.
         if let RewriteResult::InsertSplit(ref mut insert_split) = rewrite_result {
             super::multi_step::InsertMulti::route(insert_split, context, self.backend.cluster()?)?;
+            insert_split.group_by_shard(client_request, context.prepared_statements)?;
         }
 
         Ok(Some(rewrite_result))

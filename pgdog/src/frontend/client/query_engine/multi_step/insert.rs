@@ -101,7 +101,9 @@ impl<'a> InsertMulti<'a> {
             return Err(Error::MultiShardRequired);
         }
 
-        for request in self.requests.iter() {
+        let mut rows = self.requests.row_buffer();
+
+        for (index, request) in self.requests.iter().enumerate() {
             self.engine
                 .backend
                 .handle_client_request(request, &mut self.engine.router, self.engine.streaming)
@@ -110,9 +112,25 @@ impl<'a> InsertMulti<'a> {
             while self.engine.backend.has_more_messages() {
                 let message = self.engine.read_server_message().await?;
 
-                if self.state.forward(&message)? {
+                if !self.state.forward(&message)? {
+                    continue;
+                }
+
+                if let Some(rows) = rows.as_mut()
+                    && message.code() == 'D'
+                {
+                    rows[index].push(message);
+                } else {
                     self.engine.process_server_message(context, message).await?;
                 }
+            }
+        }
+
+        if let Some(rows) = rows
+            && !self.state.error()
+        {
+            for row in self.requests.rows_in_tuple_order(rows) {
+                self.engine.process_server_message(context, row).await?;
             }
         }
 
