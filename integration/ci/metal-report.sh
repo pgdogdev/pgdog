@@ -16,12 +16,19 @@ set_status() {
         -f target_url="https://s3.console.aws.amazon.com/s3/buckets/$BUCKET?prefix=results/$REF/$SHA/" > /dev/null
 }
 
+current_state() {
+    local modified
+    modified=$(aws s3api head-object --bucket "$BUCKET" --key "results/$REF/$SHA/state" --query LastModified --output text 2> /dev/null) || return 0
+    [ "$(date -d "$modified" +%s)" -ge "$ENQUEUED_AT" ] || return 0
+    aws s3 cp "$RESULTS/state" -
+}
+
 wait_for_runner() {
     local state="" last=""
 
     until [ "$state" = done ] || [ "$state" = skipped ]; do
         sleep 30
-        state=$(aws s3 cp "$RESULTS/state" - 2> /dev/null || true)
+        state=$(current_state)
 
         if [ -n "$state" ] && [ "$state" != "$last" ]; then
             set_status pending "$state"
