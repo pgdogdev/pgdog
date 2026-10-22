@@ -15,7 +15,6 @@ impl Command for Shutdown {
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        tracing::warn!("🐕 PgDog is shutting down (admin SHUTDOWN command)");
         comms().shutdown();
 
         Ok(vec![])

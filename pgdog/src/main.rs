@@ -271,7 +271,6 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
             // make sure to run the shutdown if task is called to stop the signal listener
             let comms = frontend::comms::comms();
             if !comms.shutting_down().is_cancelled() {
-                warn!("🐕 PgDog is shutting down");
                 comms.shutdown();
             }
             outcome
@@ -279,7 +278,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         async {
             tokio::select! {
                 signal = signals.recv() => {
-                    warn!("🐕 PgDog is shutting down ({signal})");
+                    info!("starting shutdown due to signal ({signal})");
                     frontend::comms::comms().shutdown();
                 }
                 _ = shutting_down.cancelled() => {}
@@ -300,7 +299,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
 
     plugin::shutdown();
 
-    warn!("🐕 PgDog is shut down");
+    info!("🐕 PgDog is shutting down");
 
     outcome
 }

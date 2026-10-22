@@ -13,7 +13,7 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{Client, Error, comms::comms};
 use crate::util::{safe_timeout, server::accept};
@@ -138,7 +138,7 @@ impl Listener {
         let shutdown_timeout = config().config.general.shutdown_timeout();
 
         info!(
-            "waiting up to {:.3}s for {} clients to finish their transactions, new connections are rejected (shutdown_timeout)",
+            "waiting up to {:.3}s for {} clients to finish transactions",
             shutdown_timeout.as_secs_f64(),
             comms().tracker().len(),
         );
@@ -149,10 +149,10 @@ impl Listener {
             .await
             .is_ok()
         {
-            info!("all clients finished their transactions, closing server connections");
+            debug!("all clients finished their transactions, closing server connections");
         } else {
             warn!(
-                "{} clients did not finish their transactions within shutdown_timeout, terminating their connections",
+                "terminating {} client connections due to shutdown timeout",
                 comms.tracker().len()
             );
 

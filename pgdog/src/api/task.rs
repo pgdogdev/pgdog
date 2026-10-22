@@ -605,7 +605,7 @@ impl TaskStorage {
             return;
         }
 
-        info!("stopping {running} running tasks (SHOW TASKS)");
+        info!("stopping {running} running tasks");
         self.cancel_all();
 
         let deadline = Instant::now() + limit;
@@ -616,7 +616,7 @@ impl TaskStorage {
 
         if running > 0 {
             warn!(
-                "{running} tasks did not stop within {:.3}s, continuing shutdown without waiting them",
+                "{running} tasks did not stop within {:.3}s, continuing shutdown without waiting for them",
                 limit.as_secs_f64()
             );
         }

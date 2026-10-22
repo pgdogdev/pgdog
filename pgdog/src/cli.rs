@@ -258,7 +258,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         {
             // pgdog is shutting down, that's why the replication process is aborted.
             // Consider this as a success replication and other errors as fail.
-            info!("Replication finished");
+            info!("replication stopped due to shutdown");
         } else {
             result?;
         }
