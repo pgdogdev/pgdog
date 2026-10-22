@@ -167,6 +167,7 @@ pub(crate) struct TaskEntry {
     /// outside the state lock and every snapshot shares it.
     definition: Arc<TaskDefinition>,
     cancellation_token: CancellationToken,
+    subtasks_cancellation_token: CancellationToken,
     /// Set once the task asks for its cancellation token: only
     /// then can it react to cancellation, so only then we'll
     /// wait for the cancellation to finish. Read for root tasks only.
@@ -366,6 +367,14 @@ impl<T: Task> TaskContext<T> {
         self.task.cancellation_token.clone()
     }
 
+    /// The cancellation token used as root token for children
+    /// subtasks of this task. It's child of current
+    /// [`Self::cancellation_token`] and parent token for any
+    /// subtask [`Self::cancellation_token`]
+    pub(crate) fn subtasks_cancellation_token(&self) -> CancellationToken {
+        self.task.subtasks_cancellation_token.clone()
+    }
+
     /// Run `task` as a subtask, inside the caller's own task.
     pub(crate) fn run<'a, T1: Task + 'a>(
         &self,
@@ -383,6 +392,7 @@ impl<T: Task> TaskContext<T> {
         );
         let span = info_span!(parent: &parent.tracing_span, "task", %id);
 
+        let cancellation_token = parent.subtasks_cancellation_token.child_token();
         let entry = Arc::new(TaskEntry {
             id,
             started_at: SystemTime::now(),
@@ -390,7 +400,8 @@ impl<T: Task> TaskContext<T> {
             parent_id: Some(parent_id),
             root_id: parent.root_id,
             level: parent.level + 1,
-            cancellation_token: parent.cancellation_token.child_token(),
+            subtasks_cancellation_token: cancellation_token.child_token(),
+            cancellation_token,
             cooperative: AtomicBool::new(false),
             subtasks: Arc::new(tasks.child()),
             state: RwLock::new(TaskEntryState::new()),
@@ -461,6 +472,7 @@ impl TaskStorage {
 
         let subtasks = Arc::new(tasks.child());
 
+        let cancellation_token = CancellationToken::new();
         let entry = TaskEntry {
             id,
             started_at: SystemTime::now(),
@@ -468,7 +480,8 @@ impl TaskStorage {
             parent_id: None,
             root_id: id,
             level: 0,
-            cancellation_token: CancellationToken::new(),
+            subtasks_cancellation_token: cancellation_token.child_token(),
+            cancellation_token,
             cooperative: AtomicBool::new(false),
             subtasks,
             state: RwLock::new(TaskEntryState::new()),
@@ -1780,6 +1793,64 @@ mod tests {
         let subtasks = root.subtasks();
         assert_eq!(subtasks.len(), 1);
         assert_eq!(subtasks[0].state().progress, TaskProgress::Cancelled);
+    }
+
+    #[derive(Debug)]
+    struct StopsSiblingsOnError;
+
+    impl Task for StopsSiblingsOnError {
+        type Status = TaskStatus;
+        type Output = ();
+        type Error = std::io::Error;
+
+        fn definition(&self) -> impl Into<TaskDefinition> {
+            "stops_siblings_on_error"
+        }
+
+        async fn run(self, ctx: TaskContext<Self>) -> Result<(), std::io::Error> {
+            let _guard = ctx.subtasks_cancellation_token().drop_guard();
+            let _sibling = tokio::spawn(ctx.run(FailsOnCancel));
+            let notify = Arc::new(Notify::new());
+            notify.notify_one();
+            ctx.run(Mock {
+                state: State::default(),
+                notify,
+                outcome: Outcome::Fail,
+            })
+            .await
+        }
+    }
+
+    #[test]
+    async fn test_stopping_subtasks_keeps_the_parent_error() {
+        let storage = TaskStorage::default();
+
+        let task = storage.run(StopsSiblingsOnError);
+        let id = task.id();
+        assert!(matches!(task.await, Err(TaskError::Failed(_))));
+
+        let root = storage.task(id).unwrap();
+        while !root
+            .subtasks()
+            .iter()
+            .all(|entry| entry.state().is_terminal())
+        {
+            yield_now().await;
+        }
+
+        assert!(matches!(root.state().progress, TaskProgress::Error { .. }));
+        let progress = root
+            .subtasks()
+            .iter()
+            .map(|entry| entry.state().progress)
+            .collect::<Vec<_>>();
+        assert_eq!(progress.len(), 2);
+        assert!(progress.contains(&TaskProgress::Cancelled));
+        assert!(
+            progress
+                .iter()
+                .any(|progress| matches!(progress, TaskProgress::Error { .. }))
+        );
     }
 
     #[test]

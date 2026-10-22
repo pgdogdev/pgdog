@@ -535,7 +535,7 @@ impl Task for ReplicationClusterTask {
                     biased;
                     _ = task_cancel.cancelled() => {
                         info!("[replication] {direction} streams cancelled, draining");
-                        return Ok(());
+                        return Err(Error::ReplicationAborted);
                     }
                     stopped = &mut stop => {
                         match stopped {
@@ -772,7 +772,11 @@ impl Task for ReplicationShardTask {
         }
         ctx.set_status(status);
 
-        result
+        if cancelled {
+            result.and(Err(Error::ReplicationAborted))
+        } else {
+            result
+        }
     }
 }
 

@@ -23,15 +23,17 @@ use crate::{
     },
     backend::{
         Cluster, ConnectReason, Error as BackendError, Server, ServerOptions, databases,
-        pool::{Address, Request},
+        pool::{Address, Guard, Request},
         schema::sync::SchemaSyncError,
         server::test::test_server,
     },
     config::{config, set},
     util::sync::WorkerPool,
 };
-use pgdog_stats::{ReplicationDirection, ReshardStatus, TaskStatus};
+use pgdog_stats::{ReplicationDirection, ReshardStatus, TaskProgress, TaskStatus};
 
+mod copy_data;
+mod replication;
 mod validation;
 
 async fn setup_replication_test(
@@ -148,6 +150,60 @@ async fn copy_table(
     )
     .await?;
     Ok(table)
+}
+
+fn subtree_progress(root: TaskId) -> Vec<(String, TaskProgress)> {
+    let mut states = vec![];
+    tasks_storage().for_each(|task| {
+        if task.root_id == root {
+            let state = task.state();
+            states.push((task.id, state.definition.name.to_string(), state.progress));
+        }
+    });
+    states.sort_by_key(|(id, _, _)| *id);
+    states
+        .into_iter()
+        .map(|(_, name, progress)| (name, progress))
+        .collect()
+}
+
+fn progress_of(states: &[(String, TaskProgress)], name: &str) -> Vec<TaskProgress> {
+    states
+        .iter()
+        .filter(|(task, _)| task == name)
+        .map(|(_, progress)| progress.clone())
+        .collect()
+}
+
+async fn create_tables(
+    schema: &str,
+    destination: &str,
+    main_rows: u64,
+) -> Result<(Guard, Guard), Box<dyn std::error::Error>> {
+    let source = databases::databases().schema_owner(schema)?;
+    let dest = databases::databases().schema_owner(destination)?;
+    let mut source_server = source.primary(0, &Request::default()).await?;
+    source_server
+        .execute_checked(format!(
+            "CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
+             INSERT INTO {schema}.main \
+             SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 32)) \
+             FROM generate_series(1, {main_rows}) g; \
+             CREATE TABLE {schema}.small (id BIGINT PRIMARY KEY); \
+             INSERT INTO {schema}.small SELECT g FROM generate_series(1, 10) g; \
+             CREATE PUBLICATION {schema} FOR TABLE {schema}.main, {schema}.small"
+        ))
+        .await?;
+    let mut dest_server = dest.primary(0, &Request::default()).await?;
+    dest_server
+        .execute_checked(format!(
+            "CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
+             CREATE TABLE {schema}.small (id BIGINT PRIMARY KEY)"
+        ))
+        .await?;
+    Ok((source_server, dest_server))
 }
 
 async fn cleanup_replication_test(
@@ -759,26 +815,7 @@ async fn copy_data_cancelled_during_copy_removes_its_slots()
     let mut admin = test_server().await;
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT); \
-                 INSERT INTO {schema}.main \
-                 SELECT g, (SELECT string_agg(md5(random()::text), '') FROM generate_series(1, 32)) \
-                 FROM generate_series(1, 200000) g; \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
-            ))
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        dest_server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY, payload TEXT)"
-            ))
-            .await?;
+        let (mut server, _dest_server) = create_tables(schema, destination, 200_000).await?;
 
         let (task, _state) = copy_data_task(schema, destination).await?;
         let id = task.id();
@@ -815,24 +852,7 @@ async fn copy_data_cancelled_during_replication_removes_its_slots()
     let mut admin = test_server().await;
     let result = async {
         setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY); \
-                 INSERT INTO {schema}.main SELECT g FROM generate_series(1, 10) g; \
-                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
-            ))
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        dest_server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.main (id BIGINT PRIMARY KEY)"
-            ))
-            .await?;
+        let (mut server, mut dest_server) = create_tables(schema, destination, 10).await?;
 
         let (task, _state) = copy_data_task(schema, destination).await?;
         let id = task.id();
