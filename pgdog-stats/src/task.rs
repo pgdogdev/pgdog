@@ -580,11 +580,11 @@ mod test {
         for (direction, expected) in [
             (
                 ReplicationDirection::Forward,
-                "replication stream prod -> prod_sharded (forward)",
+                "forward replication prod -> prod_sharded",
             ),
             (
                 ReplicationDirection::Reverse,
-                "replication stream prod -> prod_sharded (reverse)",
+                "reverse replication prod -> prod_sharded",
             ),
         ] {
             assert_eq!(

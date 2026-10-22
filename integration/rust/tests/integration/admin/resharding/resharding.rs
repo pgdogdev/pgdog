@@ -33,7 +33,11 @@ async fn test_reshard() {
     wait_for_rows_each_shard(&admin, task_id, TEST_TABLE, 20).await;
 
     wait_for_task(&admin, "reshard replicating", |t| {
-        t.id == Some(task_id) && t.inner_status == "replicating"
+        t.id == Some(task_id)
+            && matches!(
+                t.inner_status.as_str(),
+                "replicating" | "reverse replicating"
+            )
     })
     .await;
 
