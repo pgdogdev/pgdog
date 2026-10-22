@@ -70,6 +70,16 @@ impl BindParams {
         }
     }
 
+    /// Any parameter PgDog generates itself, e.g. `pgdog.unique_id()`.
+    fn has_generated(&self) -> bool {
+        match self {
+            Self::Original { .. } => false,
+            Self::Modified { params } => params
+                .iter()
+                .any(|b| !matches!(b, BindParam::FromClientBind(_))),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn generated(&self) -> impl Iterator<Item = Cow<'_, BindParam>> {
         self.iter()
@@ -394,7 +404,11 @@ impl RewritePlan {
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
                 ProtocolMessage::Bind(bind) if let Some((statement, mapping)) = &bound_execute => {
-                    bind.remap_params(mapping)?;
+                    let in_order = mapping.len() == bind.params_raw().len()
+                        && mapping.iter().enumerate().all(|(i, &param)| i == param);
+                    if !in_order {
+                        bind.remap_params(mapping)?;
+                    }
                     bind.rename(statement);
                     self.apply_bind(bind, timezone, timestamps).await?;
                 }
@@ -407,6 +421,7 @@ impl RewritePlan {
 
         if bound_execute.is_none()
             && execute_prepare.is_some()
+            && (self.offset.is_some() || self.bind_params.has_generated())
             && request.parameters()?.is_some()
             && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
         {
@@ -644,7 +659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extended_sql_prepare_supports_anonymous_statement() {
+    async fn extended_sql_prepare_supports_anonymous_and_spanning_portal() {
         let plan = RewritePlan {
             prepare_rewrites: vec![PrepareExecute::Prepare(crate::net::Prepare::new(
                 "__pgdog_1",
@@ -652,19 +667,30 @@ mod tests {
             ))],
             ..Default::default()
         };
-        let mut request = ClientRequest::from(vec![
-            Parse::new_anonymous("PREPARE stmt AS SELECT $1").into(),
-            Bind::default().into(),
-        ]);
+        let requests: [Vec<ProtocolMessage>; 2] = [
+            vec![
+                Parse::new_anonymous("PREPARE stmt AS SELECT $1").into(),
+                Bind::default().into(),
+            ],
+            vec![
+                Parse::named("outer", "PREPARE stmt AS SELECT $1").into(),
+                Bind::new_statement("outer").into(),
+                Execute::new().into(),
+                crate::net::Flush.into(),
+            ],
+        ];
 
-        assert!(matches!(
-            plan.apply(&mut request, None, QueryTimestamps::now()).await,
-            Ok(RewriteResult::InPlace { .. })
-        ));
-        assert!(matches!(
-            request.prepared_operation.as_deref(),
-            Some(PreparedOperation::PrepareOnExecute(_))
-        ));
+        for messages in requests {
+            let mut request = ClientRequest::from(messages);
+            assert!(matches!(
+                plan.apply(&mut request, None, QueryTimestamps::now()).await,
+                Ok(RewriteResult::InPlace { .. })
+            ));
+            assert!(matches!(
+                request.prepared_operation.as_deref(),
+                Some(PreparedOperation::PrepareOnExecute(_))
+            ));
+        }
     }
 
     #[tokio::test]
@@ -695,28 +721,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extended_sql_prepare_supports_spanning_portal() {
+    async fn extended_sql_execute_without_generated_values_keeps_client_statement() {
         let plan = RewritePlan {
-            prepare_rewrites: vec![PrepareExecute::Prepare(crate::net::Prepare::new(
+            stmt: Some("EXECUTE __pgdog_1(5)".to_string()),
+            prepare_rewrites: vec![PrepareExecute::Execute(crate::net::Prepare::new(
                 "__pgdog_1",
                 "PREPARE __pgdog_template_name AS SELECT $1",
             ))],
             ..Default::default()
         };
         let mut request = ClientRequest::from(vec![
-            Parse::named("outer", "PREPARE stmt AS SELECT $1").into(),
+            Parse::named("outer", "EXECUTE stmt(5)").into(),
             Bind::new_statement("outer").into(),
-            Execute::new().into(),
-            crate::net::Flush.into(),
         ]);
 
+        plan.apply(&mut request, None, QueryTimestamps::now())
+            .await
+            .unwrap();
+
+        assert!(request.prepared_operation.is_none());
         assert!(matches!(
-            plan.apply(&mut request, None, QueryTimestamps::now()).await,
-            Ok(RewriteResult::InPlace { .. })
-        ));
-        assert!(matches!(
-            request.prepared_operation.as_deref(),
-            Some(PreparedOperation::PrepareOnExecute(_))
+            request.parameters().unwrap(),
+            Some(bind) if bind.statement() == "outer"
         ));
     }
 }
