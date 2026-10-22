@@ -8,7 +8,9 @@ use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::util::safe_interval;
-use pgdog_stats::{ReplicationDirection, SynchronizeTablesStatus, TaskDefinition};
+use pgdog_stats::{
+    ReplicationDirection, SynchronizeTablesDefinition, SynchronizeTablesStatus, TaskDefinition,
+};
 use tokio::select;
 use tracing::info;
 
@@ -25,7 +27,9 @@ impl Task for SynchronizeTablesTask {
     type Error = Error;
 
     fn definition(&self) -> impl Into<TaskDefinition> {
-        "synchronize tables"
+        SynchronizeTablesDefinition {
+            databases: self.state.databases(),
+        }
     }
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), Error> {

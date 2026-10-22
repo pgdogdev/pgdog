@@ -12,11 +12,16 @@ use crate::Databases;
 #[derive(
     Debug, Display, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
+#[serde(rename_all = "snake_case")]
 #[display(rename_all = "snake_case")]
 pub enum SyncState {
+    #[serde(alias = "PreData")]
     PreData,
+    #[serde(alias = "PostData")]
     PostData,
+    #[serde(alias = "Cutover")]
     Cutover,
+    #[serde(alias = "PostDataValidation")]
     PostDataValidation,
     #[serde(other)]
     Unknown,

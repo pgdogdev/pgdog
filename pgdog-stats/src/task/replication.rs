@@ -54,19 +54,16 @@ pub enum ReplicationDirection {
     Debug, Clone, Copy, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+#[display(rename_all = "snake_case")]
 pub enum ReplicationCutoverReason {
     /// Replication lag reached the configured threshold.
-    #[display("lag")]
     Lag,
     /// No transaction was applied for the configured delay.
-    #[display("last transaction")]
     LastTransaction,
     /// The configured wait expired before the other conditions were met.
-    #[display("timeout")]
     Timeout,
     /// A reason this build does not know.
     #[default]
-    #[display("unknown")]
     #[serde(other)]
     Unknown,
 }
