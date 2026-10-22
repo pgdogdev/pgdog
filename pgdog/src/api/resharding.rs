@@ -16,6 +16,7 @@ use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::table_move::TableMove;
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -38,6 +39,9 @@ pub(crate) struct ReshardTask {
     /// waiting for an operator `CUTOVER`. Set by the reshard flow.
     #[builder(default)]
     pub(crate) auto_cutover: bool,
+    /// Move this single table instead of the tables in a user publication.
+    /// Schema sync covers only this table, and replication never cuts over.
+    pub(crate) table_move: Option<TableMove>,
 }
 
 impl Task for ReshardTask {
@@ -64,27 +68,49 @@ impl Task for ReshardTask {
         let mut state = self.state;
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
-            .publication(state.publication.clone());
+            .publication(state.publication.clone())
+            .publication_tables_only(self.table_move.is_some());
+
+        if let Some(table_move) = &self.table_move {
+            table_move.prepare(&state).await?;
+        }
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.
-        if !self.skip_schema_sync {
-            ctx.set_status(ReshardStatus::SchemaSync);
-            ctx.run(
-                schema_sync
-                    .clone()
-                    .phase(SchemaSyncPhase::Pre)
-                    .ignore_errors(true)
-                    .build(),
-            )
-            .await?;
+        let prepared: Result<(), MigrationError> = Box::pin(async {
+            if !self.skip_schema_sync {
+                ctx.set_status(ReshardStatus::SchemaSync);
+                ctx.run(
+                    schema_sync
+                        .clone()
+                        .phase(SchemaSyncPhase::Pre)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await?;
 
-            // The pre-data sync changed the destination's schema, so its pools
-            // reloaded. `SchemaSync::reload_destination` refreshes only its own
-            // cluster refs, so the state still holds stale ones.
-            state.reload()?;
+                // The pre-data sync changed the destination's schema, so its pools
+                // reloaded. `SchemaSync::reload_destination` refreshes only its own
+                // cluster refs, so the state still holds stale ones.
+                state.reload()?;
+            }
+
+            if let Some(table_move) = &self.table_move {
+                table_move.check_table(&state.destination).await?;
+            }
+
+            Ok(())
+        })
+        .await;
+
+        if let Err(err) = prepared {
+            if let Some(table_move) = &self.table_move {
+                table_move.finish(&state, false).await;
+            }
+            return Err(err);
         }
 
+        let mut copied = false;
         let result: Result<(), MigrationError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
@@ -96,6 +122,7 @@ impl Task for ReshardTask {
                         .build(),
                 )
                 .await?;
+                copied = true;
             }
 
             // Post-data schema sync (secondary indexes, constraints): the
@@ -140,6 +167,7 @@ impl Task for ReshardTask {
                         ReplicationTask::builder()
                             .state(state.clone())
                             .auto_cutover(self.auto_cutover)
+                            .disable_cutover(self.table_move.is_some())
                             .schema_sync(schema_sync.clone())
                             .validate(!self.skip_schema_sync && !self.replicate_only)
                             .build(),
@@ -152,7 +180,8 @@ impl Task for ReshardTask {
         })
         .await;
 
-        if result.is_err() || cancel.is_cancelled() {
+        // A table move drops its publication, so its slots can't be reused.
+        if result.is_err() || cancel.is_cancelled() || self.table_move.is_some() {
             // on error or cancellation make sure we drop the slots,
             // but only the slots we're actually created during this run.
             // If the slots were created outside or by calling pgdog
@@ -165,6 +194,10 @@ impl Task for ReshardTask {
             // or replication was not called and we should leave the
             // slots for the future calls
             state.detach_slots();
+        }
+
+        if let Some(table_move) = &self.table_move {
+            table_move.finish(&state, copied).await;
         }
 
         result
