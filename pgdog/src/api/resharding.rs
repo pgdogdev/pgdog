@@ -14,7 +14,7 @@ use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{MigrationError, Task};
+use crate::api::{MigrationError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::logical::table_move::TableMove;
 use crate::config::config;
@@ -94,10 +94,6 @@ impl Task for ReshardTask {
                 // reloaded. `SchemaSync::reload_destination` refreshes only its own
                 // cluster refs, so the state still holds stale ones.
                 state.reload()?;
-            }
-
-            if let Some(table_move) = &self.table_move {
-                table_move.check_table(&state.destination).await?;
             }
 
             Ok(())
@@ -197,6 +193,21 @@ impl Task for ReshardTask {
         }
 
         if let Some(table_move) = &self.table_move {
+            if copied {
+                // A table move never cuts over, so run the cutover phase
+                // here to set its sequences. It's a separate task because
+                // a stop cancels this one and every subtask.
+                let sequences = run_task(
+                    schema_sync
+                        .phase(SchemaSyncPhase::Cutover)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await;
+                if let Err(err) = sequences {
+                    warn!("failed to sync sequences after the table move: {err}");
+                }
+            }
             table_move.finish(&state, copied).await;
         }
 

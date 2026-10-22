@@ -269,9 +269,6 @@ pub(crate) enum Error {
     #[error("source and destination are the same database \"{0}\"")]
     SameDatabase(String),
 
-    #[error("table {table} does not exist on destination shard {shard}, check the schema sync log")]
-    DestinationTableMissing { table: String, shard: usize },
-
     #[error(
         "table {table} references tables that don't exist on destination shard {shard}: {missing}"
     )]

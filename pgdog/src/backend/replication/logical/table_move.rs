@@ -14,8 +14,6 @@ use super::Error;
 use super::resharding_state::ReshardingState;
 use crate::backend::Cluster;
 use crate::backend::pool::Request;
-use crate::frontend::router::parser::{Column, Sequence, Table};
-use crate::net::{DataRow, Format};
 use crate::util::sql::quote_literal;
 use crate::util::{escape_identifier, random_string};
 
@@ -163,32 +161,9 @@ impl TableMove {
         Ok(())
     }
 
-    /// Fix the destination sequences, list what is left on the source,
-    /// and drop the publication. Never touches the source table itself.
+    /// Drop the publication. Never touches the source table itself.
     pub(crate) async fn finish(&self, state: &ReshardingState, copied: bool) {
         if copied {
-            if let Err(err) = self.sync_sequences(&state.destination).await {
-                warn!(
-                    "failed to sync sequences of {} on \"{}\": {err}",
-                    self.table,
-                    state.destination.identifier().database
-                );
-            }
-
-            match self.referencing_constraints(&state.source).await {
-                Ok(constraints) if !constraints.is_empty() => warn!(
-                    "foreign keys on \"{}\" still reference {}: {}; drop them once the application stops using the source table",
-                    state.source.identifier().database,
-                    self.table,
-                    constraints.join(", ")
-                ),
-                Ok(_) => (),
-                Err(err) => warn!(
-                    "failed to list foreign keys referencing {}: {err}",
-                    self.table
-                ),
-            }
-
             info!(
                 "table {} is left in place on \"{}\"; drop it once the application uses \"{}\"",
                 self.table,
@@ -213,16 +188,6 @@ impl TableMove {
                 self.table.regclass()
             ))
             .await?)
-    }
-
-    /// The table must exist on every destination shard before the copy,
-    /// created by schema sync or by the user.
-    pub(crate) async fn check_table(&self, dest: &Cluster) -> Result<(), Error> {
-        let table = self.table.to_string();
-        match missing_tables(dest, std::slice::from_ref(&table)).await? {
-            Some((shard, _)) => Err(Error::DestinationTableMissing { table, shard }),
-            None => Ok(()),
-        }
     }
 
     async fn create_publication(&self, source: &Cluster) -> Result<(), Error> {
@@ -267,67 +232,6 @@ impl TableMove {
                 );
             }
         }
-    }
-
-    /// Logical replication doesn't move sequences. Set every sequence owned
-    /// by the table (`SERIAL` or `IDENTITY`) to the column's max value.
-    async fn sync_sequences(&self, dest: &Cluster) -> Result<(), Error> {
-        let sql = format!(
-            "SELECT a.attname, n.nspname, s.relname \
-             FROM pg_depend d \
-             JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S' \
-             JOIN pg_namespace n ON n.oid = s.relnamespace \
-             JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid \
-             WHERE d.classid = 'pg_class'::regclass \
-               AND d.refclassid = 'pg_class'::regclass \
-               AND d.refobjid = {} \
-               AND d.deptype IN ('a', 'i')",
-            self.table.regclass()
-        );
-
-        for shard in dest.shards() {
-            let mut server = shard.primary(&Request::default()).await?;
-            let sequences: Vec<DataRow> = server.fetch_all(sql.as_str()).await?;
-
-            for row in sequences {
-                let column: String = row.get(0, Format::Text).ok_or(Error::MissingData)?;
-                let schema: String = row.get(1, Format::Text).ok_or(Error::MissingData)?;
-                let name: String = row.get(2, Format::Text).ok_or(Error::MissingData)?;
-
-                let setval = Sequence::from(Table {
-                    schema: Some(&schema),
-                    name: &name,
-                    alias: None,
-                })
-                .setval_from_column(&Column {
-                    schema: Some(&self.table.schema),
-                    table: Some(&self.table.name),
-                    name: &column,
-                })?;
-
-                server.execute_checked(setval).await?;
-                info!(
-                    "sequence \"{schema}\".\"{name}\" synced to {}.\"{column}\" on shard {}",
-                    self.table,
-                    shard.number()
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Foreign keys on other source tables that reference the moved table.
-    async fn referencing_constraints(&self, source: &Cluster) -> Result<Vec<String>, Error> {
-        let mut server = source.primary(0, &Request::default()).await?;
-        Ok(server
-            .fetch_all(format!(
-                "SELECT format('%s.%I', con.conrelid::regclass, con.conname) \
-                 FROM pg_constraint con \
-                 WHERE con.contype = 'f' AND con.confrelid = {} AND con.conrelid <> con.confrelid",
-                self.table.regclass()
-            ))
-            .await?)
     }
 }
 
@@ -449,18 +353,8 @@ mod test {
             .unwrap(),
             Some((0, vec!["pgdog.table_move_absent".to_owned()]))
         );
-        child.check_table(&cluster).await.unwrap();
 
-        let absent = TableMove::new(table("pgdog", "table_move_absent"));
-        let err = absent
-            .check_table(&cluster)
-            .await
-            .expect_err("table is missing on the destination");
-        assert!(
-            matches!(err, Error::DestinationTableMissing { .. }),
-            "{err}"
-        );
-        let err = absent
+        let err = TableMove::new(table("pgdog", "table_move_absent"))
             .referenced_tables(&cluster)
             .await
             .expect_err("table is missing on the source");
@@ -495,77 +389,6 @@ mod test {
         cluster.shutdown();
         server
             .execute_checked("DROP TABLE pgdog.table_move_publication")
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn sequences_are_synced_to_max_value() {
-        crate::logger();
-        let mut server = test_server().await;
-        for ddl in [
-            "DROP TABLE IF EXISTS pgdog.table_move_seq",
-            "CREATE TABLE pgdog.table_move_seq (id BIGSERIAL PRIMARY KEY, \
-             num BIGINT GENERATED BY DEFAULT AS IDENTITY, value TEXT)",
-            "INSERT INTO pgdog.table_move_seq (id, num, value) VALUES (100, 7, 'a'), (250, 9, 'b')",
-        ] {
-            server.execute_checked(ddl).await.unwrap();
-        }
-
-        let cluster = Cluster::new_test(&config());
-        cluster.launch();
-
-        let table_move = TableMove::new(table("pgdog", "table_move_seq"));
-        table_move.sync_sequences(&cluster).await.unwrap();
-
-        let next: Vec<DataRow> = server
-            .fetch_all("INSERT INTO pgdog.table_move_seq (value) VALUES ('c') RETURNING id, num")
-            .await
-            .unwrap();
-        let id: i64 = next[0].get(0, Format::Text).unwrap();
-        let num: i64 = next[0].get(1, Format::Text).unwrap();
-        assert_eq!(id, 251);
-        assert_eq!(num, 10);
-
-        cluster.shutdown();
-        server
-            .execute_checked("DROP TABLE pgdog.table_move_seq")
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn lists_foreign_keys_referencing_the_table() {
-        crate::logger();
-        let mut server = test_server().await;
-        for ddl in [
-            "DROP TABLE IF EXISTS pgdog.table_move_ref_child, pgdog.table_move_ref_parent",
-            "CREATE TABLE pgdog.table_move_ref_parent (id BIGINT PRIMARY KEY)",
-            "CREATE TABLE pgdog.table_move_ref_child (id BIGINT PRIMARY KEY, \
-             parent_id BIGINT CONSTRAINT child_to_parent REFERENCES pgdog.table_move_ref_parent(id))",
-        ] {
-            server.execute_checked(ddl).await.unwrap();
-        }
-
-        let cluster = Cluster::new_test(&config());
-        cluster.launch();
-
-        let constraints = TableMove::new(table("pgdog", "table_move_ref_parent"))
-            .referencing_constraints(&cluster)
-            .await
-            .unwrap();
-        assert_eq!(constraints.len(), 1);
-        assert!(constraints[0].ends_with("table_move_ref_child.child_to_parent"));
-
-        let none = TableMove::new(table("pgdog", "table_move_ref_child"))
-            .referencing_constraints(&cluster)
-            .await
-            .unwrap();
-        assert!(none.is_empty());
-
-        cluster.shutdown();
-        server
-            .execute_checked("DROP TABLE pgdog.table_move_ref_child, pgdog.table_move_ref_parent")
             .await
             .unwrap();
     }
