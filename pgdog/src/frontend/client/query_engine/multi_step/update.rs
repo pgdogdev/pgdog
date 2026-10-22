@@ -59,6 +59,15 @@ impl<'a> UpdateMulti<'a> {
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
     ) -> Result<(), Error> {
+        // Omnisharded tables are identical on all shards,
+        // so there is no need to move rows between shards.
+        if client_request.route().is_omnisharded() {
+            debug!("[update] query is omnisharded");
+            self.execute_original(context, client_request).await?;
+
+            return Ok(());
+        }
+
         let mut check = self.rewrite.check.build_request(client_request)?;
         route(self.engine, &mut check, context)?;
 
