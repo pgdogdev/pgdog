@@ -10,12 +10,13 @@ use std::time::Duration;
 use tracing::warn;
 
 use crate::api::copy_data::CopyDataTask;
-use crate::api::replication::ReplicationTask;
+use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
-use crate::api::{MigrationError, Task};
+use crate::api::{MigrationError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::table_move::TableMove;
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -38,6 +39,9 @@ pub(crate) struct ReshardTask {
     /// waiting for an operator `CUTOVER`. Set by the reshard flow.
     #[builder(default)]
     pub(crate) auto_cutover: bool,
+    /// Move this single table instead of the tables in a user publication.
+    /// Schema sync covers only this table, and replication never cuts over.
+    pub(crate) table_move: Option<TableMove>,
 }
 
 impl Task for ReshardTask {
@@ -61,30 +65,49 @@ impl Task for ReshardTask {
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         let cancel = ctx.cancellation_token();
+        let cutover = self.cutover_mode();
         let mut state = self.state;
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
-            .publication(state.publication.clone());
+            .publication(state.publication.clone())
+            .publication_tables_only(self.table_move.is_some());
+
+        if let Some(table_move) = &self.table_move {
+            table_move.prepare(&state).await?;
+        }
 
         // Pre-data schema sync, unless skipped. It runs before any replication
         // slots exist, so it stays outside the cleanup guard below.
-        if !self.skip_schema_sync {
-            ctx.set_status(ReshardStatus::SchemaSync);
-            ctx.run(
-                schema_sync
-                    .clone()
-                    .phase(SchemaSyncPhase::Pre)
-                    .ignore_errors(true)
-                    .build(),
-            )
-            .await?;
+        let prepared: Result<(), MigrationError> = Box::pin(async {
+            if !self.skip_schema_sync {
+                ctx.set_status(ReshardStatus::SchemaSync);
+                ctx.run(
+                    schema_sync
+                        .clone()
+                        .phase(SchemaSyncPhase::Pre)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await?;
 
-            // The pre-data sync changed the destination's schema, so its pools
-            // reloaded. `SchemaSync::reload_destination` refreshes only its own
-            // cluster refs, so the state still holds stale ones.
-            state.reload()?;
+                // The pre-data sync changed the destination's schema, so its pools
+                // reloaded. `SchemaSync::reload_destination` refreshes only its own
+                // cluster refs, so the state still holds stale ones.
+                state.reload()?;
+            }
+
+            Ok(())
+        })
+        .await;
+
+        if let Err(err) = prepared {
+            if let Some(table_move) = &self.table_move {
+                table_move.finish(&state, false).await;
+            }
+            return Err(err);
         }
 
+        let mut copied = false;
         let result: Result<(), MigrationError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
@@ -96,6 +119,7 @@ impl Task for ReshardTask {
                         .build(),
                 )
                 .await?;
+                copied = true;
             }
 
             // Post-data schema sync (secondary indexes, constraints): the
@@ -139,7 +163,7 @@ impl Task for ReshardTask {
                     ctx.run(
                         ReplicationTask::builder()
                             .state(state.clone())
-                            .auto_cutover(self.auto_cutover)
+                            .cutover(cutover)
                             .schema_sync(schema_sync.clone())
                             .validate(!self.skip_schema_sync && !self.replicate_only)
                             .build(),
@@ -152,7 +176,8 @@ impl Task for ReshardTask {
         })
         .await;
 
-        if result.is_err() || cancel.is_cancelled() {
+        // A table move drops its publication, so its slots can't be reused.
+        if result.is_err() || cancel.is_cancelled() || self.table_move.is_some() {
             // on error or cancellation make sure we drop the slots,
             // but only the slots we're actually created during this run.
             // If the slots were created outside or by calling pgdog
@@ -167,6 +192,38 @@ impl Task for ReshardTask {
             state.detach_slots();
         }
 
+        if let Some(table_move) = &self.table_move {
+            if copied {
+                // A table move never cuts over, so run the cutover phase
+                // here to set its sequences. It's a separate task because
+                // a stop cancels this one and every subtask.
+                let sequences = run_task(
+                    schema_sync
+                        .phase(SchemaSyncPhase::Cutover)
+                        .ignore_errors(true)
+                        .build(),
+                )
+                .await;
+                if let Err(err) = sequences {
+                    warn!("failed to sync sequences after the table move: {err}");
+                }
+            }
+            table_move.finish(&state, copied).await;
+        }
+
         result
+    }
+}
+
+impl ReshardTask {
+    /// A table move never cuts over: a cutover swaps whole databases.
+    fn cutover_mode(&self) -> CutoverMode {
+        if self.table_move.is_some() {
+            CutoverMode::Disabled
+        } else if self.auto_cutover {
+            CutoverMode::Auto
+        } else {
+            CutoverMode::Manual
+        }
     }
 }

@@ -39,13 +39,24 @@ use pgdog_stats::{
 };
 use tracing::{info, warn};
 
+/// When a replication cuts over to the destination.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum CutoverMode {
+    /// Wait for an operator `CUTOVER`.
+    #[default]
+    Manual,
+    /// Cut over once the destination has caught up.
+    Auto,
+    /// Never cut over; replicate until the task is stopped. A cutover swaps
+    /// whole databases, which is wrong when moving a single table.
+    Disabled,
+}
+
 #[derive(Debug, bon::Builder)]
 pub(crate) struct ReplicationTask {
     pub(crate) state: ReshardingState,
-    /// Cut over automatically once the destination has caught up, instead
-    /// of waiting for an operator `CUTOVER`.
     #[builder(default)]
-    pub(crate) auto_cutover: bool,
+    pub(crate) cutover: CutoverMode,
     pub(crate) schema_sync: SchemaSyncBuilder,
     pub(crate) validate: bool,
 }
@@ -73,7 +84,7 @@ impl Task for ReplicationTask {
     fn definition(&self) -> impl Into<TaskDefinition> {
         ReplicationDefinition {
             databases: self.state.databases(),
-            auto_cutover: self.auto_cutover,
+            auto_cutover: self.cutover == CutoverMode::Auto,
         }
     }
 
@@ -82,13 +93,13 @@ impl Task for ReplicationTask {
             state,
             schema_sync,
             validate,
-            auto_cutover,
+            cutover,
         } = self;
 
         let mut replication = Replication::new(&ctx, state.clone(), schema_sync, validate);
         // run the replication until it's stopped - it can cutover multiple times but
         // it's stopped eventually only by the cancellation process.
-        let result = replication.run(auto_cutover).await;
+        let result = replication.run(cutover).await;
         replication.resume_traffic();
 
         let stopped_in_rollback_window = replication.cancelled()
@@ -176,13 +187,13 @@ impl<'a> Replication<'a> {
         }
     }
 
-    async fn run(&mut self, auto_cutover: bool) -> Result<(), Error> {
+    async fn run(&mut self, cutover: CutoverMode) -> Result<(), Error> {
         info!(
-            "[replication] starting {}, auto_cutover={auto_cutover}, post_data_validation={}",
+            "[replication] starting {}, cutover={cutover:?}, post_data_validation={}",
             self.state.databases(),
             self.validation_stage
         );
-        self.replicate_until_cutover(auto_cutover, PostDataValidationStage::DuringReplication)
+        self.replicate_until_cutover(cutover, PostDataValidationStage::DuringReplication)
             .await?;
         self.sync_schema(
             self.schema_sync
@@ -198,8 +209,11 @@ impl<'a> Replication<'a> {
         loop {
             self.cutover().await?;
             self.flip_direction();
-            self.replicate_until_cutover(false, PostDataValidationStage::AfterCutover)
-                .await?;
+            self.replicate_until_cutover(
+                CutoverMode::Manual,
+                PostDataValidationStage::AfterCutover,
+            )
+            .await?;
             self.validation_stage = PostDataValidationStage::Off;
             self.sync_schema(
                 SchemaSyncTask::builder()
@@ -218,14 +232,15 @@ impl<'a> Replication<'a> {
     /// the source WAL in time, resume the traffic and start the replication again.
     async fn replicate_until_cutover(
         &mut self,
-        auto_cutover: bool,
+        mode: CutoverMode,
         stage: PostDataValidationStage,
     ) -> Result<(), Error> {
         let wait_for_validation = stage != PostDataValidationStage::AfterCutover;
         let ctx = self.ctx;
         let direction = self.direction;
         let task_cancel = ctx.cancellation_token();
-        let mut cutover = (!auto_cutover).then(|| CutoverWaiter::register(ctx.root_id()));
+        let mut cutover =
+            (mode == CutoverMode::Manual).then(|| CutoverWaiter::register(ctx.root_id()));
         let mut validation = pin!(self.post_data_validation(stage).fuse());
 
         loop {
@@ -244,8 +259,10 @@ impl<'a> Replication<'a> {
 
             let result = async {
                 let mut cutover_run = pin!(async {
-                    if let Some(cutover) = cutover.as_ref() {
-                        cutover.requested().await;
+                    match (mode, cutover.as_ref()) {
+                        (CutoverMode::Disabled, _) => std::future::pending().await,
+                        (_, Some(cutover)) => cutover.requested().await,
+                        (_, None) => (),
                     }
                     Self::prepare_cutover(ctx, &self.state, &mut self.maintenance, progress.clone())
                         .await

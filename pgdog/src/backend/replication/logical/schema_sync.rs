@@ -22,6 +22,7 @@ pub(crate) struct SchemaSync {
     source: Cluster,
     destination: Cluster,
     publication: String,
+    publication_tables_only: bool,
 }
 
 impl SchemaSync {
@@ -29,11 +30,13 @@ impl SchemaSync {
         source: &str,
         destination: &str,
         publication: &str,
+        publication_tables_only: bool,
     ) -> Result<Self, SchemaSyncError> {
         Ok(Self {
             source: databases().schema_owner(source)?,
             destination: databases().schema_owner(destination)?,
             publication: publication.to_owned(),
+            publication_tables_only,
         })
     }
 
@@ -70,9 +73,13 @@ impl SchemaSync {
         .min()
         .unwrap_or(0);
         Ok(Arc::new(
-            PgDump::new(&self.source, &self.publication)
-                .dump(destination_version)
-                .await?,
+            PgDump::new(
+                &self.source,
+                &self.publication,
+                self.publication_tables_only,
+            )
+            .dump(destination_version)
+            .await?,
         ))
     }
 
