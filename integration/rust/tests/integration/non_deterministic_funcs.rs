@@ -40,6 +40,8 @@ async fn two_conns_transaction_time_reuse_insert() {
 
     let mut transaction = single_sharded_list_pool.begin().await.unwrap();
 
+    transaction.execute("TRUNCATE sharded").await.unwrap();
+
     {
         // Both use DEFAULT now() into timestamptz
         // 1 is mapped to Shard 0
@@ -123,6 +125,8 @@ async fn transaction_time_update_statement_rewrites() {
 
     assert!(transaction_start_time == row_tt_simple_protocol_time);
     assert!(transaction_start_time == row_tt_extended_protocol_time);
+
+    transaction.rollback().await.unwrap();
 }
 
 /// Verify that now() / CURRENT_TIMESTAMP in a DELETE statement are re-written to the transaction start time.
@@ -222,6 +226,8 @@ async fn transaction_time_usage_in_select_query() {
     let conn = conn.get(1).unwrap();
 
     let mut transaction = conn.begin().await.unwrap();
+
+    transaction.execute("TRUNCATE sharded").await.unwrap();
 
     // 'created_at' col has default now()
     sqlx::query("INSERT INTO sharded (id) VALUES (1)")
