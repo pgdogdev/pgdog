@@ -2,11 +2,11 @@
 # - Uses a single runner to run all benchmarks simultaneously (since bare metal is 64 cores).
 # - Autoscaling is maxed at a single runner, uses a queue instead to make subsequent runs wait.
 # - After a run, the runner stays up for a hour. If no other runs are requested within that hour, it shuts down to save $$.
-# 
+#
 # Always posts on a PR regarding status. Edits the same message for subsequent runs
 # Also includes differential flamegraphs!
 #
-# This currently mirrors Bencher (+ has a 16 core run). 
+# This currently mirrors Bencher (+ has a 16 core run).
 # I'm using this as an experiment to see if Graviton produces less variance (or if we can tune
 # our own runners to have less variance for our use case)
 
@@ -24,6 +24,7 @@ permissions:
   statuses: write
 
 env:
+  BUCKET: pgdog-metal-bench
   QUEUE_URL: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench.fifo
   AUTOSCALING_GROUP: pgdog-metal-bench
   SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -70,6 +71,30 @@ jobs:
             -f context=metal/bench \
             -f state=pending \
             -f description="Queued. $queued in line"
+
+  # TODO(jkaczman): need to get a PAT with commit statuses + pull requests write, so we can
+  # drop this unnecessary polling job (current PAT does not have necessary perms)
+  report:
+    needs: enqueue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      id-token: write
+      statuses: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
+          aws-region: us-east-1
+
+      - uses: actions/checkout@v6
+
+      - name: Wait for the runner and post its result
+        run: bash integration/ci/metal-report.sh
 
   skipped:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository
