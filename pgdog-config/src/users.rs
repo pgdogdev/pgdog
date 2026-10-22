@@ -69,6 +69,7 @@ impl Users {
                         if min_pool_size > 0
                             && user.server_password.is_none()
                             && user.server_auth == ServerAuth::Password
+                            && !config.general.passthrough_auth()
                         {
                             warn!(
                                 r#"user "{}" (database "{}") does not have a password configured, PgDog cannot connect to the server to maintain "min_pool_size" of {}, setting it to 0"#,

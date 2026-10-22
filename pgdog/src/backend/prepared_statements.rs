@@ -209,6 +209,10 @@ impl PreparedStatements {
     }
 
     /// Handle the Execute that runs a SQL PREPARE over the extended protocol.
+    ///
+    /// The statement exists only after Execute's CommandComplete, not after
+    /// ParseComplete. If this connection already has it, the Execute is dropped
+    /// and a CommandComplete is simulated.
     pub(super) fn handle_execute_prepare(&mut self, prepare: &SqlPrepare) -> HandleResult {
         if self.contains(prepare.name()) {
             let response = if self.server_state == State::TransactionError {
@@ -524,8 +528,7 @@ impl PreparedStatements {
                 // and not to copy the name just to remove by name
                 if let Some(pending) = self.pending_statements.pop_front() {
                     if let Some(name) = pending.name() {
-                        let name = name.to_owned();
-                        self.remove(&name);
+                        self.remove(name);
                     }
                     self.pending_statements.push_front(pending);
                 }

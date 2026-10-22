@@ -45,6 +45,7 @@ impl Pools {
     pub(crate) fn load() -> Pools {
         let mut metrics = vec![];
         let mut max_connections = vec![];
+        let mut min_connections = vec![];
         let mut cl_waiting = vec![];
         let mut sv_active = vec![];
         let mut sv_idle = vec![];
@@ -129,6 +130,11 @@ impl Pools {
                     max_connections.push(Measurement {
                         labels: labels.clone(),
                         measurement: state.config.max.into(),
+                    });
+
+                    min_connections.push(Measurement {
+                        labels: labels.clone(),
+                        measurement: state.config.min.into(),
                     });
 
                     cl_waiting.push(Measurement {
@@ -467,6 +473,14 @@ impl Pools {
             name: "max_connections".into(),
             measurements: max_connections,
             help: "Maximum number of allowed server connections".into(),
+            unit: None,
+            metric_type: None,
+        }));
+
+        metrics.push(Metric::new(PoolMetric {
+            name: "min_connections".into(),
+            measurements: min_connections,
+            help: "Minimum number of server connections kept open".into(),
             unit: None,
             metric_type: None,
         }));

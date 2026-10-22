@@ -29,3 +29,5 @@ chrono-tz = "0.10.4"
 pgdog-stats = { path = "../../pgdog-stats" }
 itertools = "0.15"
 pg_stream = "0.2.1"
+pgdog-regress = { git = "https://github.com/pgdogdev/regress.git", ref = "22032787eeaef9bf97aaa3216735a7369f1f9125" }
+anyhow = "1.0.104"

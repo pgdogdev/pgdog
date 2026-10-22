@@ -274,6 +274,10 @@ impl Shard {
         self.schema.get().cloned().unwrap_or_default()
     }
 
+    pub(crate) fn loaded_schema(&self) -> Option<&Schema> {
+        self.schema.get()
+    }
+
     /// Re-detect primary/replica roles and re-build
     /// the shard routing logic.
     pub(crate) fn redetect_roles(&self) -> bool {

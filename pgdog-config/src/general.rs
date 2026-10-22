@@ -1508,7 +1508,7 @@ impl General {
     }
 
     pub fn prepared_statements_limit() -> usize {
-        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", i64::MAX as usize)
+        Self::env_or_default("PGDOG_PREPARED_STATEMENTS_LIMIT", 5_000)
     }
 
     fn default_prepared_statements_ttl() -> Option<u64> {
@@ -2101,7 +2101,7 @@ mod tests {
 
         assert_eq!(General::broadcast_port(), General::port() + 1);
         assert_eq!(General::openmetrics_port(), None);
-        assert_eq!(General::prepared_statements_limit(), i64::MAX as usize);
+        assert_eq!(General::prepared_statements_limit(), 5_000);
         assert_eq!(General::default_prepared_statements_ttl(), None);
         assert_eq!(General::default_prepared_statements_ttl_jitter(), 30_000);
         assert_eq!(General::query_cache_limit(), 1_000);

@@ -9,7 +9,7 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_messages: &mut [ProtocolMessage],
-    ) -> Result<(), Error> {
+    ) -> Result<(), PreparedStatementError> {
         for message in client_messages {
             if message.is_extended() {
                 let level = context.prepared_statements.level;
@@ -72,6 +72,7 @@ impl QueryEngine {
         // if all of them go to the same shard.
         if let RewriteResult::InsertSplit(ref mut insert_split) = rewrite_result {
             super::multi_step::InsertMulti::route(insert_split, context, self.backend.cluster()?)?;
+            insert_split.group_by_shard(client_request, context.prepared_statements)?;
         }
 
         Ok(Some(rewrite_result))

@@ -503,8 +503,7 @@ impl Server {
             }
         } else {
             for message in client_request.messages.iter() {
-                let result = self.prepared_statements.handle(message)?;
-                self.send_handled(message, result).await?;
+                self.send_one(message).await?;
             }
         }
         self.flush().await?;

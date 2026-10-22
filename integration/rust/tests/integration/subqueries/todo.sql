@@ -31,8 +31,9 @@
 
 -- FIRST
 --   basis: Mastodon's test suite (highest to lowest share of subquery calls)
+--   progress: 19 out of 49 done
 --
--- [DONE EXCEPT INSERT] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
 --       case: <x> is <col>
 --       case: <x> is <key>
 -- [DONE]  [A1 A2 A3 A4 A5 A6 O9 Q7] [update, delete] .. WHERE <col> <op> (<sq>)
@@ -43,15 +44,15 @@
 --       case: <op> = scalar comparison
 -- [DONE]  [A1 A2 A3 A4 A6 O1 O2 O3 O9] [update, delete] .. <st1> .. WHERE <col> IN (SELECT .. FROM <st1>)
 --       condition: self-reference
---  [DONE] [A1 A2 A3 A4 A6] [select] .. WHERE <col> IN (<sq>)
---  [DONE)] [A1 A3] [select, update, delete] .. WHERE <key> IN (<sq>)
---   [A1 A2 A3 A4 A5 A6] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
+-- [DONE] [A1 A2 A3 A4 A6] [select] .. WHERE <col> IN (<sq>)
+-- [DONE] [A1 A3] [select, update, delete] .. WHERE <key> IN (<sq>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
 --       condition: no sharding key value anywhere in the INSERT statement
---   [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
+-- [DONE] [?] [insert] INSERT INTO <st1> SELECT .. FROM <st2>
 --       condition: source rows are on other shards than their destination
---   [A1 A2 A3] [insert] INSERT INTO <st1> SELECT .. RETURNING ..
+-- [DONE] [A1 A2 A3] [insert] INSERT INTO <st1> SELECT .. RETURNING ..
 --       condition: cross-shard; row count and rows from all shards
---   [A1 A2 A4] [insert] INSERT INTO <st1> SELECT .. FROM <st1>
+-- [DONE] [A1 A2 A4] [insert] INSERT INTO <st1> SELECT .. FROM <st1>
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq> WHERE <key> = <k1>)
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <key> = $1)
 --   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>)
@@ -72,7 +73,7 @@
 --       condition: <sq> result with and without NULLs
 --   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
 --   [A1 A2 A3 A4 A6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
---   [A1 A2 A4 A5 A6] [select, insert, delete] .. (SELECT <agg>(<col>) FROM <st2>)
+-- [DONE] [A1 A2 A4 A5 A6] [select, insert, delete] .. (SELECT <agg>(<col>) FROM <st2>)
 --       condition: computed across all shards
 --       case: <agg> = count
 --       case: <agg> = sum
@@ -89,7 +90,7 @@
 --       case: <join> = LEFT JOIN .. ON TRUE
 --       case: <join> = CROSS JOIN
 --       case: <join> = JOIN .. ON TRUE
---   [A1 A2 A3 A4 A5 A6] [select, insert, update] .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert, update] .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
 --       condition: <sq> is cross-shard; the <n> rows come from several shards
 --   [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
 --   [A1 A2 A3 A4 A6 O3 O9 Q5] [select, insert] .. (SELECT .., <fn>() OVER (..) FROM <st2>)
@@ -108,9 +109,9 @@
 --       condition: <sq> is cross-shard
 --   [A1 A2 A4 A5 A6] [select] SELECT <col>, (<sq> WHERE <st2>.<x> = <st1>.<x>) FROM <st1>
 --   [A1 A2 A3] [select] SELECT ARRAY(<sq>) FROM <st1>
---   [A1 A2 A3 A4 A5 A6] [select, insert] .. (SELECT DISTINCT .. FROM <st2>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert] .. (SELECT DISTINCT .. FROM <st2>)
 --   [A1 A2 A5 A6] [select] WITH c AS (<q1> UNION <q2>) SELECT .. FROM c
---   [A1 A2 A3 A4 A6 Q1 Q5] [insert] INSERT INTO <st1> SELECT .. ON CONFLICT ..
+-- [DONE] [A1 A2 A3 A4 A6 Q1 Q5] [insert] INSERT INTO <st1> SELECT .. ON CONFLICT ..
 --       case: DO NOTHING
 --       case: DO UPDATE SET <col> = EXCLUDED.<col>
 --   [A1 A2 A3 A4 A6] [select] SELECT EXISTS (<sq>) FROM <st1>
@@ -135,7 +136,7 @@
 --       case: EXISTS (<sq>)
 --       case: NOT EXISTS (<sq>)
 --       case: EXISTS (<sq>) OR EXISTS (<sq>)
---   [A2 A3 A5 Q1] [insert] INSERT INTO <st1> SELECT .. FROM <src>
+-- [DONE] [A2 A3 A5 Q1] [insert] INSERT INTO <st1> SELECT .. FROM <src>
 --       condition: row keys are on several shards
 --       case: <src> = generate_series(..)
 --       case: <src> = unnest($1, ..)

@@ -108,9 +108,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arc-swap"
@@ -721,6 +721,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64-simd"
@@ -2451,6 +2457,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2477,6 +2502,7 @@ dependencies = [
 name = "integration_tests_rust"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -2487,6 +2513,7 @@ dependencies = [
  "ordered-float",
  "parking_lot",
  "pg_stream",
+ "pgdog-regress",
  "pgdog-stats",
  "postgres-native-tls",
  "rand 0.9.4",
@@ -3132,6 +3159,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "pg_internals"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/pg-internals?rev=ce5c26f2501d787cdb84f610176a92880944dbcd#ce5c26f2501d787cdb84f610176a92880944dbcd"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "clang-sys",
+ "phf 0.13.1",
+ "phf_codegen",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.118",
+ "thiserror",
+]
+
+[[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
 source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1#89937b1a9c39bbb53b679f12aba3ff7c5ab3c093"
@@ -3141,6 +3186,24 @@ dependencies = [
  "convert_case 0.11.0",
  "generativity",
  "glob",
+ "libc",
+ "prettyplease",
+ "regex",
+ "syn 2.0.118",
+ "thiserror",
+]
+
+[[package]]
+name = "pg_raw_parse"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85#a4784fc603563d3db8e9f381347f039f39b1dd85"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "convert_case 0.11.0",
+ "generativity",
+ "glob",
+ "include_dir",
  "libc",
  "prettyplease",
  "regex",
@@ -3206,7 +3269,8 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_internals",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-config",
  "pgdog-macros",
  "pgdog-plugin",
@@ -3274,7 +3338,7 @@ version = "0.1.0"
 dependencies = [
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-plugin",
  "thiserror",
 ]
@@ -3307,7 +3371,7 @@ version = "0.5.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
@@ -3335,12 +3399,24 @@ dependencies = [
  "arc-swap",
  "once_cell",
  "parking_lot",
- "pg_raw_parse",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
  "pgdog-plugin",
  "serde",
  "thiserror",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "pgdog-regress"
+version = "0.1.0"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
+dependencies = [
+ "bytes",
+ "fallible-iterator",
+ "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85)",
+ "postgres-protocol 0.6.12",
+ "tokio",
 ]
 
 [[package]]
@@ -3384,6 +3460,26 @@ checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
  "phf_shared 0.13.1",
  "serde",
+]
+
+[[package]]
+name = "phf_codegen"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49aa7f9d80421bca176ca8dbfebe668cc7a2684708594ec9f3c0db0805d5d6e1"
+dependencies = [
+ "phf_generator",
+ "phf_shared 0.13.1",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737"
+dependencies = [
+ "fastrand",
+ "phf_shared 0.13.1",
 ]
 
 [[package]]
@@ -3515,6 +3611,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-protocol"
+version = "0.6.12"
+source = "git+https://github.com/pgdogdev/regress.git#22032787eeaef9bf97aaa3216735a7369f1f9125"
+dependencies = [
+ "base64 0.23.1",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac 0.13.0",
+ "md-5 0.11.0",
+ "memchr",
+ "rand 0.10.1",
+ "sha2 0.11.0",
+ "stringprep",
+]
+
+[[package]]
 name = "postgres-types"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3522,7 +3635,7 @@ checksum = "8dc729a129e682e8d24170cd30ae1aa01b336b096cbb56df6d534ffec133d186"
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.11",
  "uuid",
 ]
 
@@ -5046,7 +5159,7 @@ dependencies = [
  "percent-encoding",
  "phf 0.13.1",
  "pin-project-lite",
- "postgres-protocol",
+ "postgres-protocol 0.6.11",
  "postgres-types",
  "rand 0.10.1",
  "socket2 0.6.3",

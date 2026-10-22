@@ -3,9 +3,13 @@ use pg_stream::{
     message::{Bindable, TransactionStatus},
     startup::{AuthenticationMode, ConnectionBuilder},
 };
+use sqlx::{
+    Row,
+    postgres::{PgPoolOptions, PgRow},
+};
 use tokio::net::TcpStream;
 
-use crate::integration::subqueries::Commands;
+use crate::integration::subqueries::{TestCase, test_case::StatementType};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Protocol {
@@ -93,8 +97,32 @@ pub(crate) async fn run(
     conn: &mut PgConnection<TcpStream>,
     mut sql: String,
     protocol: Protocol,
-    commands: Option<&Commands>,
-) -> Vec<WireMessage> {
+    commands: Option<&TestCase>,
+    direct_postgres: bool,
+) -> Result<Vec<WireMessage>, anyhow::Error> {
+    let app_name_tested =
+        commands.map(|cmd| format!("{:?}_{}", protocol, cmd.identifier).to_lowercase());
+
+    // Set the applciation name to a unique identifier to the test case,
+    // so that we can figure out what queries belong to this test case
+    // when we look at pg_stat_monitor filtering by the application_name
+    // to identify what subqueries were executed on what Shard.
+    if let Some(app_name_tested) = app_name_tested.as_ref() {
+        let set_app_name = format!("SET application_name TO {app_name_tested}");
+
+        conn.query(set_app_name.as_str());
+        conn.flush().await.unwrap();
+
+        loop {
+            let message = WireMessage::from(conn.recv().await?);
+            let done = matches!(message, WireMessage::ReadyForQuery(_));
+
+            if done {
+                break;
+            }
+        }
+    }
+
     match protocol {
         Protocol::Simple => {
             if let Some(commands) = commands {
@@ -102,7 +130,12 @@ pub(crate) async fn run(
                 // the parameter with its content, so we can
                 // run it in the simple protocol too.
                 for (index, param) in commands.bind_params.iter().enumerate() {
-                    sql = sql.replace(format!("${}", index + 1).as_str(), param.as_str());
+                    let index = format!("${}", index + 1);
+                    if sql.contains(format!("{index}::").as_str()) {
+                        sql = sql.replace(index.as_str(), format!("'{param}'").as_str());
+                    } else {
+                        sql = sql.replace(index.as_str(), param.as_str());
+                    }
                 }
             }
 
@@ -135,12 +168,96 @@ pub(crate) async fn run(
 
     let mut messages = vec![];
     loop {
-        let message = WireMessage::from(conn.recv().await.unwrap());
+        let message = WireMessage::from(conn.recv().await?);
         let done = matches!(message, WireMessage::ReadyForQuery(_));
         messages.push(message);
 
         if done {
-            return messages;
+            if !direct_postgres && let Some(app_name_tested) = app_name_tested.as_ref() {
+                // Only assert routing if this is going to PgDog. We can't do the same for Postgres (as it's not sharded).
+                fetch_pg_stat_statement(commands.unwrap(), app_name_tested).await;
+            }
+
+            return Ok(messages);
         }
     }
+}
+
+/// Query `pg_stat_monitor` from each of the Postgres shards to see what queries
+/// actually ran when running the Subquery on PgDog.
+///
+/// This could be multiple statements as we execute subqueries separately when parse,
+/// evaluate separately, and inject into the top-level statement.
+///
+/// So, this allows us to see what queries actually ran (what was detected),
+/// as well as where they were routed.
+///
+/// `TestCase` holds a field pulled from the config for expected routing
+/// for each query, as well as the total amount of queries, and a general
+/// order.
+///
+/// TODO(jkaczman): we should be more specific instead of 'select' / 'insert' / etc statements.
+async fn fetch_pg_stat_statement(test_case: &TestCase, app_name_tested: &str) {
+    let mut actual: Vec<Vec<StatementType>> = Vec::new();
+    for shard in [0, 1] {
+        let sharded_conn = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(
+                format!(
+                    "postgres://pgdog:pgdog@127.0.0.1:5432/shard_{shard}?application_name=sqlx"
+                )
+                .as_str(),
+            )
+            .await
+            .unwrap();
+
+        // PERF(jkaczman): Technically, this could be a singular query send that doesn't filter by datname,
+        // then we break it apart ourselves.
+        let statements = sqlx::raw_sql(
+            format!("SELECT application_name, query FROM pg_stat_monitor WHERE datname = 'shard_{shard}' ORDER BY stats_since ASC").as_str(),
+        )
+        .fetch_all(&sharded_conn)
+        .await
+        .unwrap();
+
+        let relevant_statements: Vec<&PgRow> = statements
+            .iter()
+            .filter(|statement| {
+                statement
+                    .get::<&str, &str>("application_name")
+                    .eq(app_name_tested)
+            })
+            .filter(|statement| !statement.get::<&str, &str>("query").starts_with("SET"))
+            .collect();
+
+        let statement_types: Vec<StatementType> = relevant_statements
+            .iter()
+            .map(|row| {
+                let query = row.get::<&str, &str>("query");
+
+                StatementType::parse(query)
+            })
+            .collect();
+
+        actual.push(statement_types);
+    }
+
+    // Directly match if there's no 'any' checks
+    if test_case.routing_any.is_empty() {
+        assert_eq!(actual, test_case.routing_expectations);
+        return;
+    }
+
+    let candidates: Vec<Vec<Vec<StatementType>>> = (0..actual.len())
+        .map(|any_shard| {
+            let mut expected = test_case.routing_expectations.clone();
+            expected[any_shard].splice(0..0, test_case.routing_any.iter().cloned());
+            expected
+        })
+        .collect();
+
+    assert!(
+        candidates.contains(&actual),
+        "routing mismatch: got {actual:?}, expected one of {candidates:?}"
+    );
 }

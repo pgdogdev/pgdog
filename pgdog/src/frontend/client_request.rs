@@ -48,7 +48,8 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
-    /// SQL-level prepared statement operation carried by this request.
+    /// SQL PREPARE/EXECUTE work for the backend. The client's
+    /// Parse/Bind/Execute are sent unchanged; see `PreparedOperation`.
     pub(crate) prepared_operation: Option<Box<PreparedOperation>>,
 }
 
@@ -121,6 +122,22 @@ impl ClientRequest {
         self.prepared_operation = None;
         self.route = None;
         self.ast = None;
+    }
+
+    /// Discard messages before [`crate::net::Sync`] after an extended protocol error.
+    /// Return true if the entire request was discarded.
+    pub(crate) fn discard_until_sync(&mut self) -> bool {
+        let discard = self
+            .messages
+            .iter()
+            .position(|message| message.code() == 'S')
+            .unwrap_or(self.messages.len());
+        self.messages.drain(..discard);
+
+        // Don't replay Parse in a failed transaction.
+        self.last_parse = None;
+
+        self.messages.is_empty()
     }
 
     /// We received a complete request and we are ready to

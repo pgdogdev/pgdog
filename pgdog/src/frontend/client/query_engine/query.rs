@@ -7,7 +7,7 @@ use crate::{
         router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
-        DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
+        Bind, DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
         RowDescription, ToBytes, TransactionState,
     },
     state::State,
@@ -133,7 +133,22 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::Subquery(subquery)) => {
-                multi_step::SubqueryMulti::new(self, &subquery)
+                // We get to here when detecting a Subquery in a top-level statement; this isn't recursed.
+                // Thus, we should now fetch the Bind, if present, and pass it in (at the top-level),
+                // so that we can supply the very top level's Bind to all sub-levels.
+                //
+                // TODO(jkaczman): don't need to do this if it's not extended protocol; do we have an easy way
+                // to find that out via a pre-computed flag?
+                let top_level_bind: Option<&Bind> =
+                    client_request.messages.iter().find_map(|message| {
+                        if let ProtocolMessage::Bind(bind) = message {
+                            Some(bind)
+                        } else {
+                            None
+                        }
+                    });
+
+                multi_step::SubqueryMulti::new(self, &subquery, top_level_bind)
                     .execute(context, client_request)
                     .await?;
             }
@@ -526,7 +541,7 @@ impl QueryEngine {
         {
             let error = ErrorResponse::in_failed_transaction();
 
-            self.error_response(context, client_request, error).await?;
+            self.send_error_response(context, error).await?;
 
             Ok(false)
         } else {
@@ -540,13 +555,22 @@ impl QueryEngine {
         client_request: &ClientRequest,
         mut error: ErrorResponse,
     ) -> Result<(), Error> {
-        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
-
         // Attach query context.
         if error.detail.is_none() {
             let query = client_request.query()?.map(|q| q.query().to_owned());
             error.detail = Some(query.unwrap_or_default());
         }
+
+        self.send_error_response(context, error).await
+    }
+
+    /// Send an error without adding fields to PostgreSQL-compatible responses.
+    pub(super) async fn send_error_response(
+        &mut self,
+        context: &mut QueryEngineContext<'_>,
+        error: ErrorResponse,
+    ) -> Result<(), Error> {
+        error!("{:?} [{:?}]", error.message, context.stream.peer_addr());
 
         self.hooks.on_engine_error(context, &error)?;
 

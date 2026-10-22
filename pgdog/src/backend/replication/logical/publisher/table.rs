@@ -232,32 +232,53 @@ impl Table {
         )
     }
 
-    /// Generate the upsert query (INSERT … ON CONFLICT DO UPDATE).
-    /// Uses all columns in VALUES; DO UPDATE SET reuses the same `$N` positions — no reindex.
-    /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
-    /// the values in the default column order
+    /// Generate the upsert query:
+    ///
+    /// ```sql
+    /// INSERT [...] ON CONFLICT DO UPDATE SET [...])
+    /// ```
+    ///
+    /// If all columns are covered by a primary key constraint, the statement
+    /// is rewritten to do nothing.
+    ///
     pub(crate) fn upsert(&self) -> String {
+        let assignments = self.non_identity_columns().into_assignments();
+        let action = if assignments.is_empty() {
+            "DO NOTHING".to_owned()
+        } else {
+            format!("DO UPDATE SET {assignments}")
+        };
         format!(
-            "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {}",
+            "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({}) ON CONFLICT ({}) {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
             self.all_columns().into_names(),
             self.all_columns().into_placeholders(),
             self.identity_columns().into_names(),
-            self.non_identity_columns().into_assignments(),
+            action,
         )
     }
 
     /// Generate the UPDATE query for all columns.
-    /// Identity columns are in the WHERE part and non-identity in the SET part.
+    /// Identity columns are in the WHERE clause and non-identity columns in the SET clause.
+    ///
     /// The related [bind](crate::net::messages::replication::TupleData::to_bind) should set all
-    /// the values in the default column order
+    /// the values in the default column order.
     pub(crate) fn update(&self) -> String {
+        let assignments = self.non_identity_columns().into_assignments();
+        let assignments = if assignments.is_empty() {
+            // Key changes use DELETE + INSERT. This statement only runs when the
+            // key is unchanged, so assigning its values preserves the row while
+            // keeping the statement valid and binding every column.
+            self.identity_columns().into_assignments()
+        } else {
+            assignments
+        };
         format!(
             "UPDATE \"{}\".\"{}\" SET {} WHERE {}",
             escape_identifier(self.table.destination_schema()),
             escape_identifier(self.table.destination_name()),
-            self.non_identity_columns().into_assignments(),
+            assignments,
             self.identity_columns().into_predicates(),
         )
     }
@@ -583,6 +604,41 @@ mod test {
     }
 
     #[test]
+    fn test_upsert_all_identity_columns() {
+        for columns in [vec![("id", true)], vec![("a", true), ("b", true)]] {
+            let table = make_table(columns);
+            let sql = table.upsert();
+            assert!(parse(&sql).is_ok(), "upsert: {sql}");
+            assert_eq!(
+                sql,
+                format!(
+                    "{} ON CONFLICT ({}) DO NOTHING",
+                    table.insert(),
+                    table.identity_columns().into_names(),
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_all_identity_columns() {
+        for (columns, expected) in [
+            (
+                vec![("id", true)],
+                r#"UPDATE "public"."test_table" SET "id" = $1 WHERE "id" = $1"#,
+            ),
+            (
+                vec![("a", true), ("b", true)],
+                r#"UPDATE "public"."test_table" SET "a" = $1, "b" = $2 WHERE "a" = $1 AND "b" = $2"#,
+            ),
+        ] {
+            let sql = make_table(columns).update();
+            assert!(parse(&sql).is_ok(), "update: {sql}");
+            assert_eq!(sql, expected);
+        }
+    }
+
+    #[test]
     fn test_sql_generation_special_chars() {
         let table = make_table(vec![
             ("id", true),
@@ -777,6 +833,47 @@ mod test {
             columns,
             lsn: Lsn::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn test_all_identity_columns_prepared_statements() {
+        let mut server = test_server().await;
+        server.execute_checked("BEGIN").await.expect("begin");
+        server
+            .execute_checked("CREATE TABLE public.key_only_test (a INT, b INT, PRIMARY KEY (a, b))")
+            .await
+            .expect("create table");
+        let table = load_table(&mut server, "key_only_test").await;
+
+        // Both statements are prepared when a relation enters the stream,
+        // including tables that never receive UPDATEs.
+        for (name, sql) in [
+            ("key_only_upsert", table.upsert()),
+            ("key_only_update", table.update()),
+        ] {
+            server
+                .execute_checked(format!("PREPARE {name} AS {sql}"))
+                .await
+                .expect("prepare key-only statement");
+        }
+        for sql in [
+            "EXECUTE key_only_upsert(1, 2)",
+            "EXECUTE key_only_upsert(1, 2)",
+            "EXECUTE key_only_upsert(1, 3)",
+            "EXECUTE key_only_update(1, 2)",
+            "EXECUTE key_only_update(9, 9)",
+        ] {
+            server
+                .execute_checked(sql)
+                .await
+                .expect("execute statement");
+        }
+        let rows = server
+            .fetch_all::<i64>("SELECT b::bigint FROM public.key_only_test ORDER BY a, b")
+            .await
+            .expect("fetch rows");
+        assert_eq!(rows, vec![2, 3]);
+        server.execute_checked("ROLLBACK").await.expect("rollback");
     }
 
     #[tokio::test]

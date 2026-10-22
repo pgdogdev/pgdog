@@ -2,18 +2,29 @@
 //! getting the relevant SQL for us to send in our multi-step code.
 use pg_raw_parse::Node;
 
-use crate::frontend::router::parser::{StatementRewrite, rewrite::statement::RewritePlan};
+use crate::frontend::router::parser::{StatementRewrite, rewrite::statement::insert::Subquery};
+
+// Determine if there's a SELECT FROM in an INSERT.
+// E.g., INSERT INTO .. SELECT FROM generate_series(..)
+pub(crate) mod insert_select;
 
 // Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
 pub(crate) mod where_clause;
 
 impl<'a> StatementRewrite<'a> {
     /// Handle planning Subqueries to later be executed and re-written by the multi step code.
-    pub(crate) fn plan_subquery<'mem>(&mut self, outer_stmt: Node<'mem>, plan: &mut RewritePlan) {
+    pub(crate) fn plan_subquery<'mem>(&mut self, outer_stmt: Node<'mem>) -> Option<Subquery> {
         // Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
         if let Some((sub_link, _)) = where_clause::has_sub_link_in_where(outer_stmt) {
-            self.handle_subquery_in_where(sub_link, plan);
-            // TODO(jkaczman): when adding another type to support here, return early in this branch, so that we don't plan multiple times
+            return self.handle_subquery_in_where(sub_link);
         }
+
+        // Determine if there's a SELECT FROM in an INSERT.
+        // E.g., INSERT INTO .. SELECT FROM generate_series(..)
+        if let Some(subquery) = self.handle_subquery_in_insert_select(outer_stmt) {
+            return Some(subquery);
+        }
+
+        None
     }
 }
