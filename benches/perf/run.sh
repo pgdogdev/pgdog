@@ -30,7 +30,7 @@ if [ -n "${BENCH_PERF_OUT:-}" ]; then
 fi
 perf_stat_pid=""
 if [ -n "${BENCH_PERF_STAT_OUT:-}" ]; then
-    perf stat -e instructions,cycles -x, -o "${BENCH_PERF_STAT_OUT}" -p ${pid} > /dev/null 2>&1 &
+    perf stat -e cycles:u,instructions:u,cycles:k -x, -o "${BENCH_PERF_STAT_OUT}" -p ${pid} > /dev/null 2>&1 &
     perf_stat_pid=$!
 fi
 
@@ -49,8 +49,9 @@ echo "pgdog_ctx_switches = $({ echo "${ctx_start}"; echo "--"; echo "${ctx_end}"
 if [ -n "${perf_stat_pid}" ]; then
     kill -INT ${perf_stat_pid}
     wait ${perf_stat_pid} || true
-    echo "pgdog_instructions = $(awk -F, '$3 == "instructions" {print $1}' "${BENCH_PERF_STAT_OUT}")"
-    echo "pgdog_cycles = $(awk -F, '$3 == "cycles" {print $1}' "${BENCH_PERF_STAT_OUT}")"
+    echo "pgdog_user_cycles = $(awk -F, '$3 == "cycles:u" {print $1}' "${BENCH_PERF_STAT_OUT}")"
+    echo "pgdog_user_instructions = $(awk -F, '$3 == "instructions:u" {print $1}' "${BENCH_PERF_STAT_OUT}")"
+    echo "pgdog_kernel_cycles = $(awk -F, '$3 == "cycles:k" {print $1}' "${BENCH_PERF_STAT_OUT}")"
 fi
 
 stop_pgdog

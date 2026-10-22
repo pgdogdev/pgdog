@@ -121,16 +121,19 @@ for name in "$@"; do
     ctx=$(awk '/^pgdog_ctx_switches/ {print $3}' $name.measured.txt)
     cpu_per_txn=$(awk -v c=$cpu -v t=$txns 'BEGIN {printf "%.4f", c * 1000000 / t}')
     ctx_per_txn=$(awk -v c=$ctx -v t=$txns 'BEGIN {printf "%.6f", c / t}')
-    instructions=$(awk '/^pgdog_instructions/ {print $3}' $name.measured.txt)
-    instructions_json=""
-    if [ -n "${instructions}" ]; then
-        instructions_json=", \"instructions-per-txn\": {\"value\": $(awk -v i=$instructions -v t=$txns 'BEGIN {printf "%.1f", i / t}')}"
+    user_cycles=$(awk '/^pgdog_user_cycles/ {print $3}' $name.measured.txt)
+    counters_json=""
+    if [ -n "${user_cycles}" ]; then
+        user_instructions=$(awk '/^pgdog_user_instructions/ {print $3}' $name.measured.txt)
+        kernel_cycles=$(awk '/^pgdog_kernel_cycles/ {print $3}' $name.measured.txt)
+        counters_json=$(awk -v uc=$user_cycles -v ui=$user_instructions -v kc=$kernel_cycles -v t=$txns \
+            'BEGIN {printf ", \"user-cycles-per-txn\": {\"value\": %.1f}, \"user-instructions-per-txn\": {\"value\": %.1f}, \"kernel-cycles-per-txn\": {\"value\": %.1f}", uc / t, ui / t, kc / t}')
     fi
     ctx_json=""
     if [ "${workers}" -gt 1 ]; then
         ctx_json=", \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}"
     fi
-    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}${instructions_json}},"
+    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}${counters_json}},"
 done
 
 echo "{${json%,}}"
