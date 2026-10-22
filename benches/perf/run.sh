@@ -23,11 +23,22 @@ ctx_switches() {
     done
 }
 
+perf_pid=""
+if [ -n "${BENCH_PERF_OUT:-}" ]; then
+    perf record -q -F 499 -g -p ${pid} -o "${BENCH_PERF_OUT}" > /dev/null 2>&1 &
+    perf_pid=$!
+fi
+
 start=$(cpu_ticks)
 ctx_start=$(ctx_switches)
 bash ${SCRIPT_DIR}/$1/run.sh
 end=$(cpu_ticks)
 ctx_end=$(ctx_switches)
+
+if [ -n "${perf_pid}" ]; then
+    kill -INT ${perf_pid}
+    wait ${perf_pid} || true
+fi
 echo "pgdog_cpu_seconds = $(awk -v d=$((end - start)) -v hz=$(getconf CLK_TCK) 'BEGIN {print d / hz}')"
 echo "pgdog_ctx_switches = $({ echo "${ctx_start}"; echo "--"; echo "${ctx_end}"; } | awk '$1 == "--" {after = 1; next} !after {before[$1] = $2; next} {total += $2 - before[$1]} END {print total + 0}')"
 
