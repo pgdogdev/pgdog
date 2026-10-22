@@ -27,7 +27,9 @@ jobs:
         with:
           prefix-key: build-v1
       - name: Build
-        run: cargo build --release --bin pgdog
+        env:
+          GIT_HASH: bench
+        run: cargo build --release --bin pgdog --config 'target."cfg(all())".rustflags=["-C","llvm-args=-align-all-functions=6"]'
       - name: Build image
         run: |
           docker build --build-context bin=target/release -f benches/perf/Dockerfile -t pgdog-bench .
