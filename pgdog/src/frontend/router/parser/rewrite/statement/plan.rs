@@ -336,6 +336,8 @@ impl RewritePlan {
                 .iter()
                 .any(|message| matches!(message, ProtocolMessage::Query(_)));
 
+            // Extended protocol: the client expects replies to its own Parse/Bind/Execute,
+            // so the messages can't be replaced with a simple-protocol PREPARE.
             if !simple {
                 if request.opens_portal() {
                     return Err(Error::UnsupportedExtendedPrepared(

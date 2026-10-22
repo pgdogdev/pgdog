@@ -16,6 +16,9 @@ use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
 
+/// Parsing SQL `PREPARE`/`EXECUTE` also updates the calling client's
+/// `PreparedStatements` (e.g. `get_user` -> `__pgdog_1`). The cache only
+/// stores the AST, not that update, so these must always be parsed.
 fn cacheable(ast: &Ast) -> bool {
     ast.rewrite_plan.prepare_rewrites.is_empty()
         && !matches!(

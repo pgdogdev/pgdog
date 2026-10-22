@@ -39,7 +39,9 @@ pub(crate) struct ClientRequest {
     pub(crate) last_parse: Option<Parse>,
     /// How many parameters the client wrote in the unnamed prepared statement
     pub(crate) anonymous_client_params: Option<u16>,
-    /// SQL PREPARE created when this request's Execute succeeds.
+    /// SQL PREPARE carried by an extended-protocol request. The client's
+    /// Parse/Bind/Execute are sent unchanged; the backend registers this
+    /// statement once the Execute completes.
     pub(crate) prepare_on_execute: Option<Box<Prepare>>,
 }
 
