@@ -34,6 +34,8 @@ jobs:
   enqueue:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
+    outputs:
+      enqueued_at: ${{ steps.enqueue.outputs.enqueued_at }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,6 +43,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Enqueue commit
+        id: enqueue
         env:
           MESSAGE: >-
             {"sha": "${{ env.SHA }}",
@@ -48,6 +51,7 @@ jobs:
              "pr": "${{ github.event.pull_request.number }}",
              "base": "${{ github.event.pull_request.base.sha }}"}
         run: |
+          echo "enqueued_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
           aws sqs send-message \
             --queue-url "$QUEUE_URL" \
             --message-group-id metal \
@@ -85,6 +89,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
+      ENQUEUED_AT: ${{ needs.enqueue.outputs.enqueued_at }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
