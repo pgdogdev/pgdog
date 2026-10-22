@@ -334,6 +334,8 @@ impl RewritePlan {
                 PrepareExecute::Execute(prepare) => Some(prepare),
                 PrepareExecute::Prepare(_) => None,
             });
+        // An EXECUTE whose arguments come from Bind skips the outer statement:
+        // Bind is remapped and renamed to the SQL prepared statement.
         let bound_execute = if let Some(prepare) = execute_prepare
             && request
                 .parameters()?
@@ -408,9 +410,9 @@ impl RewritePlan {
             && request.parameters()?.is_some()
             && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
         {
-            // SQL EXECUTE can contain values generated for this execution and
-            // shard-dependent LIMIT/OFFSET. Parse an anonymous copy immediately
-            // before Bind so a cached outer statement never retains stale values.
+            // Drivers reuse the outer named statement and send only Bind next time, so
+            // values generated for this execution (unique IDs, per-shard LIMIT/OFFSET)
+            // would go stale. Parse an anonymous copy right before Bind instead.
             parse.anonymize();
             anonymous_client_params = self.apply_parse(&mut parse);
             request.last_parse = None;
