@@ -10,7 +10,7 @@ use std::time::Duration;
 use tracing::warn;
 
 use crate::api::copy_data::CopyDataTask;
-use crate::api::replication::ReplicationTask;
+use crate::api::replication::{CutoverMode, ReplicationTask};
 use crate::api::schema_sync::{SchemaSyncPhase, SchemaSyncTask};
 use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
@@ -65,6 +65,7 @@ impl Task for ReshardTask {
 
     async fn run(self, ctx: TaskContext<Self>) -> Result<(), MigrationError> {
         let cancel = ctx.cancellation_token();
+        let cutover = self.cutover_mode();
         let mut state = self.state;
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
@@ -166,8 +167,7 @@ impl Task for ReshardTask {
                     ctx.run(
                         ReplicationTask::builder()
                             .state(state.clone())
-                            .auto_cutover(self.auto_cutover)
-                            .disable_cutover(self.table_move.is_some())
+                            .cutover(cutover)
                             .schema_sync(schema_sync.clone())
                             .validate(!self.skip_schema_sync && !self.replicate_only)
                             .build(),
@@ -201,5 +201,18 @@ impl Task for ReshardTask {
         }
 
         result
+    }
+}
+
+impl ReshardTask {
+    /// A table move never cuts over: a cutover swaps whole databases.
+    fn cutover_mode(&self) -> CutoverMode {
+        if self.table_move.is_some() {
+            CutoverMode::Disabled
+        } else if self.auto_cutover {
+            CutoverMode::Auto
+        } else {
+            CutoverMode::Manual
+        }
     }
 }
