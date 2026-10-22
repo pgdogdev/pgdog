@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use pg_stream::{
     PgConnection, PgMessage, PgProtocol,
     message::{Bindable, TransactionStatus},
@@ -11,7 +12,7 @@ use tokio::net::TcpStream;
 
 use crate::integration::subqueries::{TestCase, test_case::StatementType};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Protocol {
     Simple,
     Extended,
@@ -95,7 +96,7 @@ pub(crate) async fn connect(port: u16, database: &str) -> PgConnection<TcpStream
 /// up to *AND INCLUDING* `ReadyForQuery`.
 pub(crate) async fn run(
     conn: &mut PgConnection<TcpStream>,
-    mut sql: String,
+    sql: String,
     protocol: Protocol,
     commands: Option<&TestCase>,
     direct_postgres: bool,
@@ -125,18 +126,10 @@ pub(crate) async fn run(
 
     match protocol {
         Protocol::Simple => {
-            if let Some(commands) = commands {
-                // If we have a Bind parameter, just replace
-                // the parameter with its content, so we can
-                // run it in the simple protocol too.
-                for (index, param) in commands.bind_params.iter().enumerate() {
-                    let index = format!("${}", index + 1);
-                    if sql.contains(format!("{index}::").as_str()) {
-                        sql = sql.replace(index.as_str(), format!("'{param}'").as_str());
-                    } else {
-                        sql = sql.replace(index.as_str(), param.as_str());
-                    }
-                }
+            if let Some(commands) = commands.as_ref()
+                && !commands.bind_params.is_empty()
+            {
+                unreachable!("We shouldn't run with bind params in simple protocol");
             }
 
             conn.query(sql.as_str());
@@ -175,7 +168,7 @@ pub(crate) async fn run(
         if done {
             if !direct_postgres && let Some(app_name_tested) = app_name_tested.as_ref() {
                 // Only assert routing if this is going to PgDog. We can't do the same for Postgres (as it's not sharded).
-                fetch_pg_stat_statement(commands.unwrap(), app_name_tested).await;
+                fetch_pg_stat_statement(commands.unwrap(), app_name_tested).await?;
             }
 
             return Ok(messages);
@@ -197,7 +190,10 @@ pub(crate) async fn run(
 /// order.
 ///
 /// TODO(jkaczman): we should be more specific instead of 'select' / 'insert' / etc statements.
-async fn fetch_pg_stat_statement(test_case: &TestCase, app_name_tested: &str) {
+async fn fetch_pg_stat_statement(
+    test_case: &TestCase,
+    app_name_tested: &str,
+) -> Result<(), anyhow::Error> {
     let mut actual: Vec<Vec<StatementType>> = Vec::new();
     for shard in [0, 1] {
         let sharded_conn = PgPoolOptions::new()
@@ -243,9 +239,11 @@ async fn fetch_pg_stat_statement(test_case: &TestCase, app_name_tested: &str) {
     }
 
     // Directly match if there's no 'any' checks
-    if test_case.routing_any.is_empty() {
-        assert_eq!(actual, test_case.routing_expectations);
-        return;
+    if test_case.routing_any.is_empty() && actual != test_case.routing_expectations {
+        return Err(anyhow!(
+            "Doesn't match; actual {actual:?} vs expected: {:?}",
+            test_case.routing_expectations
+        ));
     }
 
     let candidates: Vec<Vec<Vec<StatementType>>> = (0..actual.len())
@@ -260,4 +258,6 @@ async fn fetch_pg_stat_statement(test_case: &TestCase, app_name_tested: &str) {
         candidates.contains(&actual),
         "routing mismatch: got {actual:?}, expected one of {candidates:?}"
     );
+
+    Ok(())
 }

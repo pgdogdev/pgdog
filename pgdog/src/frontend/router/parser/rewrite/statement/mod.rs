@@ -235,7 +235,7 @@ impl<'a> StatementRewrite<'a> {
 
         // Handle planning subqueries
         if config().config.rewrite.subqueries == RewriteMode::Rewrite {
-            plan.subquery = self.plan_subquery(stmt.stmt());
+            plan.subquery = self.plan_subquery(stmt.stmt())?;
         }
 
         if let Node::UpdateStmt(stmt) = stmt.stmt() {
