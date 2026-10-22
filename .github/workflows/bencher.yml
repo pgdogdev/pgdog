@@ -24,12 +24,12 @@ jobs:
         include:
           - bin: pgdog
             run: |
-              cargo build --release --bin pgdog
+              cargo build --release --bin pgdog --config 'target."cfg(all())".rustflags=["-C","llvm-args=-align-all-functions=6"]'
               cp target/release/pgdog out/pgdog
           - bin: pgdog-microbench
             runner: blacksmith-16vcpu-ubuntu-2404
             run: |
-              bin=$(cargo test --profile microbench -p pgdog --bin pgdog --features bench --no-run --message-format=json \
+              bin=$(cargo test --profile microbench -p pgdog --bin pgdog --features bench --no-run --message-format=json --config 'target."cfg(all())".rustflags=["-C","llvm-args=-align-all-functions=6"]' \
                 | jq -r 'select(.profile.test == true and .target.name == "pgdog") | .executable')
               cp "$bin" out/pgdog-microbench
     steps:

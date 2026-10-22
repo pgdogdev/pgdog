@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-export PGDOG_BIN=/usr/local/bin/pgdog
+export PGDOG_BIN=${PGDOG_BIN:-/usr/local/bin/pgdog}
 
 SEED=${BENCH_SEED:-1}
 
@@ -8,7 +8,7 @@ echo 0 > /proc/sys/kernel/randomize_va_space
 
 # Microbench run?
 if [[ $1 == "microbench" ]]; then
-   taskset -c "${BENCH_MICROBENCH_CPU:-1}" pgdog-microbench run_benches --nocapture > microbench_out.txt
+   taskset -c "${BENCH_MICROBENCH_CPU:-1}" "${PGDOG_MICROBENCH_BIN:-pgdog-microbench}" run_benches --nocapture > microbench_out.txt
    awk -f benches/perf/divan_to_bmf.awk microbench_out.txt
    exit 0
 fi
@@ -126,7 +126,11 @@ for name in "$@"; do
     if [ -n "${instructions}" ]; then
         instructions_json=", \"instructions-per-txn\": {\"value\": $(awk -v i=$instructions -v t=$txns 'BEGIN {printf "%.1f", i / t}')}"
     fi
-    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}, \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}${instructions_json}},"
+    ctx_json=""
+    if [ "${workers}" -gt 1 ]; then
+        ctx_json=", \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}"
+    fi
+    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}${ctx_json}${instructions_json}},"
 done
 
 echo "{${json%,}}"
