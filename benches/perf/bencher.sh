@@ -98,15 +98,18 @@ for name in "$@"; do
     for phase in warmup measured; do
         seconds=180
         perf_out=""
+        perf_stat_out=""
         if [ "${phase}" = warmup ]; then
             seconds=30
             if [ -n "${BENCH_PERF_DIR:-}" ]; then
                 perf_out="${BENCH_PERF_DIR}/${name}.perf.data"
             fi
+        elif [ -n "${BENCH_PERF_DIR:-}" ]; then
+            perf_stat_out="${BENCH_PERF_DIR}/${name}.stat"
         fi
 
         ${pg_taskset} bash -c "${PG_START}"
-        PGDOG_WORKERS=${workers} PGDOG_CPU=${pgdog_cpu} PGBENCH_TIME=${seconds} PGBENCH_EXTRA="${rate_flag} --random-seed=${SEED}" BENCH_PERF_OUT=${perf_out} \
+        PGDOG_WORKERS=${workers} PGDOG_CPU=${pgdog_cpu} PGBENCH_TIME=${seconds} PGBENCH_EXTRA="${rate_flag} --random-seed=${SEED}" BENCH_PERF_OUT=${perf_out} BENCH_PERF_STAT_OUT=${perf_stat_out} \
             ${pgbench_taskset} bash benches/perf/run.sh $suite > $name.$phase.txt 2>&1
         bash -c "${PG_STOP}"
     done
@@ -118,7 +121,12 @@ for name in "$@"; do
     ctx=$(awk '/^pgdog_ctx_switches/ {print $3}' $name.measured.txt)
     cpu_per_txn=$(awk -v c=$cpu -v t=$txns 'BEGIN {printf "%.4f", c * 1000000 / t}')
     ctx_per_txn=$(awk -v c=$ctx -v t=$txns 'BEGIN {printf "%.6f", c / t}')
-    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}, \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}},"
+    instructions=$(awk '/^pgdog_instructions/ {print $3}' $name.measured.txt)
+    instructions_json=""
+    if [ -n "${instructions}" ]; then
+        instructions_json=", \"instructions-per-txn\": {\"value\": $(awk -v i=$instructions -v t=$txns 'BEGIN {printf "%.1f", i / t}')}"
+    fi
+    json+="\"$name-v3\": {\"throughput\": {\"value\": $tps}, \"cpu-per-txn\": {\"value\": $cpu_per_txn}, \"ctx-switches-per-txn\": {\"value\": $ctx_per_txn}${instructions_json}},"
 done
 
 echo "{${json%,}}"
