@@ -37,7 +37,7 @@ impl OffsetPlan {
 
         for message in request.messages.iter_mut() {
             if let ProtocolMessage::Bind(bind) = message {
-                if limit_val.is_none() {
+                if limit_val.is_none() && self.limit_param > 0 {
                     let idx = self.limit_param - 1;
                     limit_val = Some(
                         bind.parameter(idx)?
@@ -178,9 +178,12 @@ fn extract_limit_value(node: Node<'_>) -> Option<LimitValueInfo> {
 
 /// `$1 + $2` is ambiguous to Postgres when both sides are untyped parameters,
 /// so spell out the type both operands would have had as LIMIT/OFFSET.
-fn to_bigint<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
+fn to_bigint<'a>(
+    node: make::Unique<'a, Node<'a>>,
+    mem: make::MemoryToken<'a>,
+) -> make::Unique<'a, Node<'a>> {
     mem.make_type_cast(
-        mem.make_unique(node).uncast(),
+        node,
         mem.make_list(&[
             mem.make_string(Some("pg_catalog")),
             mem.make_string(Some("int8")),
@@ -198,8 +201,13 @@ pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
 ) {
-    let limit = to_bigint(select.limit_count(), mem);
-    let offset = to_bigint(select.limit_offset(), mem);
+    // Without LIMIT, NULL + OFFSET is NULL, which Postgres treats as no limit.
+    let limit = match select.limit_count() {
+        Node::None => mem.make_null().uncast(),
+        limit => mem.make_unique(limit).uncast(),
+    };
+    let limit = to_bigint(limit, mem);
+    let offset = to_bigint(mem.make_unique(select.limit_offset()).uncast(), mem);
     let combined = mem.make_a_expr(
         nodes::A_Expr_Kind::AEXPR_OP,
         mem.make_list(&[mem.make_string(Some("+")).uncast()]),
@@ -216,19 +224,29 @@ impl StatementRewrite<'_> {
             return;
         }
 
-        let Some(limit_info) = extract_limit_value(select.limit_count()) else {
-            return;
-        };
         let Some(offset_info) = extract_limit_value(select.limit_offset()) else {
             return;
         };
 
+        let limit_info = match select.limit_count() {
+            // No LIMIT, or LIMIT ALL. The OFFSET still has to move to the proxy,
+            // or every shard skips those rows and the proxy skips them again.
+            Node::None => None,
+            Node::A_Const(c) if c.val().is_none() => None,
+            limit => {
+                let Some(limit_info) = extract_limit_value(limit) else {
+                    return;
+                };
+                Some(limit_info)
+            }
+        };
+
         plan.offset = Some(OffsetPlan {
             limit: Limit {
-                limit: limit_info.literal(),
+                limit: limit_info.as_ref().and_then(LimitValueInfo::literal),
                 offset: offset_info.literal(),
             },
-            limit_param: limit_info.param_index(),
+            limit_param: limit_info.as_ref().map_or(0, LimitValueInfo::param_index),
             offset_param: offset_info.param_index(),
             prepare_execute: false,
         });
@@ -362,9 +380,50 @@ mod tests {
     }
 
     #[test]
-    fn test_limit_offset_skipped_no_limit() {
-        let plan = run_limit_offset("SELECT * FROM t OFFSET 5", &sharded_schema());
-        assert!(plan.offset.is_none());
+    fn test_limit_offset_detection_no_limit() {
+        for sql in [
+            "SELECT * FROM t OFFSET 5",
+            "SELECT * FROM t LIMIT ALL OFFSET 5",
+            "SELECT * FROM t LIMIT NULL OFFSET 5",
+        ] {
+            let offset = run_limit_offset(sql, &sharded_schema()).offset.unwrap();
+            assert_eq!(offset.limit.limit, None, "{sql}");
+            assert_eq!(offset.limit.offset, Some(5), "{sql}");
+            assert_eq!(offset.limit_param, 0, "{sql}");
+        }
+
+        let offset = run_limit_offset("SELECT * FROM t OFFSET $1", &sharded_schema())
+            .offset
+            .unwrap();
+        assert_eq!(offset.limit.limit, None);
+        assert_eq!(offset.limit.offset, None);
+        assert_eq!(offset.limit_param, 0);
+        assert_eq!(offset.offset_param, 1);
+    }
+
+    #[test]
+    fn test_rewrite_select_no_limit() {
+        for (sql, expected) in [
+            (
+                "SELECT * FROM t OFFSET 5",
+                "SELECT * FROM t LIMIT NULL::bigint + 5::bigint",
+            ),
+            (
+                "SELECT * FROM t LIMIT ALL OFFSET $1",
+                "SELECT * FROM t LIMIT NULL::bigint + $1::bigint",
+            ),
+        ] {
+            let stmt = pg_raw_parse::parse(sql).unwrap();
+            let Node::SelectStmt(select) = stmt.stmts().next().unwrap() else {
+                unreachable!("not a select")
+            };
+            let rewritten = make::owned(|mem| {
+                let mut select = mem.make_unique(select);
+                rewrite_select(&mut select.as_mut(), mem);
+                select
+            });
+            assert_eq!(deparse(&*rewritten).unwrap().as_str(), expected);
+        }
     }
 
     #[test]
@@ -423,6 +482,30 @@ mod tests {
 
         let route = request.route.unwrap();
         assert_eq!(route.limit().limit, Some(10));
+        assert_eq!(route.limit().offset, Some(5));
+    }
+
+    #[test]
+    fn test_apply_after_route_no_limit_offset_param() {
+        let plan = OffsetPlan {
+            limit: Limit {
+                limit: None,
+                offset: None,
+            },
+            limit_param: 0,
+            offset_param: 1,
+            prepare_execute: false,
+        };
+        let mut request = ClientRequest::from(vec![ProtocolMessage::Bind(Bind::new_params(
+            "",
+            &[Parameter::new(b"5")],
+        ))]);
+        request.route = Some(cross_shard_route());
+
+        plan.apply_after_route(&mut request).unwrap();
+
+        let route = request.route.unwrap();
+        assert_eq!(route.limit().limit, None);
         assert_eq!(route.limit().offset, Some(5));
     }
 
