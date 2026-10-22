@@ -84,7 +84,13 @@ jobs:
         # TODO: we need another test on a runner with more CPUs to catch contention with a larger
         # amount of workers (e.g., 4-8). 4 vCPUs can only fit 2 workers while leaving enough
         # cores for Postgres and pgbench.
-        suite: [pooler, lb, sharding-w2, microbench]
+        include:
+          - suite: pooler
+          - suite: lb
+            cpu_bound: 0.015
+          - suite: sharding-w2
+          - suite: microbench
+          # - suite: sharding-w8
     steps:
       - uses: actions/checkout@v6
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a
@@ -92,18 +98,6 @@ jobs:
         env:
           START_POINT: ${{ github.event_name == 'pull_request' && format('--start-point {0} --start-point-hash {1} --start-point-clone-thresholds --start-point-reset', github.base_ref, github.event.pull_request.base.sha) || '' }}
         # This will run one test per job (all in parallel).
-        # 
-        # It'll error if a test's throughput is more than 1% BELOW, or PgDog CPU time per transaction
-        # (cpu-per-txn) is more than 1% ABOVE the baseline's most recent run (main).
-        #
-        # After testing 5x back-to-back, variance was <1%. This should be enough
-        # of a difference, unless something goes on with their servers in the future.
-        # 
-        # TODO: we can re-evaluate a proper variance later
-        #
-        # Microbench: error on **any** increase in allocations (alloc_count). This is safe as
-        # allocation counts are the same on every run (unlike timings). It'll also error if alloc_bytes
-        # goes up by more than 1% or latency by more than 10% (loose until we know how noisy it is is)
         #
         # Why --github-actions? This allows it to comment on the PR with the result.
         # Why --adapter json? This allows us to use a 'custom harness'; basically nothing like rust's cargo test / criterion, we're running custom scripts
@@ -125,12 +119,12 @@ jobs:
             --threshold-test percentage \
             --threshold-max-sample-size 1 \
             --threshold-lower-boundary _ \
-            --threshold-upper-boundary 0.01 \
+            --threshold-upper-boundary ${{ matrix.cpu_bound || '0.01' }} \
             --threshold-measure ctx-switches-per-txn \
             --threshold-test percentage \
             --threshold-max-sample-size 1 \
             --threshold-lower-boundary _ \
-            --threshold-upper-boundary 0.10 \
+            --threshold-upper-boundary 0.03 \
             --threshold-measure alloc_count \
             --threshold-test percentage \
             --threshold-max-sample-size 1 \
