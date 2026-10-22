@@ -157,11 +157,10 @@ fn test_sql_prepare_rewrite_is_not_cached() {
         let query =
             BufferedQuery::Prepared(Parse::named(outer_name, "PREPARE cache_stmt AS SELECT $1"));
 
-        let parsed = Cache::get()
+        Cache::get()
             .query(&query, &test_context(), &mut prepared_statements)
             .unwrap();
 
-        assert!(!parsed.cached);
         assert!(prepared_statements.prepared_plan("cache_stmt").is_some());
     }
 

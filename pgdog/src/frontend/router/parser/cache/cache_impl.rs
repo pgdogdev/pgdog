@@ -157,26 +157,21 @@ impl Cache {
     ) -> Result<ClientQuery, Error> {
         // Separate query from comment, if one is present.
         let query_and_comment = parse_edge_comment(query.query(), ctx.sharding_schema)?;
-        let cached_ast = {
+        let ast = {
             let guard = self.inner.read();
-            let ast = guard
-                .queries
-                .peek(query_and_comment.query)
-                .filter(|entry| cacheable(entry))
-                .map(|entry| {
-                    entry.record_hit();
-                    Arc::clone(entry)
-                });
+
+            let ast = guard.queries.peek(query_and_comment.query).map(|entry| {
+                entry.record_hit();
+                Ok::<_, Error>(Arc::clone(entry))
+            });
+
             if ast.is_some() {
                 guard.hits.fetch_add(1, Ordering::Relaxed);
             }
 
             ast
-        };
-
-        let (ast, cached) = if let Some(ast) = cached_ast {
-            (ast, true)
-        } else {
+        }
+        .unwrap_or_else(|| {
             // Parse query without holding lock.
             let ast = Arc::new(Ast::parse_and_rewrite(
                 &AstQuery {
@@ -186,20 +181,22 @@ impl Cache {
                 ctx,
                 prepared_statements,
             )?);
+
             let parse_time = ast.stats.parse_time;
-            let cacheable = cacheable(&ast);
+            let insert = cacheable(&ast);
 
             let mut guard = self.inner.write();
-            if cacheable {
+            if insert {
                 guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast));
             }
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
-            (ast, cacheable)
-        };
+
+            Ok(ast)
+        })?;
 
         Ok(ClientQuery {
-            cached,
+            cached: true,
             comment: Arc::new(query_and_comment.comment),
             ast,
         })

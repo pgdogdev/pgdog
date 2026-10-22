@@ -480,15 +480,19 @@ impl Server {
         self.prepared_statements
             .set_anonymous_client_params(client_request.anonymous_client_params);
 
-        for message in client_request.messages.iter() {
-            let result = if matches!(message, ProtocolMessage::Execute(_))
-                && let Some(prepare) = client_request.prepare_on_execute.as_deref()
-            {
-                self.prepared_statements.handle_execute_prepare(prepare)
-            } else {
-                self.prepared_statements.handle(message)?
-            };
-            self.send_handled(message, result).await?;
+        if let Some(prepare) = client_request.prepare_on_execute.as_deref() {
+            for message in client_request.messages.iter() {
+                let result = if matches!(message, ProtocolMessage::Execute(_)) {
+                    self.prepared_statements.handle_execute_prepare(prepare)
+                } else {
+                    self.prepared_statements.handle(message)?
+                };
+                self.send_handled(message, result).await?;
+            }
+        } else {
+            for message in client_request.messages.iter() {
+                self.send_one(message).await?;
+            }
         }
         self.flush().await?;
 
