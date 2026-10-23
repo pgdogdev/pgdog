@@ -14,6 +14,7 @@ static PREPARED: Lazy<Vec<Query>> = Lazy::new(|| vec![Query::new("DEALLOCATE ALL
 static DIRTY: Lazy<Vec<Query>> = Lazy::new(|| {
     vec![
         Query::new("RESET ALL"),                       // Reset all parameters.
+        Query::new("RESET SESSION AUTHORIZATION"),     // Reset all skips session_authorization.
         Query::new("SELECT pg_advisory_unlock_all()"), // Remove all advisory locks.
         Query::new("DISCARD TEMP"),                    // Drop all temporary tables.
     ]
