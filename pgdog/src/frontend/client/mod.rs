@@ -551,7 +551,8 @@ impl Client {
             let query_engine_done = query_engine.can_disconnect();
 
             // If query engine is idle and we requested shutdown, we're done.
-            if query_engine_done && offline {
+            // Admin clients stay connected, so admin commands work during shutdown.
+            if query_engine_done && offline && !self.admin {
                 // Send shutdown notification to client.
                 self.stream
                     .send_flush(&ErrorResponse::shutting_down())
