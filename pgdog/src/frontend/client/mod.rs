@@ -641,8 +641,10 @@ impl Client {
             QueryEngineResult::Split { requests, extended } => {
                 let mut requests = requests.into_iter();
                 if extended {
-                    self.transaction
-                        .get_or_insert(Transaction::new(TransactionType::Implicit));
+                    self.transaction.get_or_insert(Transaction::started_at(
+                        TransactionType::Implicit,
+                        self.statement_start,
+                    ));
                 }
 
                 while let Some(mut request) = requests.next() {
@@ -740,23 +742,25 @@ impl Client {
             }
         }
 
-        let elapsed_time = Utc::now() - self.statement_start;
-        if !enabled!(LogLevel::TRACE) {
-            debug!(
-                "request buffered [{:.4}ms] {:?}",
-                elapsed_time.as_seconds_f64() * 1000.0,
-                self.client_request
-                    .messages
-                    .iter()
-                    .map(|m| m.code())
-                    .collect::<Vec<_>>(),
-            );
-        } else {
-            trace!(
-                "request buffered [{:.4}ms]\n{:#?}",
-                elapsed_time.as_seconds_f64() * 1000.0,
-                self.client_request,
-            );
+        if enabled!(LogLevel::DEBUG) {
+            let elapsed_time = Utc::now() - self.statement_start;
+            if !enabled!(LogLevel::TRACE) {
+                debug!(
+                    "request buffered [{:.4}ms] {:?}",
+                    elapsed_time.as_seconds_f64() * 1000.0,
+                    self.client_request
+                        .messages
+                        .iter()
+                        .map(|m| m.code())
+                        .collect::<Vec<_>>(),
+                );
+            } else {
+                trace!(
+                    "request buffered [{:.4}ms]\n{:#?}",
+                    elapsed_time.as_seconds_f64() * 1000.0,
+                    self.client_request,
+                );
+            }
         }
 
         Ok(BufferEvent::HaveRequest)
