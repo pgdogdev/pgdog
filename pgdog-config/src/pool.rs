@@ -214,7 +214,9 @@ impl PoolConfig {
                 .read_only
                 .unwrap_or(database.read_only.unwrap_or_default()),
             prepared_statements: PreparedStatementsConfig {
-                level: general.prepared_statements,
+                level: user
+                    .prepared_statements
+                    .unwrap_or(general.prepared_statements),
                 limit: general.prepared_statements_limit,
                 ttl: general.prepared_statements_ttl(),
                 ttl_jitter: general.prepared_statements_ttl_jitter(),
