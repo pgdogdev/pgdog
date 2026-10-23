@@ -16,7 +16,9 @@ pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
 pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, Route, SetParam};
 
-use crate::frontend::router::parser::{Shard, route::ShardSource};
+use crate::backend::Cluster;
+use crate::frontend::client::Sticky;
+use crate::frontend::router::parser::{Shard, ShardWithPriority, route::ShardSource};
 
 use super::ClientRequest;
 pub(crate) use context::RouterContext;
@@ -93,6 +95,32 @@ impl Router {
         }
 
         Ok(&self.latest_command)
+    }
+
+    pub(crate) fn skip(
+        &mut self,
+        cluster: &Cluster,
+        request: &ClientRequest,
+        sticky: &Sticky,
+    ) -> bool {
+        if cluster.router_needed() || request.ast.is_some() || sticky.role.is_some() {
+            return false;
+        }
+
+        let shard = ShardWithPriority::new_override_parser_disabled(Shard::Direct(0));
+
+        let mut route = if cluster.read_only() {
+            Route::read(shard)
+        } else {
+            Route::write(shard)
+        };
+
+        route.sharded_schema_only = !cluster.sharding_schema().schemas.is_empty()
+            && cluster.sharded_tables().tables().is_empty();
+
+        self.latest_command = Command::Query(route);
+
+        true
     }
 
     /// Parse CopyData messages and shard them.
