@@ -1,4 +1,5 @@
 pub mod copy_data;
+pub mod ddl;
 pub mod replication;
 pub mod replication_slots;
 #[allow(clippy::module_inception)]

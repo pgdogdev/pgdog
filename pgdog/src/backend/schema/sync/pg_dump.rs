@@ -260,6 +260,10 @@ pub(crate) struct PgDumpOutput {
 pub(crate) use pgdog_stats::SchemaSyncStatement as Statement;
 pub(crate) use pgdog_stats::SyncState;
 
+fn is_pgdog_event_trigger(name: Option<&str>) -> bool {
+    name.is_some_and(|name| name.starts_with("pgdog_"))
+}
+
 /// The deparsed SQL is copied out: it lives in a Postgres memory context that
 /// is freed when the [`pg_raw_parse::DeparseResult`] drops.
 fn deparsed<'n, N: Into<Node<'n>>>(node: N) -> Result<Statement, SchemaSyncError> {
@@ -859,6 +863,8 @@ impl PgDumpOutput {
                 // Skip these.
                 Node::CreateSubscriptionStmt(_) | Node::AlterSubscriptionStmt(_) => (),
 
+                Node::CreateEventTrigStmt(stmt) if is_pgdog_event_trigger(stmt.trigname()) => (),
+
                 Node::AlterSeqStmt(stmt) => {
                     if matches!(state, SyncState::PreData | SyncState::Cutover) {
                         let sequence = stmt
@@ -945,7 +951,12 @@ impl PgDumpOutput {
                 }
 
                 Node::AlterOwnerStmt(stmt) => {
+                    let pgdog_event_trigger = stmt.object_type
+                        == nodes::ObjectType::OBJECT_EVENT_TRIGGER
+                        && matches!(stmt.object(), Node::String(name) if is_pgdog_event_trigger(name.sval()));
+
                     if stmt.object_type != nodes::ObjectType::OBJECT_PUBLICATION
+                        && !pgdog_event_trigger
                         && state == SyncState::PreData
                     {
                         result.push(Statement::new(original));
@@ -1142,6 +1153,23 @@ FROM public.s;"#,
             statements[0].sql,
             "CREATE OR REPLACE VIEW public.v AS SELECT id, ((summary ->> 'ts'::text)::timestamp with time zone AT TIME ZONE (summary -> 'stop'::text ->> 'tz'::text))::date AS d FROM public.s"
         );
+    }
+
+    #[test]
+    fn test_pgdog_event_triggers_skipped() {
+        let output = parse(
+            "CREATE EVENT TRIGGER pgdog_ddl_context ON ddl_command_end
+                EXECUTE FUNCTION pgdog.save_ddl_search_path();
+            ALTER EVENT TRIGGER pgdog_ddl_context OWNER TO pgdog;
+            CREATE EVENT TRIGGER audit ON ddl_command_end EXECUTE FUNCTION public.audit();
+            ALTER EVENT TRIGGER audit OWNER TO pgdog;",
+        );
+
+        let statements = output.statements(SyncState::PreData).unwrap();
+        let sql: Vec<_> = statements.iter().map(|s| s.to_string()).collect();
+        assert_eq!(sql.len(), 2, "{sql:?}");
+        assert!(sql[0].starts_with("CREATE EVENT TRIGGER audit"), "{sql:?}");
+        assert!(sql[1].starts_with("ALTER EVENT TRIGGER audit"), "{sql:?}");
     }
 
     #[test]
