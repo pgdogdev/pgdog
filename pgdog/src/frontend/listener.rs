@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::{Client, Error, comms::comms};
-use crate::util::safe_timeout;
+use crate::util::{safe_timeout, server::accept};
 
 /// Client connections listener and handler.
 #[derive(Debug, Clone)]
@@ -86,9 +86,9 @@ impl Listener {
 
         loop {
             select! {
-                connection = listener.accept() => {
+                connection = accept(&listener) => {
                    let comms = comms();
-                   let (stream, addr) = connection?;
+                   let (stream, addr) = connection;
                    let offline = comms.offline();
 
                    let future = async move {
