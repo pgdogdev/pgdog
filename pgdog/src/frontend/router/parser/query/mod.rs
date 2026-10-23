@@ -2,10 +2,8 @@
 use std::{collections::HashSet, ops::Deref};
 
 use crate::{
-    backend::ShardingSchema,
-    config::Role,
+    backend::{ShardingSchema, pool::RoleTarget},
     frontend::router::{
-        RoutingComment,
         context::RouterContext,
         parser::{OrderBy, Shard, route::ShardSource},
         round_robin,
@@ -56,8 +54,6 @@ use tracing::{debug, trace};
 ///
 #[derive(Debug, Default)]
 pub(crate) struct QueryParser {
-    // No matter what query is executed, we'll send it to the primary.
-    write_override: bool,
     // Plugin read override.
     plugin_output: PluginOutput,
     // Record explain output.
@@ -83,7 +79,7 @@ impl QueryParser {
         if let (Some(recorder), Command::Query(route)) = (self.explain_recorder.take(), command) {
             let summary = ExplainSummary {
                 shard: route.shard().clone(),
-                read: route.is_read(),
+                read: route.role_target().allows_replica(),
             };
             route.set_explain(recorder.finalize(summary));
         }
@@ -94,8 +90,6 @@ impl QueryParser {
         let mut context = QueryParserContext::new(context)?;
 
         let mut command = if context.query().is_ok() {
-            self.write_override = context.write_override();
-
             self.query(&mut context)?
         } else {
             Command::default()
@@ -156,13 +150,7 @@ impl QueryParser {
                     .extend(std::mem::take(&mut context.bare_key_lookups));
 
                 route.set_pending_lookups(std::mem::take(&mut context.pending_lookups));
-
-                if let Some(role) = context.router_context.sticky.role {
-                    match role {
-                        Role::Primary => route.set_read(false),
-                        _ => route.set_read(true),
-                    }
-                }
+                route.set_explicit_role_target(context.explicit_role_target());
             }
 
             _ => (),
@@ -182,9 +170,7 @@ impl QueryParser {
             {
                 // SET sharding key
                 return Err(Error::UnmappedShardKey(sharding_key_value.to_string()));
-            } else if let Some(comment) = context.router_context.comment
-                && let Some(sharding_key) = &comment.sharding_key
-            {
+            } else if let Some(sharding_key) = context.router_context.pgdog_sharding_key() {
                 // Comment directive sharding key
                 return Err(Error::UnmappedShardKey(sharding_key.to_string()));
             }
@@ -215,28 +201,12 @@ impl QueryParser {
 
         let shard = context.shards_calculator.shard();
 
-        // Cluster is read-only and only has one shard.
-        if context.read_only {
-            Some(Route::read(shard))
-        }
-        // Cluster doesn't have replicas and has only one shard.
-        else if context.write_only {
-            Some(Route::write(shard))
-
-        // The role is specified in the connection parameter (pgdog.role).
-        } else if let Some(role) = context.router_context.parameter_hints.compute_role() {
-            Some(match role {
-                Role::Replica => Route::read(shard),
-                Role::Primary | Role::Auto => Route::write(shard),
-            })
-        } else if context.prefer_primary {
-            // Send queries to primary by default.
-            Some(Route::write(shard))
-        } else if context.prefer_replica {
-            // Send queries to replicas by default.
+        // Without the parser, the statement is unknown: send it to the
+        // primary unless the cluster has no primary or replicas are preferred.
+        // The context applies the transaction and role on top of this.
+        if !context.has_primary || (context.prefer_replica && context.has_replicas) {
             Some(Route::read(shard))
         } else {
-            // Default to primary.
             Some(Route::write(shard))
         }
     }
@@ -274,10 +244,6 @@ impl QueryParser {
         }
 
         let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
-        let routing_comment = context
-            .router_context
-            .comment
-            .unwrap_or(const { &RoutingComment::empty() });
 
         if let Some(stmt) = statement.ast.stmts().next() {
             self.ensure_explain_recorder(stmt, context);
@@ -286,7 +252,7 @@ impl QueryParser {
         // Parse hardcoded shard from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
-            match &routing_comment.shard {
+            match context.router_context.pgdog_shard() {
                 Some(ShardOrLookup::Shard(comment_shard)) => {
                     context
                         .shards_calculator
@@ -316,10 +282,7 @@ impl QueryParser {
                 None => {}
             }
 
-            let role_override = routing_comment.role;
-            if let Some(role) = role_override {
-                self.write_override = role == Role::Primary;
-            }
+            let role_override = context.router_context.pgdog_role();
 
             if comment_shard_set || role_override.is_some() {
                 let shard = context.shards_calculator.shard();
@@ -501,8 +464,11 @@ impl QueryParser {
                 context,
                 statement,
                 match &command {
-                    Command::Query(query) => query.is_read(),
-                    _ => false,
+                    Command::Query(query) => {
+                        RoleTarget::new(context.explicit_role_target(), query.is_read())
+                            == RoleTarget::Primary
+                    }
+                    _ => true,
                 },
             )?;
         }
@@ -515,9 +481,10 @@ impl QueryParser {
             }
         }
 
-        // Set plugin-specified route, if available.
-        // Plugins override what we calculated above.
-        if let Command::Query(ref mut route) = command {
+        // Set plugin-specified route, if available. A plugin read/write replaces
+        // the statement classification, so it also decides the omnisharded
+        // coverage; an explicit role target still wins over it.
+        if let Command::Query(route) = &mut command {
             if let Some(read) = self.plugin_output.read {
                 route.set_read(read);
             }

@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::frontend::router::parser::ShardWithPriority;
+use crate::net::FrontendPid;
 
 pub(crate) fn route(shard: Shard, is_read: bool) -> Route {
     if is_read {
@@ -7,6 +8,17 @@ pub(crate) fn route(shard: Shard, is_read: bool) -> Route {
     } else {
         Route::write(ShardWithPriority::new_table(shard))
     }
+}
+
+pub(crate) fn request(is_read: bool) -> Request {
+    Request::new(
+        FrontendPid::new(),
+        if is_read {
+            RoleTarget::Any
+        } else {
+            RoleTarget::Primary
+        },
+    )
 }
 
 pub(crate) fn test_connection() -> Connection {

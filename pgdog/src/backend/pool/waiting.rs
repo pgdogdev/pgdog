@@ -32,7 +32,7 @@ impl Waiting {
             if !guard.online {
                 return Err(Error::Offline);
             }
-            if request.read {
+            if request.role_target.allows_replica() {
                 guard.stats.counts.reads += 1;
             } else {
                 guard.stats.counts.writes += 1;

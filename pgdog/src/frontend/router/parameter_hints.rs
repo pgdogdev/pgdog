@@ -17,7 +17,7 @@ use crate::{
 pub(crate) const PGDOG_SHARD: &str = "pgdog.shard";
 /// `SET pgdog.sharding_key` — pin queries to the shard a key resolves to.
 pub(crate) const PGDOG_SHARDING_KEY: &str = "pgdog.sharding_key";
-/// `SET pgdog.role` — pin queries to a primary or replica.
+/// `SET pgdog.role` — pin queries to a primary or replica, or `auto` to let pgdog decide.
 pub(crate) const PGDOG_ROLE: &str = "pgdog.role";
 /// Connection pinning.
 pub(crate) const PGDOG_PIN: &str = "pgdog.pin";
@@ -108,15 +108,10 @@ impl ParameterHints<'_> {
 
     /// Compute role from parameter value.
     pub(crate) fn compute_role(&self) -> Option<Role> {
-        let role = match self.pgdog_role {
-            Some(ParameterValue::String(val)) => match val.as_str() {
-                "replica" => Some(Role::Replica),
-                "primary" => Some(Role::Primary),
-                _ => None,
-            },
-
-            _ => None,
-        };
+        let role = self
+            .pgdog_role
+            .and_then(|value| value.as_str())
+            .and_then(|value| value.parse().ok());
 
         if let Some(role) = &role {
             self.hooks.record_set_role(role);

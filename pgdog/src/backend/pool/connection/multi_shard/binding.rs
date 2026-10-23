@@ -1,5 +1,7 @@
 use std::slice::{Iter, IterMut};
 
+use bon::bon;
+
 use futures::future::{join_all, try_join_all};
 
 use crate::backend::Error;
@@ -15,7 +17,7 @@ use crate::net::{Bind, FrontendPid, Message, ProtocolMessage};
 use crate::parameters::ParameterStore;
 
 use super::{
-    super::{Guard, LinkedServer},
+    super::{Guard, LinkedServer, RoleTarget},
     MultiShard,
 };
 
@@ -28,8 +30,47 @@ pub(crate) struct MultiBinding {
     pub(super) state: Box<MultiShard>,
     // Transaction statement, e.g., `BEGIN`, `BEGIN READ ONLY`, etc.
     pub(in crate::backend::pool::connection) transaction_stmt: Option<BufferedQuery>,
-    // Is the transaction read-only (replicas) or write (primary)?
-    pub(in crate::backend::pool::connection) is_read: bool,
+    // Servers this binding can use.
+    pub(in crate::backend::pool::connection) role_target: RoleTarget,
+}
+
+#[bon]
+impl MultiBinding {
+    /// Create new multi-shard binding.
+    ///
+    /// # Arguments
+    ///
+    /// - `servers`: Postgres connections.
+    /// - `shard_indices: Which server is which shard.
+    /// - `route`: Statement execution plan.
+    /// - `transaction_stmt`: `BEGIN`, `BEGIN READ ONLY`, etc.
+    /// - `role_target`: Servers this binding can use.
+    ///
+    #[builder]
+    pub(crate) fn new(
+        servers: Vec<Guard>,
+        shard_indices: Vec<usize>,
+        route: &Route,
+        transaction_stmt: Option<BufferedQuery>,
+        role_target: RoleTarget,
+    ) -> Self {
+        debug_assert_eq!(servers.len(), shard_indices.len());
+
+        Self {
+            state: Box::new(MultiShard::new(servers.len(), route)),
+            servers: servers
+                .into_iter()
+                .zip(shard_indices)
+                .map(|(server, shard)| LinkedServer {
+                    server,
+                    shard,
+                    linked: false,
+                })
+                .collect(),
+            transaction_stmt,
+            role_target,
+        }
+    }
 }
 
 impl MultiBinding {
@@ -61,41 +102,6 @@ impl MultiBinding {
     /// Get currently connected shard numbers for this multi-shard binding.
     pub(crate) fn connected_shards(&self) -> impl Iterator<Item = usize> + Clone {
         self.servers.iter().map(|server| server.shard)
-    }
-
-    /// Create new multi-shard binding.
-    ///
-    /// # Arguments
-    ///
-    /// - `servers`: Postgres connections.
-    /// - `shard_indices: Which server is which shard.
-    /// - `route`: Statement execution plan.
-    /// - `transaction_stmt`: `BEGIN`, `BEGIN READ ONLY`, etc.
-    /// - `is_read`: Are we reading from a replica or writing to a primary?
-    ///
-    pub(crate) fn new(
-        servers: Vec<Guard>,
-        shard_indices: Vec<usize>,
-        route: &Route,
-        transaction_stmt: Option<BufferedQuery>,
-        is_read: bool,
-    ) -> Self {
-        debug_assert_eq!(servers.len(), shard_indices.len());
-
-        Self {
-            state: Box::new(MultiShard::new(servers.len(), route)),
-            servers: servers
-                .into_iter()
-                .zip(shard_indices)
-                .map(|(server, shard)| LinkedServer {
-                    server,
-                    shard,
-                    linked: false,
-                })
-                .collect(),
-            transaction_stmt,
-            is_read,
-        }
     }
 
     /// Given the execution plan in `route` and the total number of configured `shards`,
@@ -424,7 +430,11 @@ pub(crate) mod test {
                 } else {
                     None
                 },
-                is_read,
+                role_target: if is_read {
+                    RoleTarget::Any
+                } else {
+                    RoleTarget::Primary
+                },
             };
 
             Self { binding, links }
