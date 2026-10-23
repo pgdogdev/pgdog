@@ -98,7 +98,7 @@ impl QueryParser {
 
             self.query(&mut context)?
         } else {
-            Command::default()
+            Command::Query(Route::write(context.shards_calculator.shard()))
         };
 
         match &mut command {

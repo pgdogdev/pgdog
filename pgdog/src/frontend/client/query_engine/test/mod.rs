@@ -35,6 +35,7 @@ mod pub_sub;
 mod regression_auto_two_pc;
 mod regression_bind_transaction_end;
 mod regression_flush_error;
+mod regression_pinned_portal;
 mod regression_pinned_sync;
 mod regression_prepare_transaction_end;
 mod regression_prepare_transaction_end_idle;
