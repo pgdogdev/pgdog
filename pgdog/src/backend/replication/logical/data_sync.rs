@@ -10,7 +10,7 @@ use pgdog_stats::TaskId;
 
 use crate::backend::pool::{Address, Request};
 use crate::backend::replication::copy_statement::TableColumnSplit;
-use crate::backend::replication::publisher::ReplicationSlot;
+use crate::backend::replication::publisher::{ReplicationSlot, ReplicationSlotStream};
 use crate::backend::replication::subscriber::copy::BackgroundSubscriber;
 use crate::backend::replication::{CopyStatement, publisher};
 use crate::backend::{Cluster, ConnectReason, Server, ServerOptions};
@@ -66,85 +66,16 @@ impl DataSync<'_> {
             table.table.schema, table.table.name, address
         );
 
-        let (parallel_table_reads, table_col_split) = {
-            let mut parallel_table_reads = config::config()
-                .config
-                .general
-                .resharding_parallel_within_table_copies
-                .max(1);
-
-            let mut table_col_split =
-                TableColumnSplit::try_new(&table, parallel_table_reads, address).await?;
-
-            // We want to make sure we're not unnecessarily parallelizing the reads;
-            // what if there's only 20 rows and a singular ctid block index?
-            // At that point, there would effectively be no split; all would go to the first one.
-            // Thus, downgrade if there's a minimal amount
-            let bn_range = table_col_split.blocks;
-            if (bn_range as usize) < parallel_table_reads {
-                parallel_table_reads = std::cmp::max(1, bn_range as usize);
-                table_col_split.split_statement_count = parallel_table_reads;
+        let started = cancel
+            .run_until_cancelled(Box::pin(self.prepare_copy(&mut table, address)))
+            .await;
+        let (mut bg_task, mut set, mut stream) = match started {
+            Some(started) => started?,
+            None => {
+                warn!("aborting data sync for table {}", table.table);
+                return Err(Error::CopyAborted(table.table.clone()));
             }
-
-            (parallel_table_reads, table_col_split)
         };
-
-        // Publisher uses COPY [...] TO STDOUT.
-        // Subscriber uses COPY [...] FROM STDIN.
-        let stmt = CopyStatement::new(
-            &table.table,
-            &table
-                .columns
-                .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>(),
-            self.format,
-            table_col_split,
-        );
-
-        let (copy_sub, mut stream) = {
-            let mut copy_sub = CopySubscriber::new(&stmt, self.source, self.dest)?;
-            copy_sub.connect().await?;
-            copy_sub.start_copy().await?;
-
-            let slot = ReplicationSlot::new_temporary(&table.publication, address);
-            slot.set_task_id(self.task_id);
-
-            let mut stream = slot.create().await?;
-
-            table.lsn = stream.lsn();
-            table.reload(stream.server()).await?;
-
-            (copy_sub, stream)
-        };
-
-        // Re-use the `ReplicationSlot`'s snapshot across all of our parallel readers,
-        // so that they all have the same view of the table. This will prevent
-        // needing any synchronization (e.g., upserts) from a potential
-        // duplicate row being sent to the `CopyPublisher`.
-        let slot_snapshot: String = Self::fetch_slot_snapshot(stream.server()).await?;
-
-        // Run the subscriber in the background, to prevent waiting on flushing in our
-        // main loop. Read more about this on the `start_bg_task` comment
-        let (mut bg_task, rows) = BackgroundSubscriber::start_bg_task(copy_sub);
-
-        // Readers drop their personal header and trailer to prevent duplicates.
-        // We separately send the header and traler, ourselves, once.
-        if self.format == CopyFormat::Binary {
-            let _ = rows
-                .send(CopyData::new(&Header::default().to_bytes()))
-                .await;
-        }
-
-        // "parallel_table_reads" of `CopyPublisher`s; each run in their own
-        // Tokio task, and after completely done with copying their
-        // ctid range, returns back.
-        let mut set = JoinSet::new();
-        for index in 0..parallel_table_reads {
-            let server = Self::connect_reader(index, address, &stmt, &slot_snapshot).await?;
-            set.spawn(publisher::copy::data(server, self.format, rows.clone()));
-        }
-        drop(rows);
 
         {
             loop {
@@ -221,6 +152,101 @@ impl DataSync<'_> {
         }
 
         Ok(table)
+    }
+
+    /// Open the destination COPY, the temporary slot and the source readers.
+    async fn prepare_copy(
+        &self,
+        table: &mut Table,
+        address: &Address,
+    ) -> Result<
+        (
+            BackgroundSubscriber,
+            JoinSet<Result<(), Error>>,
+            ReplicationSlotStream,
+        ),
+        Error,
+    > {
+        let (parallel_table_reads, table_col_split) = {
+            let mut parallel_table_reads = config::config()
+                .config
+                .general
+                .resharding_parallel_within_table_copies
+                .max(1);
+
+            let mut table_col_split =
+                TableColumnSplit::try_new(table, parallel_table_reads, address).await?;
+
+            // We want to make sure we're not unnecessarily parallelizing the reads;
+            // what if there's only 20 rows and a singular ctid block index?
+            // At that point, there would effectively be no split; all would go to the first one.
+            // Thus, downgrade if there's a minimal amount
+            let bn_range = table_col_split.blocks;
+            if (bn_range as usize) < parallel_table_reads {
+                parallel_table_reads = std::cmp::max(1, bn_range as usize);
+                table_col_split.split_statement_count = parallel_table_reads;
+            }
+
+            (parallel_table_reads, table_col_split)
+        };
+
+        // Publisher uses COPY [...] TO STDOUT.
+        // Subscriber uses COPY [...] FROM STDIN.
+        let stmt = CopyStatement::new(
+            &table.table,
+            &table
+                .columns
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            self.format,
+            table_col_split,
+        );
+
+        let (copy_sub, mut stream) = {
+            let mut copy_sub = CopySubscriber::new(&stmt, self.source, self.dest)?;
+            copy_sub.connect().await?;
+            copy_sub.start_copy().await?;
+
+            let slot = ReplicationSlot::new_temporary(&table.publication, address);
+            slot.set_task_id(self.task_id);
+
+            let mut stream = slot.create().await?;
+
+            table.lsn = stream.lsn();
+            table.reload(stream.server()).await?;
+
+            (copy_sub, stream)
+        };
+
+        // Re-use the `ReplicationSlot`'s snapshot across all of our parallel readers,
+        // so that they all have the same view of the table. This will prevent
+        // needing any synchronization (e.g., upserts) from a potential
+        // duplicate row being sent to the `CopyPublisher`.
+        let slot_snapshot: String = Self::fetch_slot_snapshot(stream.server()).await?;
+
+        // Run the subscriber in the background, to prevent waiting on flushing in our
+        // main loop. Read more about this on the `start_bg_task` comment
+        let (bg_task, rows) = BackgroundSubscriber::start_bg_task(copy_sub);
+
+        // Readers drop their personal header and trailer to prevent duplicates.
+        // We separately send the header and traler, ourselves, once.
+        if self.format == CopyFormat::Binary {
+            let _ = rows
+                .send(CopyData::new(&Header::default().to_bytes()))
+                .await;
+        }
+
+        // "parallel_table_reads" of `CopyPublisher`s; each run in their own
+        // Tokio task, and after completely done with copying their
+        // ctid range, returns back.
+        let mut set = JoinSet::new();
+        for index in 0..parallel_table_reads {
+            let server = Self::connect_reader(index, address, &stmt, &slot_snapshot).await?;
+            set.spawn(publisher::copy::data(server, self.format, rows.clone()));
+        }
+
+        Ok((bg_task, set, stream))
     }
 
     // Fetch the snapshot from the slot's server, and then create
