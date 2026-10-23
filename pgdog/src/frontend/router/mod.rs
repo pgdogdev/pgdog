@@ -53,10 +53,9 @@ impl Router {
 
     /// Route a query to a shard.
     ///
-    /// If the router can't determine the route for the query to take,
-    /// previous route is preserved. This is useful in case the client
-    /// doesn't supply enough information in the buffer, e.g. just issued
-    /// a Describe request to a previously submitted Parse.
+    /// A request without a query, e.g. Describe or Close for a portal,
+    /// goes to the shard set by `pgdog.shard`, `pgdog.sharding_key`
+    /// or `search_path`. Without such a setting, it goes to all shards.
     pub(crate) fn query(&mut self, context: RouterContext) -> Result<&Command, Error> {
         // Don't invoke parser in copy mode until we're done.
         if context.copy_mode {
