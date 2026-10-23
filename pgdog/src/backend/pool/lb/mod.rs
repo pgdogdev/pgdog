@@ -2,6 +2,7 @@
 
 use std::{
     cmp::Reverse,
+    future::pending,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
@@ -10,6 +11,7 @@ use std::{
 };
 
 use rand::seq::SliceRandom;
+use tokio::select;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -199,8 +201,6 @@ impl LoadBalancer {
             .iter()
             .position(|target| !target.0.replica && target.0.valid());
 
-        self.elected_primary.send_replace(None);
-
         if let Some(primary) = primary {
             promoted = targets[primary].1.set_role(Role::Primary);
 
@@ -223,9 +223,23 @@ impl LoadBalancer {
             });
         }
 
-        self.elected_primary.send_replace(self.primary().cloned());
+        self.publish_primary();
 
         promoted
+    }
+
+    /// Tell writes waiting in [`Self::get_primary`] which pool is the primary.
+    /// Only a change wakes them up.
+    fn publish_primary(&self) {
+        let elected = self.primary().cloned();
+
+        self.elected_primary.send_if_modified(|current| {
+            let changed = current.as_ref().map(Pool::id) != elected.as_ref().map(Pool::id);
+            if changed {
+                *current = elected;
+            }
+            changed
+        });
     }
 
     /// Launch replica pools and start the monitor.
@@ -285,6 +299,7 @@ impl LoadBalancer {
             }
         }
         destination.require_healthcheck_for_new_targets(&self.targets);
+        destination.publish_primary();
 
         Ok(moved)
     }
@@ -332,34 +347,51 @@ impl LoadBalancer {
         result
     }
 
-    /// Wait until automatic role detection elects a primary.
-    ///
-    /// Fails with [`Error::CheckoutTimeout`] if no election happens in time.
-    async fn wait_primary(&self) -> Result<Pool, Error> {
-        let mut receiver = self.elected_primary.subscribe();
-
-        safe_timeout(self.checkout_timeout, receiver.wait_for(|p| p.is_some()))
-            .await
-            .map_err(|_| Error::CheckoutTimeout)?
-            .ok()
-            .and_then(|elected| elected.as_ref().cloned())
-            .ok_or(Error::NoPrimary)
-    }
-
     /// Check out a connection from the primary.
     ///
-    /// In automatic mode, the caller waits for an election. Static
-    /// replica-only configurations fail immediately with [`Error::NoPrimary`].
+    /// Static replica-only configurations fail immediately with
+    /// [`Error::NoPrimary`]. With automatic roles, the caller follows the
+    /// election for up to `checkout_timeout`: it waits while there is no
+    /// primary, and a checkout waiting on a primary that loses the election
+    /// moves to the new one.
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
-        if let Some(pool) = self.primary() {
-            return pool.get(request).await;
-        }
-
         if !self.role_detection_enabled() {
-            return Err(Error::NoPrimary);
+            return match self.primary() {
+                Some(pool) => pool.get(request).await,
+                None => Err(Error::NoPrimary),
+            };
         }
 
-        self.wait_primary().await?.get(request).await
+        safe_timeout(self.checkout_timeout, self.follow_election(request))
+            .await
+            .map_err(|_| Error::CheckoutTimeout)?
+    }
+
+    /// Check out a connection from the elected primary, starting over on
+    /// the new primary whenever the election changes.
+    async fn follow_election(&self, request: &Request) -> Result<Guard, Error> {
+        let mut elections = self.elected_primary.subscribe();
+
+        loop {
+            let elected = elections.borrow_and_update().clone();
+            let elected_id = elected.as_ref().map(Pool::id);
+
+            let checkout = async {
+                match &elected {
+                    Some(pool) => pool.get(request).await,
+                    None => pending().await,
+                }
+            };
+            let new_election =
+                elections.wait_for(|primary| primary.as_ref().map(Pool::id) != elected_id);
+
+            select! {
+                result = checkout => return result,
+                changed = new_election => {
+                    changed.map_err(|_| Error::NoPrimary)?;
+                }
+            }
+        }
     }
 
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
