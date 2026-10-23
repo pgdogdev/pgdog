@@ -303,7 +303,11 @@ impl Stats {
     pub(crate) fn state(&mut self, state: State) {
         if self.local.state != state {
             self.local.state = state;
-            if state == State::Active {
+            if state == State::Active
+                && (self.local.transaction_timer.is_none()
+                    || self.local.query_timer.is_none()
+                    || self.local.idle_in_transaction_timer.is_some())
+            {
                 let now = Instant::now();
                 if self.local.transaction_timer.is_none() {
                     self.local.transaction_timer = Some(now);
