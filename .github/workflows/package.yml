@@ -58,6 +58,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Generate PGO profile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libssl-dev mold
+          bash integration/ci/install-deps.sh
+          bash integration/ci/setup.sh --with-toxi
+          bash scripts/pgo-profile.sh
+
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v6
