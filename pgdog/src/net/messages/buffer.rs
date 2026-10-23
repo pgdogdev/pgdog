@@ -51,6 +51,11 @@ impl MessageBuffer {
         self.buffer.capacity()
     }
 
+    /// No bytes read from the socket are waiting to be taken as a message.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
     async fn read_internal(
         &mut self,
         stream: &mut (impl Unpin + AsyncReadExt),
