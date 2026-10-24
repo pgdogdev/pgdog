@@ -21,6 +21,8 @@ use pgdog_postgres_types::Datum;
 
 use super::Aggregates;
 
+mod having;
+
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug, Clone)]
 pub(super) struct Buffer {
@@ -140,7 +142,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let rows = if aggregate.is_empty() {
@@ -156,10 +158,38 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
-        if plan.is_noop() {
-            return;
+    /// Apply `HAVING` after all partial aggregate rows have been merged.
+    pub(super) fn having(
+        &mut self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) -> Result<(), super::Error> {
+        let Some(plan) = plan else {
+            return Ok(());
+        };
+        let Some(having) = plan.having.as_ref() else {
+            return Ok(());
+        };
+        let evaluator = having::Evaluator::new(having.expression(), decoder);
+
+        let mut filtered = VecDeque::with_capacity(self.buffer.len());
+        for row in self.buffer.drain(..) {
+            if evaluator.evaluate(&row, decoder)? {
+                filtered.push_back(row);
+            }
         }
+        self.buffer = filtered;
+        Ok(())
+    }
+
+    pub(super) fn drop_helper_columns(
+        &mut self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) {
+        let Some(plan) = plan else {
+            return;
+        };
 
         let drop = plan.drop_columns(decoder.row_description());
 
@@ -247,8 +277,11 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::frontend::router::parser::rewrite::statement::projection::HavingRewriteResult;
+    use crate::frontend::router::parser::{CompareOperator, HavingExpr, HavingValue};
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
+    use pg_raw_parse::Node;
 
     #[test]
     fn test_sort_buffer() {
@@ -292,8 +325,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 1);
@@ -319,8 +351,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 2);
@@ -330,6 +361,58 @@ mod test {
             let count = dr.get::<i64>(0, Format::Text).unwrap();
             assert_eq!(count, 15 * 6);
         }
+    }
+
+    #[test]
+    fn having_filters_after_grouped_aggregate_merge() {
+        let ast = pg_raw_parse::parse(
+            "SELECT customer_id, COUNT(*), \
+             COUNT(*) AS __pgdog_having_0, 3::bigint AS __pgdog_having_1 \
+             FROM purchases GROUP BY customer_id",
+        )
+        .unwrap();
+        let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {
+            panic!("not a select")
+        };
+        let aggregate = Aggregate::parse(select, &Default::default());
+        let decoder = Decoder::from(RowDescription::new(&[
+            Field::bigint("customer_id"),
+            Field::bigint("count"),
+            Field::bigint("__pgdog_having_0"),
+            Field::bigint("__pgdog_having_1"),
+        ]));
+
+        let plan = ProjectionRewritePlan {
+            having: Some(Box::new(HavingRewriteResult::new(
+                crate::frontend::router::parser::HavingRewritePlan::new(
+                    HavingExpr::Compare {
+                        left: HavingValue::new("__pgdog_having_0".into()),
+                        operator: CompareOperator::Greater,
+                        right: HavingValue::new("__pgdog_having_1".into()),
+                    },
+                    vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
+                ),
+                aggregate.clone(),
+            ))),
+            ..Default::default()
+        };
+
+        let mut buffer = Buffer::default();
+        for (customer, partial_count) in [(1_i64, 2_i64), (1, 2), (2, 1), (2, 1)] {
+            let mut row = DataRow::new();
+            row.add(customer)
+                .add(partial_count)
+                .add(partial_count)
+                .add(3_i64);
+            buffer.add(row.message()).unwrap();
+        }
+
+        buffer.aggregate(&aggregate, &decoder, Some(&plan)).unwrap();
+        buffer.having(Some(&plan), &decoder).unwrap();
+
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.buffer[0].get::<i64>(0, Format::Text).unwrap(), 1);
+        assert_eq!(buffer.buffer[0].get::<i64>(1, Format::Text).unwrap(), 4);
     }
 
     #[test]
