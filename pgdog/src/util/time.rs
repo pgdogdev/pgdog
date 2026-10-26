@@ -145,7 +145,7 @@ where
 }
 
 /// [`tokio::time::sleep`] that waits forever instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`].
+/// outside [`MAX_DURATION`].
 pub(crate) async fn safe_sleep(duration: Duration) {
     match armable(Some(duration)) {
         Some(duration) => tokio::time::sleep(duration).await,
@@ -154,7 +154,7 @@ pub(crate) async fn safe_sleep(duration: Duration) {
 }
 
 /// [`tokio::time::interval`] that is disabled instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`], or panicking on a zero period.
+/// outside [`MAX_DURATION`], or panicking on a zero period.
 #[track_caller]
 pub(crate) fn safe_interval(period: Duration) -> SafeInterval {
     match armable(Some(period)).filter(|period| !period.is_zero()) {
@@ -207,26 +207,19 @@ mod test {
 
     #[test]
     fn test_armable_boundary() {
-        assert_eq!(MAX_TIMER_DURATION.as_millis(), 1 << 36);
-
-        let just_under = MAX_TIMER_DURATION - Duration::from_millis(1);
+        let just_under = MAX_DURATION - Duration::from_millis(1);
 
         assert_eq!(armable(None), None);
         assert_eq!(armable(Some(Duration::ZERO)), Some(Duration::ZERO));
         assert_eq!(armable(Some(just_under)), Some(just_under));
-        assert_eq!(armable(Some(MAX_TIMER_DURATION)), None);
+        assert_eq!(armable(Some(MAX_DURATION)), None);
         assert_eq!(armable(Some(Duration::MAX)), None);
     }
 
     #[tokio::test]
     async fn test_safe_timeout_never_arms_forever() {
         assert_eq!(safe_timeout(Duration::MAX, async { 42 }).await.unwrap(), 42);
-        assert_eq!(
-            safe_timeout(MAX_TIMER_DURATION, async { 42 })
-                .await
-                .unwrap(),
-            42
-        );
+        assert_eq!(safe_timeout(MAX_DURATION, async { 42 }).await.unwrap(), 42);
     }
 
     #[tokio::test(start_paused = true)]
@@ -239,7 +232,7 @@ mod test {
     async fn test_safe_sleep() {
         safe_sleep(Duration::from_millis(10)).await;
 
-        for forever in [MAX_TIMER_DURATION, Duration::MAX] {
+        for forever in [MAX_DURATION, Duration::MAX] {
             assert!(
                 tokio::time::timeout(Duration::from_secs(60), safe_sleep(forever))
                     .await
@@ -267,7 +260,7 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_safe_interval_disabled_never_ticks() {
         // Zero panics `tokio::time::interval`; the rest would run the wheel hot.
-        for period in [Duration::ZERO, MAX_TIMER_DURATION, Duration::MAX] {
+        for period in [Duration::ZERO, MAX_DURATION, Duration::MAX] {
             let mut interval = safe_interval(period);
 
             assert!(
