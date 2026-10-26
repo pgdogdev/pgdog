@@ -1,0 +1,9 @@
+[general]
+host = "127.0.0.1"
+port = 6432
+healthcheck_port = 8080
+openmetrics_port = 9090
+
+[[databases]]
+name = "pgdog"
+host = "127.0.0.1"

@@ -13,6 +13,7 @@ use tracing::info;
 
 use crate::backend::databases::{Databases, databases};
 use crate::tasks;
+use crate::util::server::accept;
 
 pub(crate) async fn server(port: u16) -> std::io::Result<()> {
     info!("healthcheck endpoint http://0.0.0.0:{}", port);
@@ -22,7 +23,7 @@ pub(crate) async fn server(port: u16) -> std::io::Result<()> {
 
     loop {
         let (stream, _) = select! {
-            result = listener.accept() => result?,
+            connection = accept(&listener) => connection,
             _ = shutdown.cancelled() => break,
         };
         let io = TokioIo::new(stream);
