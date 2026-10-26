@@ -3,19 +3,17 @@
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 
-use crate::backend::databases::{databases, reload, shutdown};
+use crate::backend::databases::{databases, reload};
 use crate::config::config;
-use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::net::messages::{FrontendPid, NegotiateProtocolVersion, Startup, hello::SslReply};
 use crate::net::tls::{acceptor, peer_certificate_present, peer_identity};
 use crate::net::{self, Stream, tweak};
-use crate::sighup::Sighup;
+use crate::util::system::Sighup;
 use tokio::net::{TcpListener, TcpSocket, TcpStream, lookup_host};
-use tokio::signal::ctrl_c;
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{Client, Error, comms::comms};
 use crate::util::{safe_timeout, server::accept};
@@ -80,8 +78,8 @@ impl Listener {
     pub(crate) async fn listen(&mut self) -> Result<(), Error> {
         info!("🐕 PgDog listening on {}", self.addr);
         let listener = Self::bind(&self.addr).await?;
+        let mut sighup = Sighup::new();
         let shutdown_signal = comms().shutting_down();
-        let mut sighup = Sighup::new()?;
         let mut shutting_down = false;
 
         loop {
@@ -108,16 +106,15 @@ impl Listener {
                 }
 
                 _ = shutdown_signal.cancelled(), if !shutting_down => {
+                    // start the shutdown process, but make sure to still accept
+                    // new connections until all current requests are processed.
+                    // It's to be able for admin to still connect to pgdog, the
+                    // new client connections will be rejected anyway.
                     shutting_down = true;
                     self.start_shutdown();
                 }
 
-                _ = ctrl_c(), if !shutting_down => {
-                    shutting_down = true;
-                    self.start_shutdown();
-                }
-
-                _ = sighup.listen() => {
+                _ = sighup.recv() => {
                     if let Err(err) = reload(false) {
                         error!("configuration reload error: {}", err);
                     }
@@ -133,14 +130,8 @@ impl Listener {
     }
 
     fn start_shutdown(&self) {
-        comms().shutdown();
-
         let listener = self.clone();
-        spawn(async move {
-            listener.execute_shutdown().await;
-            Manager::get().shutdown().await; // wait for 2pc to flush
-            shutdown();
-        });
+        spawn(async move { listener.execute_shutdown().await });
     }
 
     async fn execute_shutdown(&self) {
@@ -156,8 +147,10 @@ impl Listener {
 
         if safe_timeout(shutdown_timeout, comms.tracker().wait())
             .await
-            .is_err()
+            .is_ok()
         {
+            debug!("all clients finished their transactions, closing server connections");
+        } else {
             warn!(
                 "terminating {} client connections due to shutdown timeout",
                 comms.tracker().len()
@@ -178,7 +171,7 @@ impl Listener {
 
                 if safe_timeout(termination_timeout, cancel_all).await.is_err() {
                     error!(
-                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s",
+                        "forced shutdown: abandoning {} outstanding cancel requests after waiting {:.3}s (shutdown_termination_timeout)",
                         comms.clients().len(),
                         termination_timeout.as_secs_f64()
                     );
