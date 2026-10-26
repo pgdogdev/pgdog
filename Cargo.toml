@@ -34,9 +34,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 parking_lot = "0.12"
 futures-util = "0.3.32"
-
-# [patch.crates-io]
-# tokio = { path = "../tokio/tokio" }
+tokio = { version = "1.54", features = ["full"]}
 
 # [patch."https://github.com/pgdogdev/pg_raw_parse.git"]
 # pg_raw_parse = { path = "../pg_raw_parse" }

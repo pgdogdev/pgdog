@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Local, Utc};
 use futures::{FutureExt, future::Either};
+use pgdog_config::MAX_DURATION;
 use rand::Rng;
 use std::future::{Future, pending};
 use std::panic::Location;
@@ -118,20 +119,12 @@ pub(crate) fn postgres_now() -> i64 {
     (now - start).num_microseconds().unwrap()
 }
 
-/// Longest deadline Tokio's timer wheel can address (`64^6` ms, a bit over
-/// two years). A longer timer eventually stops every other timer in the
-/// runtime from firing.
-///
-/// See <https://github.com/pgdogdev/pgdog/issues/1017> and
-/// <https://github.com/tokio-rs/tokio/pull/8334>.
-const MAX_TIMER_DURATION: Duration = Duration::from_millis(1 << 36);
-
 fn armable(duration: Option<Duration>) -> Option<Duration> {
-    duration.filter(|duration| *duration < MAX_TIMER_DURATION)
+    duration.filter(|duration| *duration < MAX_DURATION)
 }
 
 /// [`tokio::time::timeout`] that waits forever instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`].
+/// outside [`MAX_DURATION`].
 ///
 /// Not an `async fn` on purpose: an async wrapper's state machine holds `F`
 /// once as its argument and again inside the [`tokio::time::Timeout`] it
