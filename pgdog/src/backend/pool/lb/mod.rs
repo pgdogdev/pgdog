@@ -352,7 +352,17 @@ impl LoadBalancer {
     /// replica-only configurations fail immediately with [`Error::NoPrimary`].
     pub(super) async fn get_primary(&self, request: &Request) -> Result<Guard, Error> {
         if let Some(pool) = self.primary() {
-            return pool.get(request).await;
+            return tokio::select! {
+                guard = pool.get(request) => {
+                   Ok(guard?)
+                }
+
+                // Abort waiting for a connection from the primary
+                // if leader election takes place.
+                primary = self.wait_primary() => {
+                    Ok(primary?.get(request).await?)
+                }
+            };
         }
 
         if !self.role_detection_enabled() {
