@@ -32,6 +32,9 @@ pub(crate) enum Error {
     #[error("WHERE clause is required")]
     WhereClauseMissing,
 
+    #[error("ORDER BY an expression with an aggregate or DISTINCT is not supported across shards")]
+    OrderByExpressionUnsupported,
+
     #[error("{0}")]
     Type(#[from] pgdog_postgres_types::Error),
 
