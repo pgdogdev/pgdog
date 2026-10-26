@@ -8,27 +8,19 @@ pub(crate) mod sync;
 pub(crate) mod system;
 pub(crate) mod time;
 
-use chrono::{DateTime, Local, Utc};
-use futures::{FutureExt, future::Either};
+pub(crate) use time::{
+    format_time, human_duration, human_duration_display, millis, postgres_now, safe_interval,
+    safe_sleep, safe_timeout,
+};
+
+use futures::future::Either;
 use once_cell::sync::Lazy;
 use rand::{Rng, distr::Alphanumeric};
 use std::ops::ControlFlow;
-use std::panic::Location;
-use std::{env, future::Future, future::pending, future::ready, time::Duration};
+use std::{env, future::Future, future::ready};
 use tokio::task::{JoinError, spawn_blocking};
-use tokio::time::Interval;
-use tracing::warn;
 
 use crate::net::Parameters; // 0.8
-
-pub(crate) fn format_time(time: DateTime<Local>) -> String {
-    time.format("%Y-%m-%d %H:%M:%S%.3f %Z").to_string()
-}
-
-/// Convert Duration to milliseconds with 3 decimal places precision.
-pub(crate) fn millis(duration: Duration) -> f64 {
-    (duration.as_secs_f64() * 1_000_000.0).round() / 1000.0
-}
 
 /// Compare two byte slices in constant time with respect to their contents.
 ///
@@ -42,71 +34,6 @@ pub(crate) fn millis(duration: Duration) -> f64 {
 /// Length is not treated as secret: a length mismatch returns `false` early.
 pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     aws_lc_rs::constant_time::verify_slices_are_equal(a, b).is_ok()
-}
-
-/// Get a human-readable duration for amounts that
-/// a human would use.
-pub(crate) fn human_duration(duration: Duration) -> String {
-    let second = 1000;
-    let minute = second * 60;
-    let hour = minute * 60;
-    let day = hour * 24;
-    let week = day * 7;
-    // Ok that's enough.
-
-    let ms = duration.as_millis();
-    let ms_fmt = |ms: u128, unit: u128, name: &str| -> String {
-        if !ms.is_multiple_of(unit) {
-            format!("{}ms", ms)
-        } else {
-            format!("{}{}", ms / unit, name)
-        }
-    };
-
-    if ms < second {
-        format!("{}ms", ms)
-    } else if ms < minute {
-        ms_fmt(ms, second, "s")
-    } else if ms < hour {
-        ms_fmt(ms, minute, "m")
-    } else if ms < day {
-        ms_fmt(ms, hour, "h")
-    } else if ms < week {
-        ms_fmt(ms, day, "d")
-    } else {
-        ms_fmt(ms, 1, "ms")
-    }
-}
-
-/// Get a human-readable duration split into days and hh:mm:ss:ms.
-/// Example: "2d 03:15:42:100" or "00:05:30:250"
-pub(crate) fn human_duration_display(duration: Duration) -> String {
-    let total_secs = duration.as_secs();
-    let days = total_secs / 86400;
-    let hours = (total_secs % 86400) / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-    let millis = duration.subsec_millis();
-
-    if days > 0 {
-        format!(
-            "{}d {:02}:{:02}:{:02}:{:03}",
-            days, hours, minutes, seconds, millis
-        )
-    } else {
-        format!("{:02}:{:02}:{:02}:{:03}", hours, minutes, seconds, millis)
-    }
-}
-
-// 2000-01-01T00:00:00Z
-static POSTGRES_EPOCH: i64 = 946684800000000000;
-
-/// Number of microseconds since Postgres epoch.
-pub(crate) fn postgres_now() -> i64 {
-    let start = DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset();
-    let now = Utc::now().fixed_offset();
-    // Panic if overflow.
-    (now - start).num_microseconds().unwrap()
 }
 
 /// Generate a random string of length n.
@@ -260,65 +187,6 @@ pub(crate) fn sanitize_log_sample(s: &str, limit: usize) -> String {
     truncate_utf8(s, limit).replace(|c: char| c.is_control(), " ")
 }
 
-/// Longest deadline Tokio's timer wheel can address (`64^6` ms, a bit over
-/// two years). A longer timer eventually stops every other timer in the
-/// runtime from firing.
-///
-/// See <https://github.com/pgdogdev/pgdog/issues/1017> and
-/// <https://github.com/tokio-rs/tokio/pull/8334>.
-const MAX_TIMER_DURATION: Duration = Duration::from_millis(1 << 36);
-
-fn armable(duration: Option<Duration>) -> Option<Duration> {
-    duration.filter(|duration| *duration < MAX_TIMER_DURATION)
-}
-
-/// [`tokio::time::timeout`] that waits forever instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`].
-///
-/// Not an `async fn` on purpose: an async wrapper's state machine holds `F`
-/// once as its argument and again inside the [`tokio::time::Timeout`] it
-/// builds, so every call has to copy the whole future between the two slots.
-/// Some of the futures passed here are kilobytes ([`crate::backend::pool::Pool::get`]),
-/// and that copy is large enough to show up as `memcpy` in profiles.
-pub(crate) fn safe_timeout<F>(
-    duration: Duration,
-    future: F,
-) -> impl Future<Output = Result<F::Output, tokio::time::error::Elapsed>>
-where
-    F: Future,
-{
-    match armable(Some(duration)) {
-        Some(duration) => Either::Left(tokio::time::timeout(duration, future)),
-        None => Either::Right(future.map(Ok)),
-    }
-}
-
-/// [`tokio::time::sleep`] that waits forever instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`].
-pub(crate) async fn safe_sleep(duration: Duration) {
-    match armable(Some(duration)) {
-        Some(duration) => tokio::time::sleep(duration).await,
-        None => pending().await,
-    }
-}
-
-/// [`tokio::time::interval`] that is disabled instead of arming a timer
-/// outside [`MAX_TIMER_DURATION`], or panicking on a zero period.
-#[track_caller]
-pub(crate) fn safe_interval(period: Duration) -> SafeInterval {
-    match armable(Some(period)).filter(|period| !period.is_zero()) {
-        Some(period) => SafeInterval(Some(tokio::time::interval(period))),
-        None => {
-            warn!(
-                "{} is not a usable tick interval, timer disabled [{}]",
-                human_duration(period),
-                Location::caller()
-            );
-            SafeInterval(None)
-        }
-    }
-}
-
 /// Run on the blocking pool when background workers are enabled, or inline otherwise.
 pub(crate) fn maybe_spawn_blocking<F, R>(f: F) -> impl Future<Output = Result<R, JoinError>>
 where
@@ -334,29 +202,6 @@ where
         Either::Left(spawn_blocking(f))
     } else {
         Either::Right(ready(Ok(f())))
-    }
-}
-
-/// An [`Interval`] that may not be running at all.
-pub(crate) struct SafeInterval(Option<Interval>);
-
-impl SafeInterval {
-    /// Wait for the next tick, or forever when the interval is disabled.
-    ///
-    /// Cancel safe: both branches are.
-    pub(crate) async fn tick(&mut self) {
-        match self.0.as_mut() {
-            Some(interval) => {
-                interval.tick().await;
-            }
-            None => pending().await,
-        }
-    }
-
-    pub(crate) fn set_missed_tick_behavior(&mut self, behavior: tokio::time::MissedTickBehavior) {
-        if let Some(interval) = self.0.as_mut() {
-            interval.set_missed_tick_behavior(behavior);
-        }
     }
 }
 
@@ -378,101 +223,6 @@ mod test {
 
     use super::*;
     use crate::test_utils::*;
-
-    #[test]
-    fn test_human_duration() {
-        assert_eq!(human_duration(Duration::from_millis(500)), "500ms");
-        assert_eq!(human_duration(Duration::from_millis(2000)), "2s");
-        assert_eq!(human_duration(Duration::from_millis(1000 * 60 * 2)), "2m");
-        assert_eq!(human_duration(Duration::from_millis(1000 * 3600)), "1h");
-    }
-
-    #[test]
-    fn test_armable_boundary() {
-        assert_eq!(MAX_TIMER_DURATION.as_millis(), 1 << 36);
-
-        let just_under = MAX_TIMER_DURATION - Duration::from_millis(1);
-
-        assert_eq!(armable(None), None);
-        assert_eq!(armable(Some(Duration::ZERO)), Some(Duration::ZERO));
-        assert_eq!(armable(Some(just_under)), Some(just_under));
-        assert_eq!(armable(Some(MAX_TIMER_DURATION)), None);
-        assert_eq!(armable(Some(Duration::MAX)), None);
-    }
-
-    #[tokio::test]
-    async fn test_safe_timeout_never_arms_forever() {
-        assert_eq!(safe_timeout(Duration::MAX, async { 42 }).await.unwrap(), 42);
-        assert_eq!(
-            safe_timeout(MAX_TIMER_DURATION, async { 42 })
-                .await
-                .unwrap(),
-            42
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_safe_timeout_times_out() {
-        let result = safe_timeout(Duration::from_millis(1), std::future::pending::<()>()).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_safe_sleep() {
-        safe_sleep(Duration::from_millis(10)).await;
-
-        for forever in [MAX_TIMER_DURATION, Duration::MAX] {
-            assert!(
-                tokio::time::timeout(Duration::from_secs(60), safe_sleep(forever))
-                    .await
-                    .is_err(),
-                "{:?} must never wake up",
-                forever
-            );
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_safe_interval_ticks() {
-        let mut interval = safe_interval(Duration::from_millis(10));
-
-        // The first tick of a live interval resolves immediately.
-        interval.tick().await;
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), interval.tick())
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_safe_interval_disabled_never_ticks() {
-        // Zero panics `tokio::time::interval`; the rest would run the wheel hot.
-        for period in [Duration::ZERO, MAX_TIMER_DURATION, Duration::MAX] {
-            let mut interval = safe_interval(period);
-
-            assert!(
-                tokio::time::timeout(Duration::from_secs(60), interval.tick())
-                    .await
-                    .is_err(),
-                "{:?} must never tick",
-                period
-            );
-        }
-    }
-
-    #[test]
-    fn test_postgres_now() {
-        let start = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
-            .unwrap()
-            .fixed_offset();
-        assert_eq!(
-            DateTime::from_timestamp_nanos(POSTGRES_EPOCH).fixed_offset(),
-            start,
-        );
-        let _now = postgres_now();
-    }
 
     #[test]
     fn test_escape_identifier() {
@@ -551,56 +301,6 @@ mod test {
         assert_eq!(number_human(123456), "123,456");
         assert_eq!(number_human(1234567), "1,234,567");
         assert_eq!(number_human(1234567890), "1,234,567,890");
-    }
-
-    #[test]
-    fn test_human_duration_display() {
-        // Zero duration
-        assert_eq!(
-            human_duration_display(Duration::from_millis(0)),
-            "00:00:00:000"
-        );
-
-        // Just milliseconds
-        assert_eq!(
-            human_duration_display(Duration::from_millis(500)),
-            "00:00:00:500"
-        );
-
-        // Seconds and milliseconds
-        assert_eq!(
-            human_duration_display(Duration::from_millis(5500)),
-            "00:00:05:500"
-        );
-
-        // Minutes, seconds, milliseconds
-        assert_eq!(
-            human_duration_display(Duration::from_millis(65500)),
-            "00:01:05:500"
-        );
-
-        // Hours, minutes, seconds, milliseconds
-        assert_eq!(
-            human_duration_display(Duration::from_millis(3665500)),
-            "01:01:05:500"
-        );
-
-        // Days
-        assert_eq!(
-            human_duration_display(
-                Duration::from_secs(86400 + 3600 + 60 + 1) + Duration::from_millis(123)
-            ),
-            "1d 01:01:01:123"
-        );
-
-        // Multiple days
-        assert_eq!(
-            human_duration_display(
-                Duration::from_secs(2 * 86400 + 12 * 3600 + 30 * 60 + 45)
-                    + Duration::from_millis(999)
-            ),
-            "2d 12:30:45:999"
-        );
     }
 
     #[test]

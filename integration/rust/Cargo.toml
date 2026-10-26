@@ -11,7 +11,7 @@ tokio-postgres = {version = "0.7.13", features = ["with-uuid-1"]}
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "tls-native-tls", "bigdecimal", "chrono", "json", "rust_decimal", "uuid"]}
-tokio = { version = "1", features = ["full"]}
+tokio = { version = "1.54", features = ["full"]}
 futures-util.workspace = true
 uuid.workspace = true
 serial_test = "3"
@@ -29,5 +29,5 @@ chrono-tz = "0.10.4"
 pgdog-stats = { path = "../../pgdog-stats" }
 itertools = "0.15"
 pg_stream = "0.2.1"
-pgdog-regress = { git = "https://github.com/pgdogdev/regress.git", ref = "22032787eeaef9bf97aaa3216735a7369f1f9125" }
+pgdog-regress = { git = "https://github.com/pgdogdev/regress.git", rev = "22032787eeaef9bf97aaa3216735a7369f1f9125" }
 anyhow = "1.0.104"
