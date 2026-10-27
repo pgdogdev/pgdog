@@ -111,20 +111,11 @@ fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
 
 impl AggregateFunction {
     pub(crate) fn from_name(name: &str, schema: &Schema) -> Option<Self> {
-        Some(match name {
-            "count" => AggregateFunction::Count,
-            "max" => AggregateFunction::Max,
-            "min" => AggregateFunction::Min,
-            "sum" => AggregateFunction::Sum,
-            "avg" => AggregateFunction::Avg,
-            "stddev" | "stddev_samp" => AggregateFunction::StddevSamp,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "variance" | "var_samp" => AggregateFunction::VarSamp,
-            "var_pop" => AggregateFunction::VarPop,
-            name if schema.aggregate_functions.contains(name) => {
-                AggregateFunction::Unrecognized(name.to_owned())
-            }
-            _ => return None,
+        Self::from_builtin_name(name).or_else(|| {
+            schema
+                .aggregate_functions
+                .contains(name)
+                .then(|| Self::Unrecognized(name.to_owned()))
         })
     }
 }
@@ -157,12 +148,7 @@ impl Aggregate {
             .enumerate()
             .filter_map(|(idx, node)| {
                 let func = Function::try_from(node.val()).ok()?;
-                let function = AggregateFunction::from_builtin_name(func.name).or_else(|| {
-                    schema
-                        .aggregate_functions
-                        .contains(func.name)
-                        .then(|| AggregateFunction::Unrecognized(func.name.to_owned()))
-                })?;
+                let function = AggregateFunction::from_name(func.name, schema)?;
 
                 // FIXME: This doesn't correctly handle distinct behind type
                 // casts any other nodes that Function::try_from handles

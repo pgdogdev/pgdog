@@ -131,13 +131,7 @@ fn integer(value: &Datum) -> Option<i128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        frontend::router::parser::HavingValue,
-        net::{
-            Field, RowDescription,
-            messages::{DataRow, Datum},
-        },
-    };
+    use crate::net::{Field, RowDescription};
 
     fn compare_expression(operator: CompareOperator) -> HavingExpr {
         HavingExpr::Compare {
@@ -147,26 +141,14 @@ mod tests {
         }
     }
 
-    fn integer_field(name: &str) -> Field {
-        Field {
-            name: name.into(),
-            table_oid: 0,
-            column: 0,
-            type_oid: 23,
-            type_size: 4,
-            type_modifier: -1,
-            format: 0,
-        }
-    }
-
     #[test]
     fn null_comparison_is_unknown_and_filters_the_group() {
         let decoder = Decoder::from(RowDescription::new(&[
             Field::bigint("__pgdog_having_0"),
-            integer_field("__pgdog_having_1"),
+            Field::bigint("__pgdog_having_1"),
         ]));
         let mut row = DataRow::new();
-        row.add(Datum::Null).add(2_i32);
+        row.add(Datum::Null).add(2_i64);
 
         let unknown = compare_expression(CompareOperator::Greater);
         assert_eq!(
