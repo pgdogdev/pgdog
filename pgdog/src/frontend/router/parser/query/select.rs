@@ -327,7 +327,8 @@ impl QueryParser {
     ) -> Vec<OrderBy> {
         stmt.sort_clause()
             .into_iter()
-            .filter_map(|sort_by| {
+            .enumerate()
+            .filter_map(|(sort_key_position, sort_by)| {
                 use pg_raw_parse::{
                     ConstValue,
                     raw::{A_Expr_Kind::*, SortByDir::*},
@@ -385,7 +386,15 @@ impl QueryParser {
                         }
                     }
 
-                    _ => None,
+                    _ => {
+                        let helper_column_alias = OrderBy::helper_column_name(sort_key_position);
+
+                        if asc {
+                            Some(OrderBy::AscColumn(helper_column_alias))
+                        } else {
+                            Some(OrderBy::DescColumn(helper_column_alias))
+                        }
+                    }
                 }
             })
             .collect()
