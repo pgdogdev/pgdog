@@ -147,7 +147,7 @@ pub(crate) fn finalize_after_route(
     if let Some(plan) = &rewrite.plan
         && let Some(route) = request.route.as_mut()
     {
-        route.projection_rewrite_plan = Some(plan.clone());
+        route.projection_rewrite_plan = Some(Arc::clone(plan));
         let mut order_by = route.order_by().to_vec();
         for helper in &plan.order_by_helpers {
             // Prefer the structural position. The source fallback handles a
