@@ -92,26 +92,14 @@ impl Startup {
                         let value = search_path(&value);
                         startup.push((name, value));
                     } else if name == "options" {
-                        let value = value.replace('+', " ");
-                        let kvs = value.split("-c");
-                        for kv in kvs {
-                            let mut nvs = kv.split("=");
-                            let name = nvs.next();
-                            let value = nvs.next();
-
-                            if let Some(name) = name
-                                && let Some(value) = value
-                            {
-                                let name = name.trim().to_string();
-                                let value = value.trim().to_string();
-                                if !name.is_empty() && !value.is_empty() {
-                                    let value = if name == "search_path" {
-                                        search_path(&value)
-                                    } else {
-                                        ParameterValue::from(value)
-                                    };
-                                    startup.push((name.to_string(), value));
-                                }
+                        for (name, value) in parse_options(&value) {
+                            if !name.is_empty() && !value.is_empty() {
+                                let value = if name == "search_path" {
+                                    search_path(&value)
+                                } else {
+                                    ParameterValue::from(value)
+                                };
+                                startup.push((name, value));
                             }
                         }
                     } else {
@@ -282,6 +270,45 @@ fn search_path(value: &str) -> ParameterValue {
     ParameterValue::Tuple(value)
 }
 
+fn parse_options(options: &str) -> Vec<(String, String)> {
+    let mut tokens = vec![];
+    let mut current = String::new();
+    let mut chars = options.chars();
+
+    // treat the whitespaces with \\ like non-split whitespace
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => current.extend(chars.next()),
+            c if c.is_whitespace() => tokens.push(std::mem::take(&mut current)),
+            c => current.push(c),
+        }
+    }
+    tokens.push(current);
+
+    let mut params = vec![];
+    let mut tokens = tokens.into_iter().filter(|token| !token.is_empty());
+
+    while let Some(token) = tokens.next() {
+        let setting = if let Some(setting) = token.strip_prefix("--") {
+            Some(setting.to_string())
+        } else if let Some(setting) = token.strip_prefix("-c") {
+            if setting.is_empty() {
+                tokens.next()
+            } else {
+                Some(setting.to_string())
+            }
+        } else {
+            None
+        };
+
+        if let Some((name, value)) = setting.as_deref().and_then(|s| s.split_once('=')) {
+            params.push((name.to_string(), value.to_string()));
+        }
+    }
+
+    params
+}
+
 #[cfg(test)]
 mod test {
     impl Startup {
@@ -444,16 +471,40 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_options_plus_encoded() {
-        // options=-c+pgdog.role=replica  (+ not decoded to space by libpq)
-        let startup = startup_with_options("-c+pgdog.role=replica").await;
+    async fn test_options_long_form() {
+        let startup =
+            startup_with_options("--pgdog.sharding_key=YWJj== --application_name=app=web").await;
         let Startup::Startup { params, .. } = startup else {
             panic!("expected startup message");
         };
         assert_eq!(
-            params.get("pgdog.role").and_then(|v| v.as_str()),
-            Some("replica")
+            params.get("pgdog.sharding_key").and_then(|v| v.as_str()),
+            Some("YWJj==")
         );
+        assert_eq!(
+            params.get("application_name").and_then(|v| v.as_str()),
+            Some("app=web")
+        );
+    }
+
+    #[test]
+    fn test_parse_options() {
+        let parsed = parse_options(
+            "-c pgdog.sharding_key=270b77fd-c30e-4c1a-9cfe-0d1d2c3b4a5f -capplication_name=my-client --a=b=c -c x=1+2 -c y=two\\ words -c z=a\\\\ -c w=b",
+        );
+        let expected: Vec<(String, String)> = [
+            ("pgdog.sharding_key", "270b77fd-c30e-4c1a-9cfe-0d1d2c3b4a5f"),
+            ("application_name", "my-client"),
+            ("a", "b=c"),
+            ("x", "1+2"),
+            ("y", "two words"),
+            ("z", "a\\"),
+            ("w", "b"),
+        ]
+        .into_iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(parsed, expected);
     }
 
     #[tokio::test]
