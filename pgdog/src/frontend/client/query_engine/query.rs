@@ -268,7 +268,7 @@ impl QueryEngine {
                         self.backend.end_transaction();
                     }
 
-                    TransactionState::InTrasaction => {
+                    TransactionState::InTransaction => {
                         if self.two_pc.auto() {
                             self.end_two_pc(false).await?;
                             two_pc_auto = true;

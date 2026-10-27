@@ -328,7 +328,7 @@ async fn test_move_rows_simple() {
                 ),
                 'Z' => assert!(
                     ReadyForQuery::try_from(message).unwrap().state().unwrap()
-                        == TransactionState::InTrasaction
+                        == TransactionState::InTransaction
                 ),
                 'T' => assert_eq!(
                     RowDescription::try_from(message)
@@ -398,7 +398,7 @@ async fn test_move_rows_extended() {
                 ),
                 'Z' => assert!(
                     ReadyForQuery::try_from(message).unwrap().state().unwrap()
-                        == TransactionState::InTrasaction
+                        == TransactionState::InTransaction
                 ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
@@ -490,7 +490,7 @@ async fn test_move_rows_prepared() {
                 ),
                 'Z' => assert!(
                     ReadyForQuery::try_from(message).unwrap().state().unwrap()
-                        == TransactionState::InTrasaction
+                        == TransactionState::InTransaction
                 ),
                 'D' => assert_eq!(
                     DataRow::try_from(message).unwrap().column(0).unwrap(),
@@ -600,7 +600,7 @@ async fn test_update_with_expr() {
                 ),
                 'Z' => assert!(
                     ReadyForQuery::try_from(message).unwrap().state().unwrap()
-                        == TransactionState::InTrasaction
+                        == TransactionState::InTransaction
                 ),
                 'T' => {
                     let rd = RowDescription::try_from(message).unwrap();
@@ -731,7 +731,7 @@ async fn test_foreign_key_on_delete_sharding_key_update() {
                 ),
                 'Z' => assert_eq!(
                     ReadyForQuery::try_from(message).unwrap().state().unwrap(),
-                    TransactionState::InTrasaction
+                    TransactionState::InTransaction
                 ),
                 _ => unreachable!(),
             }
