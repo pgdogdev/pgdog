@@ -313,14 +313,15 @@ impl Task for TableDataSyncTask {
                     if self.dest.two_pc_enabled()
                         && let Some(txn) = err.two_pc_cleanup_transaction()
                     {
-                        Manager::get().wait_until_cleaned_up(txn).await;
+                        if Manager::get().wait_until_cleaned_up(txn).await {
+                            info!("2pc transaction {txn} cleaned up before retry");
+                        }
                     }
 
                     // Not idempotent (no truncate): if a prior attempt left rows on a
                     // reachable shard, the re-copy can only collide, so stop instead of
                     // retrying. A shard we cannot probe is logged (not blocked on), since we
-                    // cannot prove it dirty. Checked after the backoff so a RELOAD-churned
-                    // pool can recover first.
+                    // cannot prove it dirty.
                     // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
                     // race (rows remain → PK violations). Safe once source-guard checks exist.
                     if validate_destination_has_rows(&self.table, &self.dest).await {

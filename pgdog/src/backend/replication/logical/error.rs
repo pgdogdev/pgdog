@@ -6,7 +6,8 @@ use derive_more::{Display, Error};
 use crate::util::sync::worker_pool;
 use crate::{
     backend::replication::publisher::PublicationTable,
-    frontend::client::query_engine::two_pc::TwoPcTransaction, net::ErrorResponse,
+    frontend::client::query_engine::{TwoPcPhase, two_pc::TwoPcTransaction},
+    net::ErrorResponse,
 };
 
 /// The kind of validation failure, decoupled from which table it occurred on.
@@ -263,9 +264,10 @@ pub(crate) enum Error {
         op: &'static str,
     },
 
-    #[error("2pc commit failed for {transaction}: {source}")]
+    #[error("2pc {phase} failed for {transaction}: {source}")]
     TwoPcCleanupPending {
         transaction: TwoPcTransaction,
+        phase: TwoPcPhase,
         #[source]
         source: Box<Error>,
     },

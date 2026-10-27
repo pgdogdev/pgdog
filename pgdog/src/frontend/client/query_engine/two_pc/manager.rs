@@ -130,16 +130,16 @@ impl Manager {
     }
 
     /// Block until the monitor has removed this transaction from the manager,
-    /// or until a fixed timeout elapses.
+    /// or until a fixed timeout elapses. Returns `false` on timeout.
     ///
     /// No-op if the transaction was never registered or is already gone.
-    pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
+    pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) -> bool {
         const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
         let deadline = Instant::now() + WAIT_TIMEOUT;
         loop {
             if !self.inner.lock().transactions.contains_key(&transaction) {
-                return;
+                return true;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -147,7 +147,7 @@ impl Manager {
                     "[2pc] timed out waiting for transaction {} cleanup; monitor will retry",
                     transaction
                 );
-                return;
+                return false;
             }
             select! {
                 _ = self.notify.notify.notified() => {}

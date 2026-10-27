@@ -34,7 +34,7 @@ fn primary(shard: &Shard) -> Result<Pool, Error> {
         .ok_or(Error::NoPrimary)
 }
 
-async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
+pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
     let primary = primary(shard)?;
     match Box::pin(Server::connect(
         primary.addr(),
