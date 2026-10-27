@@ -93,7 +93,11 @@ jobs:
           - { name: two-pc, script: integration/two_pc/run.sh }
           - { name: complex, script: integration/complex/run.sh }
           - { name: dry-run, script: integration/dry_run/run.sh }
-          - { name: copy-data, script: integration/copy_data/run.sh }
+          - {
+              name: copy-data,
+              script: integration/copy_data/run.sh,
+              needs_docker: true,
+            }
           - {
               name: load-balancer,
               script: integration/load_balancer/run.sh,
