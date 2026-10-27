@@ -39,6 +39,23 @@ pub(crate) enum AggregateFunction {
     Unrecognized(String),
 }
 
+impl AggregateFunction {
+    pub(crate) fn from_builtin_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "count" => Self::Count,
+            "max" => Self::Max,
+            "min" => Self::Min,
+            "sum" => Self::Sum,
+            "avg" => Self::Avg,
+            "stddev" | "stddev_samp" => Self::StddevSamp,
+            "stddev_pop" => Self::StddevPop,
+            "variance" | "var_samp" => Self::VarSamp,
+            "var_pop" => Self::VarPop,
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
@@ -120,24 +137,12 @@ impl Aggregate {
             .enumerate()
             .filter_map(|(idx, node)| {
                 let func = Function::try_from(node.val()).ok()?;
-                let function = match func.name {
-                    "count" => AggregateFunction::Count,
-                    "max" => AggregateFunction::Max,
-                    "min" => AggregateFunction::Min,
-                    "sum" => AggregateFunction::Sum,
-                    "avg" => AggregateFunction::Avg,
-                    "stddev" | "stddev_samp" => AggregateFunction::StddevSamp,
-                    "stddev_pop" => AggregateFunction::StddevPop,
-                    "variance" | "var_samp" => AggregateFunction::VarSamp,
-                    "var_pop" => AggregateFunction::VarPop,
-                    fname => {
-                        if schema.aggregate_functions.contains(fname) {
-                            AggregateFunction::Unrecognized(fname.to_owned())
-                        } else {
-                            return None;
-                        }
-                    }
-                };
+                let function = AggregateFunction::from_builtin_name(func.name).or_else(|| {
+                    schema
+                        .aggregate_functions
+                        .contains(func.name)
+                        .then(|| AggregateFunction::Unrecognized(func.name.to_owned()))
+                })?;
 
                 // FIXME: This doesn't correctly handle distinct behind type
                 // casts any other nodes that Function::try_from handles

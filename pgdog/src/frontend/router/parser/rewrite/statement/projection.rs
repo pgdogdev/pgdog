@@ -53,7 +53,7 @@ impl OrderByHelper {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
@@ -82,7 +82,7 @@ impl ProjectionRewritePlan {
 #[derive(Debug, Clone)]
 pub(crate) struct PostRouteRewrite {
     sql: Arc<str>,
-    plan: ProjectionRewritePlan,
+    plan: Option<Arc<ProjectionRewritePlan>>,
 }
 
 pub(crate) fn finalize_after_route(
@@ -144,12 +144,12 @@ pub(crate) fn finalize_after_route(
     {
         parse.set_query(&rewrite.sql);
     }
-    if !rewrite.plan.is_noop()
+    if let Some(plan) = &rewrite.plan
         && let Some(route) = request.route.as_mut()
     {
-        route.projection_rewrite_plan = rewrite.plan.clone();
+        route.projection_rewrite_plan = Some(plan.clone());
         let mut order_by = route.order_by().to_vec();
-        for helper in &rewrite.plan.order_by_helpers {
+        for helper in &plan.order_by_helpers {
             // Prefer the structural position. The source fallback handles a
             // bind-dependent vector sort omitted from this execution's route.
             let position = order_by
@@ -202,6 +202,7 @@ fn build(
         return Ok(None);
     }
     let sql: Arc<str> = pg_raw_parse::deparse(&*rewritten)?.as_str().into();
+    let plan = (!plan.is_noop()).then(|| Arc::new(plan));
 
     Ok(Some(PostRouteRewrite { sql, plan }))
 }

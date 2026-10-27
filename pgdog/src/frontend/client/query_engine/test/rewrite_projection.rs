@@ -55,7 +55,7 @@ async fn direct_aggregate_keeps_base_sql() {
         _ => panic!("expected Query"),
     };
     assert_eq!(query.query(), sql);
-    assert!(client_request.route().projection_rewrite_plan.is_noop());
+    assert!(client_request.route().projection_rewrite_plan.is_none());
 }
 
 #[tokio::test]
@@ -89,6 +89,8 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
         client_request
             .route()
             .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
             .aggregate_helpers
             .len(),
         1
@@ -255,6 +257,8 @@ async fn cross_shard_order_by_projects_missing_sort_column() {
         client_request
             .route()
             .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
             .order_by_helpers
             .len(),
         1
@@ -334,7 +338,15 @@ fn aliased_projected_sort_column_remaps_route() {
         request.route().order_by(),
         &[OrderBy::AscColumn("item_price".into())]
     );
-    assert!(!request.route().projection_rewrite_plan.order_by_helpers[0].injected);
+    assert!(
+        !request
+            .route()
+            .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
+            .order_by_helpers[0]
+            .injected
+    );
 }
 
 #[test]
@@ -437,14 +449,12 @@ async fn aggregate_order_by_and_offset_compose_after_route() {
         route.order_by(),
         &[OrderBy::AscColumn("__pgdog_order_col0".into())]
     );
-    assert_eq!(
-        route.projection_rewrite_plan.aggregate_helpers[0].alias,
-        "__pgdog_count_col0"
-    );
-    assert_eq!(
-        route.projection_rewrite_plan.order_by_helpers[0].alias,
-        "__pgdog_order_col0"
-    );
+    let plan = route
+        .projection_rewrite_plan
+        .as_deref()
+        .expect("projection rewrite plan");
+    assert_eq!(plan.aggregate_helpers[0].alias, "__pgdog_count_col0");
+    assert_eq!(plan.order_by_helpers[0].alias, "__pgdog_order_col0");
     assert_eq!(
         route.limit(),
         &Limit {

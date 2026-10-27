@@ -140,7 +140,7 @@ impl Buffer {
         &mut self,
         aggregate: &Aggregate,
         decoder: &Decoder,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Result<(), super::Error> {
         let buffer: VecDeque<DataRow> = std::mem::take(&mut self.buffer);
         let rows = if aggregate.is_empty() {
@@ -156,10 +156,14 @@ impl Buffer {
         Ok(())
     }
 
-    pub(super) fn drop_helper_columns(&mut self, plan: &ProjectionRewritePlan, decoder: &Decoder) {
-        if plan.is_noop() {
+    pub(super) fn drop_helper_columns(
+        &mut self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) {
+        let Some(plan) = plan else {
             return;
-        }
+        };
 
         let drop = plan.drop_columns(decoder.row_description());
 
@@ -292,8 +296,7 @@ mod test {
             buf.add(dr.message()).unwrap();
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 1);
@@ -319,8 +322,7 @@ mod test {
             }
         }
 
-        buf.aggregate(&agg, &Decoder::from(rd), &ProjectionRewritePlan::default())
-            .unwrap();
+        buf.aggregate(&agg, &Decoder::from(rd), None).unwrap();
         buf.mark_full();
 
         assert_eq!(buf.len(), 2);
