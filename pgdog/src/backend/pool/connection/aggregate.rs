@@ -246,7 +246,7 @@ impl<'a> Aggregates<'a> {
         rows: &'a VecDeque<DataRow>,
         decoder: &'a Decoder,
         aggregate: &'a Aggregate,
-        plan: &ProjectionRewritePlan,
+        plan: Option<&ProjectionRewritePlan>,
     ) -> Option<Self> {
         let mut helper_columns: HashMap<usize, HelperColumns> = HashMap::new();
 
@@ -263,16 +263,18 @@ impl<'a> Aggregates<'a> {
             }
         }
 
-        for helper in &plan.aggregate_helpers {
-            let Some(index) = decoder.row_description().field_index(&helper.alias) else {
-                continue;
-            };
+        if let Some(plan) = plan {
+            for helper in &plan.aggregate_helpers {
+                let Some(index) = decoder.row_description().field_index(&helper.alias) else {
+                    continue;
+                };
 
-            let entry = helper_columns.entry(helper.target_column).or_default();
-            match helper.kind {
-                HelperKind::Count => entry.count = Some(index),
-                HelperKind::Sum => entry.sum = Some(index),
-                HelperKind::SumSquares => entry.sumsq = Some(index),
+                let entry = helper_columns.entry(helper.target_column).or_default();
+                match helper.kind {
+                    HelperKind::Count => entry.count = Some(index),
+                    HelperKind::Sum => entry.sum = Some(index),
+                    HelperKind::SumSquares => entry.sumsq = Some(index),
+                }
             }
         }
 
@@ -524,8 +526,7 @@ mod test {
         shard1.add("3");
         rows.push_back(shard1);
 
-        let plan = ProjectionRewritePlan::default();
-        let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
             .unwrap()
             .aggregate()
             .unwrap();
@@ -572,8 +573,7 @@ mod test {
                 );
                 rows.push_back(row);
             }
-            let plan = ProjectionRewritePlan::default();
-            let mut result = Aggregates::new(&rows, &decoder, &aggregate, &plan)
+            let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
                 .expect("count aggregate")
                 .aggregate()
                 .expect("merge partial counts");
@@ -606,15 +606,10 @@ mod test {
         shard2.add(20.0_f64).add(4_i64);
         rows.push_back(shard2);
 
-        let mut result = Aggregates::new(
-            &rows,
-            &decoder,
-            &aggregate,
-            &ProjectionRewritePlan::default(),
-        )
-        .unwrap()
-        .aggregate()
-        .unwrap();
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate()
+            .unwrap();
 
         assert_eq!(result.len(), 2);
         let mut groups: Vec<(f64, i64)> = result
@@ -651,15 +646,10 @@ mod test {
         shard2.add(Bytes::from_static(b"{{5,6},{7,8}}")).add(1_i64);
         rows.push_back(shard2);
 
-        let mut result = Aggregates::new(
-            &rows,
-            &decoder,
-            &aggregate,
-            &ProjectionRewritePlan::default(),
-        )
-        .unwrap()
-        .aggregate()
-        .unwrap();
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate()
+            .unwrap();
 
         let mut groups: Vec<(String, i64)> = result
             .drain(..)
@@ -698,15 +688,10 @@ mod test {
         shard1.add(input.clone()).add(1_i64);
         rows.push_back(shard1);
 
-        let mut result = Aggregates::new(
-            &rows,
-            &decoder,
-            &aggregate,
-            &ProjectionRewritePlan::default(),
-        )
-        .unwrap()
-        .aggregate()
-        .unwrap();
+        let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
+            .unwrap()
+            .aggregate()
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         let row = result.pop_front().unwrap();
