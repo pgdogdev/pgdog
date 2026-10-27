@@ -75,6 +75,90 @@ async fn prepared_having_parameter_is_typed_by_postgres() -> Result<(), Box<dyn 
     Ok(())
 }
 
+#[tokio::test]
+async fn having_boolean_expression_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>>
+{
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset_table(&sharded).await?;
+
+    seed(
+        &sharded,
+        0,
+        "INSERT INTO having_merge_test VALUES (1, 10), (1, 11), (2, 12), (3, 5)",
+    )
+    .await?;
+    seed(
+        &sharded,
+        1,
+        "INSERT INTO having_merge_test VALUES (1, 20), (2, 21), (2, 22), (3, 6)",
+    )
+    .await?;
+
+    let rows = sharded
+        .fetch_all(
+            "SELECT customer_id, COUNT(*) AS order_count \
+             FROM having_merge_test \
+             GROUP BY customer_id \
+             HAVING (COUNT(*) > 2 AND NOT (MAX(order_id) > 21)) OR MIN(order_id) < 6 \
+             ORDER BY customer_id",
+        )
+        .await?;
+
+    let groups: Vec<(i64, i64)> = rows
+        .iter()
+        .map(|row| (row.get("customer_id"), row.get("order_count")))
+        .collect();
+    assert_eq!(groups, vec![(1, 3), (3, 2)]);
+    assert!(rows.iter().all(|row| row.columns().len() == 2));
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn having_null_semantics_on_merged_groups() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset_table(&sharded).await?;
+
+    seed(
+        &sharded,
+        0,
+        "INSERT INTO having_merge_test VALUES (1, 10), (2, 5), (3, NULL)",
+    )
+    .await?;
+    seed(
+        &sharded,
+        1,
+        "INSERT INTO having_merge_test VALUES (1, 20), (3, NULL)",
+    )
+    .await?;
+
+    let null_groups = sharded
+        .fetch_all(
+            "SELECT customer_id FROM having_merge_test \
+             GROUP BY customer_id \
+             HAVING MAX(order_id) IS NULL",
+        )
+        .await?;
+    assert_eq!(null_groups.len(), 1);
+    assert_eq!(null_groups[0].get::<i64, _>("customer_id"), 3);
+
+    // NOT of an unknown comparison is still unknown, so customer 3 must be filtered out.
+    let negated = sharded
+        .fetch_all(
+            "SELECT customer_id FROM having_merge_test \
+             GROUP BY customer_id \
+             HAVING NOT (MAX(order_id) > 15) \
+             ORDER BY customer_id",
+        )
+        .await?;
+    let customers: Vec<i64> = negated.iter().map(|row| row.get("customer_id")).collect();
+    assert_eq!(customers, vec![2]);
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
 async fn reset_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     cleanup(pool).await;
     for shard in [0, 1] {
