@@ -180,6 +180,11 @@ fn build(
     let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
         return Ok(None);
     };
+    if !matches!(select.having_clause(), Node::None) {
+        return Err(Error::UnsupportedHaving(
+            "aggregates would be filtered on each shard before merging",
+        ));
+    }
 
     let aggregate = Aggregate::parse(select, schema);
     if aggregate.is_empty() && select.sort_clause().is_empty() && !rewrite_offset {

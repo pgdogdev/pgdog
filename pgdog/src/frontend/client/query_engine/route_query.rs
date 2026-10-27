@@ -4,6 +4,7 @@ use tracing::trace;
 use crate::backend::Error as BackendError;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
+use crate::frontend::router::parser::rewrite::statement::Error as StatementRewriteError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::sharding::lookup;
@@ -159,11 +160,27 @@ impl QueryEngine {
                 client_request.route = Some(command.route().clone());
                 trace!("routing {:#?} to {:#?}", client_request.messages, command,);
 
-                projection::finalize_after_route(
+                let finalize = projection::finalize_after_route(
                     client_request,
                     &cluster.schema(),
                     rewrite_result.and_then(RewriteResult::offset_plan),
-                )?;
+                );
+                match finalize {
+                    Err(err @ StatementRewriteError::UnsupportedHaving(_)) => {
+                        if let Some(transaction) = context.transaction.as_mut() {
+                            transaction.set_error();
+                        }
+                        self.error_response(
+                            context,
+                            client_request,
+                            ErrorResponse::unsupported(&err),
+                        )
+                        .await?;
+                        return Ok(false);
+                    }
+                    Err(err) => return Err(err.into()),
+                    Ok(()) => {}
+                }
 
                 if let Some(rewrite_result) = rewrite_result {
                     rewrite_result.apply_after_route(client_request)?;
