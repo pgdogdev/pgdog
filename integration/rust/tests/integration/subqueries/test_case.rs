@@ -95,8 +95,14 @@ pub(crate) async fn execute_test_case(
     }
 
     for protocol in [Protocol::Simple, Protocol::Extended] {
+        // Don't run with bind params in simple protocol.
+        if protocol == Protocol::Simple && !commands.bind_params.is_empty() {
+            continue;
+        }
+
         let expected =
             wire::run(direct_conn, sql.to_string(), protocol, Some(commands), true).await?;
+
         let actual = wire::run(
             sharded_conn,
             sql.to_string(),

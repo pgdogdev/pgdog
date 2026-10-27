@@ -76,6 +76,10 @@ export PGPORT=5432
 export PGUSER='pgdog'
 
 pg_stat_monitor_available=$(psql -tAc "SELECT EXISTS (SELECT FROM pg_available_extensions WHERE name = 'pg_stat_monitor')")
+if [[ "$pg_stat_monitor_available" != t ]]; then
+    echo "WARNING: pg_stat_monitor extension is not available. The Rust subqueries integration test will fail." >&2
+    echo "WARNING: Install pg_stat_monitor and add it to shared_preload_libraries, then run this script again." >&2
+fi
 
 for db in testing pgdog shard_0 shard_1 shard_2 shard_3; do
     psql -c "DROP DATABASE $db" || true

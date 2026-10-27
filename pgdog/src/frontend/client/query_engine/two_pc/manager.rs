@@ -408,11 +408,11 @@ impl Manager {
         self.notify.notify.notify_one();
         let transactions = self.inner.lock().queue.len();
 
-        info!("[2pc] cleaning up {} two-phase transactions", transactions);
+        if transactions > 0 {
+            info!("[2pc] finishing {transactions} two-phase transactions");
+        }
 
         self.notify.done.cancelled().await;
-
-        info!("[2pc] manager shutdown successful");
     }
 }
 

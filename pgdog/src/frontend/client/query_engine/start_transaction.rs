@@ -13,7 +13,10 @@ impl QueryEngine {
         begin: BufferedQuery,
         transaction_type: TransactionType,
     ) -> Result<(), Error> {
-        context.transaction = Some(Transaction::new(transaction_type));
+        context.transaction = Some(Transaction::started_at(
+            transaction_type,
+            context.statement_start,
+        ));
         context.params.begin();
 
         self.backend

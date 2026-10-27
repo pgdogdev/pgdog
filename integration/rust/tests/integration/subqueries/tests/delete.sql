@@ -97,3 +97,23 @@ DELETE FROM suborders WHERE id = (SELECT max(id) FROM subusers WHERE id < 4)
 -- route delete: 0,1
 -- verify: SELECT * FROM suborders ORDER BY id
 DELETE FROM suborders WHERE id = (SELECT avg(id) FROM subusers WHERE id < 4)
+
+-- case
+-- what: .. WHERE <key> = <k1> AND <col> IN (<sq>), key in outer only
+-- route select: 0,1
+-- route delete: 1
+-- verify: SELECT * FROM subusers ORDER BY id
+DELETE FROM subusers WHERE id = 3 AND status IN (SELECT status FROM subusers WHERE username = 'test')
+
+-- case
+-- what: .. WHERE <key> = <k1> AND <col> IN (<sq>), key in both, same shard
+-- route select: 1
+-- verify: SELECT * FROM subusers ORDER BY id
+DELETE FROM subusers WHERE id = 3 AND status IN (SELECT status FROM subusers WHERE id = 3)
+
+-- case
+-- what: .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- route select: 1
+-- route delete: 0,1
+-- verify: SELECT * FROM subusers ORDER BY id
+DELETE FROM subusers WHERE username IN (SELECT username FROM subusers WHERE id = 3)

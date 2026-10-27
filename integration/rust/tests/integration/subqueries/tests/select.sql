@@ -127,3 +127,27 @@ SELECT * FROM subusers WHERE status = (
 SELECT * FROM suborders WHERE id IN (
     SELECT id FROM subusers ORDER BY id DESC LIMIT 3
 ) ORDER BY id;
+
+-- case
+-- what: SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>), <sq> has no key
+-- route select: 0,1
+-- route select: 1
+SELECT * FROM subusers WHERE id = 3 AND status IN (
+    SELECT status FROM subusers WHERE username = 'test'
+) ORDER BY id;
+
+-- case
+-- what: SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k1>), same shard
+-- route select: 1
+SELECT * FROM subusers WHERE id = 3 AND status IN (
+    SELECT status FROM subusers WHERE id = 3
+) ORDER BY id;
+
+-- case
+-- what: .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1), same parameter in outer and inner
+-- route select: 1
+-- route select: 1
+-- $1 = 3
+SELECT * FROM subusers WHERE id = $1 AND status IN (
+    SELECT status FROM subusers WHERE id = $1
+) ORDER BY id;

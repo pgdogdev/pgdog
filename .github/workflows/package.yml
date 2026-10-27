@@ -6,6 +6,9 @@ on:
       - ".github/workflows/package.yml"
       - "**/*.rs"
       - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".dockerignore"
   release:
     types: [published]
   workflow_dispatch:

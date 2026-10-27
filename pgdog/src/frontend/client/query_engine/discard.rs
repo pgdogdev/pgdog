@@ -19,7 +19,7 @@ impl QueryEngine {
 
         match target {
             DiscardTarget::All if context.in_transaction() => {
-                context.transaction = Some(Transaction::new(
+                context.transaction = Some(Transaction::started_at(
                     match context
                         .transaction
                         .map(|transaction| transaction.transaction_type())
@@ -29,6 +29,7 @@ impl QueryEngine {
                         }
                         _ => TransactionType::ErrorReadWrite,
                     },
+                    context.statement_start,
                 ));
                 self.error_response(
                     context,

@@ -1,13 +1,16 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use crate::setup::{
-    admin_sqlx, admin_tokio, backends, connection_failover, connection_sqlx_direct,
-    connections_sqlx,
+    Backend, admin_sqlx, admin_tokio, backends, connection_sqlx_direct, connections_sqlx,
 };
 use rust_decimal::Decimal;
 use serial_test::serial;
 use sqlx::{Executor, Pool, Postgres, Row, postgres::PgPoolOptions};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
 async fn total_query_count(admin: &Pool<Postgres>) -> i64 {
     admin
@@ -23,33 +26,125 @@ async fn total_query_count(admin: &Pool<Postgres>) -> i64 {
         .sum()
 }
 
+async fn setting(admin: &Pool<Postgres>, name: &str) -> String {
+    admin
+        .fetch_all("SHOW CONFIG")
+        .await
+        .unwrap()
+        .iter()
+        .find(|row| row.get::<String, _>(0) == name)
+        .map(|row| row.get::<String, _>(1))
+        .unwrap_or_else(|| panic!("{name} not found in SHOW CONFIG"))
+}
+
+async fn pgdog_server_connections(direct: &Pool<Postgres>) -> i64 {
+    direct
+        .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
+        .await
+        .unwrap()
+        .get(0)
+}
+
+async fn failover_with_backends(app_name: &str) -> (Pool<Postgres>, Vec<Backend>) {
+    let conn = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&format!(
+            "postgres://pgdog:pgdog@127.0.0.1:6432/failover?application_name={app_name}"
+        ))
+        .await
+        .unwrap();
+
+    conn.execute("SELECT 1").await.unwrap();
+
+    let backends = backends(app_name, &conn).await;
+    assert!(!backends.is_empty());
+
+    (conn, backends)
+}
+
+async fn override_query_timeout(admin: &Pool<Postgres>) -> String {
+    let from_file = setting(admin, "query_timeout").await;
+
+    admin.execute("SET query_timeout TO 2500").await.unwrap();
+    assert_ne!(setting(admin, "query_timeout").await, from_file);
+
+    from_file
+}
+
+async fn assert_query_timeout_reloaded(admin: &Pool<Postgres>, from_file: &str) {
+    let mut current = String::new();
+    for _ in 0..20 {
+        current = setting(admin, "query_timeout").await;
+        if current == from_file {
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        current, from_file,
+        "reload should restore query_timeout from the config file"
+    );
+}
+
+async fn assert_reload(app_name: &str, reload: impl AsyncFn(&Pool<Postgres>)) {
+    let admin = admin_sqlx().await;
+    // SET recreates the pools, so it must run before the backends are recorded.
+    let from_file = override_query_timeout(&admin).await;
+    let (conn, backends_before) = failover_with_backends(app_name).await;
+
+    for _ in 0..5 {
+        conn.execute("SELECT 1").await.unwrap();
+        reload(&admin).await;
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    assert_query_timeout_reloaded(&admin, &from_file).await;
+
+    let backends_after = backends(app_name, &conn).await;
+    let some_survived = backends_after.iter().any(|b| backends_before.contains(b));
+    assert!(some_survived);
+
+    conn.close().await;
+    admin.close().await;
+}
+
+fn assert_admin_termination(err: &sqlx::Error) {
+    let err = err.as_database_error().unwrap();
+    assert!(
+        err.message()
+            .contains("terminating connection due to administrator command")
+    );
+    assert_eq!(err.code().unwrap(), "57P01");
+}
+
+#[cfg(unix)]
+fn send_sighup() {
+    let pid_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pgdog.pid");
+    let pid: libc::pid_t = std::fs::read_to_string(pid_path)
+        .expect("pgdog.pid should exist")
+        .trim()
+        .parse()
+        .expect("pgdog.pid should contain a pid");
+    let res = unsafe { libc::kill(pid, libc::SIGHUP) };
+    assert_eq!(res, 0, "kill failed: {}", std::io::Error::last_os_error());
+}
+
 #[tokio::test]
 #[serial]
 async fn test_reload() {
     sleep(Duration::from_secs(1)).await;
-    let admin = admin_tokio().await;
-    let conn = connection_failover().await;
 
-    conn.execute("SET application_name TO 'test_reload'")
-        .await
-        .unwrap();
-    conn.execute("SELECT 1").await.unwrap();
+    assert_reload("test_reload", async |admin| {
+        admin.execute("RELOAD").await.unwrap();
+    })
+    .await;
+}
 
-    let backends_before = backends("test_reload", &conn).await;
-
-    assert!(!backends_before.is_empty());
-
-    for _ in 0..5 {
-        conn.execute("SELECT 1").await.unwrap();
-        admin.simple_query("RELOAD").await.unwrap();
-        sleep(Duration::from_millis(50)).await;
-    }
-
-    let backends_after = backends("test_reload", &conn).await;
-
-    let some_survived = backends_after.iter().any(|b| backends_before.contains(b));
-    assert!(some_survived);
-    conn.close().await;
+#[cfg(unix)]
+#[tokio::test]
+#[serial]
+async fn test_reload_sighup() {
+    assert_reload("test_reload_sighup", async |_| send_sighup()).await;
 }
 
 #[tokio::test]
@@ -62,21 +157,13 @@ async fn test_reload_connection_count_stable() {
     admin.simple_query("RELOAD").await.unwrap();
     sleep(Duration::from_millis(250)).await;
     // Count PgDog connections on Postgres before reload.
-    let before: i64 = direct
-        .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
-        .await
-        .unwrap()
-        .get(0);
+    let before = pgdog_server_connections(&direct).await;
 
     assert!(before > 0, "expected pgdog connections before reload");
 
     admin.simple_query("RELOAD").await.unwrap();
     sleep(Duration::from_millis(250)).await;
-    let after: i64 = direct
-        .fetch_one("SELECT COUNT(*)::BIGINT FROM pg_stat_activity WHERE application_name = 'PgDog'")
-        .await
-        .unwrap()
-        .get(0);
+    let after = pgdog_server_connections(&direct).await;
 
     assert!(
         after as f64 / before as f64 <= 1.1,
@@ -98,7 +185,7 @@ async fn test_reload_pool_size_not_exceeded() {
     let direct = connection_sqlx_direct().await;
 
     // Spin up clients that continuously run queries.
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
     let mut handles = vec![];
 
     for _ in 0..num_clients {
@@ -111,7 +198,7 @@ async fn test_reload_pool_size_not_exceeded() {
                 ))
                 .await
                 .unwrap();
-            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed) {
                 let _ = pool.execute("SELECT 1").await;
                 sleep(Duration::from_millis(10)).await;
             }
@@ -139,7 +226,7 @@ async fn test_reload_pool_size_not_exceeded() {
         );
     }
 
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    stop.store(true, Ordering::Relaxed);
     for h in handles {
         h.await.unwrap();
     }
@@ -151,25 +238,15 @@ async fn test_reload_pool_size_not_exceeded() {
 #[serial]
 async fn test_reconnect() {
     let admin = admin_tokio().await;
-    let conn = connection_failover().await;
-
-    conn.execute("SET application_name TO 'test_reconnect'")
-        .await
-        .unwrap();
-    conn.execute("SELECT 1").await.unwrap(); // Trigger param update.
-
-    let backends_before = backends("test_reconnect", &conn).await;
-
-    assert!(!backends_before.is_empty());
+    let (conn, backends_before) = failover_with_backends("test_reconnect").await;
 
     conn.execute("SELECT 1").await.unwrap();
     admin.simple_query("RECONNECT").await.unwrap();
     sleep(Duration::from_millis(50)).await;
 
     let backends_after = backends("test_reconnect", &conn).await;
-
-    let none_survived = backends_after.iter().any(|b| backends_before.contains(b));
-    assert!(!none_survived);
+    let some_survived = backends_after.iter().any(|b| backends_before.contains(b));
+    assert!(!some_survived);
 
     conn.close().await;
 }
@@ -211,4 +288,89 @@ async fn test_reload_preserves_stats_until_reset() {
     );
 
     admin.close().await;
+}
+
+/// <https://github.com/pgdogdev/pgdog/issues/1472>
+/// FORCE_RELOAD is a normal RELOAD that also terminates all in-flight transactions.
+#[tokio::test]
+#[serial]
+async fn test_force_reload() {
+    let admin = admin_sqlx().await;
+    let connections = connections_sqlx().await; // [pgdog, pgdog_sharded]
+    let conn = &connections[1];
+
+    // Idle transaction.
+    {
+        let from_file = override_query_timeout(&admin).await;
+        let mut transaction = conn.begin().await.unwrap();
+
+        sqlx::raw_sql("SELECT * FROM sharded")
+            .fetch_all(&mut *transaction)
+            .await
+            .unwrap();
+
+        admin.execute("FORCE_RELOAD").await.unwrap();
+        assert_query_timeout_reloaded(&admin, &from_file).await;
+
+        let err = sqlx::raw_sql("SELECT * FROM sharded")
+            .fetch_all(&mut *transaction)
+            .await
+            .unwrap_err();
+
+        // Same error as Postgres returns for pg_terminate_backend.
+        // <https://www.postgresql.org/docs/current/functions-admin.html>
+        assert_admin_termination(&err);
+    }
+
+    // A new pool works.
+    let new_connections = connections_sqlx().await;
+    sqlx::raw_sql("SELECT 1234")
+        .fetch_all(&new_connections[1])
+        .await
+        .unwrap();
+
+    // The old pool still works.
+    sqlx::raw_sql("SELECT 1000").fetch_all(conn).await.unwrap();
+
+    // Active query.
+    {
+        let from_file = override_query_timeout(&admin).await;
+
+        let query = async {
+            let connections = connections_sqlx().await;
+            let mut transaction = connections[1].begin().await.unwrap();
+
+            let start_ts = Instant::now();
+
+            // FORCE_RELOAD runs after 500ms, so the query must fail long before 5s.
+            let err = sqlx::raw_sql("SELECT pg_sleep(5)")
+                .execute(&mut *transaction)
+                .await
+                .unwrap_err();
+
+            assert_admin_termination(&err);
+            assert!(start_ts.elapsed() < Duration::from_secs(1));
+        };
+
+        let reload = async {
+            sleep(Duration::from_millis(500)).await;
+            admin.execute("FORCE_RELOAD").await.unwrap();
+        };
+
+        tokio::join!(query, reload);
+        assert_query_timeout_reloaded(&admin, &from_file).await;
+
+        // PgDog terminated the client. Postgres must not run the query anymore.
+        // The filter ignores other active queries, for example a health check.
+        let rows = sqlx::raw_sql(
+            "SELECT * FROM pg_stat_activity WHERE state = 'active' AND query NOT LIKE '%pg_stat_activity%'",
+        )
+        .fetch_all(conn)
+        .await
+        .unwrap();
+
+        for row in rows {
+            assert_ne!(row.get::<&str, _>("query"), "SELECT pg_sleep(5)");
+        }
+    }
 }
