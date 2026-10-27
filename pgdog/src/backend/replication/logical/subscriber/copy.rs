@@ -6,7 +6,7 @@ use pg_raw_parse::Node;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::backend::replication::data_sync::CopyProgress;
 use crate::frontend::client::query_engine::TwoPcPhase;
@@ -275,7 +275,7 @@ impl CopySubscriber {
         // The ReadyForQuery status byte is 'T' (in-transaction).
         // A failure here leaves every shard in an open transaction that rolls back when its
         // connection closes → no partial commit.
-        for server in &mut self.connections {
+        for (shard, server) in self.connections.iter_mut().enumerate() {
             // A binary COPY width mismatch (e.g. an int column copied into a bigint) surfaces as
             // protocol_violation "insufficient data left in message"; reclassify it so the
             // operator gets actionable guidance instead of a generic protocol error.
@@ -289,17 +289,21 @@ impl CopySubscriber {
                         Error::BinaryFormatMismatch(pg)
                     }
                     other => other,
+                })
+                .inspect_err(|error| {
+                    error!(
+                        "CopyDone failed on destination shard {shard}: {error}; \
+                         no shard is committed, all roll back on connection close"
+                    )
                 })?;
         }
 
         // Commit pass: every shard has staged its rows and is sitting in an open transaction.
-        // Commit them. The data is already written, so COMMIT is cheap and very likely to
-        // succeed. Sequential and NOT atomic across shards: if a COMMIT fails after one or more
-        // earlier shards have already committed, those shards stay committed — the only residual
-        // partial-commit window (full cross-shard atomicity via 2PC is intentionally out of
-        // scope). Shards not yet committed roll back on connection close. The
-        // validate_destination_has_rows() guard in the table copy retry loop prevents a
-        // doomed retry if this window is ever hit.
+        // With 2PC, the commit is atomic across shards: see commit_two_pc().
+        // Without 2PC, the shards commit one after another. If a COMMIT fails, the shards
+        // committed before it stay committed and the rest roll back on connection close.
+        // The validate_destination_has_rows() guard in the table copy retry loop then
+        // stops the retry.
         if self.cluster.two_pc_enabled() {
             self.commit_two_pc().await?;
         } else {
@@ -307,7 +311,7 @@ impl CopySubscriber {
                 if let Err(error) =
                     Self::send_and_confirm(server, Query::new("COMMIT").into()).await
                 {
-                    tracing::error!(
+                    error!(
                         "COMMIT failed on destination shard {shard} during copy_done: {error}; \
                          shards committed before it stay committed, the rest roll back on \
                          connection close"
@@ -324,24 +328,28 @@ impl CopySubscriber {
         let manager = Manager::get();
         let txn = TwoPcTransaction::new();
         let identifier = self.cluster.identifier();
+        let mut phase = TwoPcPhase::Phase1;
 
-        async {
+        let result = async {
             let _guard_phase_1 = manager
                 .transaction_state(txn, &identifier, TwoPcPhase::Phase1)
                 .await?;
             self.two_pc_on_shards(txn, TwoPcPhase::Phase1).await?;
 
+            phase = TwoPcPhase::Phase2;
             let _guard_phase_2 = manager
                 .transaction_state(txn, &identifier, TwoPcPhase::Phase2)
                 .await?;
             self.two_pc_on_shards(txn, TwoPcPhase::Phase2).await?;
 
             manager.done(txn).await?;
-            Ok(())
+            Ok::<(), Error>(())
         }
-        .await
-        .map_err(|source| Error::TwoPcCleanupPending {
+        .await;
+
+        result.map_err(|source| Error::TwoPcCleanupPending {
             transaction: txn,
+            phase,
             source: Box::new(source),
         })
     }
@@ -365,11 +373,20 @@ impl CopySubscriber {
             futures.push(Self::send_and_confirm(server, Query::new(query).into()));
         }
 
-        for result in join_all(futures).await {
-            result?;
+        let mut first_error = None;
+        for (shard, result) in join_all(futures).await.into_iter().enumerate() {
+            if let Err(error) = result {
+                error!(
+                    "[2pc] {phase} failed on destination shard {shard} for transaction {txn}: {error}"
+                );
+                first_error.get_or_insert(error);
+            }
         }
 
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub(crate) async fn flush(&mut self, buffer: Vec<CopyData>) -> Result<(usize, usize), Error> {
