@@ -3,6 +3,7 @@
 use crate::backend::replication::publisher::Lsn;
 use crate::backend::{Server, ShardedTables};
 use crate::frontend::router::parser::Column;
+use crate::net::messages::replication::logical::relation::Relation;
 use crate::util::escape_identifier;
 
 use super::super::{Error, TableValidationError, TableValidationErrorKind};
@@ -421,6 +422,41 @@ impl Table {
     /// `true` when the table uses `REPLICA IDENTITY FULL`.
     pub(crate) fn is_identity_full(&self) -> bool {
         self.identity.identity == "f"
+    }
+
+    /// We update the columns from a Relation message.
+    /// We need to make sure that this isn't a duplicate from a DDL statement we replayed.
+    ///
+    /// Returns `true` if the columns changed.
+    pub(crate) fn update_columns(&mut self, relation: &Relation) -> bool {
+        let columns_unchanged = self
+            .columns
+            .iter()
+            .map(|column| (&column.name, column.type_oid))
+            .eq(relation
+                .columns
+                .iter()
+                .map(|column| (&column.name, column.oid)));
+
+        if columns_unchanged {
+            return false;
+        }
+
+        let identity_is_full = self.is_identity_full();
+
+        self.columns = relation
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(column_index, column)| PublicationTableColumn {
+                oid: column_index as i32 + 1,
+                name: column.name.clone(),
+                type_oid: column.oid,
+                identity: !identity_is_full && column.flag == 1,
+            })
+            .collect();
+
+        true
     }
 
     /// Check if this table is sharded.

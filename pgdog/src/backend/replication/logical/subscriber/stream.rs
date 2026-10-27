@@ -20,10 +20,12 @@ use super::super::{
     Error, TableValidationError, TableValidationErrorKind, ensure_validation, publisher::Table,
 };
 use super::StreamContext;
+use super::ddl::{self, DdlReplay};
 use super::{
     PipelinedConnection, connect_primary, pipeline::ProgressCheck,
     replication_origin::ReplicationOrigin,
 };
+use crate::net::messages::replication::logical::message::Message as XLogMessage;
 use crate::net::messages::replication::logical::tuple_data::{Identifier, TupleData};
 use crate::net::messages::replication::logical::update::Update as XLogUpdate;
 use crate::{
@@ -139,6 +141,8 @@ pub(crate) struct StreamSubscriber {
     lsn: i64,
     lsn_changed: bool,
     in_transaction: bool,
+    // Replays the DDL the source writes to the source's WAL (if enabled)
+    ddl_replay: Option<DdlReplay>,
 
     // Bytes sharded
     bytes_sharded: usize,
@@ -183,6 +187,7 @@ impl StreamSubscriber {
             rows_sharded: 0,
             lsn_changed: true,
             in_transaction: false,
+            ddl_replay: None,
             keys: HashMap::default(),
             missed_rows: MissedRows::default(),
         }
@@ -280,6 +285,12 @@ impl StreamSubscriber {
         Ok(())
     }
 
+    fn transaction_applies_on(&mut self, shard: usize) -> bool {
+        let applies = self.lsn >= self.applied_lsns[shard];
+        self.changed_shards[shard] |= applies;
+        applies
+    }
+
     // Dispatch a pre-built bind to the matching shard(s).
     async fn send(&mut self, val: &Shard, bind: Bind) -> Result<(), Error> {
         // Fail-fast: the replicated transaction spans every shard, so an error
@@ -303,12 +314,9 @@ impl StreamSubscriber {
                 Shard::Multi(multi) => multi.contains(&shard),
                 _ => true,
             };
-            // The transaction is already on this shard: its commit, at
-            // `self.lsn`, comes before the last commit the origin recorded.
-            if !target || self.lsn < self.applied_lsns[shard] {
+            if !target || !self.transaction_applies_on(shard) {
                 continue;
             }
-            self.changed_shards[shard] = true;
             if let Some(previous) = pending.replace(shard) {
                 self.connections[previous]
                     .execute(bind.clone(), is_direct)
@@ -695,20 +703,58 @@ impl StreamSubscriber {
         Ok(())
     }
 
+    // Handle a logical message.
+    //
+    // We only care about the DDL statements written to the WAL by the `pgdog.log_ddl_to_wal()`
+    // event trigger on the source. We replay the DDL statements here, at the same point in
+    // the stream, so that the schema changes in order with the rows.
+    async fn message(&mut self, message: XLogMessage) -> Result<(), Error> {
+        // Step 1: we only replay DDL if replaying DDL is enabled, and only our own messages.
+        let Some(ddl_replay) = &self.ddl_replay else {
+            return Ok(());
+        };
+        if message.prefix != ddl::MESSAGE_PREFIX {
+            return Ok(());
+        }
+
+        // Step 2: we check the message is from the trigger and get the DDL out of the message.
+        let Some(ddl_message) = ddl_replay.parse_message(&message.content)? else {
+            return Ok(());
+        };
+
+        // Step 3: we run the DDL on every shard, in the transaction being replicated.
+        for shard in 0..self.connections.len() {
+            if !self.transaction_applies_on(shard) {
+                continue;
+            }
+
+            let shard_connection = &self.connections[shard];
+            for statement in ddl_message.statements_to_replay() {
+                let parse_statement = Parse::new_anonymous(&statement);
+                shard_connection
+                    .prepare(&[parse_statement], self.in_transaction)
+                    .await?;
+                shard_connection.execute(Bind::default(), false).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     // Handle Relation message.
     //
     // Prepare upsert statement and record table info for future use
     // by Insert, Update and Delete messages.
     async fn relation(&mut self, relation: Relation) -> Result<(), Error> {
-        let table = self
-            .tables
-            .get(&Key {
-                schema: relation.namespace.clone(),
-                name: relation.name.clone(),
-            })
-            .cloned();
+        let table = self.tables.get_mut(&Key {
+            schema: relation.namespace.clone(),
+            name: relation.name.clone(),
+        });
 
         if let Some(table) = table {
+            let columns_changed = table.update_columns(&relation);
+            let table = table.clone();
+
             // Prepare queries for this table. Prepared statements
             // are much faster.
 
@@ -718,6 +764,12 @@ impl StreamSubscriber {
                 schema: table.table.destination_schema().to_string(),
                 name: table.table.destination_name().to_string(),
             };
+
+            // The statements prepared for the old columns can't be used for the new
+            // rows, so we forget the statements here and prepare the statements again below.
+            if columns_changed {
+                self.keys.remove(&dest_key);
+            }
 
             // Partition child tables target the parent on the destination shard,
             // we don't need to prepare the same statement per child.
@@ -929,6 +981,7 @@ impl StreamSubscriber {
                     self.set_working_lsn(begin.final_transaction_lsn);
                     self.in_transaction = true;
                 }
+                XLogPayload::Message(message) => self.message(message).await?,
                 _ => (),
             }
             self.bytes_sharded += xlog.len();
@@ -956,6 +1009,10 @@ impl StreamSubscriber {
     /// Number of rows applied.
     pub(crate) fn rows_sharded(&self) -> usize {
         self.rows_sharded
+    }
+
+    pub(crate) fn set_ddl_replay(&mut self, ddl_replay: DdlReplay) {
+        self.ddl_replay = Some(ddl_replay);
     }
 
     /// Advance both LSN fields. Call after commit and on publisher init.

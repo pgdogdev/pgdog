@@ -110,6 +110,7 @@
         "resharding_copy_retry_min_delay": 1000,
         "resharding_parallel_copies": 1,
         "resharding_parallel_within_table_copies": 1,
+        "resharding_replay_ddl": false,
         "resharding_replication_retry_max_attempts": 5,
         "resharding_replication_retry_min_delay": 1000,
         "rollback_timeout": 5000,
@@ -1255,6 +1256,11 @@
           "format": "uint",
           "default": 1,
           "minimum": 0
+        },
+        "resharding_replay_ddl": {
+          "description": "Replay DDL run on the source database on the destination shards while\nresharding or replicating.\n\n**Note:** DDL is replayed as the role that ran the DDL on the source. The role has to\nalso exist on the destination. Also, PgDog's user on the destination has to be a member\nof the role or a superuser.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replay_ddl>",
+          "type": "boolean",
+          "default": false
         },
         "resharding_replication_retry_max_attempts": {
           "description": "Maximum number of consecutive replication-subscriber errors tolerated before\nthe source error is propagated. Each failure triggers `slot.reconnect()`,\nafter which Postgres re-streams every event since the last acked commit.\n`0` retries indefinitely.\n\n_Default:_ `5`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#resharding_replication_retry_max_attempts>",

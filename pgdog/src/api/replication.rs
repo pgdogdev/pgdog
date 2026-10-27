@@ -23,6 +23,7 @@ use crate::backend::replication::logical::publisher::replication_stream::{
 };
 use crate::backend::replication::logical::publisher::{Lsn, Permanent, ReplicationSlot, Table};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::subscriber::ddl::DdlReplay;
 use crate::backend::replication::logical::subscriber::replication_origin::ReplicationOrigin;
 use crate::backend::schema::sync::SchemaSyncError;
 use crate::backend::{
@@ -620,6 +621,7 @@ impl ReplicationClusterTask {
         streams: &mut ReplicationStreams,
     ) -> Result<(), Error> {
         state.prepare_replication(&ctx.cancellation_token()).await?;
+        let ddl_replay = DdlReplay::load(&state.source).await?;
         for source_shard in 0..state.source.shards().len() {
             let tables = state.pop_tables(source_shard)?;
             let slot = state.slot(source_shard)?;
@@ -628,6 +630,7 @@ impl ReplicationClusterTask {
             let replication_stream = Arc::new(ReplicationStream::new(
                 &state.source,
                 &state.destination,
+                ddl_replay.clone(),
                 updater,
             ));
             replication_streams.push(Arc::clone(&replication_stream));

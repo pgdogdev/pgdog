@@ -5,7 +5,6 @@ use super::super::super::prelude::*;
 
 /// Logical decoding message. Written with `pg_logical_emit_message` (injects custom message into WAL)
 /// <https://www.postgresql.org/docs/current/functions-admin.html>
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct Message {
     /// "textual prefix that can be used by logical decoding plugins to easily recognize messages that are interesting for them"

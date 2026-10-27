@@ -13,6 +13,7 @@ use crate::backend::replication::data_sync::{
 };
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
+use crate::backend::replication::logical::subscriber::ddl::DdlReplay;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
 use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
@@ -65,6 +66,10 @@ impl Task for CopyDataTask {
         let dest = &self.state.destination;
         let state = &self.state;
         let cancel = ctx.cancellation_token();
+
+        // Test run: If the setting is enabled to replay DDL and the
+        // ddl replication key isn't installed, emit an error.
+        DdlReplay::load(source).await?;
 
         ctx.set_status(CopyDataStage::LoadingTableMetadata.into());
         state.sync_tables().await?;
