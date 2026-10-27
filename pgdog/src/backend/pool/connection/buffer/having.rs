@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashMap};
 
-use pgdog_postgres_types::Datum;
+use pgdog_postgres_types::{Datum, Double, Numeric};
 
 use crate::{
     frontend::router::parser::{CompareOperator, HavingExpr, HavingValue},
@@ -158,13 +158,45 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
 }
 
 fn numeric_ordering(left: &Datum, right: &Datum) -> Option<Ordering> {
-    let (left, right) = (integer(left)?, integer(right)?);
-    Some(left.cmp(&right))
+    if let (Some(left), Some(right)) = (integer(left), integer(right)) {
+        return Some(left.cmp(&right));
+    }
+
+    if let (Some(left), Some(right)) = (exact_numeric(left), exact_numeric(right)) {
+        return left.partial_cmp(&right);
+    }
+
+    if let (Some(left), Some(right)) = (float(left), float(right)) {
+        return Some(Double(left).cmp(&Double(right)));
+    }
+
+    None
 }
 
 fn integer(value: &Datum) -> Option<i128> {
     match value {
         Datum::Bigint(value) => Some((*value).into()),
+        Datum::Integer(value) => Some((*value).into()),
+        Datum::SmallInt(value) => Some((*value).into()),
+        _ => None,
+    }
+}
+
+fn exact_numeric(value: &Datum) -> Option<Numeric> {
+    match value {
+        Datum::Numeric(value) => Some(*value),
+        Datum::Bigint(value) => Some(Numeric::from(*value)),
+        Datum::Integer(value) => Some(Numeric::from(*value)),
+        Datum::SmallInt(value) => Some(Numeric::from(i32::from(*value))),
+        _ => None,
+    }
+}
+
+fn float(value: &Datum) -> Option<f64> {
+    match value {
+        Datum::Double(value) => Some(value.0),
+        Datum::Float(value) => Some(value.0.into()),
+        Datum::Bigint(value) => Some(*value as f64),
         Datum::Integer(value) => Some((*value).into()),
         Datum::SmallInt(value) => Some((*value).into()),
         _ => None,
@@ -181,6 +213,7 @@ mod tests {
             messages::{DataRow, Datum},
         },
     };
+    use pgdog_postgres_types::Float;
 
     fn compare_expression(operator: CompareOperator) -> HavingExpr {
         HavingExpr::Compare {
@@ -359,5 +392,64 @@ mod tests {
             ),
             Err(Error::UnsupportedHaving(_))
         ));
+    }
+
+    #[test]
+    fn compares_merged_bigint_with_numeric_without_losing_precision() {
+        let decoder = Decoder::from(RowDescription::new(&[
+            Field::bigint("__pgdog_having_0"),
+            Field::numeric("__pgdog_having_1"),
+        ]));
+        let mut row = DataRow::new();
+        row.add(9_007_199_254_740_993_i64)
+            .add(Numeric::from(9_007_199_254_740_992_i64));
+
+        assert!(
+            evaluate(
+                &compare_expression(CompareOperator::Greater),
+                &row,
+                &decoder
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn compares_numeric_and_float_values() {
+        for (operator, left, right) in [
+            (
+                CompareOperator::Greater,
+                Datum::Numeric(Numeric::from(3_i32)),
+                Datum::SmallInt(2),
+            ),
+            (
+                CompareOperator::GreaterOrEqual,
+                Datum::Float(Float(2.0)),
+                Datum::Double(Double(2.0)),
+            ),
+            (
+                CompareOperator::Less,
+                Datum::Integer(2),
+                Datum::Double(Double(2.5)),
+            ),
+        ] {
+            assert_eq!(compare(&left, operator, &right).unwrap(), TruthValue::True);
+        }
+
+        assert_eq!(
+            numeric_ordering(&Datum::Double(Double(f64::NAN)), &Datum::Float(Float(1.0))),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            numeric_ordering(
+                &Datum::Double(Double(f64::NAN)),
+                &Datum::Double(Double(f64::NAN))
+            ),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            numeric_ordering(&Datum::Float(Float(1.0)), &Datum::Double(Double(f64::NAN))),
+            Some(Ordering::Less)
+        );
     }
 }
