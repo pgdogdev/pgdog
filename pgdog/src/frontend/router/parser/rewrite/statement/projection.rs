@@ -181,7 +181,7 @@ pub(crate) fn finalize_after_route(
     if let Some(plan) = &rewrite.plan
         && let Some(route) = request.route.as_mut()
     {
-        route.projection_rewrite_plan = Some(plan.clone());
+        route.projection_rewrite_plan = Some(Arc::clone(plan));
         if let Some(having) = &plan.having {
             route.set_aggregate(having.aggregate().clone());
         }
@@ -217,7 +217,6 @@ fn build(
     let Some(Node::SelectStmt(select)) = ast.stmts().next() else {
         return Ok(None);
     };
-
     let has_having = !matches!(select.having_clause(), Node::None);
     let aggregate = if has_having {
         None
