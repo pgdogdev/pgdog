@@ -159,13 +159,64 @@ async fn having_null_semantics_on_merged_groups() -> Result<(), Box<dyn std::err
     Ok(())
 }
 
+#[tokio::test]
+async fn having_numeric_float_and_cast_operands_use_merged_values()
+-> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset_table(&sharded).await?;
+
+    seed(
+        &sharded,
+        0,
+        "INSERT INTO having_merge_test VALUES \
+         (1, 1, 50.00, 1.5), (2, 2, 40.00, 0.5), (3, 3, 1.00, 4.0)",
+    )
+    .await?;
+    seed(
+        &sharded,
+        1,
+        "INSERT INTO having_merge_test VALUES (1, 4, 49.995, 1.5), (2, 5, 10.00, 0.5)",
+    )
+    .await?;
+
+    assert_eq!(
+        matching_customers(&sharded, "SUM(price) > 99.99").await?,
+        vec![1]
+    );
+    assert_eq!(
+        matching_customers(&sharded, "SUM(weight) >= 3.0").await?,
+        vec![1, 3]
+    );
+    assert_eq!(
+        matching_customers(&sharded, "COUNT(*)::numeric > 1.5").await?,
+        vec![1, 2]
+    );
+
+    cleanup(&sharded).await;
+    Ok(())
+}
+
+async fn matching_customers(pool: &PgPool, having: &str) -> Result<Vec<i64>, sqlx::Error> {
+    let rows = pool
+        .fetch_all(
+            format!(
+                "SELECT customer_id FROM having_merge_test \
+                 GROUP BY customer_id HAVING {having} ORDER BY customer_id"
+            )
+            .as_str(),
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get("customer_id")).collect())
+}
+
 async fn reset_table(pool: &PgPool) -> Result<(), sqlx::Error> {
     cleanup(pool).await;
     for shard in [0, 1] {
         pool.execute(
             format!(
                 "/* pgdog_shard: {shard} */ \
-                 CREATE TABLE having_merge_test(customer_id BIGINT, order_id BIGINT)"
+                 CREATE TABLE having_merge_test(\
+                     customer_id BIGINT, order_id BIGINT, price NUMERIC, weight DOUBLE PRECISION)"
             )
             .as_str(),
         )
