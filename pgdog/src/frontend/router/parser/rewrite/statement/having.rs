@@ -24,6 +24,13 @@ enum HavingTemplate {
         operator: CompareOperator,
         right: ValueTemplate,
     },
+    And(Vec<HavingTemplate>),
+    Or(Vec<HavingTemplate>),
+    Not(Box<HavingTemplate>),
+    IsNull {
+        value: ValueTemplate,
+        negated: bool,
+    },
 }
 
 struct ValueTemplate {
@@ -139,6 +146,17 @@ impl HavingTemplate {
                 operator,
                 right: right.materialize(),
             },
+            Self::And(expressions) => {
+                HavingExpr::And(expressions.into_iter().map(Self::materialize).collect())
+            }
+            Self::Or(expressions) => {
+                HavingExpr::Or(expressions.into_iter().map(Self::materialize).collect())
+            }
+            Self::Not(expression) => HavingExpr::Not(Box::new(expression.materialize())),
+            Self::IsNull { value, negated } => HavingExpr::IsNull {
+                value: value.materialize(),
+                negated,
+            },
         }
     }
 }
@@ -177,8 +195,42 @@ impl<'a> Parser<'a> {
                     right: self.parse_value(expression.rexpr())?,
                 })
             }
+            Node::BoolExpr(expression) => {
+                let expressions = expression
+                    .args()
+                    .iter()
+                    .map(|node| self.parse_expression(node))
+                    .collect::<Result<Vec<_>, _>>()?;
+                match expression.boolop {
+                    nodes::BoolExprType::AND_EXPR => Ok(HavingTemplate::And(expressions)),
+                    nodes::BoolExprType::OR_EXPR => Ok(HavingTemplate::Or(expressions)),
+                    nodes::BoolExprType::NOT_EXPR => {
+                        let expression = expressions
+                            .into_iter()
+                            .exactly_one()
+                            .map_err(|_| Error::UnsupportedHaving("NOT requires one expression"))?;
+                        Ok(HavingTemplate::Not(Box::new(expression)))
+                    }
+                    _ => Err(Error::UnsupportedHaving("unsupported boolean expression")),
+                }
+            }
+            Node::NullTest(test) => {
+                let negated = match test.nulltesttype {
+                    nodes::NullTestType::IS_NULL => false,
+                    nodes::NullTestType::IS_NOT_NULL => true,
+                    _ => {
+                        return Err(Error::UnsupportedHaving(
+                            "only IS NULL and IS NOT NULL are supported",
+                        ));
+                    }
+                };
+                Ok(HavingTemplate::IsNull {
+                    value: self.parse_value(test.arg())?,
+                    negated,
+                })
+            }
             _ => Err(Error::UnsupportedHaving(
-                "only a single comparison is supported",
+                "supported predicates are comparisons, AND, OR, NOT and NULL tests",
             )),
         }
     }
@@ -280,25 +332,66 @@ mod tests {
     }
 
     #[test]
-    fn rejects_boolean_null_test_and_cast_predicates() {
-        for sql in [
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 1 AND COUNT(*) < 5",
-            "SELECT customer_id FROM purchases GROUP BY customer_id \
-             HAVING MAX(price) IS NULL",
+    fn rewrites_nested_boolean_null_and_parameter_expression() {
+        let (sql, plan) = rewrite(
+            "SELECT customer_id, SUM(price) FROM purchases \
+             GROUP BY customer_id \
+             HAVING NOT (COUNT(*) <= $1 OR SUM(price) IS NOT NULL) \
+             AND MAX(price) >= 10",
+        );
+
+        let HavingExpr::And(expressions) = plan.expression() else {
+            panic!("expected top-level AND")
+        };
+        assert!(matches!(
+            expressions.as_slice(),
+            [
+                HavingExpr::Not(not),
+                HavingExpr::Compare {
+                    operator: CompareOperator::GreaterOrEqual,
+                    ..
+                }
+            ] if matches!(
+                not.as_ref(),
+                HavingExpr::Or(or) if matches!(
+                    or.as_slice(),
+                    [
+                        HavingExpr::Compare {
+                            operator: CompareOperator::LessOrEqual,
+                            ..
+                        },
+                        HavingExpr::IsNull { negated: true, .. }
+                    ]
+                )
+            )
+        ));
+        assert_eq!(
+            sql,
+            "SELECT customer_id, sum(price), count(*) AS __pgdog_having_0, \
+             $1 AS __pgdog_having_1, sum(price) AS __pgdog_having_2, \
+             max(price) AS __pgdog_having_3, 10 AS __pgdog_having_4, \
+             customer_id AS __pgdog_having_5 FROM purchases GROUP BY customer_id \
+             HAVING (NOT (count(*) <= $1 OR sum(price) IS NOT NULL) AND \
+             max(price) >= 10) OR true"
+        );
+        assert_eq!(plan.hidden_aliases().len(), 6);
+    }
+
+    #[test]
+    fn rejects_cast_operands() {
+        let ast = pg_raw_parse::parse(
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*)::numeric > 3",
-        ] {
-            let ast = pg_raw_parse::parse(sql).unwrap();
-            let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {
-                panic!("expected SELECT")
-            };
-            let result = make::try_owned(|mem| {
-                let mut select = mem.make_unique(select);
-                rewrite_select(&mut select.as_mut(), mem).map(|_| select)
-            });
-            assert!(matches!(result, Err(Error::UnsupportedHaving(_))), "{sql}");
-        }
+        )
+        .unwrap();
+        let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {
+            panic!("expected SELECT")
+        };
+        let result = make::try_owned(|mem| {
+            let mut select = mem.make_unique(select);
+            rewrite_select(&mut select.as_mut(), mem).map(|_| select)
+        });
+        assert!(matches!(result, Err(Error::UnsupportedHaving(_))));
     }
 
     #[test]
