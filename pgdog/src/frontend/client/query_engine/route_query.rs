@@ -4,7 +4,7 @@ use tracing::trace;
 use crate::backend::Error as BackendError;
 use crate::frontend::router::Error as RouterError;
 use crate::frontend::router::parser::Error as ParserError;
-use crate::frontend::router::parser::rewrite::statement::Error as StatementRewriteError;
+use crate::frontend::router::parser::rewrite::statement::Error as RewriteError;
 use crate::frontend::router::parser::rewrite::statement::plan::RewriteResult;
 use crate::frontend::router::parser::rewrite::statement::projection;
 use crate::frontend::router::sharding::lookup;
@@ -159,14 +159,13 @@ impl QueryEngine {
                 let command = self.router.command();
                 client_request.route = Some(command.route().clone());
                 trace!("routing {:#?} to {:#?}", client_request.messages, command,);
-
-                let finalize = projection::finalize_after_route(
+                match projection::finalize_after_route(
                     client_request,
                     &cluster.schema(),
                     rewrite_result.and_then(RewriteResult::offset_plan),
-                );
-                match finalize {
-                    Err(err @ StatementRewriteError::UnsupportedHaving(_)) => {
+                ) {
+                    Ok(()) => {}
+                    Err(err @ RewriteError::UnsupportedHaving(_)) => {
                         if let Some(transaction) = context.transaction.as_mut() {
                             transaction.set_error();
                         }
@@ -178,8 +177,17 @@ impl QueryEngine {
                         .await?;
                         return Ok(false);
                     }
-                    Err(err) => return Err(err.into()),
-                    Ok(()) => {}
+                    Err(unsupported_error @ RewriteError::OrderByExpressionUnsupported) => {
+                        self.error_response(
+                            context,
+                            client_request,
+                            ErrorResponse::unsupported(&unsupported_error),
+                        )
+                        .await?;
+
+                        return Ok(false);
+                    }
+                    Err(rewrite_error) => return Err(rewrite_error.into()),
                 }
 
                 if let Some(rewrite_result) = rewrite_result {

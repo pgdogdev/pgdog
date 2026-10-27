@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 colored = "3.0"
-tokio = { version = "1", features = ["full"]}
+tokio.workspace = true
 which = "7"

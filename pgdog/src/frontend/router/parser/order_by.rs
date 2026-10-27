@@ -15,6 +15,10 @@ pub(crate) enum OrderBy {
 }
 
 impl OrderBy {
+    pub(crate) fn helper_column_name(sort_key_position: usize) -> String {
+        format!("__pgdog_order_col{sort_key_position}")
+    }
+
     /// ORDER BY x ASC
     pub(crate) fn asc(&self) -> bool {
         matches!(
