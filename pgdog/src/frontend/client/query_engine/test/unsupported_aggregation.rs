@@ -22,6 +22,10 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "SELECT count(*) FROM sharded HAVING count(*) + 1 > 0",
             "cross-shard HAVING is unsupported: aggregates would be filtered on each shard before merging",
         ),
+        (
+            "SELECT value FROM sharded GROUP BY value ORDER BY count(*)",
+            "ORDER BY an expression with an aggregate or DISTINCT is not supported across shards",
+        ),
     ] {
         for begin in [None, Some("BEGIN"), Some("BEGIN READ ONLY")] {
             timeout(Duration::from_secs(5), async {
