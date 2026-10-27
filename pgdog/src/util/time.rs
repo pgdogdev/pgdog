@@ -1,4 +1,4 @@
-//! Deadlines and jitter.
+//! Time utils: deadlines, timeouts, intervals
 
 use chrono::{DateTime, Local, Utc};
 use futures::{FutureExt, future::Either};
@@ -119,6 +119,7 @@ pub(crate) fn postgres_now() -> i64 {
     (now - start).num_microseconds().unwrap()
 }
 
+/// Treat [`MAX_DURATION`], the config value for "disabled", and longer as "wait forever".
 fn armable(duration: Option<Duration>) -> Option<Duration> {
     duration.filter(|duration| *duration < MAX_DURATION)
 }
