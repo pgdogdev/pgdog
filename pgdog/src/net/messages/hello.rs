@@ -292,7 +292,6 @@ fn parse_options(options: &str) -> Vec<(String, String)> {
         let setting = if let Some(setting) = token.strip_prefix("--") {
             Some(setting.to_string())
         } else if let Some(setting) = token.strip_prefix("-c") {
-            let setting = setting.trim_start_matches('+');
             if setting.is_empty() {
                 tokens.next()
             } else {
@@ -462,19 +461,6 @@ mod test {
     async fn test_options_space_encoded() {
         // options=-c pgdog.role=replica  (space decoded from %20 by libpq)
         let startup = startup_with_options("-c pgdog.role=replica").await;
-        let Startup::Startup { params, .. } = startup else {
-            panic!("expected startup message");
-        };
-        assert_eq!(
-            params.get("pgdog.role").and_then(|v| v.as_str()),
-            Some("replica")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_options_plus_encoded() {
-        // options=-c+pgdog.role=replica  (+ not decoded to space by libpq)
-        let startup = startup_with_options("-c+pgdog.role=replica").await;
         let Startup::Startup { params, .. } = startup else {
             panic!("expected startup message");
         };
