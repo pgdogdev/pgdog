@@ -228,6 +228,20 @@ fn build(
         Some(aggregate)
     };
 
+    // We can't sort by an expression with an aggregate in it, e.g., `ORDER BY count(*)`.
+    // Each shard runs the aggregate ONLY on the rows stored directly on it, e.g., Shard A counts 2 'free' rows and Shard B counts 3.
+    // The merge adds up the aggregates in the SELECT list, but not the helper column, so we would sort by Shard A's count (2) instead of the total (5).
+    // We can't sort by an expression with DISTINCT either, as the helper column would change which rows are distinct.
+    let has_unsupported_sort_key = select.sort_clause().iter().any(|sort_by| {
+        order_by::is_computed_sort_key(sort_by.node())
+            && (order_by::contains_aggregate(sort_by.node(), schema)
+                || !select.distinct_clause().is_empty())
+    });
+
+    if has_unsupported_sort_key {
+        return Err(Error::OrderByExpressionUnsupported);
+    }
+
     let mut plan = ProjectionRewritePlan::default();
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
@@ -280,6 +294,19 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_count_sort_key() {
+        let ast = pg_raw_parse::parse("SELECT value FROM items GROUP BY value ORDER BY count(*)")
+            .unwrap();
+
+        let rewrite_result = build(&ast, &Schema::default(), false);
+
+        assert!(matches!(
+            rewrite_result,
+            Err(Error::OrderByExpressionUnsupported)
+        ));
+    }
 
     #[test]
     fn projection_plan_tracks_helpers() {

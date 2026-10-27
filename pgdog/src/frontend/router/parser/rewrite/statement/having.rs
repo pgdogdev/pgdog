@@ -13,30 +13,6 @@ use super::Error;
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
 
-struct ParsedHaving<'a> {
-    expression: HavingTemplate,
-    values: Vec<(String, Node<'a>)>,
-}
-
-enum HavingTemplate {
-    Compare {
-        left: ValueTemplate,
-        operator: CompareOperator,
-        right: ValueTemplate,
-    },
-    And(Vec<HavingTemplate>),
-    Or(Vec<HavingTemplate>),
-    Not(Box<HavingTemplate>),
-    IsNull {
-        value: ValueTemplate,
-        negated: bool,
-    },
-}
-
-struct ValueTemplate {
-    alias: String,
-}
-
 /// Project every supported predicate operand and disable shard-local filtering.
 ///
 /// The original expression remains under `OR TRUE` so PostgreSQL still performs
@@ -89,17 +65,13 @@ pub(super) fn rewrite_select<'a>(
             }
         }
     }
-    let parsed = ParsedHaving {
-        expression,
-        values: parser.values,
-    };
 
-    let hidden_aliases = parsed
+    let hidden_aliases = parser
         .values
         .iter()
         .map(|(alias, _)| alias.clone())
         .collect::<Vec<_>>();
-    let targets = parsed
+    let targets = parser
         .values
         .iter()
         .map(|(alias, node)| mem.make_res_target(Some(alias), mem.empty(), mem.make_unique(*node)))
@@ -119,10 +91,7 @@ pub(super) fn rewrite_select<'a>(
         .set_args(mem.make_list(&[original, true_value]));
     select.set_having_clause(neutralized.uncast());
 
-    Ok(HavingRewritePlan::new(
-        parsed.expression.materialize(),
-        hidden_aliases,
-    ))
+    Ok(HavingRewritePlan::new(expression, hidden_aliases))
 }
 
 fn target_output_name(node: Node<'_>) -> Option<&str> {
@@ -134,39 +103,6 @@ fn target_output_name(node: Node<'_>) -> Option<&str> {
     }
 }
 
-impl HavingTemplate {
-    fn materialize(self) -> HavingExpr {
-        match self {
-            Self::Compare {
-                left,
-                operator,
-                right,
-            } => HavingExpr::Compare {
-                left: left.materialize(),
-                operator,
-                right: right.materialize(),
-            },
-            Self::And(expressions) => {
-                HavingExpr::And(expressions.into_iter().map(Self::materialize).collect())
-            }
-            Self::Or(expressions) => {
-                HavingExpr::Or(expressions.into_iter().map(Self::materialize).collect())
-            }
-            Self::Not(expression) => HavingExpr::Not(Box::new(expression.materialize())),
-            Self::IsNull { value, negated } => HavingExpr::IsNull {
-                value: value.materialize(),
-                negated,
-            },
-        }
-    }
-}
-
-impl ValueTemplate {
-    fn materialize(self) -> HavingValue {
-        HavingValue::new(self.alias)
-    }
-}
-
 struct Parser<'a> {
     aliases: HashSet<String>,
     values: Vec<(String, Node<'a>)>,
@@ -174,7 +110,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn parse_expression(&mut self, node: Node<'a>) -> Result<HavingTemplate, Error> {
+    fn parse_expression(&mut self, node: Node<'a>) -> Result<HavingExpr, Error> {
         match node {
             Node::A_Expr(expression) if expression.kind == nodes::A_Expr_Kind::AEXPR_OP => {
                 let operator = expression
@@ -189,7 +125,7 @@ impl<'a> Parser<'a> {
                             "only =, <>, !=, <, <=, > and >= comparisons are supported",
                         )
                     })?;
-                Ok(HavingTemplate::Compare {
+                Ok(HavingExpr::Compare {
                     left: self.parse_value(expression.lexpr())?,
                     operator,
                     right: self.parse_value(expression.rexpr())?,
@@ -202,14 +138,14 @@ impl<'a> Parser<'a> {
                     .map(|node| self.parse_expression(node))
                     .collect::<Result<Vec<_>, _>>()?;
                 match expression.boolop {
-                    nodes::BoolExprType::AND_EXPR => Ok(HavingTemplate::And(expressions)),
-                    nodes::BoolExprType::OR_EXPR => Ok(HavingTemplate::Or(expressions)),
+                    nodes::BoolExprType::AND_EXPR => Ok(HavingExpr::And(expressions)),
+                    nodes::BoolExprType::OR_EXPR => Ok(HavingExpr::Or(expressions)),
                     nodes::BoolExprType::NOT_EXPR => {
                         let expression = expressions
                             .into_iter()
                             .exactly_one()
                             .map_err(|_| Error::UnsupportedHaving("NOT requires one expression"))?;
-                        Ok(HavingTemplate::Not(Box::new(expression)))
+                        Ok(HavingExpr::Not(Box::new(expression)))
                     }
                     _ => Err(Error::UnsupportedHaving("unsupported boolean expression")),
                 }
@@ -224,7 +160,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                 };
-                Ok(HavingTemplate::IsNull {
+                Ok(HavingExpr::IsNull {
                     value: self.parse_value(test.arg())?,
                     negated,
                 })
@@ -235,7 +171,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_value(&mut self, node: Node<'a>) -> Result<ValueTemplate, Error> {
+    fn parse_value(&mut self, node: Node<'a>) -> Result<HavingValue, Error> {
         if !Self::supported_value(node) {
             return Err(Error::UnsupportedHaving(
                 "operands must be aggregate calls, grouped columns, constants or parameters",
@@ -244,7 +180,7 @@ impl<'a> Parser<'a> {
 
         let alias = self.next_alias();
         self.values.push((alias.clone(), node));
-        Ok(ValueTemplate { alias })
+        Ok(HavingValue::new(alias))
     }
 
     fn supported_value(node: Node<'_>) -> bool {
