@@ -14,6 +14,9 @@ pub(crate) enum Error {
     #[error("sharding key assignment unsupported: {0}")]
     UnsupportedShardingKeyUpdate(String),
 
+    #[error("cross-shard HAVING is unsupported: {0}")]
+    UnsupportedHaving(&'static str),
+
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
