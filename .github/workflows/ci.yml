@@ -110,6 +110,7 @@ jobs:
               runner: blacksmith-8vcpu-ubuntu-2404,
             }
           - { name: tls, script: integration/tls/run.sh, needs_docker: true }
+          - { name: vault, script: integration/vault/run.sh, needs_docker: true }
           - {
               name: resharding-reshard,
               script: integration/resharding/reshard.sh,
