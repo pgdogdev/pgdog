@@ -27,6 +27,8 @@ env:
   BUCKET: pgdog-metal-bench
   QUEUE_URL: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench.fifo
   AUTOSCALING_GROUP: pgdog-metal-bench
+  QUEUE_URL_X86: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench-x86.fifo
+  AUTOSCALING_GROUP_X86: pgdog-metal-bench-x86
   SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   REF: ${{ github.head_ref || github.ref_name }}
 
@@ -58,8 +60,16 @@ jobs:
             --message-deduplication-id "$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
-      - name: Start the runner if it's down
-        run: aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL_X86" \
+            --message-group-id metal \
+            --message-deduplication-id "$SHA-${{ github.run_id }}" \
+            --message-body "$MESSAGE"
+
+      - name: Start the runners if they're down
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
 
       - name: Mark commit as queued
         env:
@@ -75,6 +85,11 @@ jobs:
             -f context=metal/bench \
             -f state=pending \
             -f description="Queued. $queued in line"
+
+          gh api "repos/${{ github.repository }}/statuses/$SHA" \
+            -f context=metal/bench-x86 \
+            -f state=pending \
+            -f description="Queued"
 
   # TODO(jkaczman): need to get a PAT with commit statuses + pull requests write, so we can
   # drop this unnecessary polling job (current PAT does not have necessary perms)
@@ -95,6 +110,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
           aws-region: us-east-1
+          role-duration-seconds: 21600
 
       - uses: actions/checkout@v6
 
