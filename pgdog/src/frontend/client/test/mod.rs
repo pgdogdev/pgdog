@@ -32,7 +32,7 @@ use crate::{
 use super::Stream;
 
 pub(crate) mod auth;
-pub(crate) mod target_session_attrs;
+pub(crate) mod pgdog_role;
 pub(crate) mod test_client;
 pub(crate) use test_client::{SpawnedClient, TestClient};
 

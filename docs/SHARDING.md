@@ -62,9 +62,11 @@ The rest of the system only needs to know which variant it received.
   every row gets `CopyRow::omnishard` — `Shard::All`.
 
 `Route` (also in [`route.rs`](../pgdog/src/frontend/router/parser/route.rs)) wraps a `Shard` together with metadata the connection pool and response
-merger need: `read: bool` (primary vs replica), `order_by`, `aggregate`, `limit`, `distinct`, and
-`rewrite_plan`. The connection pool reads `route.shard()` to select the backend; the response merger
-reads the rest to reassemble cross-shard results.
+merger need: `is_read` (the statement classification), `explicit_role_target`, `order_by`, `aggregate`,
+`limit`, `distinct`, and `rewrite_plan`. The query engine puts `route.role_target()` on the connection
+`Request`, and `ClusterConnection::get_conn_internal()` uses it with `route.shard()` to select the
+servers (see [Primary or replica](#primary-or-replica)); the response merger reads the rest to
+reassemble cross-shard results.
 
 ---
 
@@ -76,9 +78,9 @@ reads the rest to reassemble cross-shard results.
 
 Before touching the SQL AST, `parse()` checks two bypass conditions:
 
-1. **Comment override** — `/* shard=N */` or `/* role=primary */` embedded in the SQL is extracted
-   from `Ast::comment_shard` and pushed onto `shards_calculator` before the AST walk. The role
-   override (`/* role=primary */`) sets `write_override = true`.
+1. **Comment override** — `/* pgdog_shard: N */` embedded in the SQL is extracted
+   from the routing comment and pushed onto `shards_calculator` before the AST walk.
+   `/* pgdog_role: ... */` does not change the shard; see [Primary or replica](#primary-or-replica).
 
 2. **Parser bypass** — if a shard is already known (from a prior `SET pgdog.shard = N` command or
    a sticky connection) and the cluster has only one shard, the full AST walk is skipped entirely
@@ -101,6 +103,61 @@ After the pre-parse phase, the root `NodeEnum` is matched:
 
 Empty queries (no FROM clause, e.g. `SELECT 1` or `SELECT NOW()`) are round-robined to
 `Shard::Direct(round_robin::next() % shards)` and never hit the WHERE clause walker.
+
+### Primary or replica
+
+Handlers classify the statement only: `Route::read`/`Route::select` for reads, `Route::write`
+for everything else; a `SELECT` that changes data (locking clause, data-modifying CTE, write
+function, advisory lock) is a write. After the handler returns, `parse()` stores
+`QueryParserContext::explicit_role_target()` on the route. `Route::role_target()` combines both into
+a `RoleTarget`, which the query engine puts on the connection `Request`:
+
+| `RoleTarget` | Servers |
+|---|---|
+| `Primary` | the primary only |
+| `PreferReplica` | replicas; the primary only if no replica is available |
+| `Any` | any server that `read_write_split` allows |
+
+`explicit_role_target()` does not look at `read_write_split`. It looks at the cluster topology only
+through `Cluster::has_primary()`. It applies these rules:
+
+1. An explicit role always wins: the `/* pgdog_role */` comment, then the `pgdog.role`
+   parameter (startup, `SET`, `SET LOCAL`), then the user `role` in `users.toml`.
+   Inside a conservative read/write transaction (`BEGIN`, or an implicit transaction from a
+   multi-`Execute` pipeline) on a cluster with a primary, the comment is ignored; the session
+   role still applies.
+   Role `replica` gives `PreferReplica`. Role `primary` gives `Primary`. Role `auto` stops the
+   lookup without forcing a role: for example, `SET pgdog.role TO 'auto'` clears the user `role`,
+   and `/* pgdog_role: auto */` clears the session role for one query. Rules 2–3 then apply.
+   An invalid value is ignored. Write access is not checked by pgdog: a replica rejects writes
+   by itself.
+2. Without a role, a conservative read/write or implicit transaction gives `Primary` if the cluster
+   has a primary (`Cluster::has_primary()`), and a read-only transaction (`BEGIN READ ONLY`) gives
+   `Any` with every strategy.
+3. Otherwise nothing is forced: a read gives `Any`, a write gives `Primary`.
+
+Plugins get the resulting read/write as `write_override` input. A plugin's read/write result
+replaces the statement's classification in rule 3 and in the omnisharded coverage check
+(`Route::requires_full_shard_coverage()`); the explicit role target of rules 1–2 still wins over it.
+
+`ClusterConnection::get_conn_internal()` picks the shard method for the role target at checkout:
+
+| `RoleTarget` | Shard method | Shard has a primary | Static shard without a primary | `role = auto`, detection pending | `role = auto`, no primary detected |
+|---|---|---|---|---|---|
+| `Primary` | `primary()`; `replica()` if `!has_primary()` | the primary | the replicas | wait for the primary | the replicas |
+| `PreferReplica` | `replica()` | replicas; the primary if no replica is available | the replicas | the replicas | the replicas |
+| `Any`, `prefer_primary` | `primary()`; `replica()` if `!has_primary()` | the primary | the replicas | wait for the primary | the replicas |
+| `Any` | `replica()` | as `read_write_split` allows | the replicas | the replicas | the replicas |
+
+`Shard::has_primary()` is true while role detection is pending. After detection finds no primary,
+every statement goes to a replica, also a write: the replica rejects it.
+
+Without the parser, the statement is unknown. `query_parser_bypass()` gives a read if the cluster
+has no primary (`Cluster::has_primary()`), or if `read_write_split = "exclude_primary"` and the
+cluster has replicas; otherwise a write. Rules 1–2 apply on top of it.
+
+The connection uses the role target only to choose the servers for a statement with no bound
+server. A bound transaction keeps its role target until it ends, also for new shards.
 
 ### SELECT routing decision tree
 

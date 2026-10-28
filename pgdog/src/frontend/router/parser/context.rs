@@ -2,7 +2,8 @@
 
 use pgdog_config::Role;
 
-use crate::frontend::client::TransactionType;
+use crate::backend::pool::RoleTarget;
+
 use crate::frontend::router::parser::ShardsWithPriority;
 use crate::frontend::router::sharding::PendingLookup;
 use crate::{
@@ -20,10 +21,10 @@ use super::Error;
 ///
 #[derive(Clone)]
 pub(crate) struct QueryParserContext<'a> {
-    /// Cluster is read-only, i.e. has no primary.
-    pub(super) read_only: bool,
-    /// Cluster has no replicas, only a primary.
-    pub(super) write_only: bool,
+    /// At least one shard has a primary.
+    pub(super) has_primary: bool,
+    /// At least one shard has a replica.
+    pub(super) has_replicas: bool,
     /// Number of shards in the cluster.
     pub(super) shards: usize,
     /// Are there any sharding tables in the database?
@@ -34,8 +35,6 @@ pub(crate) struct QueryParserContext<'a> {
     pub(super) router_context: RouterContext<'a>,
     /// How aggressively we want to send reads to replicas.
     pub(super) rw_strategy: &'a ReadWriteStrategy,
-    /// Route reads to the primary by default unless an explicit role hint says otherwise.
-    pub(super) prefer_primary: bool,
     /// Route all queries to replicas by default unless an explicit role hint says otherwise.
     pub(super) prefer_replica: bool,
     /// Do we need the router at all? Shortcut to bypass this for unsharded
@@ -57,6 +56,9 @@ pub(crate) struct QueryParserContext<'a> {
     /// the statement is classified: they don't apply to omnisharded
     /// writes, which route to every shard regardless of the key.
     pub(super) bare_key_lookups: Vec<PendingLookup>,
+    /// Role requested by the client session (`pgdog.role`), falling back
+    /// to the role configured for the user.
+    pub(super) session_role: Option<Role>,
 }
 
 impl<'a> QueryParserContext<'a> {
@@ -75,19 +77,24 @@ impl<'a> QueryParserContext<'a> {
             sharding_schema,
         )?;
 
+        let session_role = router_context
+            .parameter_hints
+            .compute_role()
+            .or_else(|| router_context.cluster.role());
+
         Ok(Self {
-            read_only: router_context.cluster.read_only(),
-            write_only: router_context.cluster.write_only(),
+            has_primary: router_context.cluster.has_primary(),
+            has_replicas: router_context.cluster.has_replicas(),
             shards: router_context.cluster.shards().len(),
             sharded_tables,
             sharding_schema,
             rw_strategy: router_context.cluster.read_write_strategy(),
-            prefer_primary: router_context.cluster.prefer_primary(),
             prefer_replica: router_context.cluster.prefer_replica(),
             router_needed: router_context.cluster.router_needed(),
             multi_tenant: router_context.cluster.multi_tenant(),
             dry_run: router_context.cluster.dry_run(),
             expanded_explain: router_context.cluster.expanded_explain(),
+            session_role,
             router_context,
             shards_calculator,
             pending_lookups: Vec::new(),
@@ -95,21 +102,39 @@ impl<'a> QueryParserContext<'a> {
         })
     }
 
-    /// Write override enabled?
-    pub(super) fn write_override(&self) -> bool {
-        let role = self.router_context.parameter_hints.compute_role();
-        // Readonly clusters cannot pin ordinary transactions to a writer.
-        let txn_write = matches!(
-            self.router_context
-                .transaction()
-                .map(|t| t.transaction_type()),
-            Some(TransactionType::ReadWrite | TransactionType::Implicit)
-        ) && self.rw_conservative()
-            && !self.read_only;
-        // prefer_primary defaults reads to the primary; an explicit replica hint opts out.
-        txn_write
-            || role == Some(Role::Primary)
-            || (self.prefer_primary && role != Some(Role::Replica))
+    /// Check if the role target was explicitly forced by the following entities:
+    /// 1. `pgdog.role` through user.role/SET/sql comment - that will override any other source.
+    ///    `auto` stops the lookup without forcing a role, so the rules below apply.
+    /// 2. BEGIN or implicit write transaction with [`ReadWriteStrategy::Conservative`],
+    ///    if the cluster has a primary. Only the session role overrides it, not the sql comment.
+    /// 3. `BEGIN READ ONLY` with any strategy: any server, whatever the statements are.
+    ///
+    /// The cluster decides which servers can serve the role target.
+    pub(super) fn explicit_role_target(&self) -> Option<RoleTarget> {
+        let transaction = self.router_context.transaction();
+        let transaction_write = self.rw_conservative()
+            && self.has_primary
+            && transaction.is_some_and(|transaction| transaction.write());
+        let transaction_read_only = transaction.is_some_and(|transaction| !transaction.write());
+
+        let role = if transaction_write {
+            // for conservative transactions we ignore the comment
+            // and rely only on `pgdog.role` GUC.
+            // To avoid possible issues when later request is write
+            self.session_role
+        } else {
+            self.router_context.pgdog_role().or(self.session_role)
+        };
+
+        match role {
+            Some(Role::Primary) => Some(RoleTarget::Primary),
+            Some(Role::Replica) => Some(RoleTarget::PreferReplica),
+            _ if transaction_write => Some(RoleTarget::Primary),
+            // for read-only transaction we can route to any server
+            // override the route decision by forcing Any
+            _ if transaction_read_only => Some(RoleTarget::Any),
+            _ => None,
+        }
     }
 
     /// Are we using the conservative read/write separation strategy?
@@ -141,5 +166,197 @@ impl<'a> QueryParserContext<'a> {
 
     pub(super) fn is_canonicalizing_oids(&self) -> bool {
         self.router_context.cluster.is_canonicalizing_oids()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use pgdog_config::Role::{Auto, Primary, Replica};
+
+    use super::*;
+    use crate::{
+        backend::Cluster,
+        config::config,
+        frontend::{
+            ClientRequest,
+            client::{Sticky, TransactionType, transaction_type::Transaction},
+            router::RoutingComment,
+        },
+        net::Query,
+        parameters::ParameterStore,
+    };
+
+    #[derive(Default)]
+    struct Input {
+        user: Option<Role>,
+        param: Option<&'static str>,
+        comment: Option<Role>,
+        transaction: Option<TransactionType>,
+        strategy: ReadWriteStrategy,
+    }
+
+    fn role_target_on(mut cluster: Cluster, input: Input) -> Option<RoleTarget> {
+        cluster.set_read_write_strategy(input.strategy);
+        cluster.set_role(input.user);
+
+        let mut params = ParameterStore::default();
+        if let Some(role) = input.param {
+            params.set("pgdog.role", role);
+        }
+
+        let mut request = ClientRequest::from(vec![Query::new("SELECT 1").into()]);
+        request.routing_comment = input.comment.map(|role| {
+            Arc::new(RoutingComment {
+                role: Some(role),
+                ..Default::default()
+            })
+        });
+
+        let router_context = RouterContext::new(
+            &request,
+            &cluster,
+            &params,
+            input.transaction.map(Transaction::new),
+            Sticky::new_test(),
+        )
+        .unwrap();
+
+        QueryParserContext::new(router_context)
+            .unwrap()
+            .explicit_role_target()
+    }
+
+    fn role_target(input: Input) -> Option<RoleTarget> {
+        role_target_on(Cluster::new_test(&config()), input)
+    }
+
+    #[test]
+    fn test_no_role_lets_statement_decide() {
+        assert_eq!(role_target(Input::default()), None);
+    }
+
+    #[test]
+    fn test_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
+    }
+
+    #[test]
+    fn test_param_overrides_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            param: Some("primary"),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
+    }
+
+    #[test]
+    fn test_comment_overrides_param() {
+        let input = Input {
+            param: Some("replica"),
+            comment: Some(Primary),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
+    }
+
+    #[test]
+    fn test_auto_param_clears_user_role() {
+        let input = Input {
+            user: Some(Replica),
+            param: Some("auto"),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_auto_comment_clears_param() {
+        let input = Input {
+            param: Some("primary"),
+            comment: Some(Auto),
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_conservative_transaction_uses_primary() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
+    }
+
+    #[test]
+    fn test_conservative_transaction_ignores_comment() {
+        let input = Input {
+            comment: Some(Replica),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Primary));
+    }
+
+    #[test]
+    fn test_conservative_transaction_keeps_param() {
+        let input = Input {
+            param: Some("replica"),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
+    }
+
+    #[test]
+    fn test_conservative_transaction_without_primary() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        let cluster = Cluster::new_test_single_replica(&config());
+        assert_eq!(role_target_on(cluster, input), None);
+    }
+
+    #[test]
+    fn test_aggressive_transaction_lets_statement_decide() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Aggressive,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), None);
+    }
+
+    #[test]
+    fn test_aggressive_transaction_uses_comment() {
+        let input = Input {
+            comment: Some(Replica),
+            transaction: Some(TransactionType::ReadWrite),
+            strategy: ReadWriteStrategy::Aggressive,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::PreferReplica));
+    }
+
+    #[test]
+    fn test_read_only_transaction_uses_any_server() {
+        let input = Input {
+            transaction: Some(TransactionType::ReadOnly),
+            strategy: ReadWriteStrategy::Conservative,
+            ..Default::default()
+        };
+        assert_eq!(role_target(input), Some(RoleTarget::Any));
     }
 }

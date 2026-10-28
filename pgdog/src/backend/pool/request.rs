@@ -2,40 +2,84 @@ use tokio::time::Instant;
 
 use crate::net::messages::FrontendPid;
 
+/// Which servers a connection request can use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display)]
+#[display(rename_all = "snake_case")]
+pub(crate) enum RoleTarget {
+    /// The primary only
+    #[default]
+    Primary,
+    /// Replica if available, but can use primary if no replicas
+    PreferReplica,
+    /// Any, the `read_write_split` config will affect the routing
+    Any,
+}
+
+impl RoleTarget {
+    /// Combine the explicit decision (role, transaction, cluster settings)
+    /// with the read/write classification of the statement.
+    pub(crate) fn new(explicit: Option<Self>, statement_read: bool) -> Self {
+        match explicit {
+            Some(role_target) => role_target,
+            None if statement_read => Self::Any,
+            None => Self::Primary,
+        }
+    }
+
+    /// The request can use a replica.
+    pub(crate) fn allows_replica(self) -> bool {
+        self != Self::Primary
+    }
+}
+
 /// Connection request.
 #[derive(Clone, Debug, Copy)]
 pub(crate) struct Request {
     pub(crate) id: FrontendPid,
     pub(crate) created_at: Instant,
-    pub(crate) read: bool,
 
-    // Load balancer uses this to determine if primary should be allowed to read.
-    // Propagated from `User.read_only` setting.
-    pub(crate) read_only: bool,
+    // Which servers this request can use.
+    pub(crate) role_target: RoleTarget,
 }
 
 impl Request {
-    pub(crate) fn new(id: FrontendPid, read: bool, read_only: bool) -> Self {
+    pub(crate) fn new(id: FrontendPid, role_target: RoleTarget) -> Self {
         Self {
             id,
             created_at: Instant::now(),
-            read,
-            read_only,
+            role_target,
         }
     }
 
     pub(crate) fn unrouted(id: FrontendPid) -> Self {
-        Self {
-            id,
-            created_at: Instant::now(),
-            read: false,
-            read_only: false,
-        }
+        Self::new(id, RoleTarget::default())
     }
 }
 
 impl Default for Request {
     fn default() -> Self {
         Self::unrouted(FrontendPid::new())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::RoleTarget::{self, *};
+
+    #[test]
+    fn test_decision_combines_explicit_and_statement() {
+        for (explicit, statement_read, expected) in [
+            (None, true, Any),
+            (None, false, Primary),
+            (Some(Primary), true, Primary),
+            (Some(PreferReplica), false, PreferReplica),
+            (Some(Any), false, Any),
+        ] {
+            assert_eq!(
+                RoleTarget::new(explicit, statement_read),
+                expected,
+                "explicit={explicit:?} statement_read={statement_read}"
+            );
+        }
     }
 }

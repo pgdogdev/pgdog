@@ -98,6 +98,26 @@
         }
       ]
     },
+    "Role": {
+      "description": "Role a PostgreSQL server performs in a cluster.\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/databases/#role>",
+      "oneOf": [
+        {
+          "description": "Primary database that serves writes (and reads) (default).",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "PostgreSQL replica that can only serve reads.",
+          "type": "string",
+          "const": "replica"
+        },
+        {
+          "description": "Role is detected automatically by PgDog at runtime.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
     "ServerAuth": {
       "description": "Backend authentication mode used by PgDog for server connections.",
       "oneOf": [
@@ -319,6 +339,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "role": {
+          "description": "Default value of the `pgdog.role` parameter for clients of this user that don't set it.\n\n<https://docs.pgdog.dev/configuration/users.toml/users/#role>",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Role"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "schema_admin": {

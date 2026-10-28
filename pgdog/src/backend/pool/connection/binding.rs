@@ -20,8 +20,9 @@ use multi_shard::MultiBinding;
 /// The server(s) the client is connected to.
 #[derive(Debug, Default)]
 pub(crate) enum Binding {
-    /// Transaction binding: BEGIN.
-    Transaction(TransactionBinding),
+    /// Transaction binding: `BEGIN` waiting for the first query.
+    /// `Option` lets us take the statement without cloning.
+    Transaction(Option<BufferedQuery>),
     /// Direct-to-shard transaction.
     Direct(DirectBinding),
     /// Admin database connection.
