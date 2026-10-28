@@ -146,10 +146,13 @@ impl Error {
     pub(crate) fn is_unsupported(&self) -> bool {
         matches!(
             self,
-            Self::Aggregate(AggregateError::UnsupportedAggregation { .. })
-                | Self::MultiShard(MultiShardError::Aggregate(
-                    AggregateError::UnsupportedAggregation { .. }
-                ))
+            Self::Aggregate(
+                AggregateError::UnsupportedAggregation { .. }
+                    | AggregateError::UnsupportedHaving(_)
+            ) | Self::MultiShard(MultiShardError::Aggregate(
+                AggregateError::UnsupportedAggregation { .. }
+                    | AggregateError::UnsupportedHaving(_)
+            ))
         )
     }
 
