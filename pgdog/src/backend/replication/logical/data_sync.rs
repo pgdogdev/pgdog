@@ -336,8 +336,8 @@ pub(super) fn source_regclass(table: &Table) -> String {
 /// Returns `true` if any reachable destination shard holds rows from a prior COPY
 /// attempt. Emits a single WARN listing the shards that do hold rows.
 pub(crate) async fn validate_destination_has_rows(table: &Table, dest: &Cluster) -> bool {
-    let schema = table.table.destination_schema();
-    let name = table.table.destination_name();
+    let schema = &table.table.schema;
+    let name = &table.table.name;
     let sql = format!(
         "SELECT 1 FROM \"{}\".\"{}\" LIMIT 1",
         escape_identifier(schema),

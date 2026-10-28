@@ -13,7 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{select, sync::Notify, time::Instant};
+use tokio::{select, sync::Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -129,29 +129,15 @@ impl Manager {
         Ok(())
     }
 
-    /// Block until the monitor has removed this transaction from the manager,
-    /// or until a fixed timeout elapses. Returns `false` on timeout.
+    /// Block until the monitor has removed this transaction from the manager.
+    /// The caller decides how long to wait.
     ///
     /// No-op if the transaction was never registered or is already gone.
-    pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) -> bool {
-        const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-
-        let deadline = Instant::now() + WAIT_TIMEOUT;
-        loop {
-            if !self.inner.lock().transactions.contains_key(&transaction) {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                warn!(
-                    "[2pc] timed out waiting for transaction {} cleanup; monitor will retry",
-                    transaction
-                );
-                return false;
-            }
+    pub(crate) async fn wait_until_cleaned_up(&self, transaction: TwoPcTransaction) {
+        while self.inner.lock().transactions.contains_key(&transaction) {
             select! {
                 _ = self.notify.notify.notified() => {}
-                _ = safe_sleep(remaining) => {}
+                _ = safe_sleep(MAINTENANCE) => {}
             }
         }
     }

@@ -264,7 +264,9 @@ pub(crate) enum Error {
         op: &'static str,
     },
 
-    #[error("2pc {phase} failed for {transaction}: {source}")]
+    #[error(
+        "2pc {phase} failed for {transaction} and the 2pc manager did not finish it in time: {source}"
+    )]
     TwoPcCleanupPending {
         transaction: TwoPcTransaction,
         phase: TwoPcPhase,
@@ -292,18 +294,9 @@ impl From<TableValidationError> for Error {
 }
 
 impl Error {
-    /// Two-phase commit transaction that still needs manager cleanup, if any.
-    pub(crate) fn two_pc_cleanup_transaction(&self) -> Option<TwoPcTransaction> {
-        match self {
-            Self::TwoPcCleanupPending { transaction, .. } => Some(*transaction),
-            _ => None,
-        }
-    }
-
     /// Whether the table copy should be retried after this error.
     pub(crate) fn is_retryable(&self) -> bool {
         match self {
-            Self::TwoPcCleanupPending { source, .. } => source.is_retryable(),
             Self::Net(inner) => inner.is_retryable(),
             Self::Pool(inner) => inner.is_retryable(),
             Self::Backend(inner) => inner.is_retryable(),

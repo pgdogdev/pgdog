@@ -1,14 +1,18 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
+use std::time::Duration;
+
 use futures::future::join_all;
 use pg_raw_parse::Node;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tokio::time::timeout;
+use tracing::{debug, error, info, warn};
 
 use crate::backend::replication::data_sync::CopyProgress;
+use crate::config::config;
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
@@ -347,11 +351,33 @@ impl CopySubscriber {
         }
         .await;
 
-        result.map_err(|source| Error::TwoPcCleanupPending {
-            transaction: txn,
-            phase,
-            source: Box::new(source),
-        })
+        let Err(source) = result else {
+            return Ok(());
+        };
+
+        let wait = Duration::from_millis(config().config.resharding.two_pc_cleanup_timeout);
+        if timeout(wait, manager.wait_until_cleaned_up(txn))
+            .await
+            .is_err()
+        {
+            return Err(Error::TwoPcCleanupPending {
+                transaction: txn,
+                phase,
+                source: Box::new(source),
+            });
+        }
+
+        if phase == TwoPcPhase::Phase1 {
+            info!("[2pc] transaction {txn} rolled back after {phase} failure: {source}");
+            return Err(source);
+        }
+
+        warn!(
+            "[2pc] transaction {txn} committed by the 2pc manager after {phase} failure: {source}"
+        );
+        // The connections that failed are broken and cannot be reattached.
+        self.connections.clear();
+        Ok(())
     }
 
     async fn two_pc_on_shards(

@@ -225,7 +225,8 @@
     "resharding": {
       "$ref": "#/$defs/Resharding",
       "default": {
-        "post_data_validation": "during_replication"
+        "post_data_validation": "during_replication",
+        "two_pc_cleanup_timeout": 600000
       }
     },
     "rewrite": {
@@ -1982,6 +1983,13 @@
         "post_data_validation": {
           "$ref": "#/$defs/PostDataValidationStage",
           "default": "during_replication"
+        },
+        "two_pc_cleanup_timeout": {
+          "description": "How long, in milliseconds, a table copy waits for a failed 2PC commit\nto be committed or rolled back. On timeout, the copy fails.\n_Default:_ `600000` (10 minutes)",
+          "type": "integer",
+          "format": "uint64",
+          "default": 600000,
+          "minimum": 0
         }
       },
       "additionalProperties": false
