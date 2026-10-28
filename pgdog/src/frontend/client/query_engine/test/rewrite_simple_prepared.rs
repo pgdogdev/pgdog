@@ -1,6 +1,7 @@
 use pgdog_config::PreparedStatementsLevel;
 
 use crate::config::load_test;
+use crate::frontend::PreparedOperation;
 
 use super::change_config;
 use super::prelude::*;
@@ -111,11 +112,11 @@ async fn test_rewrite_prepare_and_execute_preserves_extended_protocol() {
     assert!(
         matches!(&messages[1], ProtocolMessage::Bind(bind) if bind.statement() == outer_prepare_name)
     );
-    let prepare = client
-        .client_request
-        .prepare_on_execute
-        .as_deref()
-        .expect("expected SQL PREPARE execution metadata");
+    let Some(PreparedOperation::PrepareOnExecute(prepare)) =
+        client.client_request.prepared_operation.as_deref()
+    else {
+        panic!("expected SQL PREPARE execution metadata");
+    };
     let sql_prepared_name = prepare.name().to_owned();
     assert!(
         parse
@@ -142,12 +143,12 @@ async fn test_rewrite_prepare_and_execute_preserves_extended_protocol() {
     assert!(
         matches!(&messages[1], ProtocolMessage::Parse(parse) if parse.query() == format!("EXECUTE {sql_prepared_name}($1)"))
     );
-    assert!(
-        matches!(&messages[2], ProtocolMessage::Bind(bind) if bind.params_raw() == [Parameter::new(b"5")])
-    );
+    assert!(matches!(&messages[2], ProtocolMessage::Bind(bind)
+            if bind.statement() == sql_prepared_name
+                && bind.params_raw() == [Parameter::new(b"5")]));
     assert!(matches!(&messages[3], ProtocolMessage::Execute(_)));
     assert!(matches!(&messages[4], ProtocolMessage::Sync(_)));
-    assert!(client.client_request.prepare_on_execute.is_none());
+    assert!(client.client_request.prepared_operation.is_none());
 }
 
 fn rewritten_query(messages: &[ProtocolMessage]) -> String {

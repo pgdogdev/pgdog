@@ -192,6 +192,27 @@ impl Bind {
         }
     }
 
+    /// Reorder or duplicate parameters while preserving their wire formats.
+    pub(crate) fn remap_params(&mut self, indices: &[usize]) -> Result<(), Error> {
+        let mut params = Vec::with_capacity(indices.len());
+        let mut codes = Vec::with_capacity(indices.len());
+
+        for &index in indices {
+            let parameter = self
+                .params
+                .get(index)
+                .cloned()
+                .ok_or_else(|| Error::MissingParameter(format!("${}", index + 1)))?;
+            params.push(parameter);
+            codes.push(self.parameter_format(index)?);
+        }
+
+        self.params = params;
+        self.codes = codes;
+        self.original = None;
+        Ok(())
+    }
+
     /// Is this Bind message anonymous?
     pub(crate) fn anonymous(&self) -> bool {
         self.statement.len() == 1
@@ -554,5 +575,29 @@ mod test {
         assert_eq!(decoded.codes.len(), 0);
         assert_eq!(decoded.statement(), "__pgdog_large");
         assert_eq!(bytes.len(), decoded.len());
+    }
+
+    #[test]
+    fn remap_params_reorders_values_and_formats() {
+        let mut bind = Bind::new_params_codes(
+            "outer",
+            &[Parameter::new(b"first"), Parameter::new(b"second")],
+            &[Format::Text, Format::Binary],
+        );
+
+        bind.remap_params(&[1, 0, 1]).unwrap();
+
+        assert_eq!(
+            bind.params_raw(),
+            &[
+                Parameter::new(b"second"),
+                Parameter::new(b"first"),
+                Parameter::new(b"second"),
+            ]
+        );
+        assert_eq!(
+            bind.format_codes_raw(),
+            &[Format::Binary, Format::Text, Format::Binary]
+        );
     }
 }

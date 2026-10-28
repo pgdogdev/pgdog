@@ -748,7 +748,7 @@ impl PreparedStatements {
         self.oids = Arc::clone(oids)
     }
 
-    fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
+    pub(super) fn rewrite_parse_data_types(&self, parse: &mut Parse) -> bool {
         let Some(mappings) = self.oids.get() else {
             return false;
         };
