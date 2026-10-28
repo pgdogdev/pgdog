@@ -6,9 +6,16 @@ on:
       - ".github/workflows/package.yml"
       - "**/*.rs"
       - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
+      - ".dockerignore"
   release:
     types: [published]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io

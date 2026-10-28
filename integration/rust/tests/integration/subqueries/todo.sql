@@ -31,7 +31,7 @@
 
 -- FIRST
 --   basis: Mastodon's test suite (highest to lowest share of subquery calls)
---   progress: 19 out of 49 done
+--   progress: 24 out of 49 done
 --
 -- [DONE] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
 --       case: <x> is <col>
@@ -55,11 +55,11 @@
 -- [DONE] [A1 A2 A4] [insert] INSERT INTO <st1> SELECT .. FROM <st1>
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <col> IN (<sq> WHERE <key> = <k1>)
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <key> = $1)
---   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq>)
 --       condition: <sq> has no key
---   [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k1>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] SELECT .. FROM <st1> WHERE <key> = <k1> AND <col> IN (<sq> WHERE <key> = <k1>)
 --       condition: same shard; single-shard route
---   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1)
 --       condition: same parameter in outer and inner
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <col> = $1)
 --   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
@@ -95,13 +95,13 @@
 --   [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
 --   [A1 A2 A3 A4 A6 O3 O9 Q5] [select, insert] .. (SELECT .., <fn>() OVER (..) FROM <st2>)
 --   [A1 A2 A6 Q6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM c, LATERAL (<sq>) s) SELECT .. FROM c
---   [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq>)
 --       case: key in outer only
 --       case: key in both, same shard
 --   [A1 A2 A4 A5 A6] [select] SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s
 --       condition: <sq> is cross-shard; the <n> rows come from several shards
 --   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
---   [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
 --   [A1 A2 A4 A6] [select] SELECT .. FROM (<q1> UNION <q2>) s
 --   [A1 A2 A4 A6 O7 O9] [select] SELECT .. FROM <st1> JOIN (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col>) s ON ..
 --   [A1 A2 A3 A4 A6] [select] .. (SELECT .. FROM <st2> ORDER BY .. OFFSET <n>)

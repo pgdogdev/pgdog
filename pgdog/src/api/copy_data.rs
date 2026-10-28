@@ -25,6 +25,7 @@ use pgdog_stats::{
     CopyDataDefinition, CopyDataStage, CopyDataStatus, TableCopyDefinition, TableCopyStage,
     TableCopyStatus, TaskDefinition,
 };
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{info, warn};
 
 const STATUS_REPORT_INTERVAL: Duration = Duration::from_secs(1);
@@ -44,6 +45,8 @@ pub(crate) struct CopyDataTask {
     pub(crate) state: ReshardingState,
     pub(crate) format: CopyFormat,
 }
+
+type TableTaskHandles = FuturesUnordered<AbortOnDropHandle<Result<(usize, Table), Error>>>;
 
 impl Task for CopyDataTask {
     type Status = CopyDataStatus;
@@ -84,9 +87,7 @@ impl Task for CopyDataTask {
             ),
         });
 
-        let guard = cancel.drop_guard_ref();
-
-        let mut handles = FuturesUnordered::new();
+        let handles = TableTaskHandles::new();
 
         for shard in source.shards().iter() {
             let shard_tables = tables.remove(&shard.number()).unwrap_or_default();
@@ -112,33 +113,54 @@ impl Task for CopyDataTask {
                 let ctx = ctx.clone();
                 let shard_number = shard.number();
                 let format = self.format;
-                handles.push(tasks::spawn("tables copy", async move {
-                    let table_sync_task = TableDataSyncTask::builder()
-                        .pool(pool)
-                        .table(table)
-                        .source(source)
-                        .dest(dest)
-                        .format(format)
-                        .source_shard(shard_number)
-                        .build();
+                handles.push(AbortOnDropHandle::new(tasks::spawn(
+                    "tables copy",
+                    async move {
+                        let table_sync_task = TableDataSyncTask::builder()
+                            .pool(pool)
+                            .table(table)
+                            .source(source)
+                            .dest(dest)
+                            .format(format)
+                            .source_shard(shard_number)
+                            .build();
 
-                    let table = ctx.run(table_sync_task).await?;
+                        let table = ctx.run(table_sync_task).await?;
 
-                    Ok::<(usize, Table), Error>((shard_number, table))
-                }));
+                        Ok((shard_number, table))
+                    },
+                )));
             }
         }
 
-        let mut result: HashMap<usize, Vec<Table>> = HashMap::new();
-        while let Some(joined) = handles.next().await {
-            let (number, table) = joined??;
-            result.entry(number).or_default().push(table);
-        }
-        guard.disarm();
+        let result = Self::drain_handles(&ctx, handles).await?;
 
         state.set_tables(result);
 
         Ok(())
+    }
+}
+
+impl CopyDataTask {
+    async fn drain_handles(
+        ctx: &TaskContext<CopyDataTask>,
+        mut handles: TableTaskHandles,
+    ) -> Result<HashMap<usize, Vec<Table>>, Error> {
+        let mut result = Ok(());
+        let mut result_map: HashMap<usize, Vec<Table>> = HashMap::new();
+
+        while let Some(res) = handles.next().await {
+            if let Ok(Ok((shard, table))) = res {
+                result_map.entry(shard).or_default().push(table);
+                continue;
+            }
+
+            // cancel all other subtasks if we got an error
+            ctx.subtasks_cancellation_token().cancel();
+            result = result.and(res.map_err(Error::from).and_then(|r| r.map(|_| ())));
+        }
+
+        result.map(|()| result_map)
     }
 }
 
@@ -280,7 +302,13 @@ impl Task for TableDataSyncTask {
                     status.last_error = last_error.clone();
                     ctx.set_status(status);
 
-                    safe_sleep(backoff).await;
+                    if cancel
+                        .run_until_cancelled(safe_sleep(backoff))
+                        .await
+                        .is_none()
+                    {
+                        return Err(Error::DataSyncAborted);
+                    }
 
                     if self.dest.two_pc_enabled()
                         && let Some(txn) = err.two_pc_cleanup_transaction()

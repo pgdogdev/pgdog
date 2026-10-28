@@ -15,6 +15,7 @@ use super::{
     TokenCache, TwoPc,
 };
 use crate::tasks;
+use crate::util::server::accept;
 
 async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     let clients = Clients::load();
@@ -84,7 +85,7 @@ pub(crate) async fn server(host: &str, port: u16) -> std::io::Result<()> {
 
     loop {
         let (stream, _) = select! {
-            result = listener.accept() => result?,
+            connection = accept(&listener) => connection,
             _ = shutdown.cancelled() => break,
         };
         let io = TokioIo::new(stream);

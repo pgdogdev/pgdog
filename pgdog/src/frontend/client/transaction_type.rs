@@ -10,11 +10,16 @@ pub(crate) struct Transaction {
 }
 
 impl Transaction {
-    pub(crate) fn new(transaction_type: TransactionType) -> Self {
+    pub(crate) fn started_at(transaction_type: TransactionType, start_time: DateTime<Utc>) -> Self {
         Self {
             transaction_type,
-            start_time: Utc::now(),
+            start_time,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(transaction_type: TransactionType) -> Self {
+        Self::started_at(transaction_type, Utc::now())
     }
 
     pub(crate) fn transaction_type(&self) -> TransactionType {

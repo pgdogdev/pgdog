@@ -1,0 +1,116 @@
+# Run our benchmarks on AWS Graviton bare metal runners.
+# - Uses a single runner to run all benchmarks simultaneously (since bare metal is 64 cores).
+# - Autoscaling is maxed at a single runner, uses a queue instead to make subsequent runs wait.
+# - After a run, the runner stays up for a hour. If no other runs are requested within that hour, it shuts down to save $$.
+#
+# Always posts on a PR regarding status. Edits the same message for subsequent runs
+# Also includes differential flamegraphs!
+#
+# This currently mirrors Bencher (+ has a 16 core run).
+# I'm using this as an experiment to see if Graviton produces less variance (or if we can tune
+# our own runners to have less variance for our use case)
+
+name: metal
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  id-token: write
+  statuses: write
+
+env:
+  BUCKET: pgdog-metal-bench
+  QUEUE_URL: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench.fifo
+  AUTOSCALING_GROUP: pgdog-metal-bench
+  SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  REF: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  enqueue:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    outputs:
+      enqueued_at: ${{ steps.enqueue.outputs.enqueued_at }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
+          aws-region: us-east-1
+
+      - name: Enqueue commit
+        id: enqueue
+        env:
+          MESSAGE: >-
+            {"sha": "${{ env.SHA }}",
+             "ref": "${{ env.REF }}",
+             "pr": "${{ github.event.pull_request.number }}",
+             "base": "${{ github.event.pull_request.base.sha }}"}
+        run: |
+          echo "enqueued_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL" \
+            --message-group-id metal \
+            --message-deduplication-id "$SHA-${{ github.run_id }}" \
+            --message-body "$MESSAGE"
+
+      - name: Start the runner if it's down
+        run: aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+
+      - name: Mark commit as queued
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          queued=$(aws sqs get-queue-attributes \
+            --queue-url "$QUEUE_URL" \
+            --attribute-names ApproximateNumberOfMessages \
+            --query Attributes.ApproximateNumberOfMessages \
+            --output text)
+
+          gh api "repos/${{ github.repository }}/statuses/$SHA" \
+            -f context=metal/bench \
+            -f state=pending \
+            -f description="Queued. $queued in line"
+
+  # TODO(jkaczman): need to get a PAT with commit statuses + pull requests write, so we can
+  # drop this unnecessary polling job (current PAT does not have necessary perms)
+  report:
+    needs: enqueue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      id-token: write
+      statuses: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      ENQUEUED_AT: ${{ needs.enqueue.outputs.enqueued_at }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
+          aws-region: us-east-1
+
+      - uses: actions/checkout@v6
+
+      - name: Wait for the runner and post its result
+        run: bash integration/ci/metal-report.sh
+
+  skipped:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment that fork PRs are skipped
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Metal bench skipped! Fork PRs are not run on yet for safety reasons."

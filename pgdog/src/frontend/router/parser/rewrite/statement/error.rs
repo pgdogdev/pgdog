@@ -14,11 +14,17 @@ pub(crate) enum Error {
     #[error("sharding key assignment unsupported: {0}")]
     UnsupportedShardingKeyUpdate(String),
 
+    #[error("cross-shard HAVING is unsupported: {0}")]
+    UnsupportedHaving(&'static str),
+
     #[error("net: {0}")]
     Net(#[from] crate::net::Error),
 
     #[error("missing parameter: ${0}")]
     MissingParameter(u16),
+
+    #[error("Failed to compute shard for (sub)query when planning for potential subquery")]
+    SubqueryShardingError,
 
     #[error("empty query")]
     EmptyQuery,
@@ -28,6 +34,9 @@ pub(crate) enum Error {
 
     #[error("WHERE clause is required")]
     WhereClauseMissing,
+
+    #[error("ORDER BY an expression with an aggregate or DISTINCT is not supported across shards")]
+    OrderByExpressionUnsupported,
 
     #[error("{0}")]
     Type(#[from] pgdog_postgres_types::Error),

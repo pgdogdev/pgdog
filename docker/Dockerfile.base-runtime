@@ -3,24 +3,42 @@ FROM ubuntu:26.04
 ARG PSQL_VERSION=18
 ENV PSQL_VERSION=${PSQL_VERSION}
 
-
+# One RUN step, so the apt lists are removed in the same layer.
 RUN apt update && \
     # apt upgrade picks up security fixes released after the Ubuntu image was built.
     apt upgrade -y && \
-    apt install -y curl ca-certificates \
-        dnsutils iproute2 iputils-ping net-tools netcat-openbsd traceroute \
-        lsof procps strace tcpdump && \
-    update-ca-certificates
+    # ubuntu:26.04 has no curl or ca-certificates. We need both to fetch the pgdg key over https.
+    apt install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        # Debug tools.
+        dnsutils \
+        iproute2 \
+        iputils-ping \
+        net-tools \
+        netcat-openbsd \
+        traceroute \
+        lsof \
+        procps \
+        strace \
+        tcpdump && \
+    update-ca-certificates && \
+    # Add the PostgreSQL (pgdg) repository.
+    install -d /usr/share/postgresql-common/pgdg && \
+    curl --fail \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    . /etc/os-release && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list && \
+    # Ubuntu lists are still present, so this update only downloads the pgdg lists.
+    apt update && \
+    apt install -y --no-install-recommends postgresql-client-${PSQL_VERSION} && \
+    # Remove the apt lists to make the image smaller.
+    rm -rf /var/lib/apt/lists/*
 
 # SECURITY: Ubuntu 26.04 images ship pebble (a Go binary) that triggers security monitoring.
 # pebble is installed externally without apt in base layer for ubuntu and apt never updates it,
 # so scanners report its old Go standard library.
 # PgDog don't need this to work, we can remove.
 RUN rm -rf /usr/bin/pebble /var/lib/pebble
-
-RUN install -d /usr/share/postgresql-common/pgdg && \
-    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
-    . /etc/os-release && \
-    sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
-
-RUN apt update && apt install -y postgresql-client-${PSQL_VERSION}

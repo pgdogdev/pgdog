@@ -125,6 +125,10 @@ jobs:
               script: integration/resharding/cli.sh,
               needs_docker: true,
             }
+          - {
+              name: server,
+              script: integration/server/run.sh,
+            }
           # plugins/run.sh builds 4 plugin crates with cargo, so it needs
           # the workspace target/ cache; the other entries just run the
           # cached pgdog binary.
@@ -205,6 +209,7 @@ jobs:
   success:
     name: All Integration Tests Passed
     needs: ci
+    if: always()
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - run: echo Done!
+    - run: test "${{ needs.ci.result }}" = "success"

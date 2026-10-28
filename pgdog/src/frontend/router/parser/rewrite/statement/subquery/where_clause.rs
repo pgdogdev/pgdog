@@ -1,32 +1,52 @@
 use pg_raw_parse::{Node, deparse, nodes::SubLink};
 
 use crate::frontend::router::parser::{
-    StatementParser, StatementRewrite, rewrite::statement::insert::Subquery,
+    StatementParser,
+    rewrite::statement::{Error, insert::Subquery, subquery::SubqueryRewrite},
 };
 
-impl<'a> StatementRewrite<'a> {
-    pub(crate) fn handle_subquery_in_where(&mut self, sub_link: &SubLink) -> Option<Subquery> {
+impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
+    pub(crate) fn handle_subquery_in_where(
+        &mut self,
+        sub_link: &SubLink,
+    ) -> Result<Option<Subquery>, Error> {
         let subselect = sub_link.subselect();
 
         // Is it sharded? if not, doesn't need to be separate (strictly for WHERE).
         // Note: this doesn't apply when we're dealing with INSERTs / etc, we'll
         // still want to evaluate not sharded things for stuff like INSERT split.
-        //
-        // TODO(jkaczman): We don't need to separately evaluate subqueries that are
-        // sharded the exact same as the outer query. There's no point; it'd be evaluated the same.
-        let mut parser = StatementParser::new(subselect, None, self.schema);
-        let is_subselect_sharded = parser.is_sharded(self.db_schema, self.user, self.search_path);
+        let mut parser = StatementParser::new_that_ignore_subqueries(
+            subselect,
+            None,
+            self.statement_rewrite.schema,
+        );
+
+        let is_subselect_sharded = parser.is_sharded(
+            self.statement_rewrite.db_schema,
+            self.statement_rewrite.user,
+            None,
+        );
 
         if is_subselect_sharded {
+            if let Some(subselect_shard) =
+                parser.shard().map_err(|_| Error::SubqueryShardingError)?
+                && let Some(outer_statement_shard) = self.get_outer_statement_shard()
+                && subselect_shard == *outer_statement_shard
+            {
+                // If they evaluate to the same shard, then we shouldn't send
+                // them separately; proceed as-is.
+                return Ok(None);
+            }
+
             let subselect_sql = deparse(subselect).unwrap();
             let subselect_sql = subselect_sql.as_str().to_string();
 
-            return Some(Subquery {
+            return Ok(Some(Subquery {
                 inner_stmt: subselect_sql,
-            });
+            }));
         }
 
-        None
+        Ok(None)
     }
 }
 
@@ -49,10 +69,14 @@ pub(crate) fn has_sub_link_in_where<'a>(stmt: Node<'a>) -> Option<(&'a SubLink, 
 
     if let Node::SubLink(sublink) = where_clause {
         Some((sublink, sublink.testexpr()))
-    } else if let Node::BoolExpr(bool_expr) = where_clause
-        && let Some(Node::SubLink(sublink)) = bool_expr.args().first()
-    {
-        Some((sublink, sublink.testexpr()))
+    } else if let Node::BoolExpr(bool_expr) = where_clause {
+        if let Some(Node::SubLink(sublink)) = bool_expr.args().first() {
+            Some((sublink, sublink.testexpr()))
+        } else if let Some(Node::SubLink(sublink)) = bool_expr.args().get(1) {
+            Some((sublink, sublink.testexpr()))
+        } else {
+            None
+        }
     } else if let Node::A_Expr(a_expr) = where_clause
         && let Node::SubLink(sublink) = a_expr.rexpr()
     {

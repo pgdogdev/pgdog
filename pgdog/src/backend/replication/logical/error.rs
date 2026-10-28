@@ -177,7 +177,7 @@ pub(crate) enum Error {
     #[error("replication slots for \"{0}\" are already created")]
     SlotsAlreadyCreated(String),
 
-    #[error("replication stream stopped before shutdown was requested")]
+    #[error("replication stopped before shutdown was requested")]
     ReplicationStreamStopped,
 
     #[error("publication \"{0}\" has no tables")]

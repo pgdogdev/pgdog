@@ -282,6 +282,11 @@ pub(crate) struct StatementParser<'a, 'b> {
     /// Sharding key lookups that missed the cache and need to be resolved.
     pending_lookups: Vec<PendingLookup>,
     resolved_lookups: Option<&'b ResolvedLookups>,
+
+    /// When recursing, if we see a subquery, should we recurse into it or ignore it?
+    /// Added for the ability to try to `shard()` the top-level statement (ignoring any subqueries within)
+    /// to see if there's a sharding key or not, to determine solely the top-level's routing
+    ignore_subqueries: bool,
 }
 
 impl<'a, 'b: 'a> StatementParser<'a, 'b> {
@@ -301,7 +306,19 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             all_omnisharded: None,
             pending_lookups: Vec::new(),
             resolved_lookups: None,
+            ignore_subqueries: false,
         }
+    }
+
+    pub(crate) fn new_that_ignore_subqueries(
+        stmt: Node<'a>,
+        bind: Option<StatementParameters<'b>>,
+        schema: &'b ShardingSchema,
+    ) -> Self {
+        let mut parser = StatementParser::new(stmt, bind, schema);
+        parser.ignore_subqueries = true;
+
+        parser
     }
 
     /// Attach sharding key translations resolved for this statement.
@@ -875,7 +892,9 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
 
         let result = walk::walk_manual(stmt, |node| match node {
             Node::SelectStmt(_) => {
-                self.search_stmt(node)?;
+                if !self.ignore_subqueries {
+                    self.search_stmt(node)?;
+                }
                 Recurse::no()
             }
 
@@ -930,6 +949,7 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
                             })
                             .collect::<Result<Vec<_>, _>>()
                             .break_err()?;
+
                         match Self::converge(&shards) {
                             Some(shard) => ControlFlow::Break(Ok(shard)),
                             None => Recurse::no(),
@@ -1106,7 +1126,13 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             // the route.
             _ => {
                 let result = walk::walk_manual(node, |node| match node {
-                    Node::SelectStmt(_) => self.search_stmt(node).map_continue(|_| Recurse::No),
+                    Node::SelectStmt(_) => {
+                        if !self.ignore_subqueries {
+                            self.search_stmt(node).map_continue(|_| Recurse::No)
+                        } else {
+                            Recurse::no()
+                        }
+                    }
                     _ => Recurse::yes(),
                 })
                 .transpose()

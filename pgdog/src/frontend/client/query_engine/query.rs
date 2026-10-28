@@ -268,7 +268,7 @@ impl QueryEngine {
                         self.backend.end_transaction();
                     }
 
-                    TransactionState::InTrasaction => {
+                    TransactionState::InTransaction => {
                         if self.two_pc.auto() {
                             self.end_two_pc(false).await?;
                             two_pc_auto = true;
@@ -277,19 +277,25 @@ impl QueryEngine {
                             // Query parser is disabled, so the server is responsible for telling us
                             // we started a transaction.
                             None => {
-                                context.transaction =
-                                    Some(Transaction::new(TransactionType::ReadWrite));
+                                context.transaction = Some(Transaction::started_at(
+                                    TransactionType::ReadWrite,
+                                    context.statement_start,
+                                ));
                             }
 
                             // Restore transaction state after rollback to savepoint.
                             Some(TransactionType::ErrorReadOnly) => {
-                                context.transaction =
-                                    Some(Transaction::new(TransactionType::ReadOnly));
+                                context.transaction = Some(Transaction::started_at(
+                                    TransactionType::ReadOnly,
+                                    context.statement_start,
+                                ));
                             }
 
                             Some(TransactionType::ErrorReadWrite) => {
-                                context.transaction =
-                                    Some(Transaction::new(TransactionType::ReadWrite));
+                                context.transaction = Some(Transaction::started_at(
+                                    TransactionType::ReadWrite,
+                                    context.statement_start,
+                                ));
                             }
 
                             _ => (),

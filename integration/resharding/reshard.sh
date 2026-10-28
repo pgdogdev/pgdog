@@ -9,6 +9,6 @@ RESHARD_TASK_ID=$(psql admin -tAc 'RESHARD source destination pgdog')
 prepare_resharding_verification
 wait_for_replication_catchup
 verify_resharding_data
-wait_admin_child_inner_status "${RESHARD_TASK_ID}" replication 'reverse replicating'
+wait_admin_task_inner_status "${RESHARD_TASK_ID}" 'reverse replicating'
 write_replication_sentinel -1
 wait_for_replication_catchup

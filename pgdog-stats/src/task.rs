@@ -83,27 +83,26 @@ pub enum TaskStatus {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Display, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
+#[display(rename_all = "snake_case")]
 pub enum TaskProgress {
-    #[display("started")]
     Started,
-    #[display("running")]
     Running,
-    #[display("finished")]
     Finished,
     /// Cancellation has been requested; the task is winding down
     /// cooperatively and has not yet reached a terminal state.
-    #[display("cancelling")]
     Cancelling,
-    #[display("cancelled")]
     Cancelled,
     #[display("failed: {message}")]
-    Error { message: String },
+    Error {
+        message: String,
+    },
     #[display("panicked: {message}")]
-    Panic { message: String },
+    Panic {
+        message: String,
+    },
     /// Fallback value for the communication protocol,
     /// to cover versions mismatches
     #[default]
-    #[display("unknown")]
     #[serde(other)]
     Unknown,
 }
@@ -355,6 +354,7 @@ pub enum TaskDefinitionKind {
     SchemaShard(SchemaShardDefinition),
     CopyData(CopyDataDefinition),
     TableCopy(TableCopyDefinition),
+    SynchronizeTables(SynchronizeTablesDefinition),
     // In progress, not used yet
     Replication(ReplicationDefinition),
     ReplicationCluster(ReplicationClusterDefinition),
@@ -374,6 +374,7 @@ impl TaskDefinitionKind {
             Self::Reshard(_) => "reshard",
             Self::CopyData(_) => "copy_data",
             Self::TableCopy(_) => "table_copy",
+            Self::SynchronizeTables(_) => "synchronize_tables",
             Self::SchemaSync(_) => "schema_sync",
             Self::SchemaShard(_) => "schema_shard",
             Self::Replication(_) => "replication",
@@ -425,7 +426,7 @@ mod test {
 
     /// One definition per kind. The exhaustive `match` in
     /// [`test_definition_round_trip`] forces a new kind into this list.
-    fn definitions() -> [TaskDefinition; 9] {
+    fn definitions() -> [TaskDefinition; 10] {
         [
             "test task".into(),
             ReshardDefinition {
@@ -449,6 +450,10 @@ mod test {
             }
             .into(),
             table_copy().into(),
+            SynchronizeTablesDefinition {
+                databases: databases(),
+            }
+            .into(),
             ReplicationDefinition {
                 databases: databases(),
                 auto_cutover: false,
@@ -496,6 +501,7 @@ mod test {
                 TaskDefinitionKind::Reshard(_)
                 | TaskDefinitionKind::CopyData(_)
                 | TaskDefinitionKind::TableCopy(_)
+                | TaskDefinitionKind::SynchronizeTables(_)
                 | TaskDefinitionKind::SchemaSync(_)
                 | TaskDefinitionKind::SchemaShard(_)
                 | TaskDefinitionKind::Replication(_)
@@ -533,6 +539,14 @@ mod test {
             "copy_data prod -> prod_sharded"
         );
 
+        assert_eq!(
+            TaskDefinition::from(SynchronizeTablesDefinition {
+                databases: databases(),
+            })
+            .to_string(),
+            "synchronize_tables prod -> prod_sharded"
+        );
+
         for (sync_state, expected) in [
             (
                 SyncState::PreData,
@@ -566,11 +580,11 @@ mod test {
         for (direction, expected) in [
             (
                 ReplicationDirection::Forward,
-                "replication stream prod -> prod_sharded (forward)",
+                "forward replication prod -> prod_sharded",
             ),
             (
                 ReplicationDirection::Reverse,
-                "replication stream prod -> prod_sharded (reverse)",
+                "reverse replication prod -> prod_sharded",
             ),
         ] {
             assert_eq!(

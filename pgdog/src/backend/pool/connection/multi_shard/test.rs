@@ -79,7 +79,7 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
         Default::default(),
         None,
     );
-    route.projection_rewrite_plan = plan;
+    route.projection_rewrite_plan = Some(std::sync::Arc::new(plan));
     let mut multi_shard = MultiShard::new(2, &route);
 
     let row_description = RowDescription::new(&[

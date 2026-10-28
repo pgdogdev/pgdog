@@ -17,7 +17,7 @@ bench = []
 [dependencies]
 bon.workspace = true
 pin-project = "1"
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "std"] }
 tracing-throttle = "0.4"
@@ -59,7 +59,7 @@ chrono-tz = "0.10.4"
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
-socket2 = { version = "0.5.9", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 sha1 = "0.10"
 indexmap.workspace = true
 lru = "0.16"
@@ -104,5 +104,5 @@ tempfile = "3.23.0"
 stats_alloc = "0.1.10"
 brunch = "0.5"
 wiremock = "0.6"
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 divan = "0.1.21"
