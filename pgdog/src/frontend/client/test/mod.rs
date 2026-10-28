@@ -1,5 +1,4 @@
 use std::time::{Duration, Instant};
-use tokio_util::sync::CancellationToken;
 
 use pgdog_config::{PoolerMode, QuerySizeLimitAction};
 use tokio::{
@@ -254,10 +253,7 @@ async fn test_abrupt_disconnect() {
 
     drop(conn);
 
-    let event = client
-        .buffer(State::Idle, &CancellationToken::new())
-        .await
-        .unwrap();
+    let event = client.buffer(State::Idle).await.unwrap();
     assert_eq!(event, BufferEvent::DisconnectAbrupt);
     assert!(client.client_request.messages.is_empty());
 
@@ -276,10 +272,7 @@ async fn test_client_idle_timeout() {
     set(config).unwrap();
 
     let start = Instant::now();
-    let res = client
-        .buffer(State::Idle, &CancellationToken::new())
-        .await
-        .unwrap();
+    let res = client.buffer(State::Idle).await.unwrap();
     assert_eq!(res, BufferEvent::DisconnectAbrupt);
 
     let err = read_one!(conn);
@@ -290,7 +283,7 @@ async fn test_client_idle_timeout() {
     assert!(
         timeout(
             Duration::from_millis(50),
-            client.buffer(State::IdleInTransaction, &CancellationToken::new())
+            client.buffer(State::IdleInTransaction)
         )
         .await
         .is_err()
@@ -642,10 +635,7 @@ async fn test_query_timeout() {
     let buf = buffer!({ Query::new("SELECT pg_sleep(0.2)") });
     conn.write_all(&buf).await.unwrap();
 
-    client
-        .buffer(State::Idle, &CancellationToken::new())
-        .await
-        .unwrap();
+    client.buffer(State::Idle).await.unwrap();
     let result = client.client_messages(&mut engine).await;
 
     assert!(result.is_err());
