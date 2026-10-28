@@ -150,10 +150,10 @@ impl Error {
             Self::Aggregate(
                 AggregateError::UnsupportedAggregation { .. }
                     | AggregateError::UnsupportedHaving(_)
-                ) | Self::MultiShard(MultiShardError::Aggregate(
-                    AggregateError::UnsupportedAggregation { .. }
-                        | AggregateError::UnsupportedHaving(_)
-                )) | Self::Pool(PoolError::PubSubDisabled)
+            ) | Self::MultiShard(MultiShardError::Aggregate(
+                AggregateError::UnsupportedAggregation { .. }
+                    | AggregateError::UnsupportedHaving(_)
+            )) | Self::Pool(PoolError::PubSubDisabled)
         )
     }
 
