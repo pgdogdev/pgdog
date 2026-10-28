@@ -1,14 +1,19 @@
 //! Shard COPY stream from one source
 //! between N shards.
 
+use std::time::Duration;
+
 use futures::future::join_all;
 use pg_raw_parse::Node;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use crate::backend::replication::data_sync::CopyProgress;
+use crate::config::config;
 use crate::frontend::client::query_engine::TwoPcPhase;
 use crate::frontend::client::query_engine::two_pc::{
     Manager, TwoPcTransaction, statement::phase_control,
@@ -244,8 +249,7 @@ impl CopySubscriber {
         for server in &mut self.connections {
             // Open an explicit transaction so the COPY is not autocommit: the commit is
             // deferred to copy_done(), so a CopyDone failure on any shard rolls back every
-            // shard (none commit). The commit pass itself is per-shard, not atomic across shards.
-            // TODO: implement complete 2pc to copy data to minimize chances of partial commits even more
+            // shard (none commit).
             Self::send_and_confirm(server, Query::new("BEGIN").into()).await?;
 
             debug!("{} [{}]", stmt.query(), server.addr());
@@ -267,8 +271,8 @@ impl CopySubscriber {
         Ok(())
     }
 
-    /// Finish COPY on all shards.
-    pub(crate) async fn copy_done(&mut self) -> Result<(), Error> {
+    /// Finish COPY on all shards. `cancel` stops the wait for the 2PC manager.
+    pub(crate) async fn copy_done(&mut self, cancel: &CancellationToken) -> Result<(), Error> {
         // Stage pass: send CopyDone to every shard and read CommandComplete + ReadyForQuery.
         // Because each shard is inside an explicit transaction, CopyDone only finalises the
         // COPY (writes pages, builds indexes, checks constraints) — it does NOT commit.
@@ -305,7 +309,7 @@ impl CopySubscriber {
         // The validate_destination_has_rows() guard in the table copy retry loop then
         // stops the retry.
         if self.cluster.two_pc_enabled() {
-            self.commit_two_pc().await?;
+            self.commit_two_pc(cancel).await?;
         } else {
             for (shard, server) in self.connections.iter_mut().enumerate() {
                 if let Err(error) =
@@ -324,7 +328,7 @@ impl CopySubscriber {
         Ok(())
     }
 
-    async fn commit_two_pc(&mut self) -> Result<(), Error> {
+    async fn commit_two_pc(&mut self, cancel: &CancellationToken) -> Result<(), Error> {
         let manager = Manager::get();
         let txn = TwoPcTransaction::new();
         let identifier = self.cluster.identifier();
@@ -347,11 +351,42 @@ impl CopySubscriber {
         }
         .await;
 
-        result.map_err(|source| Error::TwoPcCleanupPending {
-            transaction: txn,
-            phase,
-            source: Box::new(source),
-        })
+        let Err(source) = result else {
+            return Ok(());
+        };
+
+        let wait = Duration::from_millis(config().config.resharding.two_pc_cleanup_timeout);
+        match cancel
+            .run_until_cancelled(timeout(wait, manager.wait_until_cleaned_up(txn)))
+            .await
+        {
+            None => {
+                warn!(
+                    "[2pc] copy aborted while the 2pc manager finishes transaction {txn} after {phase} failure: {source}"
+                );
+                return Err(Error::DataSyncAborted);
+            }
+            Some(Err(_)) => {
+                return Err(Error::TwoPcCleanupPending {
+                    transaction: txn,
+                    phase,
+                    source: Box::new(source),
+                });
+            }
+            Some(Ok(())) => {}
+        }
+
+        if phase == TwoPcPhase::Phase1 {
+            info!("[2pc] transaction {txn} rolled back after {phase} failure: {source}");
+            return Err(source);
+        }
+
+        warn!(
+            "[2pc] transaction {txn} committed by the 2pc manager after {phase} failure: {source}"
+        );
+        // The connections that failed are broken and cannot be reattached.
+        self.connections.clear();
+        Ok(())
     }
 
     async fn two_pc_on_shards(
@@ -496,7 +531,10 @@ mod test {
             .await
             .unwrap();
 
-        subscriber.copy_done().await.unwrap();
+        subscriber
+            .copy_done(&CancellationToken::new())
+            .await
+            .unwrap();
         let mut server = cluster.primary(0, &Request::default()).await.unwrap();
         let count = server
             .fetch_all::<i64>("SELECT COUNT(*)::BIGINT FROM pgdog.sharded")
