@@ -144,6 +144,7 @@ impl Error {
 
     /// It's not a supported feature so we should tell the client so.
     pub(crate) fn is_unsupported(&self) -> bool {
+        use crate::backend::pool::Error as PoolError;
         matches!(
             self,
             Self::Aggregate(
@@ -152,7 +153,7 @@ impl Error {
             ) | Self::MultiShard(MultiShardError::Aggregate(
                 AggregateError::UnsupportedAggregation { .. }
                     | AggregateError::UnsupportedHaving(_)
-            ))
+            )) | Self::Pool(PoolError::PubSubDisabled)
         )
     }
 

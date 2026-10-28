@@ -90,7 +90,8 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
         return Ok(TruthValue::Unknown);
     }
 
-    let ordering = numeric_ordering(left, right)
+    let ordering = left
+        .compare_numeric(right)
         .or_else(|| left.partial_cmp(right))
         .ok_or_else(|| {
             Error::UnsupportedHaving(format!(
@@ -112,20 +113,6 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
     } else {
         TruthValue::False
     })
-}
-
-fn numeric_ordering(left: &Datum, right: &Datum) -> Option<Ordering> {
-    let (left, right) = (integer(left)?, integer(right)?);
-    Some(left.cmp(&right))
-}
-
-fn integer(value: &Datum) -> Option<i128> {
-    match value {
-        Datum::Bigint(value) => Some((*value).into()),
-        Datum::Integer(value) => Some((*value).into()),
-        Datum::SmallInt(value) => Some((*value).into()),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
