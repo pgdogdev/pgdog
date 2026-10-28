@@ -1,7 +1,9 @@
 use fnv::FnvHashMap as HashMap;
 
 use super::super::Error;
-use crate::net::{CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes};
+use crate::net::{
+    CommandComplete, FromBytes, Message, Protocol, ReadyForQuery, ToBytes, TransactionState,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum CommandType {
@@ -13,6 +15,7 @@ pub(crate) struct MultiServerState {
     servers: usize,
     rows: usize,
     counters: HashMap<char, usize>,
+    in_transaction: bool,
 }
 
 impl MultiServerState {
@@ -22,6 +25,7 @@ impl MultiServerState {
             servers,
             rows: 0,
             counters: HashMap::default(),
+            in_transaction: false,
         }
     }
 
@@ -38,7 +42,14 @@ impl MultiServerState {
                 self.rows += command_complete.rows()?.unwrap_or(0);
                 false
             }
-            'Z' => false,
+            'Z' => {
+                // track if we have opened the transaction on server
+                // due to 2pc.auto. In that case we should process server
+                // responses as inside the transaction.
+                let state = ReadyForQuery::from_bytes(message.to_bytes())?.state()?;
+                self.in_transaction |= state != TransactionState::Idle;
+                false
+            }
             'n' => *count == self.servers && !self.counters.contains_key(&'D'),
             'I' => *count == self.servers && !self.counters.contains_key(&'C'),
             _ => true,
@@ -68,8 +79,8 @@ impl MultiServerState {
         Some(CommandComplete::new(format!("{} {}", name, self.rows())))
     }
 
-    /// Create ReadyForQuery (C) message.
-    pub(crate) fn ready_for_query(&self, in_transaction: bool) -> Option<ReadyForQuery> {
+    /// Create ReadyForQuery (Z) message from the server transaction state.
+    pub(crate) fn ready_for_query(&self) -> Option<ReadyForQuery> {
         if !self.counters.contains_key(&'Z') {
             return None;
         }
@@ -77,7 +88,7 @@ impl MultiServerState {
         if self.error() {
             Some(ReadyForQuery::error())
         } else {
-            Some(ReadyForQuery::in_transaction(in_transaction))
+            Some(ReadyForQuery::in_transaction(self.in_transaction))
         }
     }
 }

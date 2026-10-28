@@ -165,7 +165,10 @@ impl QueryEngine {
                     rewrite_result.and_then(RewriteResult::offset_plan),
                 ) {
                     Ok(()) => {}
-                    Err(err @ RewriteError::UnsupportedHaving(_)) => {
+                    Err(
+                        err @ (RewriteError::UnsupportedHaving(_)
+                        | RewriteError::OrderByExpressionUnsupported),
+                    ) => {
                         if let Some(transaction) = context.transaction.as_mut() {
                             transaction.set_error();
                         }
@@ -175,16 +178,6 @@ impl QueryEngine {
                             ErrorResponse::unsupported(&err),
                         )
                         .await?;
-                        return Ok(false);
-                    }
-                    Err(unsupported_error @ RewriteError::OrderByExpressionUnsupported) => {
-                        self.error_response(
-                            context,
-                            client_request,
-                            ErrorResponse::unsupported(&unsupported_error),
-                        )
-                        .await?;
-
                         return Ok(false);
                     }
                     Err(rewrite_error) => return Err(rewrite_error.into()),
