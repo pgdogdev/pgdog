@@ -263,9 +263,6 @@ pub(crate) enum Error {
         op: &'static str,
     },
 
-    #[error("{0}")]
-    InvalidTableName(#[from] super::table_move::InvalidTableName),
-
     #[error("source and destination are the same database \"{0}\"")]
     SameDatabase(String),
 

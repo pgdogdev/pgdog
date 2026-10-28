@@ -4,8 +4,7 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
-use crate::backend::replication::logical::Error as ReplicationError;
-use crate::backend::replication::logical::table_move::{QualifiedTable, TableMove};
+use crate::backend::replication::logical::table_move::TableMove;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::prelude::*;
@@ -13,7 +12,7 @@ use super::prelude::*;
 /// What to copy: the tables of an existing publication, or a single table.
 pub(crate) enum CopySource {
     Publication(String),
-    Table(QualifiedTable),
+    Table(String),
 }
 
 pub(crate) struct CopyData {
@@ -21,11 +20,6 @@ pub(crate) struct CopyData {
     pub(crate) to_database: String,
     pub(crate) source: CopySource,
     pub(crate) replication_slot: Option<String>,
-}
-
-fn table(name: &str) -> Result<CopySource, Error> {
-    let table = name.parse().map_err(ReplicationError::from)?;
-    Ok(CopySource::Table(table))
 }
 
 #[async_trait]
@@ -38,8 +32,9 @@ impl Command for CopyData {
         let parts = sql.split(" ").collect::<Vec<_>>();
 
         let (from_database, to_database, source, replication_slot) = match parts[..] {
-            ["copy_data", from, to, "table", name] => (from, to, table(name)?, None),
-            ["copy_data", from, to, "table", name, slot] => (from, to, table(name)?, Some(slot)),
+            ["copy_data", from, to, "table", table] => {
+                (from, to, CopySource::Table(table.to_owned()), None)
+            }
             ["copy_data", from, to, publication] => (
                 from,
                 to,
@@ -74,7 +69,7 @@ impl Command for CopyData {
             }
             CopySource::Table(table) => {
                 info!(
-                    r#"copy_data "{}" to "{}", table={}"#,
+                    r#"copy_data "{}" to "{}", table="{}""#,
                     self.from_database, self.to_database, table
                 );
                 let table_move = TableMove::new(table.clone());
@@ -125,22 +120,11 @@ mod test {
         assert_eq!(cmd.replication_slot.as_deref(), Some("slot"));
 
         let cmd = CopyData::parse("copy_data a b table sales.orders").unwrap();
-        assert!(matches!(
-            &cmd.source,
-            CopySource::Table(t) if t.schema == "sales" && t.name == "orders"
-        ));
+        assert!(matches!(&cmd.source, CopySource::Table(t) if t == "sales.orders"));
         assert_eq!(cmd.replication_slot, None);
-
-        let cmd = CopyData::parse("copy_data a b table orders slot").unwrap();
-        assert!(matches!(
-            &cmd.source,
-            CopySource::Table(t) if t.schema == "public" && t.name == "orders"
-        ));
-        assert_eq!(cmd.replication_slot.as_deref(), Some("slot"));
         assert_eq!(cmd.from_database, "a");
         assert_eq!(cmd.to_database, "b");
 
-        assert!(CopyData::parse("copy_data a b table a.b.c").is_err());
         assert!(CopyData::parse("copy_data a b").is_err());
     }
 }

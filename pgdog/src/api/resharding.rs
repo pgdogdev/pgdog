@@ -72,13 +72,13 @@ impl Task for ReshardTask {
             .publication(state.publication.clone())
             .publication_tables_only(self.table_move.is_some());
 
-        if let Some(table_move) = &self.table_move {
-            table_move.prepare(&state).await?;
-        }
+        let mut copied = false;
+        let result: Result<(), MigrationError> = Box::pin(async {
+            if let Some(table_move) = &self.table_move {
+                table_move.prepare(&state).await?;
+            }
 
-        // Pre-data schema sync, unless skipped. It runs before any replication
-        // slots exist, so it stays outside the cleanup guard below.
-        let prepared: Result<(), MigrationError> = Box::pin(async {
+            // Pre-data schema sync, unless skipped.
             if !self.skip_schema_sync {
                 ctx.set_status(ReshardStatus::SchemaSync);
                 ctx.run(
@@ -96,19 +96,6 @@ impl Task for ReshardTask {
                 state.reload()?;
             }
 
-            Ok(())
-        })
-        .await;
-
-        if let Err(err) = prepared {
-            if let Some(table_move) = &self.table_move {
-                table_move.finish(&state, false).await;
-            }
-            return Err(err);
-        }
-
-        let mut copied = false;
-        let result: Result<(), MigrationError> = Box::pin(async {
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);

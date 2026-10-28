@@ -9,7 +9,7 @@ use crate::api::task::TaskError;
 use crate::api::{MigrationError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
-use crate::backend::replication::logical::table_move::{QualifiedTable, TableMove};
+use crate::backend::replication::logical::table_move::TableMove;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
@@ -90,7 +90,7 @@ pub(crate) enum Commands {
         /// Move a single table ("table" or "schema.table") instead of a publication.
         /// Schema sync creates only this table. Runs until interrupted, without cutover.
         #[arg(long)]
-        table: Option<QualifiedTable>,
+        table: Option<String>,
 
         /// Destination database.
         #[arg(long)]
@@ -387,11 +387,7 @@ mod test {
             else {
                 panic!("not a data sync command");
             };
-            let table = table.expect("table is set");
-            assert_eq!(
-                (table.schema.as_str(), table.name.as_str()),
-                ("sales", "orders")
-            );
+            assert_eq!(table.as_deref(), Some("sales.orders"));
             assert_eq!(publication, None);
 
             let Commands::DataSync {
@@ -405,7 +401,6 @@ mod test {
 
             for args in [
                 vec![],
-                vec!["--table", "a.b.c"],
                 vec!["--table", "t", "--publication", "p"],
                 vec!["--table", "t", "--replicate-only"],
             ] {

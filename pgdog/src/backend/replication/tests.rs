@@ -10,7 +10,7 @@ use super::logical::Error;
 use super::logical::publisher::Table;
 use super::logical::publisher::replication_progress::ReplicationProgress;
 use super::logical::resharding_state::ReshardingState;
-use super::logical::table_move::{QualifiedTable, TableMove};
+use super::logical::table_move::TableMove;
 use crate::{
     api::{
         MigrationError,
@@ -993,10 +993,7 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
             .await?;
         let mut dest_server = dest.primary(0, &Request::default()).await?;
 
-        let table_move = TableMove::new(QualifiedTable {
-            schema: schema.into(),
-            name: "main".into(),
-        });
+        let table_move = TableMove::new(format!("{schema}.main"));
         let publication = table_move.publication().to_owned();
         let state = ReshardingState::builder()
             .source(schema)
@@ -1130,10 +1127,7 @@ async fn table_move_fails_before_copy_when_referenced_table_is_missing()
             ))
             .await?;
 
-        let table_move = TableMove::new(QualifiedTable {
-            schema: schema.into(),
-            name: "child".into(),
-        });
+        let table_move = TableMove::new(format!("{schema}.child"));
         let state = ReshardingState::builder()
             .source(schema)
             .destination(destination)
