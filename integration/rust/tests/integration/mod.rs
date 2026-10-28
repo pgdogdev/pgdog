@@ -1,5 +1,4 @@
 pub mod admin;
-pub mod admin_reload;
 pub mod admin_termination;
 pub mod advisory_locks;
 pub mod auth;
@@ -27,6 +26,7 @@ pub mod non_deterministic_funcs;
 pub mod notify;
 mod numeric_infinity;
 pub mod offset;
+pub mod order_by;
 pub mod partial_req;
 mod passthrough_debounce;
 pub mod per_stmt_routing;

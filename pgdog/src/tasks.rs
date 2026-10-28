@@ -25,24 +25,24 @@ where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let mut counter = TASKS.counter.entry(name).or_insert(0);
-    *counter += 1;
+    *TASKS.counter.entry(name).or_insert(0) += 1;
+    let guard = CounterGuard(name);
 
     TASKS.tracker.spawn(async move {
-        let res = future.await;
-        let mut remove = false;
-
-        if let Some(mut counter) = TASKS.counter.get_mut(name) {
-            *counter = counter.saturating_sub(1);
-            remove = *counter == 0;
-        }
-
-        if remove {
-            TASKS.counter.remove(name);
-        }
-
-        res
+        let _guard = guard;
+        future.await
     })
+}
+
+struct CounterGuard(&'static str);
+
+impl Drop for CounterGuard {
+    fn drop(&mut self) {
+        if let Some(mut counter) = TASKS.counter.get_mut(self.0) {
+            *counter = counter.saturating_sub(1);
+        }
+        TASKS.counter.remove_if(self.0, |_, count| *count == 0);
+    }
 }
 
 /// Shared shutdown signal for background tasks that are not tied to a pool/client signal.

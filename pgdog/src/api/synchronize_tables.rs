@@ -69,6 +69,11 @@ impl Task for SynchronizeTablesTask {
             select! {
                 result = &mut replication => {
                     result?;
+                    if ctx.cancellation_token().is_cancelled() {
+                        // the tasks where cancelled and not
+                        // unexpectedly stopped
+                        return Err(Error::ReplicationAborted);
+                    }
                     return Err(Error::ReplicationStreamStopped);
                 }
                 _ = check.tick() => {
