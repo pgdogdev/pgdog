@@ -186,6 +186,7 @@ impl<'a> Parser<'a> {
     fn supported_value(node: Node<'_>) -> bool {
         match node {
             Node::A_Const(_) | Node::ParamRef(_) | Node::ColumnRef(_) => true,
+            Node::TypeCast(cast) => Self::supported_value(cast.arg()),
             Node::FuncCall(_) => Self::supported_aggregate(node),
             _ => false,
         }
@@ -314,20 +315,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cast_operands() {
-        let ast = pg_raw_parse::parse(
+    fn rewrites_cast_operands() {
+        let (sql, plan) = rewrite(
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*)::numeric > 3",
-        )
-        .unwrap();
-        let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {
-            panic!("expected SELECT")
-        };
-        let result = make::try_owned(|mem| {
-            let mut select = mem.make_unique(select);
-            rewrite_select(&mut select.as_mut(), mem).map(|_| select)
-        });
-        assert!(matches!(result, Err(Error::UnsupportedHaving(_))));
+        );
+
+        assert_eq!(
+            sql,
+            "SELECT customer_id, count(*)::numeric AS __pgdog_having_0, \
+             3 AS __pgdog_having_1, customer_id AS __pgdog_having_2 \
+             FROM purchases GROUP BY customer_id HAVING count(*)::numeric > 3 OR true"
+        );
+        assert_eq!(plan.hidden_aliases().len(), 3);
     }
 
     #[test]
