@@ -21,6 +21,16 @@ pub(super) struct Evaluator<'a> {
     columns: HashMap<&'a str, usize>,
 }
 
+impl TruthValue {
+    fn not(self) -> Self {
+        match self {
+            Self::True => Self::False,
+            Self::False => Self::True,
+            Self::Unknown => Self::Unknown,
+        }
+    }
+}
+
 impl<'a> Evaluator<'a> {
     pub(super) fn new(expression: &'a HavingExpr, decoder: &'a Decoder) -> Self {
         let columns = decoder
@@ -58,6 +68,39 @@ impl<'a> Evaluator<'a> {
                 let left = self.value(left, row, decoder)?;
                 let right = self.value(right, row, decoder)?;
                 compare(&left, *operator, &right)
+            }
+            HavingExpr::And(expressions) => {
+                let mut result = TruthValue::True;
+                for expression in expressions {
+                    match self.evaluate_expression(expression, row, decoder)? {
+                        TruthValue::False => return Ok(TruthValue::False),
+                        TruthValue::Unknown => result = TruthValue::Unknown,
+                        TruthValue::True => {}
+                    }
+                }
+                Ok(result)
+            }
+            HavingExpr::Or(expressions) => {
+                let mut result = TruthValue::False;
+                for expression in expressions {
+                    match self.evaluate_expression(expression, row, decoder)? {
+                        TruthValue::True => return Ok(TruthValue::True),
+                        TruthValue::Unknown => result = TruthValue::Unknown,
+                        TruthValue::False => {}
+                    }
+                }
+                Ok(result)
+            }
+            HavingExpr::Not(expression) => {
+                Ok(self.evaluate_expression(expression, row, decoder)?.not())
+            }
+            HavingExpr::IsNull { value, negated } => {
+                let is_null = self.value(value, row, decoder)?.is_null();
+                Ok(if is_null != *negated {
+                    TruthValue::True
+                } else {
+                    TruthValue::False
+                })
             }
         }
     }
@@ -166,6 +209,72 @@ mod tests {
             evaluate(&missing, &row, &decoder),
             Err(Error::InvalidHaving(_))
         ));
+    }
+
+    #[test]
+    fn implements_sql_three_valued_boolean_logic() {
+        let decoder = Decoder::from(RowDescription::new(&[
+            Field::bigint("__pgdog_having_0"),
+            Field::bigint("__pgdog_having_1"),
+        ]));
+        let mut row = DataRow::new();
+        row.add(Datum::Null).add(2_i64);
+
+        let unknown = compare_expression(CompareOperator::Greater);
+        let is_null = HavingExpr::IsNull {
+            value: HavingValue::new("__pgdog_having_0".into()),
+            negated: false,
+        };
+        let is_not_null = HavingExpr::IsNull {
+            value: HavingValue::new("__pgdog_having_1".into()),
+            negated: true,
+        };
+        let known_false = HavingExpr::Compare {
+            left: HavingValue::new("__pgdog_having_1".into()),
+            operator: CompareOperator::Greater,
+            right: HavingValue::new("__pgdog_having_1".into()),
+        };
+
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::And(vec![is_null.clone(), unknown.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::Unknown
+        );
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::And(vec![unknown.clone(), known_false.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::False
+        );
+        assert_eq!(
+            evaluate_expression(
+                &HavingExpr::Or(vec![known_false.clone(), unknown.clone()]),
+                &row,
+                &decoder
+            )
+            .unwrap(),
+            TruthValue::Unknown
+        );
+        assert!(
+            evaluate(
+                &HavingExpr::Or(vec![unknown.clone(), is_null]),
+                &row,
+                &decoder
+            )
+            .unwrap()
+        );
+        assert!(evaluate(&is_not_null, &row, &decoder).unwrap());
+        assert_eq!(
+            evaluate_expression(&HavingExpr::Not(Box::new(unknown)), &row, &decoder).unwrap(),
+            TruthValue::Unknown
+        );
     }
 
     #[test]
