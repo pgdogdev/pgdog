@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use pg_raw_parse::{Error as ParseError, deparse, nodes};
+use pg_raw_parse::{Error as ParseError, Node, deparse, nodes};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tracing::debug;
@@ -15,6 +15,17 @@ use super::{super::parse_edge_comment, Ast, AstContext, AstQuery, ClientQuery};
 use crate::frontend::{BufferedQuery, PreparedStatements};
 
 static CACHE: Lazy<Cache> = Lazy::new(Cache::new);
+
+/// Parsing SQL `PREPARE`/`EXECUTE` also updates the calling client's
+/// `PreparedStatements` (e.g. `get_user` -> `__pgdog_1`). The cache only
+/// stores the AST, not that update, so these must always be parsed.
+fn cacheable(ast: &Ast) -> bool {
+    ast.rewrite_plan.prepare_rewrites.is_empty()
+        && !matches!(
+            ast.ast.stmts().next(),
+            Some(Node::PrepareStmt(_) | Node::ExecuteStmt(_))
+        )
+}
 
 /// Cache statistics.
 #[derive(Default, Debug, Clone, Copy)]
@@ -172,9 +183,12 @@ impl Cache {
             )?);
 
             let parse_time = ast.stats.parse_time;
+            let insert = cacheable(&ast);
 
             let mut guard = self.inner.write();
-            guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast));
+            if insert {
+                guard.insert(ast.query_without_comment.clone(), Arc::clone(&ast));
+            }
             guard.stats.misses += 1;
             guard.stats.parse_time += parse_time;
 

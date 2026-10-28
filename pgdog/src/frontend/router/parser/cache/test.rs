@@ -1,6 +1,7 @@
 #![allow(clippy::print_stdout)]
 
 use pg_raw_parse::parse;
+use pgdog_config::PreparedStatementsLevel;
 use tokio::spawn;
 
 use crate::{
@@ -143,6 +144,30 @@ fn test_cache_hit_same_query_no_comment() {
     let (stats, _) = Cache::stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn test_sql_prepare_rewrite_is_not_cached() {
+    let _guard = CACHE_STATS_LOCK.lock();
+    Cache::reset();
+
+    for outer_name in ["outer_prepare_1", "outer_prepare_2"] {
+        let mut prepared_statements = PreparedStatements::default();
+        prepared_statements.set_level(PreparedStatementsLevel::Full);
+        let query =
+            BufferedQuery::Prepared(Parse::named(outer_name, "PREPARE cache_stmt AS SELECT $1"));
+
+        Cache::get()
+            .query(&query, &test_context(), &mut prepared_statements)
+            .unwrap();
+
+        assert!(prepared_statements.prepared_plan("cache_stmt").is_some());
+    }
+
+    let (stats, len) = Cache::stats();
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.hits, 0);
+    assert_eq!(len, 0);
 }
 
 #[test]
