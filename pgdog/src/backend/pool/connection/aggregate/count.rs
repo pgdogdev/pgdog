@@ -1,6 +1,7 @@
 use super::TypeError;
 use crate::net::messages::Datum;
-use pgdog_postgres_types::{DataType, Float};
+use pgdog_postgres_types::{DataType, Float, Numeric};
+use rust_decimal::prelude::ToPrimitive;
 
 #[derive(Debug)]
 pub(super) struct Count {
@@ -23,9 +24,16 @@ impl Count {
             return Ok(());
         }
 
+        let partial = match &value {
+            Datum::Numeric(numeric) => numeric
+                .as_decimal()
+                .and_then(|decimal| decimal.to_i64())
+                .ok_or(TypeError::NumericOutOfRange(DataType::Bigint))?,
+            value => value.as_i64()?,
+        };
         self.total = self
             .total
-            .checked_add(value.as_i64()?)
+            .checked_add(partial)
             .ok_or(TypeError::NumericOutOfRange(DataType::Bigint))?;
         self.data_type = value.data_type();
         Ok(())
@@ -42,6 +50,7 @@ impl Count {
             DataType::Bigint => Ok(self.total.into()),
             DataType::Real => Ok(Datum::Float(Float(self.total as f32))),
             DataType::DoublePrecision => Ok(Datum::from(self.total as f64)),
+            DataType::Numeric => Ok(Datum::Numeric(Numeric::from(self.total))),
             to => Err(TypeError::InvalidCast {
                 from: DataType::Bigint,
                 to,
@@ -70,6 +79,21 @@ fn count_with_only_null() {
     state.accumulate(Datum::Null).unwrap();
     state.accumulate(Datum::Null).unwrap();
     assert_eq!(state.finalize().expect("valid count"), 0i64.into());
+}
+
+#[test]
+fn count_cast_to_numeric_merges_as_numeric() {
+    let mut state = Count::new(0);
+    state
+        .accumulate(Datum::Numeric(Numeric::from(2_i64)))
+        .unwrap();
+    state
+        .accumulate(Datum::Numeric(Numeric::from(3_i64)))
+        .unwrap();
+    assert_eq!(
+        state.finalize().expect("valid count"),
+        Datum::Numeric(Numeric::from(5_i64))
+    );
 }
 
 #[test]

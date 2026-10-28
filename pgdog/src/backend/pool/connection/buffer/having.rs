@@ -196,6 +196,7 @@ fn float(value: &Datum) -> Option<f64> {
     match value {
         Datum::Double(value) => Some(value.0),
         Datum::Float(value) => Some(value.0.into()),
+        Datum::Numeric(value) => value.to_f64(),
         Datum::Bigint(value) => Some(*value as f64),
         Datum::Integer(value) => Some((*value).into()),
         Datum::SmallInt(value) => Some((*value).into()),
@@ -413,6 +414,11 @@ mod tests {
                 CompareOperator::Less,
                 Datum::Integer(2),
                 Datum::Double(Double(2.5)),
+            ),
+            (
+                CompareOperator::GreaterOrEqual,
+                Datum::Double(Double(3.0)),
+                Datum::Numeric(Numeric::from(3_i32)),
             ),
         ] {
             assert_eq!(compare(&left, operator, &right).unwrap(), TruthValue::True);
