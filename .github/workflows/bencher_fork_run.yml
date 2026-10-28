@@ -10,8 +10,7 @@
 # This is the documented 2-step workflow that Bencher mentions in their docs.
 name: bencher-fork-run
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 jobs:
   image:
