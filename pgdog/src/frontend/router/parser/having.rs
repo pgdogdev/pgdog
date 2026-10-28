@@ -1,6 +1,4 @@
 //! Cross-shard `HAVING` execution plan.
-// Only tests build plans until the HAVING rewriter is wired in.
-#![cfg_attr(not(test), allow(dead_code))]
 
 /// Comparison operators supported by the cross-shard `HAVING` evaluator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
