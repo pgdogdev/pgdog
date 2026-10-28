@@ -5,6 +5,7 @@ pub(crate) mod publisher;
 pub(crate) mod resharding_state;
 pub(crate) mod schema_sync;
 pub(crate) mod subscriber;
+pub(crate) mod table_move;
 pub(crate) mod tables_sync;
 
 pub(crate) use copy_statement::CopyStatement;
