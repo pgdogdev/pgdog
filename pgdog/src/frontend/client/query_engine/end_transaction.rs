@@ -108,6 +108,7 @@ impl QueryEngine {
         if rollback {
             self.backend.execute("ROLLBACK").await?;
             self.backend.end_transaction();
+            self.two_pc.reset();
             return Ok(());
         }
 

@@ -140,7 +140,7 @@ impl<'a> InsertMulti<'a> {
                 .await?;
         }
 
-        if let Some(rfq) = self.state.ready_for_query(context.in_transaction()) {
+        if let Some(rfq) = self.state.ready_for_query() {
             self.engine
                 .process_server_message(context, rfq.message())
                 .await?;
