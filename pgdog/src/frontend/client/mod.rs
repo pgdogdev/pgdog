@@ -554,15 +554,15 @@ impl Client {
             }
 
             _ = shutdown.cancelled() => {
-                // Check if we should be shutting down.
-                let offline = self.comms.offline();
-
                 // Check that there are no active transactions.
                 let query_engine_done = query_engine.can_disconnect();
 
+                // TODO: will do this before merge
+                //       This should be queued to be automatically run when QueryEngine is ready
+                //       to disconnect via something like `query_engine.queue_disconnect()`
+                //
                 // If query engine is idle and we requested shutdown, we're done.
-                if query_engine_done && offline {
-
+                if query_engine_done {
                     // Send shutdown notification to client.
                     self.stream
                         .send_flush(&ErrorResponse::shutting_down())
