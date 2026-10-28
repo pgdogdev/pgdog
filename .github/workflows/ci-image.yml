@@ -20,15 +20,6 @@ on:
       - "integration/haskell/cabal.project"
       - "integration/haskell/*.cabal"
       - "rust-toolchain.toml"
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - ".github/workflows/**"
-      - "docker/Dockerfile.ci"
-      - "integration/ci/install-deps.sh"
-      - "integration/haskell/cabal.project"
-      - "integration/haskell/*.cabal"
-      - "rust-toolchain.toml"
 
 env:
   IMAGE: ghcr.io/pgdogdev/pgdog-ci

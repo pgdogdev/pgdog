@@ -14,7 +14,6 @@ use crate::backend::replication::data_sync::{
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
-use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
 use crate::util::safe_sleep;
 use crate::util::stats::average_rate;
@@ -279,7 +278,7 @@ impl Task for TableDataSyncTask {
                 Ok(table) => return Ok(table),
                 Err(err) if !err.is_retryable() || attempt >= max_retries => {
                     // Terminal failure: warn if rows remain so the operator can truncate.
-                    let _ = validate_destination_has_rows(&self.table, &self.dest).await;
+                    let _ = self.can_retry().await;
                     return Err(err);
                 }
                 Err(err) => {
@@ -310,24 +309,25 @@ impl Task for TableDataSyncTask {
                         return Err(Error::DataSyncAborted);
                     }
 
-                    if self.dest.two_pc_enabled()
-                        && let Some(txn) = err.two_pc_cleanup_transaction()
-                    {
-                        Manager::get().wait_until_cleaned_up(txn).await;
-                    }
-
-                    // Not idempotent (no truncate): if a prior attempt left rows on a
-                    // reachable shard, the re-copy can only collide, so stop instead of
-                    // retrying. A shard we cannot probe is logged (not blocked on), since we
-                    // cannot prove it dirty. Checked after the backoff so a RELOAD-churned
-                    // pool can recover first.
                     // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
                     // race (rows remain → PK violations). Safe once source-guard checks exist.
-                    if validate_destination_has_rows(&self.table, &self.dest).await {
+                    if !self.can_retry().await {
                         return Err(err);
                     }
                 }
             }
         }
+    }
+}
+
+impl TableDataSyncTask {
+    /// Whether the destination is in a state where a failed copy can be retried.
+    /// Without 2PC, a failed copy can leave rows that a retry would collide with.
+    async fn can_retry(&self) -> bool {
+        if self.dest.two_pc_enabled() {
+            return true;
+        }
+
+        !validate_destination_has_rows(&self.table, &self.dest).await
     }
 }

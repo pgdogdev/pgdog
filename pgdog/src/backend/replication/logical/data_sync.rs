@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 use pgdog_config::CopyFormat;
 use pgdog_stats::TaskId;
 
-use crate::backend::pool::{Address, Request};
+use crate::backend::pool::Address;
 use crate::backend::replication::copy_statement::TableColumnSplit;
 use crate::backend::replication::publisher::{ReplicationSlot, ReplicationSlotStream};
 use crate::backend::replication::subscriber::copy::BackgroundSubscriber;
@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use super::Error;
 use super::ensure_validation;
 use super::publisher::Table;
-use super::subscriber::CopySubscriber;
+use super::subscriber::{CopySubscriber, connect_primary};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CopyProgress {
@@ -336,8 +336,8 @@ pub(super) fn source_regclass(table: &Table) -> String {
 /// Returns `true` if any reachable destination shard holds rows from a prior COPY
 /// attempt. Emits a single WARN listing the shards that do hold rows.
 pub(crate) async fn validate_destination_has_rows(table: &Table, dest: &Cluster) -> bool {
-    let schema = table.table.destination_schema();
-    let name = table.table.destination_name();
+    let schema = &table.table.schema;
+    let name = &table.table.name;
     let sql = format!(
         "SELECT 1 FROM \"{}\".\"{}\" LIMIT 1",
         escape_identifier(schema),
@@ -346,9 +346,8 @@ pub(crate) async fn validate_destination_has_rows(table: &Table, dest: &Cluster)
 
     let mut shards_with_rows = vec![];
     for shard in dest.shards().iter() {
-        let shard = shard.number();
         let result: Result<bool, Error> = async {
-            let mut server = dest.primary(shard, &Request::default()).await?;
+            let mut server = connect_primary(shard).await?;
             Ok(server
                 .execute_checked(sql.as_str())
                 .await?
@@ -357,12 +356,13 @@ pub(crate) async fn validate_destination_has_rows(table: &Table, dest: &Cluster)
         }
         .await;
 
+        let shard = shard.number();
         match result {
             Ok(true) => shards_with_rows.push(shard),
-            Ok(false) => {}
+            Ok(false) => debug!("destination \"{schema}\".\"{name}\" is empty on shard {shard}"),
             Err(err) => warn!(
-                "could not verify destination rows on shard {shard}: {err}; \
-                     proceeding as if empty"
+                "could not verify rows of destination \"{schema}\".\"{name}\" on shard {shard}: {err}; \
+                 proceeding as if empty"
             ),
         }
     }
@@ -494,8 +494,8 @@ mod test {
         }
     }
 
-    /// Leftover rows on the destination must be detected. A shard whose probe
-    /// fails cannot be proven dirty and must not be counted.
+    /// Leftover rows on the destination must be detected, also after the
+    /// cluster's pools are shut down (RELOAD replaces the cluster mid-copy).
     #[tokio::test]
     async fn destination_row_check_detects_leftover_rows() {
         crate::logger();
@@ -543,8 +543,8 @@ mod test {
 
         cluster.shutdown();
         assert!(
-            !validate_destination_has_rows(&table, &cluster).await,
-            "an unreachable shard cannot be proven dirty"
+            validate_destination_has_rows(&table, &cluster).await,
+            "a shut-down pool must not hide rows"
         );
 
         for ddl in &[

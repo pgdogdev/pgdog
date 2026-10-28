@@ -10,6 +10,7 @@ resharding_parallel_copies = 1
 resharding_copy_retry_max_attempts = 100
 resharding_copy_retry_min_delay = 10
 two_phase_commit = true # enable to prevent unique constraint violation during multiple retries
+tls_verify = "disabled" # plaintext wire, so run.sh can place the toxic cut by byte count
 
 [[databases]]
 name = "source"
