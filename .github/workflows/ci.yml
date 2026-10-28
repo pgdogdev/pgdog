@@ -209,6 +209,7 @@ jobs:
   success:
     name: All Integration Tests Passed
     needs: ci
+    if: always()
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-    - run: echo Done!
+    - run: test "${{ needs.ci.result }}" = "success"
