@@ -8,8 +8,8 @@ use std::{
 use crate::{
     frontend::{self, prepared_statements::GlobalCache},
     net::{
-        Close, CloseComplete, Describe, FromBytes, Message, ParseComplete, Protocol,
-        ProtocolMessage, ToBytes,
+        Close, CloseComplete, FromBytes, Message, ParseComplete, Protocol, ProtocolMessage,
+        ToBytes,
         messages::{ParameterDescription, RowDescription, parse::Parse},
     },
     state::State,
@@ -59,7 +59,6 @@ pub(super) struct Prepare {
     /// Some if statement was prepared previously, but has expired since
     close: Option<ProtocolMessage>,
     parse: ProtocolMessage,
-    describe: Option<ProtocolMessage>,
 }
 
 impl Prepare {
@@ -72,15 +71,8 @@ impl Prepare {
         &self.parse
     }
 
-    pub(super) fn describe(&self) -> Option<&ProtocolMessage> {
-        self.describe.as_ref()
-    }
-
     fn anonymize(&mut self) {
         self.parse.anonymize();
-        if let Some(describe) = &mut self.describe {
-            describe.anonymize();
-        }
     }
 }
 
@@ -95,10 +87,6 @@ pub(super) enum HandleResult {
         rewrite: ProtocolMessage,
     },
     PrependProtocolMessage(ProtocolMessage),
-    PrependProtocolMessageRewrite {
-        prepend: ProtocolMessage,
-        rewrite: ProtocolMessage,
-    },
 }
 
 /// Server-specific prepared statements.
@@ -113,8 +101,6 @@ pub(crate) struct PreparedStatements {
     state: ProtocolState,
     // Prepared statements being prepared now on the connection.
     parses: VecDeque<String>,
-    // Describes being executed now on the connection.
-    describes: VecDeque<String>,
     // Statement names of every statement Describe sent (to match each ParameterDescription to its statement)
     parameter_describes: VecDeque<String>,
     config: PreparedStatementsConfig,
@@ -140,7 +126,6 @@ impl PreparedStatements {
             local_cache: LruCache::unbounded(),
             state: ProtocolState::default(),
             parses: VecDeque::new(),
-            describes: VecDeque::new(),
             parameter_describes: VecDeque::new(),
             config: PreparedStatementsConfig::default(),
             memory_used: 0,
@@ -198,7 +183,6 @@ impl PreparedStatements {
                             }
                             self.state.add_ignore('1');
                             self.parses.push_back(bind.statement().to_string());
-                            message.describe = self.internal_describe(bind.statement());
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 message.anonymize();
@@ -214,24 +198,11 @@ impl PreparedStatements {
                         }
 
                         None => {
-                            let mut describe = self.internal_describe(bind.statement());
                             self.state.add('2');
                             if self.config.level.rewrite_anonymous() {
                                 let mut bind = bind.clone();
                                 bind.anonymize();
-                                if let Some(describe) = &mut describe {
-                                    describe.anonymize();
-                                }
-                                if let Some(describe) = describe {
-                                    return Ok(HandleResult::PrependProtocolMessageRewrite {
-                                        prepend: describe,
-                                        rewrite: ProtocolMessage::Bind(bind),
-                                    });
-                                }
                                 return Ok(HandleResult::Rewrite(ProtocolMessage::Bind(bind)));
-                            }
-                            if let Some(describe) = describe {
-                                return Ok(HandleResult::PrependProtocolMessage(describe));
                             }
                         }
                     }
@@ -259,11 +230,6 @@ impl PreparedStatements {
                             self.state.add(ExecutionCode::DescriptionOrNothing); // T
 
                             if self.config.level.rewrite_anonymous() {
-                                // Save the RowDescription because
-                                // we don't actually save prepared statements in the server
-                                // anymore so they can be different every time.
-                                self.describes.push_back(describe.statement().to_string());
-
                                 message.anonymize();
                                 let mut describe = describe.clone();
                                 describe.anonymize();
@@ -278,9 +244,7 @@ impl PreparedStatements {
 
                         None => {
                             self.state.add(ExecutionCode::DescriptionOrNothing); // t
-                            self.state.add(ExecutionCode::DescriptionOrNothing);
-                            // T
-                            self.describes.push_back(describe.statement().to_string());
+                            self.state.add(ExecutionCode::DescriptionOrNothing); // T
                             if self.config.level.rewrite_anonymous() {
                                 let mut describe = describe.clone();
                                 describe.anonymize();
@@ -441,25 +405,11 @@ impl PreparedStatements {
                 // Backend ignored any subsequent extended commands.
                 // These prepared statements have not been prepared, even if they
                 // are syntactically valid.
-                self.describes.clear();
                 self.parameter_describes.clear();
                 self.parses.clear();
             }
 
-            'T' => {
-                let maybe_row_description = self.parse_and_rewrite_row_description(message)?;
-                if let Some(describe) = self.describes.pop_front() {
-                    let row_description = maybe_row_description
-                        .map(Ok)
-                        .unwrap_or_else(|| RowDescription::from_bytes(message.payload()))?;
-                    self.add_row_description(&describe, row_description);
-                };
-            }
-
-            // No data for DELETEs
-            'n' => {
-                self.describes.pop_front();
-            }
+            'T' => self.rewrite_row_description(message)?,
 
             '1' | 'C' => {
                 if let Some(name) = self.parses.pop_front() {
@@ -510,7 +460,7 @@ impl PreparedStatements {
 
     /// Extended protocol is in sync.
     pub(crate) fn done(&self) -> bool {
-        self.state.done() && self.parses.is_empty() && self.describes.is_empty()
+        self.state.done() && self.parses.is_empty()
     }
 
     /// The server connection has more messages to send
@@ -560,28 +510,7 @@ impl PreparedStatements {
             // it still holds.
             close: expired.then(|| ProtocolMessage::Close(Close::named(name))),
             parse: ProtocolMessage::Parse(parse),
-            describe: None,
         }))
-    }
-
-    /// Named Bind execution does not return RowDescription, so describe a new
-    /// cross-shard variant internally before decoding its helper columns.
-    fn internal_describe(&mut self, name: &str) -> Option<ProtocolMessage> {
-        if self.describes.iter().any(|describe| describe == name)
-            || !self
-                .global_cache
-                .read()
-                .cross_shard_variant_needs_row_description(name)
-        {
-            return None;
-        }
-
-        self.describes.push_back(name.to_owned());
-        self.parameter_describes.push_back(name.to_owned());
-        self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
-        self.state.add_ignore(ExecutionCode::DescriptionOrNothing);
-
-        Some(ProtocolMessage::Describe(Describe::new_statement(name)))
     }
 
     /// The server has prepared this statement already.
@@ -619,14 +548,6 @@ impl PreparedStatements {
                 self.rewrite_parse_data_types(&mut parse);
                 parse
             })
-    }
-
-    /// Handle a Describe message, storing the RowDescription for the
-    /// statement in the global cache.
-    fn add_row_description(&self, name: &str, row_description: RowDescription) {
-        self.global_cache
-            .write()
-            .insert_row_description(name, row_description);
     }
 
     /// Remove statement from local cache.
@@ -697,11 +618,8 @@ impl PreparedStatements {
     }
 
     /// Rewrite the given RowDescription Message to have the canonical set of
-    /// OIDs. Returns the parsed RowDescription if parsing occurred
-    fn parse_and_rewrite_row_description(
-        &self,
-        message: &mut Message,
-    ) -> Result<Option<RowDescription>, Error> {
+    /// OIDs.
+    fn rewrite_row_description(&self, message: &mut Message) -> Result<(), Error> {
         // RowDescription is emitted during cluster startup, so we can't
         // require OIDs to be loaded.
         let empty_mapping = Default::default();
@@ -712,10 +630,8 @@ impl PreparedStatements {
             if row_description.rewrite_data_types(mappings) {
                 message.replace_payload(row_description.to_bytes());
             }
-            Ok(Some(row_description))
-        } else {
-            Ok(None)
         }
+        Ok(())
     }
 
     /// Rewrite the ParameterDescription for `statement` to hide any parameters the rewrite engine added.
@@ -760,9 +676,8 @@ pub(crate) mod test {
     use crate::frontend::PreparedStatements as FrontendPreparedStatements;
     use crate::net::{
         Bind, CommandComplete, Describe, ErrorResponse, Execute, Message, Parse,
-        Prepare as SimplePrepare, ProtocolMessage, Query, Sync,
-        bind::Parameter,
-        messages::{ReadyForQuery, row_description::Field},
+        Prepare as SimplePrepare, ProtocolMessage, Query, Sync, bind::Parameter,
+        messages::ReadyForQuery,
     };
     use pgdog_config::PreparedStatementsLevel;
 
@@ -844,75 +759,6 @@ pub(crate) mod test {
         let mut ps = new_with_ttl();
 
         assert_parse_without_close!(ps.handle(&bind(&name)).unwrap());
-    }
-
-    #[test]
-    fn bind_describes_a_pending_statement_when_result_shape_is_missing() {
-        let base = insert_global(
-            "internal_description",
-            "SELECT AVG(value) FROM measurements_internal_rd",
-        );
-        let name = FrontendPreparedStatements::global()
-            .write()
-            .cross_shard_variant(
-                &base,
-                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 \
-                 FROM measurements_internal_rd",
-            )
-            .unwrap();
-        let mut ps = new_extended();
-        let parse = ProtocolMessage::Parse(ps.parse(&name).unwrap());
-
-        assert_eq!(ps.handle(&parse).unwrap(), HandleResult::Forward);
-
-        let HandleResult::PrependProtocolMessage(ProtocolMessage::Describe(describe)) =
-            ps.handle(&bind(&name)).unwrap()
-        else {
-            panic!("expected an internal Describe before Bind");
-        };
-        assert_eq!(describe.statement(), name);
-
-        let mut parse_complete = Message::new(ParseComplete.to_bytes());
-        assert!(ps.forward(&mut parse_complete).unwrap());
-
-        let mut parameter_description = Message::new(ParameterDescription::empty().to_bytes());
-        assert!(!ps.forward(&mut parameter_description).unwrap());
-
-        let row_description =
-            RowDescription::new(&[Field::double("avg"), Field::bigint("__pgdog_count_col0")]);
-        let mut message = Message::new(row_description.to_bytes());
-        assert!(!ps.forward(&mut message).unwrap());
-
-        assert_eq!(
-            ps.global_cache.read().row_description(&name).unwrap().len(),
-            2
-        );
-    }
-
-    #[test]
-    fn bind_prepares_and_describes_an_unseen_cross_shard_variant() {
-        let base = insert_global(
-            "prepare_and_describe",
-            "SELECT AVG(value) FROM measurements_prepare_and_describe",
-        );
-        let name = FrontendPreparedStatements::global()
-            .write()
-            .cross_shard_variant(
-                &base,
-                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 \
-                 FROM measurements_prepare_and_describe",
-            )
-            .unwrap();
-        let mut ps = new_extended();
-
-        let HandleResult::Prepend(prepare) = ps.handle(&bind(&name)).unwrap() else {
-            panic!("expected Parse and internal Describe before Bind");
-        };
-        assert!(matches!(prepare.parse(), ProtocolMessage::Parse(parse) if parse.name() == name));
-        assert!(
-            matches!(prepare.describe(), Some(ProtocolMessage::Describe(describe))
-                if describe.statement() == name)
-        );
     }
 
     #[test]

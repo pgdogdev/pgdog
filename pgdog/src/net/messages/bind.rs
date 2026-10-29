@@ -202,6 +202,11 @@ impl Bind {
         unsafe { from_utf8_unchecked(&self.statement[0..self.statement.len() - 1]) }
     }
 
+    pub(crate) fn portal(&self) -> &str {
+        // SAFETY: We check that this is valid UTF-8 in FromBytes::from_bytes below.
+        unsafe { from_utf8_unchecked(&self.portal[0..self.portal.len() - 1]) }
+    }
+
     /// Format the client asked each result column to be returned in.
     pub(crate) fn result_formats(&self) -> impl ExactSizeIterator<Item = Format> + '_ {
         self.results.chunks_exact(2).map(|code| {

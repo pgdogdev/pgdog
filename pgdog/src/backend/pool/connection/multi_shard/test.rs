@@ -3,7 +3,7 @@ use crate::{
         DistinctBy, OrderBy, Shard, ShardWithPriority,
         rewrite::statement::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan},
     },
-    net::{BindComplete, DataRow, Field, Format},
+    net::{BindComplete, DataRow, Field, Format, NoData},
 };
 
 use super::*;
@@ -459,6 +459,37 @@ fn test_bind_result_formats_apply_per_statement() {
         multi_shard.handle_server_message(rd.message()).unwrap();
     }
     assert_eq!(multi_shard.decoder.get_format(0), Format::Text);
+}
+
+/// Rows are decoded with the columns PgDog asked for itself,
+/// and the client only sees the descriptions it asked for.
+#[test]
+fn test_descriptions_pgdog_asked_for_are_not_forwarded() {
+    let mut multi_shard = MultiShard::new(
+        2,
+        &Route::read(ShardWithPriority::new_default_unset(Shard::All)),
+    );
+    multi_shard.set_describes(VecDeque::from([
+        DescribedBy::Client,
+        DescribedBy::PgDog,
+        DescribedBy::PgDog,
+    ]));
+
+    let statement = RowDescription::new(&[Field::text("id")]);
+    let portal = RowDescription::new(&[Field::bigint("id")]);
+    let mut forwarded = vec![];
+
+    for message in [statement.message(), portal.message(), NoData.message()] {
+        for _ in 0..2 {
+            if let Some(message) = multi_shard.handle_server_message(message.clone()).unwrap() {
+                forwarded.push(message);
+            }
+        }
+    }
+
+    assert_eq!(forwarded, vec![statement.message()]);
+    assert_eq!(multi_shard.decoder.row_description(), &portal);
+    assert!(multi_shard.describes.is_empty());
 }
 
 /// A Bind that never completed is dropped at ReadyForQuery, so the next

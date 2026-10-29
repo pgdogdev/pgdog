@@ -39,12 +39,6 @@ impl Protocol for ParameterDescription {
 }
 
 impl ParameterDescription {
-    /// Create an empty parameter description.
-    #[cfg(test)]
-    pub(crate) fn empty() -> Self {
-        Self::default()
-    }
-
     /// Keep only the first `len` parameters.
     pub(crate) fn truncate(&mut self, len: usize) {
         self.params.truncate(len);

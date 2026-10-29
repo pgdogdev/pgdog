@@ -235,6 +235,11 @@ impl ClientRequest {
         let mut messages = self.messages.clone();
         messages.retain(|m| m.code() != 'd');
 
+        self.with_messages(messages)
+    }
+
+    /// The same request, sending these messages instead.
+    pub(crate) fn with_messages(&self, messages: Vec<ProtocolMessage>) -> Self {
         Self {
             messages,
             route: self.route.clone(),
