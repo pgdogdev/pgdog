@@ -225,8 +225,7 @@ async fn shard_consistency_data_row_validator_prepared_statement()
 
     admin_sqlx().await.execute("RELOAD").await?;
 
-    // Now prepare a statement against the views. No ORDER BY: PgDog describes
-    // the portals of results it merges, which would catch the mismatch in RowDescription.
+    // Now prepare a statement against the views.
     let result = sharded
         .prepare("SELECT * FROM datarow_view WHERE id > $1")
         .await;

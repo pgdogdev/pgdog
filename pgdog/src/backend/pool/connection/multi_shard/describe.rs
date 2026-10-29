@@ -56,7 +56,7 @@ fn undescribed_portals(messages: &[ProtocolMessage]) -> impl Iterator<Item = Opt
             described = describe.is_portal().then(|| describe.statement());
             None
         }
-        ProtocolMessage::Bind(bind) if described == Some(bind.portal()) => {
+        ProtocolMessage::Bind(_) => {
             described = None;
             None
         }
@@ -126,6 +126,17 @@ mod test {
             summary(&sent.messages),
             ["B", "DPp1", "Ep1", "B", "DPp2", "Ep2", "S"]
         );
+        assert_eq!(describes, [Client, PgDog]);
+
+        // Bind replaces the portal the client described.
+        let (sent, describes) = describe_portals(&ClientRequest::from(vec![
+            Describe::new_portal("").into(),
+            Bind::new_statement("s1").into(),
+            Execute::new().into(),
+            Sync.into(),
+        ]))
+        .unwrap();
+        assert_eq!(summary(&sent.messages), ["DP", "B", "DP", "E", "S"]);
         assert_eq!(describes, [Client, PgDog]);
     }
 
