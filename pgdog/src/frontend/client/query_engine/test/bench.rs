@@ -104,8 +104,7 @@ async fn route(client: &mut Client, engine: &mut QueryEngine) {
 }
 
 fn background() -> Runtime {
-    let background = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+    let background = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
