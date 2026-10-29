@@ -9,6 +9,9 @@ echo 0 > /proc/sys/kernel/randomize_va_space
 # Microbench run?
 if [[ $1 == "microbench" ]]; then
    taskset -c "${BENCH_MICROBENCH_CPU:-1}" "${PGDOG_MICROBENCH_BIN:-pgdog-microbench}" run_benches --nocapture > microbench_out.txt
+   taskset -c "${BENCH_MICROBENCH_CPU:-1}" "${PGDOG_MICROBENCH_BIN:-pgdog-microbench}" count_instructions --nocapture >> microbench_out.txt \
+      || echo "count_instructions failed" >&2
+   grep '^instructions ' microbench_out.txt >&2 || true
    awk -f benches/perf/divan_to_bmf.awk microbench_out.txt
    exit 0
 fi
