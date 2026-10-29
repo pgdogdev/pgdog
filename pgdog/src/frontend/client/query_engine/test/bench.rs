@@ -196,6 +196,8 @@ fn count_instructions() {
             }
 
             let mut counter = instructions::Instructions::new().unwrap();
+            let mut counts = Vec::with_capacity(ITERATIONS);
+            let mut previous = 0;
 
             for _ in 0..ITERATIONS {
                 let (mut client, mut engine) = inputs(case, extended, cached);
@@ -203,13 +205,17 @@ fn count_instructions() {
                 counter.enable().unwrap();
                 rt.block_on(route(&mut client, &mut engine));
                 counter.disable().unwrap();
+
+                let total = counter.read().unwrap();
+                counts.push(total - previous);
+                previous = total;
             }
 
-            let total = counter.read().unwrap();
+            counts.sort_unstable();
 
             println!(
-                "instructions {module}::{group}::{case} {:.1}",
-                total as f64 / ITERATIONS as f64
+                "instructions {module}::{group}::{case} {}",
+                counts[ITERATIONS / 2]
             );
         }
     }
