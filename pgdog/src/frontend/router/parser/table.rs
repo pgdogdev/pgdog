@@ -40,6 +40,16 @@ impl<'a> Table<'a> {
     pub(crate) fn schema(&self) -> Option<Schema<'a>> {
         self.schema.map(|s| s.into())
     }
+
+    /// A table in `pg_catalog`. Postgres searches `pg_catalog` first unless
+    /// the search_path lists it elsewhere, so an unqualified `pg_*` name
+    /// like pg_dump's `FROM pg_rewrite` resolves there too.
+    pub(crate) fn is_pg_catalog(&self) -> bool {
+        match self.schema {
+            Some(schema) => schema == "pg_catalog",
+            None => self.name.starts_with("pg_"),
+        }
+    }
 }
 
 impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {

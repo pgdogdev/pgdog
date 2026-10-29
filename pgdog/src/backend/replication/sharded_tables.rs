@@ -175,6 +175,15 @@ impl ShardedTables {
         self.inner.system_catalogs == SystemCatalogsBehavior::Sharded
     }
 
+    /// System catalogs are read from one shard per client connection.
+    ///
+    /// OIDs differ per shard, so a client that reads the catalog and then
+    /// looks objects up by OID, like pg_dump, needs every catalog read on
+    /// the same shard.
+    pub(crate) fn is_system_catalog_sticky(&self) -> bool {
+        self.inner.system_catalogs == SystemCatalogsBehavior::OmnishardedSticky
+    }
+
     /// The deployment has only one sharded table.
     pub(crate) fn common_mapping(&self) -> &Option<CommonMapping> {
         &self.inner.common_mapping
