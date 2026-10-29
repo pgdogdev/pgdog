@@ -23,6 +23,7 @@ mod instructions;
 use super::prelude::*;
 use crate::config::load_test_sharded;
 use crate::frontend::router::parser::Cache;
+use tokio::runtime::Runtime;
 
 struct Case(&'static str, &'static str);
 
@@ -102,6 +103,20 @@ async fn route(client: &mut Client, engine: &mut QueryEngine) {
         .unwrap();
 }
 
+fn background() -> Runtime {
+    let background = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let _guard = background.enter();
+
+    load_test_sharded();
+
+    background
+}
+
 fn inputs(case: &Case, extended: bool, cached: bool) -> (Client, QueryEngine) {
     if !cached {
         Cache::reset();
@@ -126,9 +141,8 @@ fn bench(bencher: divan::Bencher, case: &Case, extended: bool, cached: bool) {
         .build()
         .unwrap();
 
+    let _background = background();
     let _guard = rt.enter();
-
-    load_test_sharded();
 
     bencher
         .with_inputs(|| inputs(case, extended, cached))
@@ -165,9 +179,8 @@ fn count_instructions() {
         .build()
         .unwrap();
 
+    let _background = background();
     let _guard = rt.enter();
-
-    load_test_sharded();
 
     let module = module_path!().trim_start_matches("pgdog::");
 

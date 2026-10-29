@@ -70,6 +70,7 @@ jobs:
         run: |
           aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
           aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+          aws autoscaling set-desired-capacity --region us-west-2 --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
 
       - name: Mark commit as queued
         env:

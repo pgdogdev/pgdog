@@ -80,8 +80,8 @@ BEGIN {
     for (i = 1; i <= n; i++) col[i] = trim(col[i])
 }
 
-$1 == "instructions" && NF == 3 {
-    emit($2, "instructions", $3, "", "")
+NF >= 3 && $(NF - 2) == "instructions" {
+    emit($(NF - 1), "instructions", $NF, "", "")
     next
 }
 
