@@ -3,7 +3,7 @@
 # TODO(jkaczman): get rid of this with PAT with necessary perms
 set -euo pipefail
 
-readonly X86_WAIT_SECONDS=5400
+readonly X86_WAIT_SECONDS=10800
 
 lane_context() { [ "$1" = x86 ] && echo metal/bench-x86 || echo metal/bench; }
 lane_prefix() { [ "$1" = x86 ] && echo results-x86 || echo results; }
