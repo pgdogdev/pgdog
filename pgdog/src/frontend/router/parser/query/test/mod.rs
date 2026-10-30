@@ -25,6 +25,7 @@ pub(crate) mod setup;
 
 pub(crate) mod test_bypass;
 pub(crate) mod test_comments;
+pub(crate) mod test_copy;
 pub(crate) mod test_ddl;
 pub(crate) mod test_delete;
 pub(crate) mod test_dml;

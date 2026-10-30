@@ -1,0 +1,4 @@
+[[users]]
+database = "pg_dump_sharded"
+name = "pgdog"
+password = "pgdog"

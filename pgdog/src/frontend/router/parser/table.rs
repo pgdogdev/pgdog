@@ -40,6 +40,15 @@ impl<'a> Table<'a> {
     pub(crate) fn schema(&self) -> Option<Schema<'a>> {
         self.schema.map(|s| s.into())
     }
+
+    /// Attempt to figure out if the table is a part of `pg_catalog`.
+    /// WARN: that may give false positives
+    pub(crate) fn is_pg_catalog(&self) -> bool {
+        match self.schema {
+            Some(schema) => schema == "pg_catalog",
+            None => self.name.starts_with("pg_"),
+        }
+    }
 }
 
 impl<'a> TryFrom<pg_raw_parse::Node<'a>> for Table<'a> {
