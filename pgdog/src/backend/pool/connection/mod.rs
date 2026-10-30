@@ -316,7 +316,9 @@ impl Connection {
     ///
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         select! {
-            notification = self.pub_sub.recv() => {
+            // If we're listening on a NOTIFY channel, wait for a message, and if
+            // one is available, then we return it here.
+            notification = self.pub_sub.recv(), if self.pub_sub.is_listening() => {
                 Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message())
             }
 
