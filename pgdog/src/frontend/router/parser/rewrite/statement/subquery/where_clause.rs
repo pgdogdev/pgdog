@@ -2,14 +2,19 @@ use pg_raw_parse::{Node, deparse, nodes::SubLink};
 
 use crate::frontend::router::parser::{
     StatementParser,
-    rewrite::statement::{Error, insert::Subquery, subquery::SubqueryRewrite},
+    rewrite::statement::{
+        Error,
+        insert::{Subquery, SubqueryType},
+        subquery::SubqueryRewrite,
+    },
 };
 
 impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
-    pub(crate) fn handle_subquery_in_where(
-        &mut self,
-        sub_link: &SubLink,
-    ) -> Result<Option<Subquery>, Error> {
+    pub(crate) fn handle_subquery_in_where(&mut self) -> Result<Option<Subquery>, Error> {
+        let Some((sub_link, _)) = has_sub_link_in_where(self.outer_stmt) else {
+            return Ok(None);
+        };
+
         let subselect = sub_link.subselect();
 
         // Is it sharded? if not, doesn't need to be separate (strictly for WHERE).
@@ -43,6 +48,7 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
 
             return Ok(Some(Subquery {
                 inner_stmt: subselect_sql,
+                identifier: SubqueryType::WhereClause,
             }));
         }
 

@@ -254,10 +254,11 @@ async fn fetch_pg_stat_statement(
         })
         .collect();
 
-    assert!(
-        candidates.contains(&actual),
-        "routing mismatch: got {actual:?}, expected one of {candidates:?}"
-    );
+    if !candidates.contains(&actual) {
+        return Err(anyhow!(
+            "Routing ANY doesn't match; actual {actual:?} vs expected one of {candidates:?}"
+        ));
+    }
 
     Ok(())
 }

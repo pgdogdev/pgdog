@@ -10,6 +10,7 @@ use pgdog_postgres_types::Datum;
 use rust_decimal::prelude::ToPrimitive;
 
 // These are all internal modules; don't need to be exported out.
+mod from_clause;
 mod insert_select;
 mod request;
 mod where_clause;
@@ -19,7 +20,7 @@ use crate::{
     frontend::{
         ClientRequest,
         client::query_engine::{QueryEngine, QueryEngineContext},
-        router::parser::rewrite::statement::insert::Subquery,
+        router::parser::rewrite::statement::insert::{Subquery, SubqueryType},
     },
     net::{Bind, DataRow, RowDescription},
 };
@@ -122,16 +123,17 @@ impl<'a> SubqueryMulti<'a> {
         if let Some(ast) = client_request.ast.as_ref()
             && let Some(stmt) = ast.ast.stmts().next()
         {
-            // SELECT / UPDATE / DELETE with a subquery in a WHERE clause.
-            if let Some(sql) = self.handle_where_clause(stmt, row_description, data_rows)? {
-                return Ok(Some(sql));
-            }
-
-            // Select subquery within an INSERT statement with a SELECT FROM
-            // e.g., INSERT INTO .. SELECT FROM generate_series(..)
-            if let Some(sql) = self.handle_insert_select(stmt, row_description, data_rows)? {
-                return Ok(Some(sql));
-            }
+            return match self.subquery.identifier {
+                SubqueryType::FromClause => {
+                    self.handle_from_clause(stmt, row_description, data_rows)
+                }
+                SubqueryType::WhereClause => {
+                    self.handle_where_clause(stmt, row_description, data_rows)
+                }
+                SubqueryType::InsertSelect => {
+                    self.handle_insert_select(stmt, row_description, data_rows)
+                }
+            };
         }
 
         Ok(None)

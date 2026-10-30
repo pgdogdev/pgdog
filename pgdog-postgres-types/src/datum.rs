@@ -265,7 +265,6 @@ pub enum DataType {
     DoublePrecision,
     Bool,
     SmallInt,
-    TinyInt,
     Numeric,
     Other(i32),
     Uuid,
@@ -311,6 +310,54 @@ impl DataType {
             _ => DataType::Other(oid),
         }
     }
+
+    /// Format the `DataType` into a type that can be
+    /// expressed as pg_catalog.<TYPE>
+    ///
+    /// Manually checked via `SELECT oid, typname, typnamespace::regnamespace AS schema_name
+    /// FROM pg_catalog.pg_type ORDER BY oid;` against `DataType::from_oid`
+    ///
+    /// <https://www.postgresql.org/docs/current/datatype.html>
+    pub fn as_pg_catalog_type(&self) -> &'static str {
+        match self {
+            DataType::Bigint => "int8",
+            DataType::Integer => "int4",
+            DataType::Text => "text",
+            DataType::Interval => "interval",
+            DataType::Timestamp => "timestamp",
+            DataType::TimestampTz => "timestamptz",
+            DataType::Real => "float4",
+            DataType::DoublePrecision => "float8",
+            DataType::Bool => "bool",
+            DataType::SmallInt => "int2",
+            DataType::Numeric => "numeric",
+            DataType::Uuid => "uuid",
+            DataType::Oid => "oid",
+            DataType::Vector => todo!(
+                "We don't have a type OID for this within from_oid; not sure what this maps to"
+            ),
+            DataType::Array(inner_oid) => match inner_oid {
+                1000 => "_bool",
+                1005 => "_int2",
+                1007 => "_int4",
+                1009 => "_text",
+                1015 => "_varchar",
+                1016 => "_int8",
+                1021 => "_float4",
+                1022 => "_float8",
+                1028 => "_oid",
+                1115 => "_timestamp",
+                1185 => "_timestamptz",
+                1187 => "_interval",
+                1231 => "_numeric",
+                2951 => "_uuid",
+                _ => panic!("We should have all the array types covered (this matches from_oid)"),
+            },
+            DataType::Other(_) => {
+                panic!("This needs to be handled properly with a client-facing error")
+            }
+        }
+    }
 }
 
 impl fmt::Display for DataType {
@@ -327,7 +374,6 @@ impl fmt::Display for DataType {
             DoublePrecision => write!(f, "double precision"),
             Bool => write!(f, "boolean"),
             SmallInt => write!(f, "smallint"),
-            TinyInt => write!(f, "tinyint"),
             Numeric => write!(f, "numeric"),
             Other(i) => write!(f, "unknown type {i}"),
             Uuid => write!(f, "uuid"),
