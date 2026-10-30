@@ -41,9 +41,8 @@ impl<'a> Table<'a> {
         self.schema.map(|s| s.into())
     }
 
-    /// A table in `pg_catalog`. Postgres searches `pg_catalog` first unless
-    /// the search_path lists it elsewhere, so an unqualified `pg_*` name
-    /// like pg_dump's `FROM pg_rewrite` resolves there too.
+    /// Attempt to figure out if the table is a part of `pg_catalog`.
+    /// WARN: that may give false positives
     pub(crate) fn is_pg_catalog(&self) -> bool {
         match self.schema {
             Some(schema) => schema == "pg_catalog",

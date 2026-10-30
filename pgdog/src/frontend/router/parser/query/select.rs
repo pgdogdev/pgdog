@@ -151,8 +151,8 @@ impl QueryParser {
                     .shards_calculator
                     .push(ShardWithPriority::new_table_omni(Shard::All));
             } else {
-                // Table-less reads like `SELECT pg_get_viewdef(16401)` resolve
-                // OIDs, so they stay on the shard the client read the catalog from.
+                // check if we have sticky setting somewhere and if do
+                // read the data from the sticked shard
                 let sharded_tables = context.sharding_schema.tables();
                 let index = if sharded_tables.is_system_catalog_sticky()
                     || sharded_tables.is_omnisharded_sticky_default()
@@ -271,6 +271,7 @@ impl QueryParser {
                     let sticky = tables.is_some_and(|tables| {
                         tables.iter().any(|table| {
                             sharded_tables.is_omnisharded_sticky(table.name) == Some(true)
+                            // TODO: do we need to store and manage system_catalogs if we have `is_pg_catalog`?
                                 || (table.is_pg_catalog()
                                     && sharded_tables.is_system_catalog_sticky())
                         })

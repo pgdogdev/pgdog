@@ -564,38 +564,6 @@ impl QueryParser {
         }
     }
 
-    /// The table of a `COPY <table> TO` holds the same rows on every shard:
-    /// it is configured as omnisharded, or the schema knows it and it has no
-    /// sharding column. A table the schema doesn't know stays on all shards.
-    fn copy_reads_omnisharded(table: Table<'_>, context: &QueryParserContext) -> bool {
-        let sharded_tables = context.sharding_schema.tables();
-        if sharded_tables.omnishards().contains_key(table.name) {
-            return true;
-        }
-
-        let Some(relation) = context.router_context.schema.table(
-            table,
-            context.router_context.cluster.user(),
-            context.router_context.parameter_hints.search_path,
-        ) else {
-            return false;
-        };
-
-        !sharded_tables
-            .tables()
-            .iter()
-            .any(|config| match &config.name {
-                Some(_) => {
-                    config.name_matches(table.name)
-                        && config
-                            .schema
-                            .as_deref()
-                            .is_none_or(|schema| table.schema == Some(schema))
-                }
-                None => relation.has_column(&config.column),
-            })
-    }
-
     /// Handle COPY command.
     fn copy(stmt: &nodes::CopyStmt, context: &mut QueryParserContext) -> Result<Command, Error> {
         // Schema-based routing.
@@ -630,8 +598,6 @@ impl QueryParser {
 
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
-            // Every shard holds the same rows of an omnisharded table: read
-            // them from one, or the client gets one copy per shard.
             let shard = match table {
                 Some(table) if Self::copy_reads_omnisharded(table, context) => {
                     ShardWithPriority::new_rr_omni(Shard::Direct(
@@ -650,6 +616,27 @@ impl QueryParser {
                 route: Route::write(ShardWithPriority::new_override_copy()).dml(),
             })
         }
+    }
+
+    fn copy_reads_omnisharded(table: Table<'_>, context: &QueryParserContext) -> bool {
+        let sharded_tables = context.sharding_schema.tables();
+        if sharded_tables.omnishards().contains_key(table.name) {
+            return true;
+        }
+
+        let db_schema = context.router_context.schema;
+        let user = context.router_context.cluster.user();
+        let search_path = context.router_context.parameter_hints.search_path;
+
+        let Some(relation) = db_schema.table(table, user, search_path) else {
+            return false;
+        };
+        let table = Table {
+            schema: Some(relation.schema()),
+            ..table
+        };
+
+        !sharded_tables.is_table_sharded(table, db_schema, user, search_path)
     }
 
     /// Handle INSERT statement.
