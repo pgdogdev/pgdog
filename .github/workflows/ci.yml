@@ -94,6 +94,7 @@ jobs:
           - { name: complex, script: integration/complex/run.sh }
           - { name: dry-run, script: integration/dry_run/run.sh }
           - { name: copy-data, script: integration/copy_data/run.sh }
+          - { name: pg-dump, script: integration/pg_dump/run.sh }
           - {
               name: load-balancer,
               script: integration/load_balancer/run.sh,

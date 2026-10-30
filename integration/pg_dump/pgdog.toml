@@ -1,0 +1,36 @@
+[general]
+host = "127.0.0.1"
+port = 6432
+system_catalogs = "omnisharded_sticky"
+prepared_statements = "full"
+
+[[databases]]
+name = "pg_dump_sharded"
+host = "127.0.0.1"
+database_name = "pg_dump_0"
+shard = 0
+
+[[databases]]
+name = "pg_dump_sharded"
+host = "127.0.0.1"
+database_name = "pg_dump_1"
+shard = 1
+
+[[sharded_tables]]
+database = "pg_dump_sharded"
+schema = "public"
+name = "orders"
+column = "tenant_id"
+data_type = "bigint"
+
+[[omnisharded_tables]]
+database = "pg_dump_sharded"
+tables = ["countries"]
+
+[[omnisharded_tables]]
+database = "pg_dump_sharded"
+tables = ["migrations"]
+sticky = true
+
+[admin]
+password = "pgdog"
