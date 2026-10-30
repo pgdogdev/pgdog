@@ -10,6 +10,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
+use tokio::time::sleep;
 use tokio::{select, spawn};
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
@@ -555,19 +556,22 @@ impl Client {
 
             _ = shutdown.cancelled() => {
                 // Check that there are no active transactions.
-                let query_engine_done = query_engine.can_disconnect();
 
-                // TODO: will do this before merge
-                //       This should be queued to be automatically run when QueryEngine is ready
-                //       to disconnect via something like `query_engine.queue_disconnect()`
-                //
-                // If query engine is idle and we requested shutdown, we're done.
-                if query_engine_done {
-                    // Send shutdown notification to client.
-                    self.stream
+                // TODO(jkaczman): It would be nice to not have to poll on this. However,
+                //                 there doesn't seem to be an easy way to do that, and
+                //                 this only is triggered when the CancellationFuture is
+                //                 cancelled, therefore, this crude solution won't hurt
+                //                 performance meaningfully.
+                while !query_engine.can_disconnect() {
+                    // Poll until the client is ready to be disconnected.
+                    sleep(Duration::from_millis(10)).await;
+                }
+
+                // Send shutdown notification to client.
+                self.stream
                         .send_flush(&ErrorResponse::shutting_down())
                         .await?;
-                }
+
 
                 Ok(())
             }
