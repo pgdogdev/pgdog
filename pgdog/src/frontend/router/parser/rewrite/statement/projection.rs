@@ -9,7 +9,7 @@ use super::aggregate::{AggregatesRewrite, HelperKind};
 use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{Aggregate, OrderBy};
+use crate::frontend::router::parser::{Aggregate, HavingExpr, HavingRewritePlan, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make};
@@ -57,11 +57,41 @@ impl OrderByHelper {
 pub(crate) struct ProjectionRewritePlan {
     pub(crate) aggregate_helpers: Vec<AggregateHelper>,
     pub(crate) order_by_helpers: Vec<OrderByHelper>,
+    pub(crate) having: Option<Box<HavingRewriteResult>>,
+}
+
+/// The filter and aggregate metadata produced by rewriting a HAVING query.
+#[derive(Debug, PartialEq)]
+pub(crate) struct HavingRewriteResult {
+    rewrite: HavingRewritePlan,
+    aggregate: Aggregate,
+}
+
+impl HavingRewriteResult {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn new(rewrite: HavingRewritePlan, aggregate: Aggregate) -> Self {
+        Self { rewrite, aggregate }
+    }
+
+    pub(crate) fn expression(&self) -> &HavingExpr {
+        self.rewrite.expression()
+    }
+
+    pub(crate) fn hidden_aliases(&self) -> &[String] {
+        self.rewrite.hidden_aliases()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn aggregate(&self) -> &Aggregate {
+        &self.aggregate
+    }
 }
 
 impl ProjectionRewritePlan {
     pub(crate) fn is_noop(&self) -> bool {
-        self.aggregate_helpers.is_empty() && self.order_by_helpers.is_empty()
+        self.aggregate_helpers.is_empty()
+            && self.order_by_helpers.is_empty()
+            && self.having.is_none()
     }
 
     pub(crate) fn drop_columns(&self, row_description: &RowDescription) -> BTreeSet<usize> {
@@ -73,6 +103,11 @@ impl ProjectionRewritePlan {
                     .iter()
                     .filter(|helper| helper.injected)
                     .map(|helper| helper.alias.as_str()),
+            )
+            .chain(
+                self.having
+                    .iter()
+                    .flat_map(|plan| plan.hidden_aliases().iter().map(String::as_str)),
             )
             .filter_map(|alias| row_description.field_index(alias))
             .collect()
