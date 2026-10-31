@@ -9,7 +9,7 @@ use crate::frontend::router::parser::{
     AggregateFunction, CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
 };
 
-use super::{Error, order_by::target_output_name};
+use super::{Error, projection::target_output_name};
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
 
