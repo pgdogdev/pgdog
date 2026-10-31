@@ -32,6 +32,7 @@ impl<'a> SubqueryMulti<'a> {
         else {
             return Ok(None);
         };
+
         let new_stmt = owned(|mem| {
             let owned_stmt = mem.make_unique(statement);
             let mut owned_raw_stmt = mem.make_raw_stmt(owned_stmt);

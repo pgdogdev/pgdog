@@ -151,3 +151,38 @@ SELECT * FROM subusers WHERE id = 3 AND status IN (
 SELECT * FROM subusers WHERE id = $1 AND status IN (
     SELECT status FROM subusers WHERE id = $1
 ) ORDER BY id;
+
+-- case
+-- what: SELECT <agg>(..) FROM (<sq>) s, <sq> is cross-shard
+-- route select: 0,1
+-- route select: any
+SELECT count(*) FROM (
+    SELECT id FROM subusers WHERE status = 'VIP'
+) s;
+
+-- case
+-- what: SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s, the <n> rows come from several shards
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.username FROM (
+    SELECT id, username FROM subusers ORDER BY id DESC LIMIT 3
+) s ORDER BY s.id;
+
+-- case
+-- what: SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>, <sq> is cross-shard
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.status FROM (
+    SELECT id, status FROM subusers WHERE status IS NOT NULL
+) s ORDER BY s.id DESC LIMIT 2;
+
+-- case
+-- what: Derived table with an inner-table that returns an empty response.
+--       Want to make sure that the OIDs returned are correct (if present)
+--       based on us relying on the first row normally setting them
+--       properly in the response via explicit casts.
+-- route select: 0,1
+-- route select: any
+SELECT s.id, s.status FROM (
+    SELECT id, status FROM subusers WHERE status = 'some random status which doesnt exist'
+) s ORDER BY s.id DESC LIMIT 2;

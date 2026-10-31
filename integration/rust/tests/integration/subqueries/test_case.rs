@@ -54,6 +54,8 @@ pub async fn run_tests_for_case(
                 {
                     success += 1;
                 } else {
+                    println!("FAILED HERE: {} {}", worker_name.as_str(), job.sql);
+                    println!("FAILED HERE!");
                     // TRUNCATE in case leftover state from error
                     setup_subqueries_suite(worker_name.as_str(), false).await;
 
@@ -113,7 +115,9 @@ pub(crate) async fn execute_test_case(
         .await?;
 
         if expected != actual {
-            return Err(anyhow!("{protocol:?} protocol {sql}"));
+            return Err(anyhow!(
+                "{protocol:?} protocol {sql},\n expected = {expected:#?}, \nactual = {actual:#?}"
+            ));
         }
 
         // Run `command_to_verify` (e.g., SELECT * ALL ...) to ensure the rows are equal on each.
@@ -173,7 +177,7 @@ pub struct TestCase {
     pub identifier: usize,
 
     /// SQL to execute as the test
-    sql: String,
+    pub sql: String,
 
     /// If we want to target a specific test, instead of running the
     /// entire suite in parallel, then we should be able to specify
@@ -236,7 +240,7 @@ impl StatementType {
 }
 
 impl TestCase {
-    pub(crate) fn new(sql: String, stripped_case: &str, identifier: usize) -> Self {
+    pub(crate) fn new(sql: String, stripped_case: &str, identifier: usize) -> Option<Self> {
         let lines = stripped_case.split("--");
 
         // TODO(jkaczman): might be worthwhile in the future
@@ -254,8 +258,17 @@ impl TestCase {
 
         // Assume an order of $1, $2, $3... (continuous increasing)
         let mut bind_params: Vec<String> = Vec::new();
-        for line in lines {
+
+        for line in lines.clone() {
             let line = line.trim();
+
+            // Can have cases where we don't want them executed yet (e.g.,
+            // if we have TODO cases for later and we want to expand on our
+            // current functionality, but they'd fail right now)
+            if line.eq("marked TODO") {
+                return None;
+            }
+
             if line.starts_with("verify: ") {
                 command_to_verify = Some(line.trim().replace("verify: ", ""));
             } else if line.starts_with("name") {
@@ -288,10 +301,15 @@ impl TestCase {
             }
         }
 
+        // Guard against these cases.
+        if sql.trim().is_empty() {
+            panic!("Found empty SQL case lines: {lines:?}");
+        }
+
         let data_modifying =
             sql.contains("INSERT") || sql.contains("DELETE") || sql.contains("UPDATE");
 
-        Self {
+        Some(Self {
             identifier,
             sql,
             name,
@@ -300,6 +318,6 @@ impl TestCase {
             bind_params,
             routing_expectations,
             routing_any,
-        }
+        })
     }
 }

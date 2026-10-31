@@ -2,7 +2,10 @@ use pg_raw_parse::{Node, deparse};
 
 use crate::frontend::router::parser::{
     StatementParser,
-    rewrite::statement::{insert::Subquery, subquery::SubqueryRewrite},
+    rewrite::statement::{
+        insert::{Subquery, SubqueryType},
+        subquery::SubqueryRewrite,
+    },
 };
 
 impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
@@ -30,6 +33,7 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
                 // Even if it's a function like generate_series, we need to evaluate it.
                 return Some(Subquery {
                     inner_stmt: deparse(select).unwrap().as_str().to_string(),
+                    identifier: SubqueryType::InsertSelect,
                 });
             }
         }
