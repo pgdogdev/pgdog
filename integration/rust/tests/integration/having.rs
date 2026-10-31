@@ -68,6 +68,7 @@ async fn prepared_having_parameter_is_typed_by_postgres() -> Result<(), Box<dyn 
     .await?;
 
     assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].columns().len(), 2);
     assert_eq!(rows[0].get::<i64, _>("customer_id"), 1);
     assert_eq!(rows[0].get::<i64, _>("order_count"), 3);
 
