@@ -14,8 +14,12 @@ RUN source ~/.cargo/env && \
     if [ -n "${FEATURES}" ]; then \
         cargo_features=(--no-default-features --features "${FEATURES}"); \
     fi && \
+    pgo_args=(); \
+    if [ -f pgo.profdata ]; then \
+        pgo_args=(--config "target.'cfg(all())'.rustflags=['-Cprofile-use=/build/pgo.profdata']"); \
+    fi && \
     cd pgdog && \
-    cargo build --release "${cargo_features[@]}" && \
+    cargo build --release "${cargo_features[@]}" "${pgo_args[@]}" && \
     cd .. && \
     cargo build --release -p pgdog-primary-only-tables "${cargo_features[@]}"
 
