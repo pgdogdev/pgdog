@@ -122,7 +122,8 @@ impl Aggregate {
                 // We use 0-indexed arrays, Postgres uses 1-indexed.
                 Node::A_Const(c) => c
                     .val()
-                    .and_then(|v| v.numeric_value::<i32>().map(|x| x as usize - 1)),
+                    .and_then(|v| v.numeric_value::<i32>())
+                    .and_then(|x| usize::try_from(x).ok()?.checked_sub(1)),
                 Node::ColumnRef(c) => index_of_column(
                     stmt,
                     &c.fields()
@@ -341,6 +342,18 @@ mod test {
         let aggr = parse("SELECT COUNT(*) FROM example GROUP BY user_id");
         assert!(aggr.group_by().is_empty());
         assert_eq!(aggr.targets().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_group_by_invalid_ordinal_is_skipped() {
+        for sql in [
+            "SELECT user_id, COUNT(*) FROM example GROUP BY 0",
+            "SELECT user_id, COUNT(*) FROM example GROUP BY -1",
+        ] {
+            let aggr = parse(sql);
+            assert!(aggr.group_by().is_empty(), "{sql}");
+            assert_eq!(aggr.targets().len(), 1, "{sql}");
+        }
     }
 
     #[test]
