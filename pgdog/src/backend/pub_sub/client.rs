@@ -31,6 +31,14 @@ impl PubSubClient {
         }
     }
 
+    // Do we have an active `listen` on anything
+    // This is solely used to determine if we should have an extra select! branch
+    // within our `read()` method. If we're not listening on anything,
+    // no point in adding the extra overhead within the branch.
+    pub(crate) fn is_listening(&self) -> bool {
+        !self.unlisten.is_empty()
+    }
+
     /// Listen on a channel.
     pub(crate) fn listen(&mut self, channel: &str, mut rx: Listener) {
         let tx = self.tx.clone();
