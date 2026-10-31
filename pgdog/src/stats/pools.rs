@@ -635,7 +635,7 @@ impl Pools {
             measurements: avg_received,
             help: "Average number of bytes received.".into(),
             unit: None,
-            metric_type: Some("counter".into()),
+            metric_type: None,
         }));
 
         metrics.push(Metric::new(PoolMetric {

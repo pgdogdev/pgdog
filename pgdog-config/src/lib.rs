@@ -37,7 +37,7 @@ pub use error::Error;
 pub use general::{General, LogFormat, QuerySizeLimitAction};
 pub use memory::*;
 pub use networking::{MultiTenant, Tcp, TlsVerifyMode};
-pub use otel::Otel;
+pub use otel::{Otel, OtelTemporality};
 pub use overrides::Overrides;
 pub use pooling::{PoolerMode, PreparedStatementsLevel};
 pub use replication::*;
