@@ -80,6 +80,11 @@ BEGIN {
     for (i = 1; i <= n; i++) col[i] = trim(col[i])
 }
 
+NF >= 3 && $(NF - 2) == "instructions" {
+    emit($(NF - 1), "instructions", $NF, "", "")
+    next
+}
+
 depth >= 0 && col[1] ~ /^\+- [^ ]+ +[0-9.]+ [^ ]+$/ {
     split(substr(col[1], 4), parts, / +/)
     leaf = path(depth) parts[1]

@@ -452,46 +452,12 @@ impl<'a, 'b: 'a> StatementParser<'a, 'b> {
             return false;
         }
 
-        let sharded_tables = self.schema.tables.tables();
-        let omnishards = self.schema.tables.omnishards();
-
-        // Separate configs with explicit table names from those without
-        let (named, nameless): (Vec<_>, Vec<_>) =
-            sharded_tables.iter().partition(|t| t.name.is_some());
-
-        for table in self.tables() {
-            // Omnisharded config takes priority over sharded tables.
-            if omnishards.contains_key(table.name) {
-                continue;
-            }
-
-            // Check named sharded table configs (fast path, no schema lookup needed)
-            for config in &named {
-                if config.name_matches(table.name) {
-                    // Also check schema match if specified in config
-                    if let Some(ref config_schema) = config.schema
-                        && table.schema != Some(config_schema.as_str())
-                    {
-                        continue;
-                    }
-                    return true;
-                }
-            }
-
-            // Check nameless configs by looking up the table in the db schema
-            // to see if it has the sharding column
-            if !nameless.is_empty()
-                && let Some(relation) = db_schema.table(*table, user, search_path)
-            {
-                for config in &nameless {
-                    if relation.has_column(&config.column) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
+        let schema = self.schema;
+        self.tables().iter().any(|table| {
+            schema
+                .tables
+                .is_table_sharded(*table, db_schema, user, search_path)
+        })
     }
 
     /// Extract pg_advisory_lock / pg_advisory_unlock calls with literal integer keys.

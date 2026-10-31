@@ -598,9 +598,15 @@ impl QueryParser {
 
         let parser = CopyParser::new(stmt, context.router_context.cluster)?;
         if !stmt.is_from {
-            context
-                .shards_calculator
-                .push(ShardWithPriority::new_table(Shard::All));
+            let shard = match table {
+                Some(table) if Self::copy_reads_omnisharded(table, context) => {
+                    ShardWithPriority::new_rr_omni(Shard::Direct(
+                        context.router_context.sticky.omni_index % context.shards,
+                    ))
+                }
+                _ => ShardWithPriority::new_table(Shard::All),
+            };
+            context.shards_calculator.push(shard);
             Ok(Command::Query(
                 Route::read(context.shards_calculator.shard()).dml(),
             ))
@@ -610,6 +616,27 @@ impl QueryParser {
                 route: Route::write(ShardWithPriority::new_override_copy()).dml(),
             })
         }
+    }
+
+    fn copy_reads_omnisharded(table: Table<'_>, context: &QueryParserContext) -> bool {
+        let sharded_tables = context.sharding_schema.tables();
+        if sharded_tables.omnishards().contains_key(table.name) {
+            return true;
+        }
+
+        let db_schema = context.router_context.schema;
+        let user = context.router_context.cluster.user();
+        let search_path = context.router_context.parameter_hints.search_path;
+
+        let Some(relation) = db_schema.table(table, user, search_path) else {
+            return false;
+        };
+        let table = Table {
+            schema: Some(relation.schema()),
+            ..table
+        };
+
+        !sharded_tables.is_table_sharded(table, db_schema, user, search_path)
     }
 
     /// Handle INSERT statement.
