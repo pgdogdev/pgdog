@@ -50,7 +50,11 @@ pub(super) fn rewrite_select<'a>(
         match group {
             Node::ColumnRef(_) => {
                 let alias = parser.next_alias();
-                parser.values.push((alias, group));
+                parser.values.push(Projected {
+                    alias,
+                    node: group,
+                    typed_like: None,
+                });
             }
             Node::A_Const(_) => {}
             _ => {
@@ -64,12 +68,18 @@ pub(super) fn rewrite_select<'a>(
     let hidden_aliases = parser
         .values
         .iter()
-        .map(|(alias, _)| alias.clone())
+        .map(|value| value.alias.clone())
         .collect::<Vec<_>>();
     let targets = parser
         .values
         .iter()
-        .map(|(alias, node)| mem.make_res_target(Some(alias), mem.empty(), mem.make_unique(*node)))
+        .map(|value| {
+            let projected = match value.typed_like {
+                Some(like) => typed_like(mem, value.node, like),
+                None => mem.make_unique(value.node),
+            };
+            mem.make_res_target(Some(&value.alias), mem.empty(), projected)
+        })
         .collect::<Vec<_>>();
     select
         .target_list_mut()
@@ -89,9 +99,34 @@ pub(super) fn rewrite_select<'a>(
     Ok(HavingRewritePlan::new(expression, hidden_aliases))
 }
 
+/// `CASE WHEN false THEN <like> ELSE <value> END` evaluates to `value` with the
+/// type PostgreSQL infers for it in a comparison with `like`. A bare untyped
+/// literal or parameter in the target list would be resolved as `text` instead.
+fn typed_like<'a>(
+    mem: make::MemoryToken<'a>,
+    value: Node<'_>,
+    like: Node<'_>,
+) -> make::Unique<'a, Node<'a>> {
+    let mut when = mem.make_node::<nodes::CaseWhen>();
+    when.as_mut()
+        .set_expr(mem.make_a_const(ConstValue::Boolean(false)).uncast());
+    when.as_mut().set_result(mem.make_unique(like));
+    let mut case = mem.make_node::<nodes::CaseExpr>();
+    case.as_mut().set_args(mem.make_list(&[when.uncast()]));
+    case.as_mut().set_defresult(mem.make_unique(value));
+    case.uncast()
+}
+
+struct Projected<'a> {
+    alias: String,
+    node: Node<'a>,
+    /// Operand whose type an untyped literal or parameter should take.
+    typed_like: Option<Node<'a>>,
+}
+
 struct Parser<'a> {
     aliases: HashSet<String>,
-    values: Vec<(String, Node<'a>)>,
+    values: Vec<Projected<'a>>,
     next_alias: usize,
 }
 
@@ -111,10 +146,11 @@ impl<'a> Parser<'a> {
                             "only =, <>, !=, <, <=, > and >= comparisons are supported",
                         )
                     })?;
+                let (left, right) = (expression.lexpr(), expression.rexpr());
                 Ok(HavingExpr::Compare {
-                    left: self.parse_value(expression.lexpr())?,
+                    left: self.parse_value(left, right)?,
                     operator,
-                    right: self.parse_value(expression.rexpr())?,
+                    right: self.parse_value(right, left)?,
                 })
             }
             _ => Err(Error::UnsupportedHaving(
@@ -123,15 +159,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_value(&mut self, node: Node<'a>) -> Result<HavingValue, Error> {
+    fn parse_value(&mut self, node: Node<'a>, other: Node<'a>) -> Result<HavingValue, Error> {
         if !Self::supported_value(node) {
             return Err(Error::UnsupportedHaving(
                 "operands must be aggregate calls, grouped columns, constants or parameters",
             ));
         }
 
+        let untyped = |node| matches!(node, Node::A_Const(_) | Node::ParamRef(_));
         let alias = self.next_alias();
-        self.values.push((alias.clone(), node));
+        self.values.push(Projected {
+            alias: alias.clone(),
+            node,
+            typed_like: (untyped(node) && !untyped(other)).then_some(other),
+        });
         Ok(HavingValue::new(alias))
     }
 
@@ -213,7 +254,8 @@ mod tests {
         assert_eq!(
             sql,
             "SELECT customer_id, count(*), count(*) AS __pgdog_having_0, \
-             $1 AS __pgdog_having_1, customer_id AS __pgdog_having_2 \
+             CASE WHEN false THEN count(*) ELSE $1 END AS __pgdog_having_1, \
+             customer_id AS __pgdog_having_2 \
              FROM purchases GROUP BY customer_id HAVING count(*) > $1 OR true"
         );
         assert_eq!(plan.hidden_aliases().len(), 3);

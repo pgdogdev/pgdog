@@ -237,6 +237,33 @@ pub(crate) fn finalize_after_route(
     Ok(())
 }
 
+/// Query shapes that would return wrong rows once HAVING moves after the merge.
+fn unsupported_with_having(select: &nodes::SelectStmt) -> Option<&'static str> {
+    // Aggregates are merged by SELECT list position, which star expansion shifts.
+    let expands_star = select
+        .target_list()
+        .iter()
+        .any(|target| match target.val() {
+            Node::ColumnRef(column) => is_star(column),
+            Node::A_Indirection(indirection) => matches!(
+                indirection.indirection().into_iter().next_back(),
+                Some(Node::A_Star(_))
+            ),
+            _ => false,
+        });
+    if expands_star {
+        return Some("SELECT * is unsupported");
+    }
+    // Shards would drop groups before PgDog merges and filters them.
+    if !matches!(select.limit_count(), Node::None) || !matches!(select.limit_offset(), Node::None) {
+        return Some("LIMIT and OFFSET are unsupported");
+    }
+    if !matches!(select.distinct_clause().first(), None | Some(Node::None)) {
+        return Some("DISTINCT ON is unsupported");
+    }
+    None
+}
+
 fn build(
     ast: &StmtList,
     schema: &Schema,
@@ -246,6 +273,9 @@ fn build(
         return Ok(None);
     };
     let has_having = !matches!(select.having_clause(), Node::None);
+    if has_having && let Some(reason) = unsupported_with_having(select) {
+        return Err(Error::UnsupportedHaving(reason));
+    }
     let aggregate = if has_having {
         None
     } else {
@@ -483,6 +513,14 @@ mod tests {
              GROUP BY customer_id HAVING customer_id > 2",
             "SELECT lower(customer_id), COUNT(*) FROM purchases \
              GROUP BY lower(customer_id) HAVING COUNT(*) > 2",
+            "SELECT * FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT p.*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT customer_id FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 LIMIT 1",
+            "SELECT customer_id FROM purchases GROUP BY customer_id \
+             HAVING COUNT(*) > 2 OFFSET 1",
+            "SELECT DISTINCT ON (customer_id) customer_id FROM purchases \
+             GROUP BY customer_id HAVING COUNT(*) > 2",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();
