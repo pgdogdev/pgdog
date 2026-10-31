@@ -270,6 +270,8 @@ mod tests {
              HAVING MAX(price) IS NULL",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*)::numeric > 3",
+            "SELECT customer_id FROM purchases GROUP BY customer_id \
+             HAVING MAX(name) ~ 'a'",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {

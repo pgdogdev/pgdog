@@ -490,8 +490,8 @@ mod tests {
     #[test]
     fn aggregate_used_only_by_having_is_merged_and_hidden() {
         let ast = pg_raw_parse::parse(
-            "SELECT customer_id FROM purchases \
-             GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT customer_id, 'total' FROM purchases \
+             GROUP BY 1 HAVING COUNT(*) > 2",
         )
         .unwrap();
         let rewrite = build(&ast, &Schema::default(), false)
@@ -515,6 +515,8 @@ mod tests {
              GROUP BY lower(customer_id) HAVING COUNT(*) > 2",
             "SELECT * FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT p.*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT (p).*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
+            "SELECT customer_id, COUNT(*) FROM purchases GROUP BY 'x' HAVING COUNT(*) > 2",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > 2 LIMIT 1",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
