@@ -10,8 +10,8 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use pgdog_config::users::PasswordKind;
 use timeouts::Timeouts;
+use tokio::time::sleep;
 use tokio::{select, spawn};
-use tokio_util::sync::CancellationToken;
 use tracing::{Level as LogLevel, debug, enabled, error, info, trace, warn};
 
 use super::{ClientRequest, Error, PreparedStatements};
@@ -544,44 +544,63 @@ impl Client {
         let shutdown = self.comms.shutting_down();
         let mut query_engine = QueryEngine::from_client(self)?;
 
-        loop {
-            // Check if we should be shutting down.
-            let offline = self.comms.offline();
-            // Check that there are no active transactions.
-            let query_engine_done = query_engine.can_disconnect();
+        let admin_cancellation = query_engine.cancellation_token();
 
-            // If query engine is idle and we requested shutdown, we're done.
-            // Admin clients stay connected, so admin commands work during shutdown.
-            if query_engine_done && offline && !self.admin {
-                // Send shutdown notification to client.
-                self.stream
-                    .send_flush(&ErrorResponse::shutting_down())
-                    .await?;
-                break;
+        select! {
+            _ = admin_cancellation.cancelled() => {
+                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
+                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
+                // which will disconnect the `Client` (and `QueryEngine` transactions)
+                Err(Error::AdminTermination)
             }
 
-            let client_state = query_engine.client_state();
+            _ = shutdown.cancelled() => {
+                // Check that there are no active transactions.
 
-            let cancellation_token = query_engine.cancellation_token();
-
-            select! {
-                _ = shutdown.cancelled(), if !offline => {
-                    continue; // Wake up task.
+                // TODO(jkaczman): It would be nice to not have to poll on this. However,
+                //                 there doesn't seem to be an easy way to do that, and
+                //                 this only is triggered when the CancellationFuture is
+                //                 cancelled, therefore, this crude solution won't hurt
+                //                 performance meaningfully.
+                while !query_engine.can_disconnect() {
+                    // Poll until the client is ready to be disconnected.
+                    sleep(Duration::from_millis(10)).await;
                 }
 
+                // Send shutdown notification to client.
+                self.stream
+                        .send_flush(&ErrorResponse::shutting_down())
+                        .await?;
+
+
+                Ok(())
+            }
+
+            resp = self.run_loop(&mut query_engine) => {
+                resp
+            },
+        }
+    }
+
+    /// Run the client.
+    async fn run_loop(&mut self, query_engine: &mut QueryEngine) -> Result<(), Error> {
+        loop {
+            let client_state = query_engine.client_state();
+
+            select! {
                 // Async messages.
                 message = query_engine.read_backend() => {
                     let message = message?;
-                    self.server_message(&mut query_engine, message).await?;
+                    self.server_message(query_engine, message).await?;
                 }
 
-                buffer = self.buffer(client_state, &cancellation_token) => {
+                buffer = self.buffer(client_state) => {
                     let event = buffer?;
 
                     // Only send requests to the backend if they are complete.
                     if self.client_request.is_complete()
                         && !self.client_request.messages.is_empty() {
-                            self.client_messages(&mut query_engine).await?;
+                            self.client_messages(query_engine).await?;
                         }
 
                     match event {
@@ -676,11 +695,7 @@ impl Client {
     ///
     /// This ensures we don't check out a connection from the pool until the client
     /// sent a complete request.
-    async fn buffer(
-        &mut self,
-        state: State,
-        cancellation_token: &CancellationToken,
-    ) -> Result<BufferEvent, Error> {
+    async fn buffer(&mut self, state: State) -> Result<BufferEvent, Error> {
         self.client_request.clear();
 
         // Check config once per request.
@@ -699,17 +714,8 @@ impl Client {
                 .timeouts
                 .client_idle_timeout(&state, &self.client_request);
 
-            let message = select! {
-                message = safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)) => {
-                    message
-                }
-                // If any of the `CancellationTokens `trigger, exit early. Currently used for admin `FORCE_RELOAD`.
-                // If this returns an Error, it'll be propagated up to `Client`'s [`Box::pin(self.run())`]
-                // which will disconnect the `Client` (and `QueryEngine` transactions)
-                _ = cancellation_token.cancelled() => {
-                    return Err(Error::AdminTermination)
-                }
-            };
+            let message =
+                safe_timeout(idle_timeout, self.stream_buffer.read(&mut self.stream)).await;
 
             let message = match message {
                 Err(_) => {

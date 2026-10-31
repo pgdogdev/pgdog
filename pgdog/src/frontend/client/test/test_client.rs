@@ -1,5 +1,4 @@
 use std::{fmt::Debug, ops::Deref};
-use tokio_util::sync::CancellationToken;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use pgdog_config::RewriteMode;
@@ -250,9 +249,7 @@ impl TestClient {
 
     /// Process a request.
     pub(crate) async fn try_process(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.client
-            .buffer(self.engine.stats().state, &CancellationToken::new())
-            .await?;
+        self.client.buffer(self.engine.stats().state).await?;
         self.client.client_messages(&mut self.engine).await?;
 
         Ok(())
