@@ -184,7 +184,8 @@
         "endpoint": null,
         "headers": {},
         "namespace": null,
-        "push_interval": 0
+        "push_interval": 0,
+        "temporality": "delta"
       }
     },
     "plugins": {
@@ -1714,9 +1715,29 @@
           "format": "uint64",
           "default": 10000,
           "minimum": 0
+        },
+        "temporality": {
+          "description": "How counters are reported to the OTLP endpoint.\n\n**Note:** If we send `delta`, GCP and Prometheus reject the counters.\nUse `cumulative` for GCP and Prometheus.\n\n_Default:_ `delta`\n\n_Options:_ `delta`, `cumulative`",
+          "$ref": "#/$defs/OtelTemporality",
+          "default": "delta"
         }
       },
       "additionalProperties": false
+    },
+    "OtelTemporality": {
+      "description": "How PgDog reports counters to the OTLP endpoint.",
+      "oneOf": [
+        {
+          "description": "Send the change since the previous push (default).",
+          "type": "string",
+          "const": "delta"
+        },
+        {
+          "description": "Send the running total and the time PgDog started counting.",
+          "type": "string",
+          "const": "cumulative"
+        }
+      ]
     },
     "PassthroughAuth": {
       "description": "toggle automatic creation of connection pools given the user name, database and password.\n\nSee [passthrough authentication](https://docs.pgdog.dev/features/authentication/#passthrough-authentication).\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#passthrough_auth>",
