@@ -9,7 +9,10 @@ use crate::frontend::router::parser::{
     AggregateFunction, CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
 };
 
-use super::{Error, projection::target_output_name};
+use super::{
+    Error,
+    projection::{column_name, target_output_name},
+};
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
 
@@ -48,6 +51,12 @@ pub(super) fn rewrite_select<'a>(
     for group_source in &group_sources {
         let group = group_source.as_ref();
         match group {
+            // Shards can't resolve a SELECT alias inside the hidden projection.
+            Node::ColumnRef(column) if groups_by_output_alias(select, column) => {
+                return Err(Error::UnsupportedHaving(
+                    "GROUP BY on a SELECT alias is unsupported",
+                ));
+            }
             Node::ColumnRef(_) => {
                 let alias = parser.next_alias();
                 parser.values.push(Projected {
@@ -97,6 +106,18 @@ pub(super) fn rewrite_select<'a>(
     select.set_having_clause(neutralized.uncast());
 
     Ok(HavingRewritePlan::new(expression, hidden_aliases))
+}
+
+fn groups_by_output_alias(
+    select: &nodes::SelectStmtMut<'_, '_>,
+    column: &nodes::ColumnRef,
+) -> bool {
+    column.fields().len() == 1
+        && select.target_list().iter().any(|target| {
+            target
+                .name()
+                .is_some_and(|name| Some(name) == column_name(column))
+        })
 }
 
 /// `CASE WHEN false THEN <like> ELSE <value> END` evaluates to `value` with the

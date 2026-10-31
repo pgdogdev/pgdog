@@ -10,7 +10,9 @@ use super::having;
 use super::offset::{self, OffsetPlan};
 use super::order_by;
 use crate::backend::schema::Schema;
-use crate::frontend::router::parser::{Aggregate, HavingExpr, HavingRewritePlan, OrderBy};
+use crate::frontend::router::parser::{
+    Aggregate, AggregateFunction, Function, HavingExpr, HavingRewritePlan, OrderBy,
+};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
 use pg_raw_parse::{Node, StmtList, make, nodes};
@@ -238,7 +240,7 @@ pub(crate) fn finalize_after_route(
 }
 
 /// Query shapes that would return wrong rows once HAVING moves after the merge.
-fn unsupported_with_having(select: &nodes::SelectStmt) -> Option<&'static str> {
+fn unsupported_with_having(select: &nodes::SelectStmt, schema: &Schema) -> Option<&'static str> {
     // Aggregates are merged by SELECT list position, which star expansion shifts.
     let expands_star = select
         .target_list()
@@ -253,6 +255,15 @@ fn unsupported_with_having(select: &nodes::SelectStmt) -> Option<&'static str> {
         });
     if expands_star {
         return Some("SELECT * is unsupported");
+    }
+    // Only whole aggregate calls are merged; an expression over them keeps one shard's value.
+    let wraps_aggregate = select.target_list().iter().any(|target| {
+        order_by::contains_aggregate(target.val(), schema)
+            && !Function::try_from(target.val())
+                .is_ok_and(|function| AggregateFunction::from_name(function.name, schema).is_some())
+    });
+    if wraps_aggregate {
+        return Some("expressions over aggregates in the SELECT list are unsupported");
     }
     // Shards would drop groups before PgDog merges and filters them.
     if !matches!(select.limit_count(), Node::None) || !matches!(select.limit_offset(), Node::None) {
@@ -273,7 +284,7 @@ fn build(
         return Ok(None);
     };
     let has_having = !matches!(select.having_clause(), Node::None);
-    if has_having && let Some(reason) = unsupported_with_having(select) {
+    if has_having && let Some(reason) = unsupported_with_having(select, schema) {
         return Err(Error::UnsupportedHaving(reason));
     }
     let aggregate = if has_having {
@@ -517,6 +528,9 @@ mod tests {
             "SELECT p.*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT (p).*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY 'x' HAVING COUNT(*) > 2",
+            "SELECT name AS n, COUNT(*) FROM purchases GROUP BY n HAVING COUNT(*) > 2",
+            "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
+             GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > 2 LIMIT 1",
             "SELECT customer_id FROM purchases GROUP BY customer_id \

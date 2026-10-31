@@ -112,6 +112,9 @@ async fn having_rejects_shard_local_steps() -> Result<(), Box<dyn std::error::Er
          HAVING COUNT(*) > 0 OFFSET 1",
         "SELECT DISTINCT ON (customer_id) customer_id FROM having_merge_test \
          GROUP BY customer_id HAVING COUNT(*) > 0",
+        "SELECT customer_id AS c FROM having_merge_test GROUP BY c HAVING COUNT(*) > 0",
+        "SELECT customer_id, COUNT(*) + 1 FROM having_merge_test \
+         GROUP BY customer_id HAVING COUNT(*) > 0",
         "EXECUTE having_prepared(0)",
     ] {
         if sql.starts_with("EXECUTE") {
