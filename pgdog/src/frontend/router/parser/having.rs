@@ -35,6 +35,13 @@ pub(crate) enum HavingExpr {
         operator: CompareOperator,
         right: HavingValue,
     },
+    And(Vec<HavingExpr>),
+    Or(Vec<HavingExpr>),
+    Not(Box<HavingExpr>),
+    IsNull {
+        value: HavingValue,
+        negated: bool,
+    },
 }
 
 /// Metadata produced while rewriting a cross-shard `HAVING` clause.
