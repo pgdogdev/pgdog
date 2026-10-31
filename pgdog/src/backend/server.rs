@@ -513,10 +513,6 @@ impl Server {
                 self.send_stream(protocol_message).await?;
                 self.send_stream(message).await?;
             }
-            HandleResult::PrependProtocolMessageRewrite { prepend, rewrite } => {
-                self.send_stream(prepend).await?;
-                self.send_stream(rewrite).await?;
-            }
             HandleResult::PrependRewrite { prepend, rewrite } => {
                 self.send_prepare(prepend).await?;
                 self.send_stream(rewrite).await?;
@@ -532,11 +528,7 @@ impl Server {
             self.send_stream(close).await?;
         }
 
-        self.send_stream(prepare.parse()).await?;
-        if let Some(describe) = prepare.describe() {
-            self.send_stream(describe).await?;
-        }
-        Ok(())
+        self.send_stream(prepare.parse()).await
     }
 
     /// Send a message to Postgres and force us to ignore its respose in [`Self::read`].

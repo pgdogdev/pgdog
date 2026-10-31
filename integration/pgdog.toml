@@ -287,6 +287,12 @@ column = "id"
 data_type = "bigint"
 primary = true
 
+[[sharded_tables]]
+database = "pgdog_sharded"
+name = "pq_district_sums"
+column = "customer_id"
+data_type = "bigint"
+
 # ------------------------------------------------------------------------------
 # ----- Hash Sharded :: UUID ---------------------------------------------------
 

@@ -17,6 +17,7 @@ use crate::parameters::ParameterStore;
 use super::{
     super::{Guard, LinkedServer},
     MultiShard,
+    describe::describe_portals,
 };
 
 /// Handle talking to multiple servers for cross-shard queries.
@@ -219,7 +220,21 @@ impl MultiBinding {
 
     /// Send client request to the shard(s) it should go to.
     pub(crate) async fn send(&mut self, client_request: &ClientRequest) -> Result<(), Error> {
-        let mut shards_sent = self.servers.len();
+        let route = client_request.route();
+        let shards_sent = match route.shard() {
+            Shard::Direct(_) => 1,
+            Shard::Multi(shards) => shards.len(),
+            Shard::All => self.servers.len(),
+        };
+
+        // We decode the rows we merge, so we need their columns.
+        let described = MultiShard::buffers(shards_sent, route)
+            .then(|| describe_portals(client_request))
+            .flatten();
+        let request = described
+            .as_ref()
+            .map_or(client_request, |(request, _)| request);
+
         let mut futures = Vec::new();
 
         for server in self.servers.iter_mut() {
@@ -227,20 +242,14 @@ impl MultiBinding {
             // When only a subset of shards is connected (Shard::Multi binding),
             // positional indices don't match actual shard numbers.
             let shard = server.shard;
-            let send = match client_request.route().shard() {
-                Shard::Direct(s) => {
-                    shards_sent = 1;
-                    *s == shard
-                }
-                Shard::Multi(shards) => {
-                    shards_sent = shards.len();
-                    shards.contains(&shard)
-                }
+            let send = match route.shard() {
+                Shard::Direct(s) => *s == shard,
+                Shard::Multi(shards) => shards.contains(&shard),
                 Shard::All => true,
             };
 
             if send {
-                futures.push(server.send(client_request));
+                futures.push(server.send(request));
             }
         }
 
@@ -256,7 +265,10 @@ impl MultiBinding {
         if client_request.is_sync_only() {
             self.state.update_shards(shards_sent);
         } else {
-            self.state.update(shards_sent, client_request.route());
+            self.state.update(shards_sent, route);
+            if let Some((_, describes)) = described {
+                self.state.set_describes(describes);
+            }
         }
 
         Ok(())

@@ -1,5 +1,3 @@
-use crate::frontend::PreparedStatements;
-
 use super::{Bind, Format, RowDescription};
 
 /// Decodes columns returned by Postgres.
@@ -21,17 +19,6 @@ impl Decoder {
     pub(crate) fn set_formats(&mut self, bind: &Bind) {
         self.formats.clear();
         self.formats.extend(bind.result_formats());
-
-        // Unnamed statements will cause the server to return `RowDescription`. Will will
-        // see it and set it. Named statements will often request it separately with `Describe`
-        // as part of a previous request, so we get it from the prepared statements cache.
-        if !bind.anonymous()
-            && let Some(rd) = PreparedStatements::global()
-                .read()
-                .row_description(bind.statement())
-        {
-            self.row_description = Some(rd);
-        }
     }
 
     /// Set the [`RowDescription`] returned by the server.
@@ -131,16 +118,10 @@ mod test {
     }
 
     #[test]
-    fn test_bind_keeps_the_server_description_when_the_cache_is_empty() {
+    fn test_bind_without_result_formats_uses_the_server_description() {
         let mut decoder = Decoder::default();
         decoder.set_row_description(text_rd());
         decoder.set_formats(&Bind::new_params_codes_results("s1", &[], &[], &[1]));
-
-        // Nothing described s1, so the only columns we have are the ones the
-        // server announced. The formats still come from the Bind.
-        assert_eq!(decoder.row_description().fields.len(), 2);
-        assert_eq!(decoder.get_format(0), Format::Binary);
-
         decoder.set_formats(&Bind::new_statement("s2"));
 
         assert_eq!(decoder.get_format(0), Format::Text);
