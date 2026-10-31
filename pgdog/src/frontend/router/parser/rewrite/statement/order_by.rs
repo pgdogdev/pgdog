@@ -59,12 +59,18 @@ fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
                         .map(Node::as_str))))
 }
 
-fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
-    if let Some(alias) = target.name() {
-        return Some(alias);
-    }
-    match target.val() {
+/// Column name PostgreSQL assigns to a SELECT target in the RowDescription.
+pub(super) fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
+    target
+        .name()
+        .or_else(|| expression_output_name(target.val()))
+}
+
+fn expression_output_name(node: Node<'_>) -> Option<&str> {
+    match node {
         Node::ColumnRef(column) if !is_star(column) => column_name(column),
+        Node::FuncCall(function) => function.funcname().iter().next_back()?.as_str(),
+        Node::TypeCast(cast) => expression_output_name(cast.arg()),
         _ => None,
     }
 }
@@ -401,6 +407,14 @@ mod tests {
             rewrite("SELECT a.*, b.price FROM a JOIN b ON a.id = b.a_id ORDER BY b.price");
 
         assert!(sql.contains("b.price AS __pgdog_order_col0"));
+        assert!(plan.order_by_helpers[0].injected);
+    }
+
+    #[test]
+    fn injects_helper_when_cast_target_shares_output_name() {
+        let (sql, plan) = rewrite("SELECT price::int, price FROM purchases ORDER BY price");
+
+        assert!(sql.contains("price AS __pgdog_order_col0"), "{sql}");
         assert!(plan.order_by_helpers[0].injected);
     }
 

@@ -9,7 +9,7 @@ use crate::frontend::router::parser::{
     AggregateFunction, CompareOperator, Function, HavingExpr, HavingRewritePlan, HavingValue,
 };
 
-use super::Error;
+use super::{Error, order_by::target_output_name};
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
 
@@ -32,12 +32,7 @@ pub(super) fn rewrite_select<'a>(
     let aliases = select
         .target_list()
         .iter()
-        .filter_map(|target| {
-            target
-                .name()
-                .or_else(|| target_output_name(target.val()))
-                .map(str::to_owned)
-        })
+        .filter_map(|target| target_output_name(target).map(str::to_owned))
         .collect();
     let mut parser = Parser {
         aliases,
@@ -92,15 +87,6 @@ pub(super) fn rewrite_select<'a>(
     select.set_having_clause(neutralized.uncast());
 
     Ok(HavingRewritePlan::new(expression, hidden_aliases))
-}
-
-fn target_output_name(node: Node<'_>) -> Option<&str> {
-    match node {
-        Node::ColumnRef(column) => column.fields().iter().next_back()?.as_str(),
-        Node::FuncCall(function) => function.funcname().iter().next_back()?.as_str(),
-        Node::TypeCast(cast) => target_output_name(cast.arg()),
-        _ => None,
-    }
 }
 
 struct Parser<'a> {
