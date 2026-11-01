@@ -89,6 +89,21 @@ fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<Tru
     if left.is_null() || right.is_null() {
         return Ok(TruthValue::Unknown);
     }
+    // PgDog only has the text form of these, which doesn't follow their PostgreSQL ordering
+    // (date, char(n), citext, money, inet, ...).
+    if matches!(left, Datum::Unknown(_)) || matches!(right, Datum::Unknown(_)) {
+        return Err(Error::UnsupportedHaving(
+            "cannot compare values of this type".into(),
+        ));
+    }
+    // Text ordering depends on the column collation, which PgDog doesn't know.
+    if matches!((left, right), (Datum::Text(_), Datum::Text(_)))
+        && !matches!(operator, CompareOperator::Equal | CompareOperator::NotEqual)
+    {
+        return Err(Error::UnsupportedHaving(
+            "only = and <> are supported for text".into(),
+        ));
+    }
 
     let ordering = left
         .compare_numeric(right)
@@ -195,10 +210,10 @@ mod tests {
                 true,
             ),
             (
-                CompareOperator::Greater,
+                CompareOperator::NotEqual,
                 Datum::Text("a".into()),
                 Datum::Text("z".into()),
-                false,
+                true,
             ),
         ] {
             assert_eq!(
@@ -211,13 +226,27 @@ mod tests {
             );
         }
 
-        assert!(matches!(
-            compare(
-                &Datum::Text("2".into()),
+        for (left, operator, right) in [
+            (
+                Datum::Text("2".into()),
                 CompareOperator::Equal,
-                &Datum::Integer(2)
+                Datum::Integer(2),
             ),
-            Err(Error::UnsupportedHaving(_))
-        ));
+            (
+                Datum::Text("a".into()),
+                CompareOperator::Greater,
+                Datum::Text("B".into()),
+            ),
+            (
+                Datum::Unknown("2026-01-02".into()),
+                CompareOperator::Equal,
+                Datum::Unknown("2026-01-02".into()),
+            ),
+        ] {
+            assert!(matches!(
+                compare(&left, operator, &right),
+                Err(Error::UnsupportedHaving(_))
+            ));
+        }
     }
 }
