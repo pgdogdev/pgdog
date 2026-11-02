@@ -30,9 +30,7 @@ use crate::{
     config::{config, set},
     util::sync::WorkerPool,
 };
-use pgdog_stats::{
-    ReplicationDirection, ReplicationStatus, ReshardStatus, TaskProgress, TaskStatus,
-};
+use pgdog_stats::{ReplicationStatus, ReshardStatus, TaskDefinitionKind, TaskProgress, TaskStatus};
 
 mod copy_data;
 mod replication;
@@ -75,8 +73,7 @@ async fn setup_replication_test(
 
 fn start_replication(state: &ReshardingState) -> (TaskWaiter<(), Error>, ReplicationClusterStop) {
     let progress = ReplicationProgress::new(state.source.shards().len());
-    let (cluster, stop) =
-        ReplicationClusterTask::new(state.clone(), ReplicationDirection::Forward, progress);
+    let (cluster, stop) = ReplicationClusterTask::new(state.clone(), progress);
 
     (run_task(cluster), stop)
 }
@@ -167,6 +164,17 @@ fn subtree_progress(root: TaskId) -> Vec<(String, TaskProgress)> {
         .into_iter()
         .map(|(_, name, progress)| (name, progress))
         .collect()
+}
+
+fn subtree_definitions(root: TaskId) -> Vec<TaskDefinitionKind> {
+    let mut definitions = vec![];
+    tasks_storage().for_each(|task| {
+        if task.root_id == root && task.id != root {
+            definitions.push((task.id, task.state().definition.kind.clone()));
+        }
+    });
+    definitions.sort_by_key(|(id, _)| *id);
+    definitions.into_iter().map(|(_, kind)| kind).collect()
 }
 
 fn progress_of(states: &[(String, TaskProgress)], name: &str) -> Vec<TaskProgress> {
@@ -966,5 +974,32 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
         ),
         "post-data did not report the unique index error: {post_data:?}"
     );
+    Ok(())
+}
+
+fn replication_status(id: TaskId) -> Option<ReplicationStatus> {
+    let mut found = None;
+    tasks_storage().try_for_each(|task| {
+        if task.id != id {
+            return ControlFlow::Continue(());
+        }
+        if let TaskStatus::Replication(status) = task.state().status {
+            found = Some(status);
+        }
+        ControlFlow::Break(())
+    });
+    found
+}
+
+async fn wait_for_replication_status(
+    id: TaskId,
+    expected: ReplicationStatus,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while replication_status(id) != Some(expected) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
     Ok(())
 }

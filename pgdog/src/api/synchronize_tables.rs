@@ -8,9 +8,7 @@ use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::publisher::replication_progress::ReplicationProgress;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::util::safe_interval;
-use pgdog_stats::{
-    ReplicationDirection, SynchronizeTablesDefinition, SynchronizeTablesStatus, TaskDefinition,
-};
+use pgdog_stats::{SynchronizeTablesDefinition, SynchronizeTablesStatus, TaskDefinition};
 use tokio::select;
 use tracing::info;
 
@@ -57,11 +55,7 @@ impl Task for SynchronizeTablesTask {
         let progress = ReplicationProgress::new(state.source.shards().len());
 
         // start the replication to make sure all the tables reach the same lsn on the shards
-        let (task, stop) = ReplicationClusterTask::new(
-            state.clone(),
-            ReplicationDirection::Forward,
-            progress.clone(),
-        );
+        let (task, stop) = ReplicationClusterTask::new(state.clone(), progress.clone());
         let mut replication = Box::pin(ctx.run(task));
         let mut check = safe_interval(STATUS_REPORT_INTERVAL);
 

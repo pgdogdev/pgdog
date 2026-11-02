@@ -5,8 +5,8 @@ use tokio::sync::OnceCell;
 
 use futures::future::try_join_all;
 use pgdog_stats::{
-    Databases, SchemaShardDefinition, SchemaShardStatus, SchemaStatementFailure,
-    SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition,
+    Databases, ReshardingDirection, SchemaShardDefinition, SchemaShardStatus,
+    SchemaStatementFailure, SchemaSyncDefinition, SchemaSyncStatus, TaskDefinition,
 };
 use tracing::{info, warn};
 
@@ -56,6 +56,8 @@ pub(crate) struct SchemaSyncTask {
     ignore_errors: bool,
     #[builder(default)]
     dry_run: bool,
+    #[builder(default)]
+    direction: ReshardingDirection,
 }
 
 pub(crate) type SchemaSyncBuilder = SchemaSyncTaskBuilder<
@@ -77,6 +79,7 @@ impl Task for SchemaSyncTask {
             sync_state: self.phase.into(),
             ignore_errors: self.ignore_errors,
             dry_run: self.dry_run,
+            direction: self.direction,
         }
     }
 
@@ -299,6 +302,7 @@ mod tests {
                 sync_state: phase.into(),
                 ignore_errors: false,
                 dry_run: false,
+                direction: ReshardingDirection::Forward,
             });
 
             assert_eq!(definition.name, "schema_sync");
