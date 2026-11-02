@@ -5,9 +5,10 @@ set -euo pipefail
 
 readonly X86_WAIT_SECONDS=10800
 
-lane_context() { [ "$1" = x86 ] && echo metal/bench-x86 || echo metal/bench; }
-lane_prefix() { [ "$1" = x86 ] && echo results-x86 || echo results; }
-lane_marker() { [ "$1" = x86 ] && echo "<!-- metal-bench-x86 -->" || echo "<!-- metal-bench -->"; }
+lane_suffix() { [ "$1" = arm64 ] || echo "-$1"; }
+lane_context() { echo "metal/bench$(lane_suffix "$1")"; }
+lane_prefix() { echo "results$(lane_suffix "$1")"; }
+lane_marker() { echo "<!-- metal-bench$(lane_suffix "$1") -->"; }
 
 set_status() {
     local lane=$1 state=$2 description=$3
@@ -90,8 +91,14 @@ report_lane() {
 }
 
 main() {
+    if [ "${1:-}" = pgo ]; then
+        report_lane pgo "$(wait_for_lane pgo)"
+        report_lane pgo-x86 "$(wait_for_lane pgo-x86 $(($(date +%s) + X86_WAIT_SECONDS)))"
+        return
+    fi
+
     report_lane arm64 "$(wait_for_lane arm64)"
     report_lane x86 "$(wait_for_lane x86 $(($(date +%s) + X86_WAIT_SECONDS)))"
 }
 
-main
+main "$@"
