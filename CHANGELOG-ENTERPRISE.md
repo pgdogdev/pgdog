@@ -16,6 +16,7 @@ the most optimal way to share those changes.
 
 - Enterprise Docker images now use open source base images
 - Unify the resharding UI and add missing replication and resharding tasks
+- Use PGO (profile-guided optimization) for Docker images, which improves performance by 6% on x86 and 17% on ARM
 
 #### Bug fixes
 
