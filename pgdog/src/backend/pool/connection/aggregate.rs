@@ -539,7 +539,7 @@ mod test {
 
     #[test]
     fn aggregate_count_preserves_binary_result_types() {
-        use pgdog_postgres_types::Float;
+        use pgdog_postgres_types::{Float, Numeric};
 
         for (cast, oid, partial, expected) in [
             ("smallint", 21, Datum::SmallInt(3), Datum::SmallInt(6)),
@@ -556,6 +556,12 @@ mod test {
                 701,
                 Datum::Double(Double(3.0)),
                 Datum::Double(Double(6.0)),
+            ),
+            (
+                "numeric",
+                1700,
+                Datum::Numeric(Numeric::from(3_i64)),
+                Datum::Numeric(Numeric::from(6_i64)),
             ),
         ] {
             let aggregate = parse(&format!("SELECT COUNT(*)::{cast} FROM users"));
