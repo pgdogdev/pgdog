@@ -39,6 +39,23 @@ pub(crate) enum AggregateFunction {
     Unrecognized(String),
 }
 
+impl AggregateFunction {
+    pub(crate) fn from_builtin_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "count" => Self::Count,
+            "max" => Self::Max,
+            "min" => Self::Min,
+            "sum" => Self::Sum,
+            "avg" => Self::Avg,
+            "stddev" | "stddev_samp" => Self::StddevSamp,
+            "stddev_pop" => Self::StddevPop,
+            "variance" | "var_samp" => Self::VarSamp,
+            "var_pop" => Self::VarPop,
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
@@ -94,20 +111,11 @@ fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
 
 impl AggregateFunction {
     pub(crate) fn from_name(name: &str, schema: &Schema) -> Option<Self> {
-        Some(match name {
-            "count" => AggregateFunction::Count,
-            "max" => AggregateFunction::Max,
-            "min" => AggregateFunction::Min,
-            "sum" => AggregateFunction::Sum,
-            "avg" => AggregateFunction::Avg,
-            "stddev" | "stddev_samp" => AggregateFunction::StddevSamp,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "variance" | "var_samp" => AggregateFunction::VarSamp,
-            "var_pop" => AggregateFunction::VarPop,
-            name if schema.aggregate_functions.contains(name) => {
-                AggregateFunction::Unrecognized(name.to_owned())
-            }
-            _ => return None,
+        Self::from_builtin_name(name).or_else(|| {
+            schema
+                .aggregate_functions
+                .contains(name)
+                .then(|| Self::Unrecognized(name.to_owned()))
         })
     }
 }
