@@ -14,7 +14,6 @@ use crate::backend::replication::data_sync::{
 use crate::backend::replication::logical::Error;
 use crate::backend::replication::logical::resharding_state::ReshardingState;
 use crate::backend::replication::publisher::{Table, resolve_resharding_replicas};
-use crate::frontend::client::query_engine::two_pc::Manager;
 use crate::tasks;
 use crate::util::safe_sleep;
 use crate::util::stats::average_rate;
@@ -310,19 +309,8 @@ impl Task for TableDataSyncTask {
                         return Err(Error::DataSyncAborted);
                     }
 
-                    if self.dest.two_pc_enabled()
-                        && let Some(txn) = err.two_pc_cleanup_transaction()
-                    {
-                        Manager::get().wait_until_cleaned_up(txn).await;
-                    }
-
-                    // Not idempotent (no truncate): if a prior attempt left rows on a
-                    // reachable shard, the re-copy can only collide, so stop instead of
-                    // retrying. A shard we cannot probe is logged (not blocked on), since we
-                    // cannot prove it dirty. Checked after the backoff so a RELOAD-churned
-                    // pool can recover first.
-                    // FUTURE: truncate before retry to handle the COPY-committed-but-dropped
-                    // race (rows remain → PK violations). Safe once source-guard checks exist.
+                    // FUTURE: without 2pc truncate before retry to handle the COPY-committed-but-dropped
+                    // race (rows remain → PK violations). Or force 2pc
                     if validate_destination_has_rows(&self.table, &self.dest).await {
                         return Err(err);
                     }
