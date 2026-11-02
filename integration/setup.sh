@@ -2,11 +2,10 @@
 set -e
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-if [[ "$OS" == "darwin" ]]; then
-    ARCH=arm64
-else
-    ARCH=amd64
-fi
+case "$(uname -m)" in
+    arm64|aarch64) ARCH=arm64 ;;
+    *) ARCH=amd64 ;;
+esac
 
 # Verify and apply required PostgreSQL system settings.
 # ALTER SYSTEM cannot run inside a function/DO block, so checks are done in bash.

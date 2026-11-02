@@ -45,8 +45,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Generate PGO profile
+        if: runner.os == 'Linux'
+        run: |
+          bash integration/ci/install-deps.sh
+          bash integration/ci/setup.sh --with-toxi
+          bash scripts/pgo-profile.sh ${{ matrix.target }}
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p pgdog
+        run: |
+          pgo_args=()
+          if [ -f pgo.profdata ]; then
+            pgo_args=(--config "target.'cfg(all())'.rustflags=['-Cprofile-use=$PWD/pgo.profdata']")
+          fi
+          cargo build --release --target ${{ matrix.target }} -p pgdog "${pgo_args[@]}"
 
       - name: Package tarball
         run: |
