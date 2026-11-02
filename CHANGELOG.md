@@ -4,6 +4,66 @@ PgDog is released weekly, on Thursdays. Each release includes tagged Docker imag
 
 For the [Enterprise edition](https://docs.pgdog.dev/enterprise_edition/), see [CHANGELOG-ENTERPRISE.md](CHANGELOG-ENTERPRISE.md).
 
+### v0.1.63
+
+| Application | Docker image                     |
+| ----------- | -------------------------------- |
+| PgDog       | `ghcr.io/pgdogdev/pgdog:v0.1.63` |
+
+#### Features
+
+- Add support for recursive cross-shard subqueries (i.e., subquery inside another subquery) @jkaczman
+- Add support for `INSERT INTO [...] SELECT [...] FROM` subqueries @jkaczman
+- Add support for handling subqueries in right side of boolean expression in a WHERE clause @jkaczman
+- **Breaking** `prepared_statements_limit` is now set to 5,000 by default. This is to prevent statement leaks when that setting is not set and the pg client driver does not use prepared statements optimally (e.g., tokio-postgres). @levkk
+- Add a bunch of CLI tools to the production Docker image to help with debugging (e.g., netstat, dig, etc.)
+- Add `min_connections` OTEL/OpenMetrics gauge which tracks `min_pool_size` for each connection pool @meskill
+- Make `SIGTERM` behave like `SIGINT`, preventing common misuse in cloud-native environments @meskill
+- Cross-shard `ORDER BY` now supports `CASE` expressions @jkaczman
+- Partial support for `HAVING` in cross-shard aggregates @murex971
+- Support cumulative temporailty for OTEL metrics, allowing to export those metrics to servers that don't support incremental measurements, e.g., GCP @jkaczman
+- Parse `URI` on TLS certificates along with `dnsName` to be used as identity for client-to-PgDog mTLS @eidam @levkk
+
+#### Performance
+
+- Query router performance improvements (5-12% improvement in microbenchmarks). @jkaczman
+- Replace query cache mutex with a rwlock, decreasing contention on the AST cache. The cache now uses CLOCK (second chance) eviction to enforce the LRU policy. @jkaczman
+- Improve cross-shard INSERT handling by grouping tuples that belong to the same shard into a single statement. @jkaczman
+- Skip query routing logic in non-sharded single primary/replicas-only clusters. CPU utilization reduced by 1.3%. @jkaczman
+- Make PgDog production Docker images 35% smaller @meskill
+- Remove redundant clock reads in the hot path @jkaczman
+
+#### Bug fixes
+
+- Make `SET` more Postgres-compliant: return errors on incorrect parameter values, return correct `ParameterStatus` messages, handle `RESET` correctly for `DateStyle` and other parameters that have connection defaults, correctly return multiple `CommandComplete` messages for multi-query `SET` statements.
+- `min_pool_size` was incorrectly rejected on `[[users]]` entries when `passthrough_auth` was enabled @meskill
+- Logical replication couldn't handle tables with primary keys that cover all table columns @levkk
+- Extended protocol error recovery had an edge case that could cause PgDog to stall @levkk @frangz
+- Sharding key updates were incorrectly blocked to omnisharded tables wherie they were safe @levkk
+- [Enterprise] Cancelled replication tasks were incorrectly tracked as completed @meskill
+- Some resharding tasks could hang on cancellation @meskill
+- Some extended protocol messages (e.g., Describe) were incorrectly routed in cross-shard transactions @meskill
+- PgDog would crash if it would run out of available open file descriptions. Correct behavior is to return an error and continue operations. @meskill
+- Reject unsupported cross-shard aggregates with `HAVING` clause instead of returning wrong results @murex971
+- Correctly parse `-c` startup parameters in `Startup` message @meskill
+- Cross-shard `INSERT` transaction using `two_phase_commit_auto` would not automatically commit @meskill
+- Don't disconnect clients that attempt to use `LISTEN`/`NOTIFY` when `pub_sub_channel_size` is 0 @murex971
+- Correctly stick pg catalog omnisharded queries to one shard, allowing tools like `pg_dump` to work correctly with sharded databases @meskill
+- `GROUP BY 0` and other invalid values would crash PgDog @murex971
+
+#### Security
+
+- Prevent clients directly executing PgDog-prepared statements by internal name. This only affected users that were able to authenticate to PgDog, so multi-tenant publicly accessible deployments should consider upgrading. @levkk
+
+#### Code quality
+
+- Subquery test suite runs in parallel for all DML queries @jkaczman
+- Cleanup transaction handling to re-use the same simulated responses code @levkk
+- Use `pg_stat_monitor` extension in tests to validate correct statement routing @jkaczman
+- Move to self-hosted metal instances for performance regression testing @jkaczman
+- Updated to latest Tokio @meskill
+- Use instruction count instead of latency for microbenchmarks @jkaczman
+
 ### v0.1.62
 
 | Application | Docker image                     |
