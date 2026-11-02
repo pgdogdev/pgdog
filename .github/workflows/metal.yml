@@ -60,13 +60,13 @@ jobs:
           echo "enqueued_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
           aws sqs send-message \
             --queue-url "$QUEUE_URL" \
-            --message-group-id metal \
+            --message-group-id "$REF" \
             --message-deduplication-id "$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
           aws sqs send-message \
             --queue-url "$QUEUE_URL_X86" \
-            --message-group-id metal \
+            --message-group-id "$REF" \
             --message-deduplication-id "$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
