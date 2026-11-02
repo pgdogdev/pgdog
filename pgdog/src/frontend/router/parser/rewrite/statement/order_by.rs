@@ -14,7 +14,7 @@ impl OrderBySource {
     }
 }
 
-fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
+pub(super) fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
     column
         .fields()
         .into_iter()
@@ -22,7 +22,7 @@ fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
         .and_then(Node::as_str)
 }
 
-fn is_star(column: &nodes::ColumnRef) -> bool {
+pub(super) fn is_star(column: &nodes::ColumnRef) -> bool {
     matches!(
         column.fields().into_iter().next_back(),
         Some(Node::A_Star(_))
@@ -59,7 +59,7 @@ fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
                         .map(Node::as_str))))
 }
 
-fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
+pub(super) fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
     if let Some(alias) = target.name() {
         return Some(alias);
     }

@@ -153,6 +153,17 @@ impl QueryEngine {
                     .await?;
             }
 
+            Some(RewriteResult::InPlace { .. }) | None
+                if let Some(plan) = client_request
+                    .route()
+                    .projection_rewrite_plan
+                    .clone()
+                    .filter(|plan| plan.having.is_some()) =>
+            {
+                Box::pin(multi_step::HavingMulti::new(self, plan).execute(context, client_request))
+                    .await?;
+            }
+
             Some(RewriteResult::InPlace { .. }) | None => {
                 self.backend
                     .handle_client_request(client_request, &mut self.router, self.streaming)

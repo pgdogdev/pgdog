@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     frontend::router::parser::{
-        Aggregate, CompareOperator, DistinctBy, HavingExpr, HavingRewritePlan, HavingValue,
-        OrderBy, Shard, ShardWithPriority,
+        Aggregate, DistinctBy, HavingRewritePlan, OrderBy, Shard, ShardWithPriority,
         rewrite::statement::projection::{
             HavingRewriteResult, OrderByHelper, OrderBySource, ProjectionRewritePlan,
         },
@@ -142,18 +141,15 @@ fn test_order_by_helper_after_star_expansion_is_dropped_after_sorting() {
     }
 }
 
-/// `SELECT customer_id, COUNT(*) ... GROUP BY customer_id HAVING <left> > 3`,
-/// with `3` projected as the hidden `__pgdog_having_0` column.
-fn having_route(left: &str) -> Route {
+/// `SELECT customer_id, COUNT(*) ... GROUP BY customer_id HAVING ...`, with
+/// `operand` passed to the HAVING filter and `__pgdog_having_0` hidden.
+fn having_route(operand: &str) -> Route {
     let aggregate = Aggregate::new_count_group_by(1, &[0]);
     let plan = ProjectionRewritePlan {
         having: Some(Box::new(HavingRewriteResult::new(
             HavingRewritePlan::new(
-                HavingExpr::Compare {
-                    left: HavingValue::new(left.into()),
-                    operator: CompareOperator::Greater,
-                    right: HavingValue::new("__pgdog_having_0".into()),
-                },
+                String::new(),
+                vec![operand.into()],
                 vec!["__pgdog_having_0".into()],
             ),
             aggregate.clone(),
@@ -199,7 +195,7 @@ fn send_having_shard_results(multi_shard: &mut MultiShard) -> Result<Vec<Message
 }
 
 #[test]
-fn test_having_filters_merged_groups_and_drops_hidden_columns() {
+fn test_having_collects_merged_inputs_and_drops_hidden_columns() {
     let route = having_route("count");
     let mut multi_shard = MultiShard::new(2, &route);
 
@@ -217,16 +213,27 @@ fn test_having_filters_merged_groups_and_drops_hidden_columns() {
         ["customer_id", "count"]
     );
 
-    // No shard passes COUNT(*) > 3 on its own; customer 1 does only after merging (2 + 2).
-    let row = DataRow::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
-    assert_eq!(row.len(), 2);
-    assert_eq!(row.get::<i64>(0, Format::Text).unwrap(), 1);
-    assert_eq!(row.get::<i64>(1, Format::Text).unwrap(), 4);
+    // Every merged group is kept for the query engine to filter, with the
+    // merged counts (2 + 2 and 1 + 1) as the HAVING input.
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        let row =
+            DataRow::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
+        assert_eq!(row.len(), 2);
+        counts.push(row.get::<i64>(1, Format::Text).unwrap());
+    }
+    counts.sort();
+    assert_eq!(counts, [2, 4]);
 
     let command_complete =
         CommandComplete::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
-    assert_eq!(command_complete.rows().unwrap(), Some(1));
+    assert_eq!(command_complete.rows().unwrap(), Some(2));
     assert!(multi_shard.get_server_message().is_none());
+
+    multi_shard.query_complete();
+    let inputs = multi_shard.take_having_inputs().unwrap();
+    assert_eq!(inputs.rows(), 2);
+    assert_eq!(inputs.columns().len(), 1);
 }
 
 #[test]

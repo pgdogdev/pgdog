@@ -21,7 +21,9 @@ use pgdog_postgres_types::Datum;
 
 use super::Aggregates;
 
-mod having;
+pub(crate) mod having;
+
+use having::HavingInputs;
 
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug, Clone)]
@@ -158,28 +160,20 @@ impl Buffer {
         Ok(())
     }
 
-    /// Apply `HAVING` after all partial aggregate rows have been merged.
-    pub(super) fn having(
-        &mut self,
+    /// Collect the merged `HAVING` operands, before hidden columns are dropped.
+    pub(super) fn having_inputs(
+        &self,
         plan: Option<&ProjectionRewritePlan>,
         decoder: &Decoder,
-    ) -> Result<(), super::Error> {
-        let Some(plan) = plan else {
-            return Ok(());
+    ) -> Result<Option<HavingInputs>, super::Error> {
+        let Some(having) = plan.and_then(|plan| plan.having.as_deref()) else {
+            return Ok(None);
         };
-        let Some(having) = plan.having.as_ref() else {
-            return Ok(());
-        };
-        let evaluator = having::Evaluator::new(having.expression(), decoder);
-
-        let mut filtered = VecDeque::with_capacity(self.buffer.len());
-        for row in self.buffer.drain(..) {
-            if evaluator.evaluate(&row, decoder)? {
-                filtered.push_back(row);
-            }
-        }
-        self.buffer = filtered;
-        Ok(())
+        Ok(Some(HavingInputs::new(
+            &self.buffer,
+            having.rewrite().operand_aliases(),
+            decoder,
+        )?))
     }
 
     pub(super) fn drop_helper_columns(
@@ -278,7 +272,6 @@ impl Buffer {
 mod test {
     use super::*;
     use crate::frontend::router::parser::rewrite::statement::projection::HavingRewriteResult;
-    use crate::frontend::router::parser::{CompareOperator, HavingExpr, HavingValue};
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
     use pg_raw_parse::Node;
@@ -364,10 +357,9 @@ mod test {
     }
 
     #[test]
-    fn having_filters_after_grouped_aggregate_merge() {
+    fn having_inputs_follow_grouped_aggregate_merge() {
         let ast = pg_raw_parse::parse(
-            "SELECT customer_id, COUNT(*), \
-             COUNT(*) AS __pgdog_having_0, 3::bigint AS __pgdog_having_1 \
+            "SELECT customer_id, COUNT(*), COUNT(*) AS __pgdog_having_0 \
              FROM purchases GROUP BY customer_id",
         )
         .unwrap();
@@ -379,18 +371,14 @@ mod test {
             Field::bigint("customer_id"),
             Field::bigint("count"),
             Field::bigint("__pgdog_having_0"),
-            Field::bigint("__pgdog_having_1"),
         ]));
 
         let plan = ProjectionRewritePlan {
             having: Some(Box::new(HavingRewriteResult::new(
                 crate::frontend::router::parser::HavingRewritePlan::new(
-                    HavingExpr::Compare {
-                        left: HavingValue::new("__pgdog_having_0".into()),
-                        operator: CompareOperator::Greater,
-                        right: HavingValue::new("__pgdog_having_1".into()),
-                    },
-                    vec!["__pgdog_having_0".into(), "__pgdog_having_1".into()],
+                    String::new(),
+                    vec!["__pgdog_having_0".into()],
+                    vec!["__pgdog_having_0".into()],
                 ),
                 aggregate.clone(),
             ))),
@@ -400,19 +388,22 @@ mod test {
         let mut buffer = Buffer::default();
         for (customer, partial_count) in [(1_i64, 2_i64), (1, 2), (2, 1), (2, 1)] {
             let mut row = DataRow::new();
-            row.add(customer)
-                .add(partial_count)
-                .add(partial_count)
-                .add(3_i64);
+            row.add(customer).add(partial_count).add(partial_count);
             buffer.add(row.message()).unwrap();
         }
 
         buffer.aggregate(&aggregate, &decoder, Some(&plan)).unwrap();
-        buffer.having(Some(&plan), &decoder).unwrap();
+        let inputs = buffer
+            .having_inputs(Some(&plan), &decoder)
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(buffer.len(), 1);
-        assert_eq!(buffer.buffer[0].get::<i64>(0, Format::Text).unwrap(), 1);
-        assert_eq!(buffer.buffer[0].get::<i64>(1, Format::Text).unwrap(), 4);
+        assert_eq!(inputs.rows(), 2);
+        let array = inputs.columns()[0].array().0.data;
+        assert!(
+            [&br#"{"4","2"}"#[..], br#"{"2","4"}"#].contains(&array.as_ref()),
+            "{array:?}"
+        );
     }
 
     #[test]

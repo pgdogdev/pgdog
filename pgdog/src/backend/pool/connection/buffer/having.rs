@@ -1,223 +1,175 @@
-use std::{cmp::Ordering, collections::HashMap};
+//! Merged `HAVING` operands, sent back to PostgreSQL for evaluation.
 
-use pgdog_postgres_types::Datum;
+use std::collections::VecDeque;
 
-use crate::{
-    frontend::router::parser::{CompareOperator, HavingExpr, HavingValue},
-    net::{Decoder, messages::DataRow},
+use bytes::{BufMut, Bytes, BytesMut};
+
+use crate::net::{
+    Decoder,
+    messages::{DataRow, Format, bind::Parameter},
 };
 
 use super::super::aggregate::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TruthValue {
-    True,
-    False,
-    Unknown,
+/// One merged group per row, one column per `HAVING` operand.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HavingInputs {
+    rows: usize,
+    columns: Vec<HavingColumn>,
 }
 
-pub(super) struct Evaluator<'a> {
-    expression: &'a HavingExpr,
-    columns: HashMap<&'a str, usize>,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct HavingColumn {
+    type_oid: i32,
+    format: Format,
+    values: Vec<Option<Bytes>>,
 }
 
-impl<'a> Evaluator<'a> {
-    pub(super) fn new(expression: &'a HavingExpr, decoder: &'a Decoder) -> Self {
-        let columns = decoder
-            .row_description()
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(index, field)| (field.name.as_str(), index))
-            .collect();
-        Self {
-            expression,
-            columns,
-        }
-    }
-
-    pub(super) fn evaluate(&self, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-        Ok(matches!(
-            self.evaluate_expression(self.expression, row, decoder)?,
-            TruthValue::True
-        ))
-    }
-
-    fn evaluate_expression(
-        &self,
-        expression: &HavingExpr,
-        row: &DataRow,
+impl HavingInputs {
+    pub(super) fn new(
+        rows: &VecDeque<DataRow>,
+        aliases: &[String],
         decoder: &Decoder,
-    ) -> Result<TruthValue, Error> {
-        match expression {
-            HavingExpr::Compare {
-                left,
-                operator,
-                right,
-            } => {
-                let left = self.value(left, row, decoder)?;
-                let right = self.value(right, row, decoder)?;
-                compare(&left, *operator, &right)
+    ) -> Result<Self, Error> {
+        let row_description = decoder.row_description();
+        let columns = aliases
+            .iter()
+            .map(|alias| {
+                let index = row_description.field_index(alias).ok_or_else(|| {
+                    Error::InvalidHaving(format!("missing HAVING column \"{alias}\""))
+                })?;
+                let field = row_description
+                    .field(index)
+                    .expect("field_index returned a valid column");
+                Ok(HavingColumn {
+                    type_oid: field.type_oid,
+                    format: decoder.get_format(index),
+                    values: rows
+                        .iter()
+                        .map(|row| {
+                            row.get_raw(index)
+                                .filter(|data| !data.is_null)
+                                .map(|data| data.data.clone())
+                        })
+                        .collect(),
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+
+        Ok(Self {
+            rows: rows.len(),
+            columns,
+        })
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub(crate) fn columns(&self) -> &[HavingColumn] {
+        &self.columns
+    }
+}
+
+impl HavingColumn {
+    /// Array type for this column, if it's a built-in type.
+    pub(crate) fn array_oid(&self) -> Option<u32> {
+        array_oid(self.type_oid)
+    }
+
+    /// Encode every value of this column as a one-dimensional array parameter.
+    pub(crate) fn array(&self) -> (Parameter, Format) {
+        let mut array = BytesMut::new();
+        match self.format {
+            Format::Binary => {
+                array.put_i32(1);
+                array.put_i32(self.values.iter().any(Option::is_none) as i32);
+                array.put_i32(self.type_oid);
+                array.put_i32(self.values.len() as i32);
+                array.put_i32(1);
+                for value in &self.values {
+                    match value {
+                        Some(value) => {
+                            array.put_i32(value.len() as i32);
+                            array.put_slice(value);
+                        }
+                        None => array.put_i32(-1),
+                    }
+                }
+            }
+            Format::Text => {
+                array.put_u8(b'{');
+                for (position, value) in self.values.iter().enumerate() {
+                    if position > 0 {
+                        array.put_u8(b',');
+                    }
+                    let Some(value) = value else {
+                        array.put_slice(b"NULL");
+                        continue;
+                    };
+                    array.put_u8(b'"');
+                    for &byte in value.iter() {
+                        if matches!(byte, b'"' | b'\\') {
+                            array.put_u8(b'\\');
+                        }
+                        array.put_u8(byte);
+                    }
+                    array.put_u8(b'"');
+                }
+                array.put_u8(b'}');
             }
         }
-    }
-
-    fn value(&self, value: &HavingValue, row: &DataRow, decoder: &Decoder) -> Result<Datum, Error> {
-        let index =
-            self.columns.get(value.alias()).copied().ok_or_else(|| {
-                Error::InvalidHaving(format!("missing operand {}", value.alias()))
-            })?;
-        Ok(row.get_column_checked(index, decoder)?.value)
+        (Parameter::new(&array), self.format)
     }
 }
 
-#[cfg(test)]
-fn evaluate(expression: &HavingExpr, row: &DataRow, decoder: &Decoder) -> Result<bool, Error> {
-    Evaluator::new(expression, decoder).evaluate(row, decoder)
-}
-
-#[cfg(test)]
-fn evaluate_expression(
-    expression: &HavingExpr,
-    row: &DataRow,
-    decoder: &Decoder,
-) -> Result<TruthValue, Error> {
-    Evaluator::new(expression, decoder).evaluate_expression(expression, row, decoder)
-}
-
-fn compare(left: &Datum, operator: CompareOperator, right: &Datum) -> Result<TruthValue, Error> {
-    if left.is_null() || right.is_null() {
-        return Ok(TruthValue::Unknown);
-    }
-
-    let ordering = left
-        .compare_numeric(right)
-        .or_else(|| left.partial_cmp(right))
-        .ok_or_else(|| {
-            Error::UnsupportedHaving(format!(
-                "cannot compare {} with {}",
-                left.data_type(),
-                right.data_type()
-            ))
-        })?;
-    let result = match operator {
-        CompareOperator::Equal => ordering == Ordering::Equal,
-        CompareOperator::NotEqual => ordering != Ordering::Equal,
-        CompareOperator::Less => ordering == Ordering::Less,
-        CompareOperator::LessOrEqual => ordering != Ordering::Greater,
-        CompareOperator::Greater => ordering == Ordering::Greater,
-        CompareOperator::GreaterOrEqual => ordering != Ordering::Less,
-    };
-    Ok(if result {
-        TruthValue::True
-    } else {
-        TruthValue::False
+/// Array OIDs of built-in types whose text array delimiter is a comma.
+fn array_oid(element: i32) -> Option<u32> {
+    Some(match element {
+        16 => 1000,   // bool
+        20 => 1016,   // int8
+        21 => 1005,   // int2
+        23 => 1007,   // int4
+        25 => 1009,   // text
+        700 => 1021,  // float4
+        701 => 1022,  // float8
+        1042 => 1014, // bpchar
+        1043 => 1015, // varchar
+        1082 => 1182, // date
+        1114 => 1115, // timestamp
+        1184 => 1185, // timestamptz
+        1186 => 1187, // interval
+        1700 => 1231, // numeric
+        2950 => 2951, // uuid
+        _ => return None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::{Field, RowDescription};
-
-    fn compare_expression(operator: CompareOperator) -> HavingExpr {
-        HavingExpr::Compare {
-            left: HavingValue::new("__pgdog_having_0".into()),
-            operator,
-            right: HavingValue::new("__pgdog_having_1".into()),
-        }
-    }
 
     #[test]
-    fn null_comparison_is_unknown_and_filters_the_group() {
-        let decoder = Decoder::from(RowDescription::new(&[
-            Field::bigint("__pgdog_having_0"),
-            Field::bigint("__pgdog_having_1"),
-        ]));
-        let mut row = DataRow::new();
-        row.add(Datum::Null).add(2_i64);
-
-        let unknown = compare_expression(CompareOperator::Greater);
-        assert_eq!(
-            evaluate_expression(&unknown, &row, &decoder).unwrap(),
-            TruthValue::Unknown
-        );
-        assert!(!evaluate(&unknown, &row, &decoder).unwrap());
-
-        let missing = HavingExpr::Compare {
-            left: HavingValue::new("__pgdog_missing".into()),
-            operator: CompareOperator::Equal,
-            right: HavingValue::new("__pgdog_having_1".into()),
+    fn encodes_text_and_binary_arrays_with_nulls() {
+        let text = HavingColumn {
+            type_oid: 25,
+            format: Format::Text,
+            values: vec![Some(Bytes::from_static(br#"a"b\c"#)), None],
         };
-        assert!(matches!(
-            evaluate(&missing, &row, &decoder),
-            Err(Error::InvalidHaving(_))
-        ));
-    }
+        assert_eq!(text.array_oid(), Some(1009));
+        assert_eq!(text.array().0.data.as_ref(), br#"{"a\"b\\c",NULL}"#);
 
-    #[test]
-    fn compares_integers_across_widths_with_all_operators() {
-        for (operator, left, right, expected) in [
-            (
-                CompareOperator::Equal,
-                Datum::Bigint(2),
-                Datum::Integer(2),
-                true,
-            ),
-            (
-                CompareOperator::NotEqual,
-                Datum::Integer(2),
-                Datum::SmallInt(3),
-                true,
-            ),
-            (
-                CompareOperator::Less,
-                Datum::SmallInt(2),
-                Datum::Bigint(3),
-                true,
-            ),
-            (
-                CompareOperator::LessOrEqual,
-                Datum::Bigint(2),
-                Datum::Integer(2),
-                true,
-            ),
-            (
-                CompareOperator::Greater,
-                Datum::Bigint(3),
-                Datum::SmallInt(2),
-                true,
-            ),
-            (
-                CompareOperator::GreaterOrEqual,
-                Datum::Integer(2),
-                Datum::Bigint(2),
-                true,
-            ),
-            (
-                CompareOperator::Greater,
-                Datum::Text("a".into()),
-                Datum::Text("z".into()),
-                false,
-            ),
-        ] {
-            assert_eq!(
-                compare(&left, operator, &right).unwrap(),
-                if expected {
-                    TruthValue::True
-                } else {
-                    TruthValue::False
-                }
-            );
+        let binary = HavingColumn {
+            type_oid: 20,
+            format: Format::Binary,
+            values: vec![Some(Bytes::copy_from_slice(&7_i64.to_be_bytes())), None],
+        };
+        let mut expected = Vec::new();
+        for header in [1_i32, 1, 20, 2, 1, 8] {
+            expected.extend_from_slice(&header.to_be_bytes());
         }
-
-        assert!(matches!(
-            compare(
-                &Datum::Text("2".into()),
-                CompareOperator::Equal,
-                &Datum::Integer(2)
-            ),
-            Err(Error::UnsupportedHaving(_))
-        ));
+        expected.extend_from_slice(&7_i64.to_be_bytes());
+        expected.extend_from_slice(&(-1_i32).to_be_bytes());
+        assert_eq!(binary.array().0.data.as_ref(), expected.as_slice());
     }
 }
