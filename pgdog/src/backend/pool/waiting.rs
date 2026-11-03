@@ -39,7 +39,7 @@ impl Waiting {
             }
             // Recheck availability while registering, since cancellation may
             // have completed after get_internal's first checkout attempt.
-            guard.add_waiter(Waiter { request, tx })?;
+            guard.add_waiter(Waiter { request, tx }, request.created_at)?;
             guard.full()
         };
 

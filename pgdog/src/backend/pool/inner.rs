@@ -313,9 +313,8 @@ impl Inner {
     }
 
     /// Register a waiter and assign available connections under the same lock.
-    pub(super) fn add_waiter(&mut self, waiter: Waiter) -> Result<(), Error> {
+    pub(super) fn add_waiter(&mut self, waiter: Waiter, now: Instant) -> Result<(), Error> {
         self.waiting.push_back(waiter);
-        let now = Instant::now();
         while !self.waiting.is_empty() {
             let Some(conn) = self.take_idle() else {
                 break;
