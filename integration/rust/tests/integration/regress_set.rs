@@ -241,6 +241,56 @@ async fn multiple_set_and_reset_report_each_change() {
 }
 
 #[tokio::test]
+async fn reset_reports_server_default_for_parameter_not_sent_at_startup() {
+    RegressTest::new(&[
+        "SET timezone = 'Europe/Paris'; SET intervalstyle = 'sql_standard'",
+        "SET datestyle = 'SQL, DMY'",
+        "RESET timezone; RESET intervalstyle",
+        "RESET datestyle",
+        "SHOW timezone",
+        "SHOW intervalstyle",
+        "SHOW datestyle",
+    ])
+    .no_fail_fast()
+    .run_simple_ci()
+    .await
+    .expect("RESET reports the server default value like PostgreSQL");
+}
+
+#[tokio::test]
+async fn rollback_reports_server_default_for_parameter_not_sent_at_startup() {
+    RegressTest::new(&[
+        "BEGIN",
+        "SET timezone = 'Europe/Paris'; SET intervalstyle = 'sql_standard'",
+        "SET datestyle = 'SQL, DMY'",
+        "ROLLBACK",
+        "SHOW timezone",
+        "SHOW intervalstyle",
+        "SHOW datestyle",
+    ])
+    .no_fail_fast()
+    .run_simple_ci()
+    .await
+    .expect("ROLLBACK reports the server default value like PostgreSQL");
+}
+
+#[tokio::test]
+async fn set_and_reset_in_one_query_reports_nothing() {
+    RegressTest::new(&[
+        "SET timezone = 'Europe/Paris'; RESET timezone",
+        "SET intervalstyle = 'sql_standard'; SET datestyle = 'SQL, DMY'; RESET intervalstyle; RESET datestyle",
+        "BEGIN; SET timezone = 'Europe/Paris'; ROLLBACK",
+        "SHOW timezone",
+        "SHOW intervalstyle",
+        "SHOW datestyle",
+    ])
+    .no_fail_fast()
+    .run_simple_ci()
+    .await
+    .expect("a query that restores every parameter it changes reports nothing, like PostgreSQL");
+}
+
+#[tokio::test]
 async fn multiple_set_local_transaction() {
     RegressTest::new(&[
         "BEGIN",
