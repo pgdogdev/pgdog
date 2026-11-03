@@ -91,7 +91,6 @@ pub(super) struct Waiter {
 
 #[cfg(test)]
 mod tests {
-    use futures::FutureExt;
 
     use super::*;
     use crate::backend::pool::Pool;

@@ -301,7 +301,7 @@ impl Pool {
         // Must NOT hold the lock while doing async I/O.
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
-            let _guard = CancelGuard::new(&self, key.pid());
+            let _guard = CancelGuard::new(self, key.pid());
             Server::cancel(self.addr(), key).await?;
             self.comms().ready.notify_one();
         }
