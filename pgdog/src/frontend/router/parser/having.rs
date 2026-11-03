@@ -26,13 +26,11 @@ impl HavingRewritePlan {
     }
 
     /// Query over the merged operands, with `$1..$n` bound to one array per operand.
-    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
     pub(crate) fn filter_sql(&self) -> &str {
         &self.filter_sql
     }
 
     /// Hidden columns passed to [`Self::filter_sql`], in parameter order.
-    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
     pub(crate) fn operand_aliases(&self) -> &[String] {
         &self.operand_aliases
     }

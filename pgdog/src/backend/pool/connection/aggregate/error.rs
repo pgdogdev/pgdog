@@ -14,6 +14,9 @@ pub(crate) enum Error {
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
 
+    #[error("invalid cross-shard HAVING state: {0}")]
+    InvalidHaving(String),
+
     #[error("unexpected aggregation error: {0}")]
     Unexpected(String),
 }

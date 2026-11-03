@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::buffer::Buffer;
+use super::buffer::{Buffer, having::HavingInputs};
 
 mod binding;
 mod error;
@@ -65,6 +65,8 @@ pub(crate) struct MultiShard {
     validator: Validator,
     /// [`Bind`]s waiting for their [`crate::net::BindComplete`], in the order they were sent.
     bound_statements: VecDeque<Bind>,
+    /// Merged `HAVING` operands, taken by the query engine once the request completes.
+    having_inputs: Option<HavingInputs>,
 }
 
 impl MultiShard {
@@ -80,8 +82,13 @@ impl MultiShard {
     /// Update multi-shard state.
     pub(super) fn update(&mut self, shards: usize, route: &Route) {
         self.reset();
+        self.having_inputs = None;
         self.shards = shards;
         self.route = route.clone();
+    }
+
+    pub(super) fn take_having_inputs(&mut self) -> Option<HavingInputs> {
+        self.having_inputs.take()
     }
 
     /// Update only the shards count without resetting message counters.
@@ -256,6 +263,13 @@ impl MultiShard {
                 }
 
                 self.buffer.sort(self.route.order_by(), &self.decoder);
+                match self.buffer.having_inputs(plan, &self.decoder) {
+                    Ok(inputs) => self.having_inputs = inputs,
+                    Err(err) => {
+                        self.buffer.clear();
+                        return Err(err.into());
+                    }
+                }
                 self.buffer.drop_helper_columns(plan, &self.decoder);
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
                 self.buffer.limit(self.route.limit());
