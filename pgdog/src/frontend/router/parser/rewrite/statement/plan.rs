@@ -121,7 +121,7 @@ where
 ///
 /// Executed in order of fields in this struct.
 ///
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 pub(crate) struct RewritePlan {
     /// One-based parameter indexes and ID sources in allocation order.
     /// Simple protocol records sequence calls here without using the indexes.
@@ -141,7 +141,7 @@ pub(crate) struct RewritePlan {
 
     /// Executing an inner subquery separately to ensure proper routing
     /// Involves injecting the results of the inner query into the outer query
-    pub(crate) subquery: Option<Subquery>,
+    pub(crate) subqueries: Vec<Subquery>,
 
     /// Sharding key is being updated, we need to execute
     /// a multi-step plan.
@@ -151,11 +151,11 @@ pub(crate) struct RewritePlan {
     pub(crate) offset: Option<OffsetPlan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum RewriteResult {
     InPlace { offset: Option<OffsetPlan> },
     InsertSplit(InsertSplitRewriteResult),
-    Subquery(Subquery),
+    Subquery(Vec<Subquery>),
     ShardingKeyUpdate(ShardingKeyUpdate),
 }
 
@@ -402,10 +402,8 @@ impl RewritePlan {
             ));
         }
 
-        if let Some(subqueries) = &self.subquery
-            && request.is_executable()
-        {
-            return Ok(RewriteResult::Subquery(subqueries.clone()));
+        if !self.subqueries.is_empty() && request.is_executable() {
+            return Ok(RewriteResult::Subquery(self.subqueries.clone()));
         }
 
         Ok(RewriteResult::InPlace {

@@ -1,10 +1,12 @@
 //! Sending and receiving logic for subqueries
 
+use pg_raw_parse::{Node, deparse};
+
 use crate::{
     frontend::{
         ClientRequest, Router,
         client::query_engine::{
-            QueryEngineContext,
+            QueryEngine, QueryEngineContext,
             multi_step::{self, Error, SubqueryMulti},
         },
         router::parser::{
@@ -23,26 +25,25 @@ impl<'a> SubqueryMulti<'a> {
     /// `is_subquery` is true. Else, return back directly to the client.
     pub(crate) async fn send_query_string(
         &mut self,
-        original_request: &ClientRequest,
+        engine: &mut QueryEngine,
+        query_ast: Node<'_>,
         query_string: String,
         context: &mut QueryEngineContext<'_>,
         is_subquery: bool,
     ) -> Result<Option<(Vec<DataRow>, Option<RowDescription>)>, Error> {
         let mut client_request: ClientRequest = self
-            .form_client_request(query_string, original_request, context)
+            .form_client_request(engine, query_string, context)
             .await?;
 
-        multi_step::update::route(self.engine, &mut client_request, context)?;
+        multi_step::update::route(engine, &mut client_request, context)?;
 
         if is_subquery {
-            let rewrite_result: Option<RewriteResult> = self
-                .engine
-                .rewrite_request(context, &mut client_request)
-                .await?;
+            let rewrite_result: Option<RewriteResult> =
+                engine.rewrite_request(context, &mut client_request).await?;
 
             match rewrite_result {
                 Some(rewrite_result @ RewriteResult::InPlace { .. }) => {
-                    let cluster = self.engine.backend.cluster()?;
+                    let cluster = engine.backend.cluster()?;
                     projection::finalize_after_route(
                         &mut client_request,
                         &cluster.schema(),
@@ -50,29 +51,32 @@ impl<'a> SubqueryMulti<'a> {
                     )?;
                     rewrite_result.apply_after_route(&mut client_request)?;
 
-                    Ok(Some(self.send_request(&mut client_request).await?))
+                    Ok(Some(self.send_request(engine, &mut client_request).await?))
                 }
 
-                Some(RewriteResult::Subquery(subquery)) => {
+                Some(RewriteResult::Subquery(subqueries)) => {
                     // Pass the `client_request` we just made back through multi_step/subquery.rs's internal
                     // SQL response method (return new "outer" SQL to us instead of a response to client).
                     // In this case, the "outer" SQL is the evaluated subquery within this statement.
                     //
                     // Then, we send the re-written subquery here, and return the relevant DataRows / RD
-                    let mut subquery_multi = SubqueryMulti {
-                        subquery: &subquery,
-                        engine: self.engine,
-                        top_level_bind: self.top_level_bind,
+
+                    let rewritten_subquery_ast = {
+                        let mut subquery_multi =
+                            SubqueryMulti::new_sub_engine(self, query_ast, subqueries);
+
+                        Box::pin(
+                            subquery_multi.evaluate_and_rewrite_outer_statement(engine, context),
+                        )
+                        .await?
                     };
 
-                    let rewritten_subquery_sql = Box::pin(
-                        subquery_multi
-                            .evaluate_and_rewrite_outer_statement(context, &client_request),
-                    )
-                    .await?;
+                    let rewritten_subquery_sql =
+                        deparse(rewritten_subquery_ast.stmt())?.as_str().to_string();
 
                     Box::pin(self.send_query_string(
-                        original_request,
+                        engine,
+                        rewritten_subquery_ast.stmt(),
                         rewritten_subquery_sql,
                         context,
                         true,
@@ -89,16 +93,12 @@ impl<'a> SubqueryMulti<'a> {
             // extracting a full helper out of QueryEngine that doesn't return the response
             // to the Client when a flag is false?
 
-            let rewrite_result = self
-                .engine
-                .rewrite_request(context, &mut client_request)
-                .await?;
+            let rewrite_result = engine.rewrite_request(context, &mut client_request).await?;
 
             // Need this to set route for stuff like INSERT split, where it relies on
             // "rewrite_result.apply_after_route(client_request)?;"
             // which sets the route of the outer statement if all tuples converge to the same shard.
-            if !self
-                .engine
+            if !engine
                 .route_query(context, &mut client_request, rewrite_result.as_ref())
                 .await?
             {
@@ -111,12 +111,9 @@ impl<'a> SubqueryMulti<'a> {
             // enabled, then INSERTs will still fail with
             // INSERT SELECT FROM. Maybe we override INSERT split
             // if subqueries are enabled in that case
-            Box::pin(
-                self.engine
-                    .execute(context, &mut client_request, rewrite_result),
-            )
-            .await
-            .unwrap();
+            Box::pin(engine.execute(context, &mut client_request, rewrite_result))
+                .await
+                .unwrap();
 
             Ok(None)
         }
@@ -124,22 +121,11 @@ impl<'a> SubqueryMulti<'a> {
 
     async fn form_client_request(
         &self,
+        engine: &mut QueryEngine,
         mut query_string: String,
-        original_request: &ClientRequest,
         context: &mut QueryEngineContext<'_>,
     ) -> Result<ClientRequest, Error> {
-        let is_extended_protocol = original_request
-            .messages
-            .iter()
-            .find(|message| {
-                matches!(
-                    message,
-                    ProtocolMessage::Parse(_) | ProtocolMessage::Bind(_)
-                )
-            })
-            .is_some();
-
-        let mut client_request = if is_extended_protocol {
+        let mut client_request = if self.is_extended_protocol {
             let mut bind = Bind::default();
             if let Some(top_level_bind) = self.top_level_bind {
                 let mut actual_param_index = 1;
@@ -182,7 +168,7 @@ impl<'a> SubqueryMulti<'a> {
             ClientRequest::from(vec![ProtocolMessage::Query(Query::new(&query_string))])
         };
 
-        let cluster = self.engine.backend.cluster()?;
+        let cluster = engine.backend.cluster()?;
         let ast_ctx = AstContext::from_cluster(cluster, context.params, context.timestamps());
 
         let query = crate::frontend::BufferedQuery::Query(Query::new(&query_string));
@@ -198,9 +184,10 @@ impl<'a> SubqueryMulti<'a> {
     /// Send `client_request` and return the rows and RowDescription (if present) back.
     pub(crate) async fn send_request(
         &mut self,
+        engine: &mut QueryEngine,
         client_request: &mut ClientRequest,
     ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-        self.engine
+        engine
             .backend
             .handle_client_request(client_request, &mut Router::default(), false)
             .await?;
@@ -208,8 +195,8 @@ impl<'a> SubqueryMulti<'a> {
         let mut row_description: Option<RowDescription> = None;
         let mut data_rows: Vec<DataRow> = Vec::new();
 
-        while self.engine.backend.has_more_messages() {
-            let message = self.engine.read_server_message().await?;
+        while engine.backend.has_more_messages() {
+            let message = engine.read_server_message().await?;
             match message.code() {
                 'D' => {
                     data_rows.push(DataRow::try_from(message)?);

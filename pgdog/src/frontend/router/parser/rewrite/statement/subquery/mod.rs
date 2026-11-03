@@ -12,13 +12,14 @@ use crate::frontend::router::parser::{
 pub(crate) mod from_clause;
 pub(crate) mod insert_select;
 pub(crate) mod where_clause;
+pub(crate) mod with_clause;
 
 impl<'a> StatementRewrite<'a> {
     /// Handle planning Subqueries to later be executed and re-written by the multi step code.
     pub(crate) fn plan_subquery<'mem>(
         &mut self,
         outer_stmt: Node<'mem>,
-    ) -> Result<Option<Subquery>, Error> {
+    ) -> Result<Vec<Subquery>, Error> {
         let mut subquery_rewrite = SubqueryRewrite::new(outer_stmt, self);
 
         subquery_rewrite.plan_subquery()
@@ -50,24 +51,37 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
         }
     }
 
-    fn plan_subquery(&mut self) -> Result<Option<Subquery>, Error> {
+    fn plan_subquery(&mut self) -> Result<Vec<Subquery>, Error> {
+        // Determine if the statement has a CTE.
+        // e.g., WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
+        if let Some(list_of_subqueries) = self.handle_subquery_in_with_clause()
+            && !list_of_subqueries.is_empty()
+        {
+            return Ok(list_of_subqueries);
+        }
+
+        let where_clause_ctes = self.handle_ctes_in_where_clause_subquery();
+        if !where_clause_ctes.is_empty() {
+            return Ok(where_clause_ctes);
+        }
+
         // Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
         if let Some(subquery) = self.handle_subquery_in_where()? {
-            return Ok(Some(subquery));
+            return Ok(vec![subquery]);
         }
 
         // Determine if there's a RangeSubselect within a FROM clause of a SELECT / UPDATE statement.
         if let Some(subquery) = self.handle_subquery_in_from_clause() {
-            return Ok(Some(subquery));
+            return Ok(vec![subquery]);
         }
 
         // Determine if there's a SELECT FROM in an INSERT.
         // E.g., INSERT INTO .. SELECT FROM generate_series(..)
         if let Some(subquery) = self.handle_subquery_in_insert_select() {
-            return Ok(Some(subquery));
+            return Ok(vec![subquery]);
         }
 
-        Ok(None)
+        Ok(vec![])
     }
 
     /// Returns the outer statement's Shard.
