@@ -36,26 +36,28 @@ fn primary(shard: &Shard) -> Result<Pool, Error> {
 
 pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {
     let primary = primary(shard)?;
-    match Box::pin(Server::connect(
+    let mut server = Box::pin(Server::connect(
         primary.addr(),
         ServerOptions::new_resharding(primary.config()),
         ConnectReason::Resharding,
         Arc::clone(primary.oids()),
     ))
-    .await
+    .await?;
+
+    // This can't be set via startup parameters on some of the cloud providers due to error
+    // `failed: Resharding connection denied for user "user" on database "db":
+    // FATAL: 42501 permission denied to set parameter "session_replication_role".`
+    // But it works fine if we set the runtime parameter.
+    match server
+        .execute_checked("SET session_replication_role TO replica")
+        .await
     {
-        Ok(server) => Ok(server),
-        Err(error)
-            if matches!(
-                &error,
-                BackendError::ConnectionError(response) | BackendError::ExecutionError(response)
-                    if response.code == "42501"
-            ) =>
-        {
+        Ok(_) => Ok(server),
+        Err(BackendError::ExecutionError(response)) if response.code == "42501" => {
             Err(Error::ReshardingPermissionDenied {
                 user: primary.addr().user.clone(),
                 database: primary.addr().database_name.clone(),
-                source: Box::new(error),
+                source: Box::new(BackendError::ExecutionError(response)),
             })
         }
         Err(error) => Err(error.into()),

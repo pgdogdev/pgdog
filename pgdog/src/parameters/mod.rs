@@ -16,7 +16,7 @@ use untracked::is_untracked;
 
 pub(crate) use name::{ParameterName, ParameterNameRef};
 pub(crate) use normalizer::ParameterNormalizer;
-pub(crate) use parameters_impl::Parameters;
+pub(crate) use parameters_impl::{ADMIN_PARAMETERS, Parameters};
 pub(crate) use status_buffer::ParameterStatusBuffer;
 pub(crate) use store::ParameterStore;
 pub(crate) use sync::ParametersSync;

@@ -12,7 +12,8 @@ use crate::{
         BufferedQuery, ClientRequest, Router,
         router::{CopyRow, Route, parser::Shard},
     },
-    net::{Bind, Message, ParameterStatus, Protocol, ProtocolMessage, Query},
+    net::{Bind, Message, Parameters, Protocol, ProtocolMessage, Query},
+    parameters::ADMIN_PARAMETERS,
 };
 
 use super::{
@@ -22,6 +23,7 @@ use super::{
 
 use std::{
     ops::{Deref, DerefMut},
+    sync::Arc,
     time::Duration,
 };
 
@@ -268,12 +270,9 @@ impl Connection {
     }
 
     /// Get server parameters.
-    pub(crate) async fn parameters(
-        &mut self,
-        request: &Request,
-    ) -> Result<Vec<ParameterStatus>, Error> {
+    pub(crate) async fn parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
         if matches!(self.binding, Binding::Admin(_)) {
-            return Ok(ParameterStatus::fake());
+            return Ok(ADMIN_PARAMETERS.clone());
         }
 
         match self.try_parameters(request).await {
@@ -289,20 +288,12 @@ impl Connection {
         }
     }
 
-    async fn try_parameters(&mut self, request: &Request) -> Result<Vec<ParameterStatus>, Error> {
+    async fn try_parameters(&mut self, request: &Request) -> Result<Arc<Parameters>, Error> {
         // Get params from the first database that answers.
         // Parameters are cached on the pool.
         for shard in self.cluster()?.shards() {
             if let Ok(params) = shard.params(request).await {
-                let mut result = vec![];
-
-                for param in params.iter() {
-                    if let Some(value) = param.1.as_str() {
-                        result.push(ParameterStatus::from((param.0.as_str(), value)));
-                    }
-                }
-
-                return Ok(result);
+                return Ok(params.clone());
             }
         }
         Err(Error::Pool(pool::Error::AllReplicasDown))

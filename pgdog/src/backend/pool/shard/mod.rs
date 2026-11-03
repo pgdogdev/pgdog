@@ -284,7 +284,7 @@ impl Shard {
     }
 
     /// Get parameters from first available connection pool.
-    pub(crate) async fn params(&self, request: &Request) -> Result<&Parameters, Error> {
+    pub(crate) async fn params(&self, request: &Request) -> Result<&Arc<Parameters>, Error> {
         self.lb.params(request).await
     }
 

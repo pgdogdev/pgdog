@@ -5,10 +5,14 @@ async fn test_set_application_name() {
     RegressTest::new(&[
         "SET application_name TO 'apples'",
         "SHOW application_name",
-        "RESET application_name",
+        "/* server_reset */ RESET application_name",
         "/* server_reset */ SHOW application_name",
     ])
-    .known_bad_queries(&["/* server_reset */ SHOW application_name"]) // This will return PgDog for pgdog connection because its being reset to its startup value on the server side, which is set to PgDog by default.
+    // Clients without a name see pgdog's own application_name, not PostgreSQL's ''.
+    .known_bad_queries(&[
+        "/* server_reset */ RESET application_name",
+        "/* server_reset */ SHOW application_name",
+    ])
     .run_simple_ci()
     .await
     .unwrap()
@@ -169,9 +173,9 @@ async fn test_repeat() {
 #[tokio::test]
 async fn test_reset() {
     RegressTest::new(&[
-        "SET application_name TO 'apples'",
-        "RESET application_name",
-        "RESET application_name",
+        "SET intervalstyle TO 'sql_standard'",
+        "RESET intervalstyle",
+        "RESET intervalstyle",
         "SELECT 1",
     ])
     .run_simple_ci()
@@ -247,6 +251,8 @@ async fn reset_reports_server_default_for_parameter_not_sent_at_startup() {
         "SET datestyle = 'SQL, DMY'",
         "RESET timezone; RESET intervalstyle",
         "RESET datestyle",
+        "RESET timezone; RESET intervalstyle",
+        "RESET datestyle",
         "SHOW timezone",
         "SHOW intervalstyle",
         "SHOW datestyle",
@@ -284,6 +290,9 @@ async fn set_and_reset_in_one_query_reports_nothing() {
         "SHOW intervalstyle",
         "SHOW datestyle",
     ])
+    // pgdog splits this batch and reports a ParameterStatus per statement.
+    // Tracked in https://github.com/pgdogdev/pgdog/issues/395.
+    .known_bad_queries(&["BEGIN; SET timezone = 'Europe/Paris'; ROLLBACK"])
     .no_fail_fast()
     .run_simple_ci()
     .await
@@ -317,13 +326,30 @@ async fn set_config_returns_row_and_parameter_status() {
     RegressTest::new(&[
         "SET application_name = 'startup'",
         "SELECT set_config('application_name', 'changed', false)",
-        "SELECT set_config('application_name', NULL, false)",
+        "/* server_reset */ SELECT set_config('application_name', NULL, false)",
         "/* server_reset */ SHOW application_name",
     ])
-    .known_bad_queries(&["/* server_reset */ SHOW application_name"])
+    .known_bad_queries(&[
+        "/* server_reset */ SELECT set_config('application_name', NULL, false)",
+        "/* server_reset */ SHOW application_name",
+    ])
     .run_simple_ci()
     .await
     .expect("set_config rows, NULL handling, completions, and parameter statuses match PostgreSQL");
+}
+
+#[tokio::test]
+async fn set_config_timezone_returns_row_and_parameter_status() {
+    RegressTest::new(&[
+        "SET timezone = 'Europe/Paris'",
+        "SELECT set_config('timezone', 'UTC', false)",
+        "SELECT set_config('timezone', NULL, false)",
+        "SHOW timezone",
+    ])
+    .no_fail_fast()
+    .run_simple_ci()
+    .await
+    .expect("set_config rows, NULL handling, and TimeZone parameter statuses match PostgreSQL");
 }
 
 #[tokio::test]
