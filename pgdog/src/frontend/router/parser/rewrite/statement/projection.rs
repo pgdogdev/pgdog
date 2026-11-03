@@ -12,7 +12,7 @@ use crate::backend::schema::Schema;
 use crate::frontend::router::parser::{Aggregate, HavingExpr, HavingRewritePlan, OrderBy};
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
-use pg_raw_parse::{Node, StmtList, make};
+use pg_raw_parse::{Node, StmtList, make, nodes};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -259,6 +259,31 @@ fn build(
     let plan = (!plan.is_noop()).then(|| Arc::new(plan));
 
     Ok(Some(PostRouteRewrite { sql, plan }))
+}
+
+pub(super) fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
+    column
+        .fields()
+        .into_iter()
+        .next_back()
+        .and_then(Node::as_str)
+}
+
+pub(super) fn is_star(column: &nodes::ColumnRef) -> bool {
+    matches!(
+        column.fields().into_iter().next_back(),
+        Some(Node::A_Star(_))
+    )
+}
+
+pub(super) fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
+    if let Some(alias) = target.name() {
+        return Some(alias);
+    }
+    match target.val() {
+        Node::ColumnRef(column) if !is_star(column) => column_name(column),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
