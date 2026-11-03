@@ -1,63 +1,43 @@
 //! Cross-shard `HAVING` execution plan.
-// Only tests build plans until the HAVING rewriter is wired in.
-#![cfg_attr(not(test), allow(dead_code))]
-
-/// Comparison operators supported by the cross-shard `HAVING` evaluator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompareOperator {
-    Equal,
-    NotEqual,
-    Less,
-    LessOrEqual,
-    Greater,
-    GreaterOrEqual,
-}
-
-/// A value projected by the cross-shard query under an internal alias.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HavingValue {
-    alias: String,
-}
-
-impl HavingValue {
-    pub(crate) fn new(alias: String) -> Self {
-        Self { alias }
-    }
-
-    pub(crate) fn alias(&self) -> &str {
-        &self.alias
-    }
-}
-
-/// Predicate evaluated after partial aggregate results have been merged.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HavingExpr {
-    Compare {
-        left: HavingValue,
-        operator: CompareOperator,
-        right: HavingValue,
-    },
-}
 
 /// Metadata produced while rewriting a cross-shard `HAVING` clause.
+///
+/// Shards return every group with each `HAVING` operand projected under a
+/// hidden alias. After the merge, PgDog sends those operands to Postgres as
+/// arrays and `filter_sql` returns the 1-based positions of the groups that pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HavingRewritePlan {
-    expression: HavingExpr,
+    filter_sql: String,
+    operand_aliases: Vec<String>,
     hidden_aliases: Vec<String>,
 }
 
 impl HavingRewritePlan {
-    pub(crate) fn new(expression: HavingExpr, hidden_aliases: Vec<String>) -> Self {
+    pub(crate) fn new(
+        filter_sql: String,
+        operand_aliases: Vec<String>,
+        hidden_aliases: Vec<String>,
+    ) -> Self {
         Self {
-            expression,
+            filter_sql,
+            operand_aliases,
             hidden_aliases,
         }
     }
 
-    pub(crate) fn expression(&self) -> &HavingExpr {
-        &self.expression
+    /// Query over the merged operands, with `$1..$n` bound to one array per operand.
+    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
+    pub(crate) fn filter_sql(&self) -> &str {
+        &self.filter_sql
     }
 
+    /// Hidden columns passed to [`Self::filter_sql`], in parameter order.
+    #[allow(dead_code)] // Cross-shard HAVING is planned but not executed yet.
+    pub(crate) fn operand_aliases(&self) -> &[String] {
+        &self.operand_aliases
+    }
+
+    /// Every hidden column, removed before rows reach the client.
     pub(crate) fn hidden_aliases(&self) -> &[String] {
         &self.hidden_aliases
     }
