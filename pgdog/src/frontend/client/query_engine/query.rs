@@ -544,6 +544,10 @@ impl QueryEngine {
             && !context.rollback
             && client_request.is_executable()
             && !client_request.route().rollback_savepoint()
+            && client_request
+                .ast
+                .as_ref()
+                .is_none_or(|ast| ast.ast.stmts().next().is_some())
         {
             let error = ErrorResponse::in_failed_transaction();
 
@@ -620,5 +624,46 @@ impl ExplainResponseState {
 
     pub(crate) fn should_emit(&self) -> bool {
         self.supported && !self.annotated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::{
+        client::transaction_type::{Transaction, TransactionType},
+        router::Ast,
+    };
+
+    #[tokio::test]
+    async fn test_empty_query_in_failed_transaction() {
+        let mut client = super::super::test::test_client();
+        let mut engine = QueryEngine::from_client(&client).expect("query engine");
+
+        for transaction_type in [
+            TransactionType::ErrorReadOnly,
+            TransactionType::ErrorReadWrite,
+        ] {
+            client.transaction = Some(Transaction::new(transaction_type));
+            for parsed in [true, false] {
+                for sql in [";", "", " /* empty */ ; ", "SELECT 1"] {
+                    let mut request = ClientRequest::from(vec![Query::new(sql).into()]);
+                    if parsed {
+                        request.ast = Some(Ast::parse(sql).expect("parse query").into());
+                    }
+                    let (mut context, _) = QueryEngineContext::new(&mut client);
+                    let allowed = engine
+                        .transaction_error_check(&mut context, &request)
+                        .await
+                        .expect("check failed transaction");
+                    assert_eq!(
+                        allowed,
+                        parsed && sql != "SELECT 1",
+                        "{sql:?}, parsed={parsed}"
+                    );
+                    assert!(context.in_error());
+                }
+            }
+        }
     }
 }
