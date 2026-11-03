@@ -544,6 +544,10 @@ impl QueryEngine {
             && !context.rollback
             && client_request.is_executable()
             && !client_request.route().rollback_savepoint()
+            && client_request
+                .ast
+                .as_ref()
+                .is_none_or(|ast| ast.ast.stmts().next().is_some())
         {
             let error = ErrorResponse::in_failed_transaction();
 
