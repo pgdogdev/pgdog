@@ -24,8 +24,31 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 /// Aggregate calls and column references in `HAVING` become hidden columns.
 /// The returned plan holds a query that evaluates the original predicate over
 /// the merged values, so PostgreSQL applies its own semantics to the result.
-/// The original expression remains under `OR TRUE` on the shards so PostgreSQL
-/// still performs parse analysis and parameter type inference.
+///
+/// ```sql
+/// SELECT customer_id, count(*) FROM purchases
+/// GROUP BY customer_id HAVING count(*) > 2 AND max(price) < 100
+/// ```
+///
+/// is sent to every shard as
+///
+/// ```sql
+/// SELECT customer_id, count(*),
+///        count(*) AS __pgdog_having_0, max(price) AS __pgdog_having_1,
+///        customer_id AS __pgdog_having_2
+/// FROM purchases
+/// GROUP BY customer_id HAVING (count(*) > 2 AND max(price) < 100) OR true
+/// ```
+///
+/// and the merged groups are filtered with
+///
+/// ```sql
+/// SELECT __pgdog_row FROM unnest($1, $2) WITH ORDINALITY
+///     __pgdog_having(__pgdog_having_0, __pgdog_having_1, __pgdog_row)
+/// WHERE __pgdog_having_0 > 2 AND __pgdog_having_1 < 100
+/// ```
+///
+/// which returns the positions of the groups to keep.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
@@ -120,6 +143,9 @@ pub(super) fn rewrite_select<'a>(
         .target_list_mut()
         .extend(mem, mem.make_list(&targets));
 
+    // Keep the predicate under `OR true` instead of removing it, so the shard
+    // statement still references every `$n` and Postgres infers the same
+    // parameter types. Postgres folds `x OR true` away, so shards don't evaluate it.
     let true_value = mem.make_a_const(ConstValue::Boolean(true)).uncast();
     let mut neutralized = mem.make_node::<nodes::BoolExpr>();
     neutralized
@@ -284,13 +310,17 @@ mod tests {
     #[test]
     fn rejects_operands_that_cannot_be_merged() {
         for sql in [
+            // Can't be merged from per-shard partial results.
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(DISTINCT price) > 1",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) FILTER (WHERE price > 1) > 1",
+            // Not implemented yet.
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > (SELECT 1)",
+            // References neither an aggregate nor a grouped column.
             "SELECT customer_id FROM purchases GROUP BY customer_id HAVING true",
+            // Not implemented yet.
             "SELECT customer_id FROM purchases GROUP BY customer_id HAVING COUNT(*) > $1",
         ] {
             assert!(

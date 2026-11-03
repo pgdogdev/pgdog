@@ -500,15 +500,20 @@ mod tests {
     #[test]
     fn unsupported_having_queries_fail_closed() {
         for sql in [
+            // Groups can only be matched across shards on columns and ordinals.
             "SELECT lower(customer_id), COUNT(*) FROM purchases \
              GROUP BY lower(customer_id) HAVING COUNT(*) > 2",
+            // Star expansion shifts the positions aggregates are merged by.
             "SELECT * FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT p.*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
             "SELECT (p).*, COUNT(*) FROM purchases p GROUP BY customer_id HAVING COUNT(*) > 2",
+            // Groups can only be matched across shards on columns and ordinals.
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY 'x' HAVING COUNT(*) > 2",
             "SELECT name AS n, COUNT(*) FROM purchases GROUP BY n HAVING COUNT(*) > 2",
+            // An expression over aggregates would keep one shard's value.
             "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
+            // Shards would drop or deduplicate groups before they are filtered.
             "SELECT customer_id FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > 2 LIMIT 1",
             "SELECT customer_id FROM purchases GROUP BY customer_id \
