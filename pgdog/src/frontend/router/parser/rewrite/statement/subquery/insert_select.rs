@@ -1,11 +1,8 @@
-use pg_raw_parse::{Node, deparse};
+use pg_raw_parse::Node;
 
 use crate::frontend::router::parser::{
     StatementParser,
-    rewrite::statement::{
-        insert::{Subquery, SubqueryType},
-        subquery::SubqueryRewrite,
-    },
+    rewrite::statement::{insert::Subquery, subquery::SubqueryRewrite},
 };
 
 impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
@@ -31,13 +28,22 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
             if is_insert_sharded {
                 // We're selecting data from something into a sharded table.
                 // Even if it's a function like generate_series, we need to evaluate it.
-                return Some(Subquery {
-                    inner_stmt: deparse(select).unwrap().as_str().to_string(),
-                    identifier: SubqueryType::InsertSelect,
-                });
+                return Some(Subquery::InsertSelect);
             }
         }
 
         None
     }
+}
+
+pub(crate) fn parse_insert_select<'a>(entire_ast: Node<'a>) -> Option<Node<'a>> {
+    if let Node::InsertStmt(insert_stmt) = entire_ast
+            && let Node::SelectStmt(select) = insert_stmt.select_stmt()
+            // This won't be a SubLink node as the select statement is naturally apart of the insert's AST.
+            && !select.from_clause().is_empty()
+    {
+        return Some(insert_stmt.select_stmt());
+    }
+
+    None
 }
