@@ -12,7 +12,7 @@ use crate::frontend::router::parser::{AggregateFunction, HavingRewritePlan};
 
 use super::{
     Error,
-    order_by::{column_name, is_star, target_output_name},
+    projection::{column_name, is_star, target_output_name},
 };
 
 const ALIAS_PREFIX: &str = "__pgdog_having_";
