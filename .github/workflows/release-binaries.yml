@@ -33,12 +33,14 @@ jobs:
 
       # Mirrors docker/Dockerfile.base-builder: cmake + clang for aws-lc-sys,
       # libssl-dev for openssl-sys, mold is the linker pinned in .cargo/config.toml.
+      # pg-internals needs libclang plus PostgreSQL's configure/build dependencies.
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential cmake clang pkg-config libssl-dev mold
+            build-essential cmake clang pkg-config libssl-dev mold \
+            libclang-dev libicu-dev libreadline-dev zlib1g-dev bison flex perl
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
