@@ -452,7 +452,9 @@ impl LoadBalancer {
             match target.pool.get(request).await {
                 Ok(conn) => return Ok(conn),
                 Err(Error::Offline) => {
-                    continue;
+                    // We never mark one pool as offline and leave it in the load balancer.
+                    // All pools are replaced at the same time.
+                    return Err(Error::Offline);
                 }
                 Err(err) => {
                     if bannable {
@@ -465,6 +467,13 @@ impl LoadBalancer {
         candidates
             .iter()
             .for_each(|target| target.ban.unban(true, UnbanReason::AllTargetsBanned));
+
+        // If all targets are banned (manually), this should still
+        // check that all pools are indeed offline and return the correct
+        // error the cluster connection manager can re-load its cluster reference.
+        if candidates.iter().all(|target| target.pool.offline()) {
+            return Err(Error::Offline);
+        }
 
         Err(Error::AllReplicasDown)
     }

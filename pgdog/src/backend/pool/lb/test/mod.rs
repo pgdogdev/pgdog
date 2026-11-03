@@ -2566,6 +2566,28 @@ async fn test_reload_preserves_only_manual_bans() {
 }
 
 #[tokio::test]
+async fn test_get_returns_offline_when_all_targets_banned_and_offline() {
+    let replicas = LoadBalancer::new(
+        &None,
+        &[
+            create_test_pool_config("127.0.0.1", 5432),
+            create_test_pool_config("localhost", 5432),
+        ],
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    );
+    for target in &replicas.targets {
+        target.ban.ban(Error::ManualBan, Duration::MAX);
+    }
+    replicas.shutdown();
+
+    let result = replicas.get(&Request::default()).await;
+
+    assert!(matches!(result, Err(Error::Offline)));
+}
+
+#[tokio::test]
 async fn initial_healthcheck_banned_targets_stay_banned_on_reload() {
     let old = setup_test_replicas();
     let new_config = PoolConfig {

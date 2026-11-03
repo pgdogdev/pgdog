@@ -449,6 +449,11 @@ impl Pool {
         guard.online = false;
     }
 
+    /// Check if the pool is online.
+    pub(super) fn offline(&self) -> bool {
+        !self.lock().online
+    }
+
     /// Pool exclusive lock.
     pub(super) fn lock(&self) -> MutexGuard<'_, RawMutex, Inner> {
         self.inner.inner.lock()

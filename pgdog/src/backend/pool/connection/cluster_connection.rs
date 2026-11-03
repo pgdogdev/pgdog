@@ -138,18 +138,19 @@ impl ClusterConnection {
         shard: usize,
         is_read: bool,
     ) -> Result<Guard, Error> {
-        match self.get_conn_internal(request, shard, is_read).await {
-            Ok(conn) => Ok(conn),
-            Err(Error::Pool(PoolError::Offline | PoolError::AllReplicasDown)) => {
-                debug!(
-                    "detected configuration reload, reloading [{}]",
-                    self.cluster()?.identifier()
-                );
+        loop {
+            match self.get_conn_internal(request, shard, is_read).await {
+                Ok(conn) => return Ok(conn),
+                Err(Error::Pool(PoolError::Offline)) => {
+                    debug!(
+                        "detected configuration reload, reloading [{}]",
+                        self.cluster()?.identifier()
+                    );
 
-                self.safe_reload().await?;
-                self.get_conn_internal(request, shard, is_read).await
+                    self.safe_reload().await?;
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => Err(err),
         }
     }
 
