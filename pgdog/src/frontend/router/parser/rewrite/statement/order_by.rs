@@ -4,7 +4,9 @@ use crate::backend::schema::Schema;
 use crate::frontend::router::parser::aggregate::AggregateFunction;
 use crate::frontend::router::parser::{Column, Function, OrderBy};
 
-use super::projection::{OrderByHelper, OrderBySource, ProjectionRewritePlan};
+use super::projection::{
+    OrderByHelper, OrderBySource, ProjectionRewritePlan, column_name, is_star, target_output_name,
+};
 
 impl OrderBySource {
     fn name(&self) -> &str {
@@ -12,21 +14,6 @@ impl OrderBySource {
             Self::Column(name) | Self::Vector(name) => name,
         }
     }
-}
-
-fn column_name(column: &nodes::ColumnRef) -> Option<&str> {
-    column
-        .fields()
-        .into_iter()
-        .next_back()
-        .and_then(Node::as_str)
-}
-
-fn is_star(column: &nodes::ColumnRef) -> bool {
-    matches!(
-        column.fields().into_iter().next_back(),
-        Some(Node::A_Star(_))
-    )
 }
 
 /// Compare complete column references so `a.price` and `b.price` remain distinct.
@@ -57,16 +44,6 @@ fn star_covers(star: &nodes::ColumnRef, column: &nodes::ColumnRef) -> bool {
                         .into_iter()
                         .take(star_len - 1)
                         .map(Node::as_str))))
-}
-
-fn target_output_name(target: &nodes::ResTarget) -> Option<&str> {
-    if let Some(alias) = target.name() {
-        return Some(alias);
-    }
-    match target.val() {
-        Node::ColumnRef(column) if !is_star(column) => column_name(column),
-        _ => None,
-    }
 }
 
 fn single_relation(select: &nodes::SelectStmtMut<'_, '_>) -> bool {

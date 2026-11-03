@@ -2,7 +2,7 @@
 
 use crate::{
     frontend::{
-        ClientRequest, Router,
+        ClientRequest,
         client::query_engine::{
             QueryEngineContext,
             multi_step::{self, Error, SubqueryMulti},
@@ -12,10 +12,7 @@ use crate::{
             rewrite::statement::{plan::RewriteResult, projection},
         },
     },
-    net::{
-        Bind, DataRow, Describe, ErrorResponse, Parse, Protocol, ProtocolMessage, Query,
-        RowDescription,
-    },
+    net::{Bind, DataRow, Describe, Parse, ProtocolMessage, Query, RowDescription},
 };
 
 impl<'a> SubqueryMulti<'a> {
@@ -200,26 +197,6 @@ impl<'a> SubqueryMulti<'a> {
         &mut self,
         client_request: &mut ClientRequest,
     ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-        self.engine
-            .backend
-            .handle_client_request(client_request, &mut Router::default(), false)
-            .await?;
-
-        let mut row_description: Option<RowDescription> = None;
-        let mut data_rows: Vec<DataRow> = Vec::new();
-
-        while self.engine.backend.has_more_messages() {
-            let message = self.engine.read_server_message().await?;
-            match message.code() {
-                'D' => {
-                    data_rows.push(DataRow::try_from(message)?);
-                }
-                'T' => row_description = Some(RowDescription::try_from(message)?),
-                'E' => return Err(ErrorResponse::try_from(message)?.into()),
-                _ => (),
-            }
-        }
-
-        Ok((data_rows, row_description))
+        multi_step::fetch_rows(self.engine, client_request).await
     }
 }
