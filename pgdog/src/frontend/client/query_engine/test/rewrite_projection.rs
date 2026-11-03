@@ -98,6 +98,79 @@ async fn cross_shard_aggregate_adds_and_tracks_helpers() {
 }
 
 #[tokio::test]
+async fn cross_shard_having_rewrites_and_replaces_route_aggregate() {
+    let sql = "SELECT customer_id, COUNT(*) AS orders \
+               FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::All));
+
+    projection::finalize_after_route(
+        client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+
+    let query = match &client_request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert!(query.query().contains("__pgdog_having_0"));
+    assert_eq!(
+        client_request.route().aggregate().targets().len(),
+        2,
+        "both the selected and hidden COUNT must be merged"
+    );
+    assert!(
+        client_request
+            .route()
+            .projection_rewrite_plan
+            .as_deref()
+            .expect("projection rewrite plan")
+            .having
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn direct_having_keeps_native_postgres_semantics() {
+    let sql = "SELECT customer_id, COUNT(*) AS orders \
+               FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2";
+    let mut client = test_sharded_client();
+    client.client_request = ClientRequest::from(vec![ProtocolMessage::Query(Query::new(sql))]);
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+    let (mut context, client_request) = QueryEngineContext::new(&mut client);
+    let result = engine
+        .parse_and_rewrite(&mut context, client_request)
+        .await
+        .unwrap();
+    client_request.route = Some(route(Shard::Direct(0)));
+
+    projection::finalize_after_route(
+        client_request,
+        &Schema::default(),
+        result.as_ref().and_then(RewriteResult::offset_plan),
+    )
+    .unwrap();
+
+    let query = match &client_request.messages[0] {
+        ProtocolMessage::Query(query) => query,
+        _ => panic!("expected Query"),
+    };
+    assert_eq!(query.query(), sql);
+    assert!(client_request.route().projection_rewrite_plan.is_none());
+}
+
+#[tokio::test]
 async fn named_prepared_aggregate_uses_cross_shard_variant() {
     let mut client = test_sharded_client();
     client.client_request = ClientRequest::from(vec![
