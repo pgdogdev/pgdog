@@ -29,7 +29,7 @@ use crate::net::messages::{
     Authentication, BackendKeyData, ErrorResponse, FromBytes, FrontendPid, Message, Password,
     Protocol, ProtocolVersion, ReadyForQuery, ToBytes, scram_challenge,
 };
-use crate::net::{MessageBuffer, ProtocolMessage, Stream};
+use crate::net::{MessageBuffer, ParameterStatus, ProtocolMessage, Stream};
 use crate::parameters::{ParameterStore, Parameters};
 use crate::state::State;
 use crate::stats::memory::MemoryUsage;
@@ -415,14 +415,6 @@ impl Client {
             }
         };
 
-        for param in &server_params {
-            stream.send(param).await?;
-        }
-
-        stream.send(&key).await?;
-        stream.send_flush(&ReadyForQuery::idle()).await?;
-        comms.connect(key.clone(), addr, &params);
-
         if config.config.general.log_connections {
             info!(
                 r#"client "{}" connected to database "{}" [{}, auth: {}] {}"#,
@@ -445,6 +437,19 @@ impl Client {
 
         params.set_server_defaults(&server_params);
 
+        for (name, value) in server_params.iter() {
+            stream
+                .send(&Message::new(ParameterStatus::encode_payload(
+                    name.as_str(),
+                    params.tracked_value(name.as_str()).unwrap_or(value),
+                )))
+                .await?;
+        }
+
+        stream.send(&key).await?;
+        stream.send_flush(&ReadyForQuery::idle()).await?;
+        comms.connect(key.clone(), addr, &params);
+
         let sticky = Sticky::from_params(&params);
 
         Ok(Some(Self {
@@ -454,7 +459,7 @@ impl Client {
             comms,
             admin,
             streaming: false,
-            params: ParameterStore::new(params),
+            params: ParameterStore::new(params).with_server_reported(server_params),
             prepared_statements: PreparedStatements::new(),
             transaction: None,
             timeouts: Timeouts::from_config(&config.config.general),
