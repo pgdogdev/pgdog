@@ -17,9 +17,13 @@ fn run_benches() {
 
 use std::fmt;
 
+#[cfg(all(feature = "bench", target_os = "linux"))]
+mod instructions;
+
 use super::prelude::*;
 use crate::config::load_test_sharded;
 use crate::frontend::router::parser::Cache;
+use tokio::runtime::Runtime;
 
 struct Case(&'static str, &'static str);
 
@@ -99,6 +103,32 @@ async fn route(client: &mut Client, engine: &mut QueryEngine) {
         .unwrap();
 }
 
+fn background() -> Runtime {
+    let background = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let _guard = background.enter();
+
+    load_test_sharded();
+
+    background
+}
+
+fn inputs(case: &Case, extended: bool, cached: bool) -> (Client, QueryEngine) {
+    if !cached {
+        Cache::reset();
+    }
+
+    let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
+    client.client_request = messages(case.1, extended).into();
+
+    let engine = QueryEngine::from_client(&client).unwrap();
+
+    (client, engine)
+}
+
 /// Build the Client & QueryEngine outside of the timed section, so that we only measure the
 /// query engine.
 ///
@@ -110,23 +140,11 @@ fn bench(bencher: divan::Bencher, case: &Case, extended: bool, cached: bool) {
         .build()
         .unwrap();
 
+    let _background = background();
     let _guard = rt.enter();
 
-    load_test_sharded();
-
     bencher
-        .with_inputs(|| {
-            if !cached {
-                Cache::reset();
-            }
-
-            let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
-            client.client_request = messages(case.1, extended).into();
-
-            let engine = QueryEngine::from_client(&client).unwrap();
-
-            (client, engine)
-        })
+        .with_inputs(|| inputs(case, extended, cached))
         .bench_local_values(|(mut client, mut engine)| {
             rt.block_on(route(&mut client, &mut engine));
 
@@ -147,6 +165,59 @@ fn extended_cold(bencher: divan::Bencher, case: &Case) {
 #[divan::bench(args = CASES, sample_count = 1000)]
 fn extended_cached(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, true, true);
+}
+
+#[test]
+#[cfg(all(feature = "bench", target_os = "linux"))]
+fn count_instructions() {
+    const WARMUP: usize = 100;
+    const ITERATIONS: usize = 1000;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let _background = background();
+    let _guard = rt.enter();
+
+    let module = module_path!().trim_start_matches("pgdog::");
+
+    for (group, extended, cached) in [
+        ("simple_cold", false, false),
+        ("extended_cold", true, false),
+        ("extended_cached", true, true),
+    ] {
+        for case in CASES {
+            for _ in 0..WARMUP {
+                let (mut client, mut engine) = inputs(case, extended, cached);
+                rt.block_on(route(&mut client, &mut engine));
+            }
+
+            let mut counter = instructions::Instructions::new().unwrap();
+            let mut counts = Vec::with_capacity(ITERATIONS);
+            let mut previous = 0;
+
+            for _ in 0..ITERATIONS {
+                let (mut client, mut engine) = inputs(case, extended, cached);
+
+                counter.enable().unwrap();
+                rt.block_on(route(&mut client, &mut engine));
+                counter.disable().unwrap();
+
+                let total = counter.read().unwrap();
+                counts.push(total - previous);
+                previous = total;
+            }
+
+            counts.sort_unstable();
+
+            println!(
+                "instructions {module}::{group}::{case} {}",
+                counts[ITERATIONS / 2]
+            );
+        }
+    }
 }
 
 #[tokio::test]

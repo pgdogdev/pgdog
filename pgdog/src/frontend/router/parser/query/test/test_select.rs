@@ -345,6 +345,50 @@ fn test_system_catalog_omnisharded_default() {
     config::set(updated).unwrap();
 }
 
+/// pg_dump reads catalogs that aren't on the system catalog list, like
+/// pg_rewrite, and resolves OIDs with table-less SELECTs. OIDs differ per
+/// shard, so every catalog read of one client must land on the same shard.
+#[test]
+fn test_pg_dump_catalog_reads_stay_on_one_shard() {
+    let mut test = QueryParserTest::new();
+
+    let mut shards_seen = HashSet::new();
+    for q in [
+        "SELECT oid, relname FROM pg_catalog.pg_class",
+        "SELECT oid, ev_class FROM pg_catalog.pg_rewrite",
+        "SELECT tableoid, oid, ev_class FROM pg_rewrite ORDER BY oid",
+        "SELECT classid, objid FROM pg_depend WHERE deptype != 'p'",
+        "SELECT opcintype FROM pg_catalog.pg_opclass WHERE oid = 16401",
+        "SELECT pg_catalog.format_type('16401'::pg_catalog.oid, NULL)",
+        "SELECT pg_catalog.pg_get_viewdef('16401'::pg_catalog.oid) AS viewdef",
+    ] {
+        for _ in 0..3 {
+            let command = test.execute(vec![Query::new(q).into()]);
+            assert!(matches!(command.route().shard(), Shard::Direct(_)), "{q}");
+            shards_seen.insert(command.route().shard().clone());
+        }
+    }
+
+    assert_eq!(
+        shards_seen.len(),
+        1,
+        "catalog reads of one client went to {shards_seen:?}"
+    );
+}
+
+/// COPY TO of an omnisharded table reads one shard, or the client gets
+/// every row once per shard. A sharded table still reads all shards.
+#[test]
+fn test_copy_to_omnisharded_table_reads_one_shard() {
+    let mut test = QueryParserTest::new();
+
+    let command = test.execute(vec![Query::new("COPY sharded_omni TO STDOUT").into()]);
+    assert!(matches!(command.route().shard(), Shard::Direct(_)));
+
+    let command = test.execute(vec![Query::new("COPY sharded TO STDOUT").into()]);
+    assert_eq!(command.route().shard(), &Shard::All);
+}
+
 /// A SELECT against a table explicitly configured as omnisharded routes to a
 /// single shard and is flagged as omnisharded.
 #[test]

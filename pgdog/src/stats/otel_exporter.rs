@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use tracing::{info, warn};
 
 use super::otel;
@@ -33,6 +34,10 @@ pub(crate) async fn run() {
     );
 
     let shutdown = tasks::shutdown_signal();
+
+    // We set the start time before the first push.
+    // This is necessary as, if we have a counter where the start time is after the end time, GCP rejects it.
+    Lazy::force(&otel::COUNTERS_START_TIME);
 
     loop {
         tokio::select! {

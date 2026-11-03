@@ -3,7 +3,7 @@ use crate::{
     config::config,
     frontend::{
         BufferedQuery, Client, ClientComms, ClientRequest, Command, DiscardTarget, Error, Router,
-        RouterContext, Stats,
+        RouterContext, Stats, UnlistenTarget,
         client::query_engine::{hooks::QueryEngineHooks, route_query::ClusterCheck},
         prepared_statements::Error as PreparedStatementError,
         router::{Route, parser::Shard},
@@ -296,8 +296,8 @@ impl QueryEngine {
                 )
                 .await?
             }
-            Command::Unlisten(channel) => {
-                self.unlisten(context, &client_request.messages, &channel.clone())
+            Command::Unlisten(target) => {
+                self.unlisten(context, &client_request.messages, &target.clone())
                     .await?
             }
             Command::Set {

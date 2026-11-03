@@ -218,7 +218,7 @@ pub(crate) fn tls_server_end_point(cert: &CertificateDer<'_>) -> Option<Vec<u8>>
     Some(digest(algorithm, cert.as_ref()).as_ref().to_vec())
 }
 
-/// Extract the hostname identity from the peer's TLS certificate, if present.
+/// Extract the identity from the peer's TLS certificate, if present.
 pub(crate) fn peer_identity(conn: &ServerConnection) -> Option<String> {
     identity_from_certs(conn.peer_certificates()?)
 }
@@ -230,11 +230,16 @@ pub(crate) fn peer_certificate_present(conn: &ServerConnection) -> bool {
         .is_some_and(|certs| !certs.is_empty())
 }
 
-/// Extract a hostname identity from the first certificate in the chain.
+/// Extract an identity from the first certificate in the chain.
 ///
-/// Prefers the first `dNSName` in the Subject Alternative Name extension and
-/// falls back to the Subject CN. RFC 6125 deprecated CN for hostname identity,
-/// and modern certificates often publish identity only via SAN.
+/// Prefers the first `dNSName` in the Subject Alternative Name extension, then
+/// the first `uniformResourceIdentifier`, and falls back to the Subject CN.
+/// RFC 6125 deprecated CN for identity, and modern certificates often publish
+/// it only via SAN.
+///
+/// The URI is matched verbatim, with no scheme-specific parsing: workload
+/// identity platforms (SPIFFE, SPIRE, Istio, GKE) assert identity as a
+/// `spiffe://` URI and issue no `dNSName`.
 pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String> {
     use x509_parser::certificate::X509Certificate;
     use x509_parser::extensions::GeneralName;
@@ -243,12 +248,19 @@ pub(crate) fn identity_from_certs(certs: &[CertificateDer<'_>]) -> Option<String
     let (_, cert) = X509Certificate::from_der(cert_der).ok()?;
 
     if let Ok(Some(san)) = cert.subject_alternative_name() {
-        let dns_name = san.value.general_names.iter().find_map(|gn| match gn {
-            GeneralName::DNSName(name) => Some((*name).to_string()),
+        let names = &san.value.general_names;
+        let dns_name = names.iter().find_map(|gn| match gn {
+            GeneralName::DNSName(name) => Some(*name),
             _ => None,
         });
-        if dns_name.is_some() {
-            return dns_name;
+        let identity = dns_name.or_else(|| {
+            names.iter().find_map(|gn| match gn {
+                GeneralName::URI(uri) => Some(*uri),
+                _ => None,
+            })
+        });
+        if let Some(identity) = identity {
+            return Some(identity.to_string());
         }
     }
 
@@ -1390,6 +1402,38 @@ mod tests {
         assert_eq!(
             identity_from_certs(&certs).as_deref(),
             Some("only-via-san.example")
+        );
+    }
+
+    #[test]
+    fn san_uri_used_when_no_dns_name() {
+        let pem = include_str!("../../tests/tls/cert_san_uri_only.pem");
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse PEM");
+
+        // No dNSName and no CN: a workload identity certificate names itself
+        // with a URI only.
+        assert_eq!(
+            identity_from_certs(&certs).as_deref(),
+            Some("spiffe://example.svc.id.goog/ns/dashboard/sa/webapp")
+        );
+    }
+
+    #[test]
+    fn san_dns_preferred_over_san_uri() {
+        let pem = include_str!("../../tests/tls/cert_san_uri_and_dns.pem");
+        let certs: Vec<CertificateDer<'static>> =
+            rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("parse PEM");
+
+        // The URI comes first in the SAN, but dNSName still wins so
+        // certificates that resolve today keep resolving the same way.
+        assert_eq!(
+            identity_from_certs(&certs).as_deref(),
+            Some("primary.san.example")
         );
     }
 

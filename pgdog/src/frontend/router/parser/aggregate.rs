@@ -39,6 +39,23 @@ pub(crate) enum AggregateFunction {
     Unrecognized(String),
 }
 
+impl AggregateFunction {
+    pub(crate) fn from_builtin_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "count" => Self::Count,
+            "max" => Self::Max,
+            "min" => Self::Min,
+            "sum" => Self::Sum,
+            "avg" => Self::Avg,
+            "stddev" | "stddev_samp" => Self::StddevSamp,
+            "stddev_pop" => Self::StddevPop,
+            "variance" | "var_samp" => Self::VarSamp,
+            "var_pop" => Self::VarPop,
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
@@ -94,20 +111,11 @@ fn columns_match(group_by_names: &[&str], select_names: &[&str]) -> bool {
 
 impl AggregateFunction {
     pub(crate) fn from_name(name: &str, schema: &Schema) -> Option<Self> {
-        Some(match name {
-            "count" => AggregateFunction::Count,
-            "max" => AggregateFunction::Max,
-            "min" => AggregateFunction::Min,
-            "sum" => AggregateFunction::Sum,
-            "avg" => AggregateFunction::Avg,
-            "stddev" | "stddev_samp" => AggregateFunction::StddevSamp,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "variance" | "var_samp" => AggregateFunction::VarSamp,
-            "var_pop" => AggregateFunction::VarPop,
-            name if schema.aggregate_functions.contains(name) => {
-                AggregateFunction::Unrecognized(name.to_owned())
-            }
-            _ => return None,
+        Self::from_builtin_name(name).or_else(|| {
+            schema
+                .aggregate_functions
+                .contains(name)
+                .then(|| Self::Unrecognized(name.to_owned()))
         })
     }
 }
@@ -122,7 +130,8 @@ impl Aggregate {
                 // We use 0-indexed arrays, Postgres uses 1-indexed.
                 Node::A_Const(c) => c
                     .val()
-                    .and_then(|v| v.numeric_value::<i32>().map(|x| x as usize - 1)),
+                    .and_then(|v| v.numeric_value::<i32>())
+                    .and_then(|x| usize::try_from(x).ok()?.checked_sub(1)),
                 Node::ColumnRef(c) => index_of_column(
                     stmt,
                     &c.fields()
@@ -341,6 +350,18 @@ mod test {
         let aggr = parse("SELECT COUNT(*) FROM example GROUP BY user_id");
         assert!(aggr.group_by().is_empty());
         assert_eq!(aggr.targets().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_group_by_invalid_ordinal_is_skipped() {
+        for sql in [
+            "SELECT user_id, COUNT(*) FROM example GROUP BY 0",
+            "SELECT user_id, COUNT(*) FROM example GROUP BY -1",
+        ] {
+            let aggr = parse(sql);
+            assert!(aggr.group_by().is_empty(), "{sql}");
+            assert_eq!(aggr.targets().len(), 1, "{sql}");
+        }
     }
 
     #[test]

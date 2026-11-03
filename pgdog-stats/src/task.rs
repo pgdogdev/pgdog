@@ -447,6 +447,7 @@ mod test {
                 sync_state: SyncState::PreData,
                 ignore_errors: false,
                 dry_run: false,
+                direction: ReshardingDirection::Reverse,
             }
             .into(),
             table_copy().into(),
@@ -461,7 +462,7 @@ mod test {
             .into(),
             ReplicationClusterDefinition {
                 databases: databases(),
-                direction: ReplicationDirection::Reverse,
+                direction: ReshardingDirection::Reverse,
             }
             .into(),
             ReplicationShardDefinition {
@@ -547,22 +548,26 @@ mod test {
             "synchronize_tables prod -> prod_sharded"
         );
 
-        for (sync_state, expected) in [
+        for (sync_state, direction, expected) in [
             (
                 SyncState::PreData,
+                ReshardingDirection::Forward,
                 "schema_sync(pre_data) prod -> prod_sharded",
             ),
             (
                 SyncState::PostData,
+                ReshardingDirection::Forward,
                 "schema_sync(post_data) prod -> prod_sharded",
             ),
             (
                 SyncState::Cutover,
-                "schema_sync(cutover) prod -> prod_sharded",
+                ReshardingDirection::Reverse,
+                "reverse schema_sync(cutover) prod -> prod_sharded",
             ),
             (
                 SyncState::PostDataValidation,
-                "schema_sync(post_data_validation) prod -> prod_sharded",
+                ReshardingDirection::Reverse,
+                "reverse schema_sync(post_data_validation) prod -> prod_sharded",
             ),
         ] {
             assert_eq!(
@@ -571,6 +576,7 @@ mod test {
                     sync_state,
                     ignore_errors: false,
                     dry_run: false,
+                    direction,
                 })
                 .to_string(),
                 expected
@@ -579,11 +585,11 @@ mod test {
 
         for (direction, expected) in [
             (
-                ReplicationDirection::Forward,
+                ReshardingDirection::Forward,
                 "forward replication prod -> prod_sharded",
             ),
             (
-                ReplicationDirection::Reverse,
+                ReshardingDirection::Reverse,
                 "reverse replication prod -> prod_sharded",
             ),
         ] {
@@ -686,7 +692,7 @@ mod test {
             }),
             TaskStatus::Replication(ReplicationStatus::Replicating),
             TaskStatus::ReplicationCluster(ReplicationClusterStatus::Replicating {
-                direction: ReplicationDirection::Reverse,
+                direction: ReshardingDirection::Reverse,
                 progress: ReplicationProgress {
                     lag_bytes: Some(2048),
                     last_transaction_ms: Some(150),

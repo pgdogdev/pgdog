@@ -21,8 +21,8 @@ use crate::net::{
 
 use super::inner::CheckInResult;
 use super::{
-    Address, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids, PoolConfig, Request,
-    State, Stats, Waiting,
+    Address, CancelGuard, Comms, Config, Error, Guard, Healtcheck, Inner, Monitor, Oids,
+    PoolConfig, Request, State, Stats, Waiting,
     lb::TargetHealth,
     lsn_monitor::{LsnMonitor, ReplicaLag},
 };
@@ -301,8 +301,10 @@ impl Pool {
         // Must NOT hold the lock while doing async I/O.
         let key = self.lock().cancel_key(id).cloned();
         if let Some(key) = key {
+            let _guard = CancelGuard::new(self, key.pid());
             Server::cancel(self.addr(), key).await?;
         }
+
         Ok(())
     }
 
@@ -337,7 +339,7 @@ impl Pool {
 
             let (idle, taken) = from_guard.move_conns_to(destination);
             for server in idle {
-                to_guard.put(server, now)?;
+                to_guard.put(server, now);
             }
             to_guard.set_taken(taken);
         }

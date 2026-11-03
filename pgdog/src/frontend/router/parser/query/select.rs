@@ -151,7 +151,17 @@ impl QueryParser {
                     .shards_calculator
                     .push(ShardWithPriority::new_table_omni(Shard::All));
             } else {
-                let shard = Shard::Direct(round_robin::next(context.shards));
+                // check if we have sticky setting somewhere and if do
+                // read the data from the sticked shard
+                let sharded_tables = context.sharding_schema.tables();
+                let index = if sharded_tables.is_system_catalog_sticky()
+                    || sharded_tables.is_omnisharded_sticky_default()
+                {
+                    context.router_context.sticky.omni_index % context.shards
+                } else {
+                    round_robin::next(context.shards)
+                };
+                let shard = Shard::Direct(index);
 
                 if let Some(recorder) = self.recorder_mut() {
                     recorder.record_entry(Some(shard.clone()), "SELECT omnishard no table");
@@ -257,13 +267,13 @@ impl QueryParser {
                         .push(ShardWithPriority::new_table_omni(Shard::All));
                 } else {
                     // Any single shard can answer a read.
+                    let sharded_tables = context.sharding_schema.tables();
                     let sticky = tables.is_some_and(|tables| {
                         tables.iter().any(|table| {
-                            context
-                                .sharding_schema
-                                .tables()
-                                .is_omnisharded_sticky(table.name)
-                                == Some(true)
+                            sharded_tables.is_omnisharded_sticky(table.name) == Some(true)
+                            // TODO: do we need to store and manage system_catalogs if we have `is_pg_catalog`?
+                                || (table.is_pg_catalog()
+                                    && sharded_tables.is_system_catalog_sticky())
                         })
                     });
 

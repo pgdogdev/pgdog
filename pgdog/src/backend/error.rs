@@ -147,11 +147,13 @@ impl Error {
         use crate::backend::pool::Error as PoolError;
         matches!(
             self,
-            Self::Aggregate(AggregateError::UnsupportedAggregation { .. })
-                | Self::MultiShard(MultiShardError::Aggregate(
-                    AggregateError::UnsupportedAggregation { .. }
-                ))
-                | Self::Pool(PoolError::PubSubDisabled)
+            Self::Aggregate(
+                AggregateError::UnsupportedAggregation { .. }
+                    | AggregateError::UnsupportedHaving(_)
+            ) | Self::MultiShard(MultiShardError::Aggregate(
+                AggregateError::UnsupportedAggregation { .. }
+                    | AggregateError::UnsupportedHaving(_)
+            )) | Self::Pool(PoolError::PubSubDisabled)
         )
     }
 

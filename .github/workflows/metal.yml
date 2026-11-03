@@ -15,7 +15,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
   pull_request_target:
     types: [opened]
 
@@ -27,12 +27,18 @@ env:
   BUCKET: pgdog-metal-bench
   QUEUE_URL: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench.fifo
   AUTOSCALING_GROUP: pgdog-metal-bench
+  QUEUE_URL_X86: https://sqs.us-east-1.amazonaws.com/588738614642/pgdog-metal-bench-x86.fifo
+  AUTOSCALING_GROUP_X86: pgdog-metal-bench-x86
   SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   REF: ${{ github.head_ref || github.ref_name }}
 
 jobs:
   enqueue:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'pull_request'
+          && github.event.action != 'labeled'
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     outputs:
       enqueued_at: ${{ steps.enqueue.outputs.enqueued_at }}
@@ -54,12 +60,22 @@ jobs:
           echo "enqueued_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
           aws sqs send-message \
             --queue-url "$QUEUE_URL" \
-            --message-group-id metal \
+            --message-group-id "$REF" \
             --message-deduplication-id "$SHA-${{ github.run_id }}" \
             --message-body "$MESSAGE"
 
-      - name: Start the runner if it's down
-        run: aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL_X86" \
+            --message-group-id "$REF" \
+            --message-deduplication-id "$SHA-${{ github.run_id }}" \
+            --message-body "$MESSAGE"
+
+      - name: Start the runners if they're down
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws autoscaling set-desired-capacity --region us-east-2 --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+          aws autoscaling set-desired-capacity --region us-west-2 --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
 
       - name: Mark commit as queued
         env:
@@ -75,6 +91,11 @@ jobs:
             -f context=metal/bench \
             -f state=pending \
             -f description="Queued. $queued in line"
+
+          gh api "repos/${{ github.repository }}/statuses/$SHA" \
+            -f context=metal/bench-x86 \
+            -f state=pending \
+            -f description="Queued"
 
   # TODO(jkaczman): need to get a PAT with commit statuses + pull requests write, so we can
   # drop this unnecessary polling job (current PAT does not have necessary perms)
@@ -95,11 +116,80 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
           aws-region: us-east-1
+          role-duration-seconds: 21600
 
       - uses: actions/checkout@v6
 
       - name: Wait for the runner and post its result
         run: bash integration/ci/metal-report.sh
+
+  enqueue-pgo:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(github.event.pull_request.labels.*.name, 'bench-pgo')
+      && (github.event.action != 'labeled' || github.event.label.name == 'bench-pgo')
+    runs-on: ubuntu-24.04
+    outputs:
+      enqueued_at: ${{ steps.enqueue.outputs.enqueued_at }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
+          aws-region: us-east-1
+
+      - name: Enqueue PGO comparison
+        id: enqueue
+        env:
+          MESSAGE: >-
+            {"sha": "${{ env.SHA }}",
+             "ref": "${{ env.REF }}",
+             "pgo": true}
+        run: |
+          echo "enqueued_at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL" \
+            --message-group-id "pgo-$REF" \
+            --message-deduplication-id "pgo-$SHA-${{ github.run_id }}" \
+            --message-body "$MESSAGE"
+
+          aws sqs send-message \
+            --queue-url "$QUEUE_URL_X86" \
+            --message-group-id "pgo-$REF" \
+            --message-deduplication-id "pgo-$SHA-${{ github.run_id }}" \
+            --message-body "$MESSAGE"
+
+      - name: Start the runners if they're down
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws autoscaling set-desired-capacity --region us-east-2 --auto-scaling-group-name "$AUTOSCALING_GROUP" --desired-capacity 1
+          aws autoscaling set-desired-capacity --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+          aws autoscaling set-desired-capacity --region us-west-2 --auto-scaling-group-name "$AUTOSCALING_GROUP_X86" --desired-capacity 1
+
+  report-pgo:
+    needs: enqueue-pgo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      id-token: write
+      statuses: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      ENQUEUED_AT: ${{ needs.enqueue-pgo.outputs.enqueued_at }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::588738614642:role/pgdog-metal-bench-ci
+          aws-region: us-east-1
+          role-duration-seconds: 21600
+
+      - uses: actions/checkout@v6
+
+      - name: Wait for the runner and post its result
+        run: bash integration/ci/metal-report.sh pgo
 
   skipped:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository

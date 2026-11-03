@@ -14,7 +14,9 @@ pub(crate) mod sharding;
 pub(in crate::frontend) use comment::RoutingComment;
 pub(crate) use copy::CopyRow;
 pub(crate) use error::Error;
-pub(crate) use parser::{Ast, Command, DiscardTarget, QueryParser, Route, SetParam};
+pub(crate) use parser::{
+    Ast, Command, DiscardTarget, QueryParser, Route, SetParam, UnlistenTarget,
+};
 
 use crate::backend::Cluster;
 use crate::frontend::client::Sticky;

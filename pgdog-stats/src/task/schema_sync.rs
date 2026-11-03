@@ -7,7 +7,7 @@ use derive_more::Display;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::Databases;
+use crate::{Databases, ReshardingDirection};
 
 #[derive(
     Debug, Display, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
@@ -28,13 +28,23 @@ pub enum SyncState {
 }
 
 /// The schema sync one schema-sync task runs, and at which stage.
-#[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize, JsonSchema)]
-#[display("schema_sync({sync_state}) {databases}")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SchemaSyncDefinition {
     pub databases: Databases,
     pub sync_state: SyncState,
     pub ignore_errors: bool,
     pub dry_run: bool,
+    #[serde(default)]
+    pub direction: ReshardingDirection,
+}
+
+impl fmt::Display for SchemaSyncDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.direction == ReshardingDirection::Reverse {
+            f.write_str("reverse ")?;
+        }
+        write!(f, "schema_sync({}) {}", self.sync_state, self.databases)
+    }
 }
 
 /// One statement of a schema sync phase.

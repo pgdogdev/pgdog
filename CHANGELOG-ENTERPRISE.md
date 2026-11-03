@@ -3,6 +3,26 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-11-02
+
+**OS version**: [v0.1.63](CHANGELOG.md#v0163)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-02`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-02` |
+
+#### Features
+
+- Enterprise Docker images now use open source base images
+- Unify the resharding UI and add missing replication and resharding tasks
+- Use PGO (profile-guided optimization) for Docker images, which improves performance by 6% on x86 and 17% on ARM
+
+#### Bug fixes
+
+- Autodiscovery would not detect hostname changes during AWS RDS blue/green failover
+- Increase default Redis timeout on the control plane and make it configurable
+
 ### v2026-10-16
 
 **OS version**: [v0.1.62](CHANGELOG.md#v0162)

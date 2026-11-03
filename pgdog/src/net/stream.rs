@@ -147,7 +147,7 @@ impl Stream {
         }
     }
 
-    /// Get the hostname identity (SAN dNSName, falling back to Subject CN)
+    /// Get the identity (SAN dNSName, then SAN URI, falling back to Subject CN)
     /// from the client's TLS certificate, if any.
     pub(crate) fn tls_identity(&self) -> Option<&str> {
         self.tls_identity.as_deref()

@@ -11,6 +11,8 @@ RUN apt update && \
     apt install -y --no-install-recommends \
         curl \
         ca-certificates \
+        # Default snakeoil TLS certificate and private key.
+        ssl-cert \
         # Debug tools.
         dnsutils \
         iproute2 \
@@ -23,6 +25,7 @@ RUN apt update && \
         strace \
         tcpdump && \
     update-ca-certificates && \
+    make-ssl-cert generate-default-snakeoil && \
     # Add the PostgreSQL (pgdg) repository.
     install -d /usr/share/postgresql-common/pgdg && \
     curl --fail \

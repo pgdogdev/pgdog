@@ -250,6 +250,21 @@ impl Datum {
             }),
         }
     }
+
+    /// Orders numeric values of different widths the way PostgreSQL does.
+    /// Returns `None` if either side isn't numeric.
+    pub fn compare_numeric(&self, other: &Datum) -> Option<Ordering> {
+        Some(self.as_i128()?.cmp(&other.as_i128()?))
+    }
+
+    fn as_i128(&self) -> Option<i128> {
+        match self {
+            Datum::Bigint(value) => Some((*value).into()),
+            Datum::Integer(value) => Some((*value).into()),
+            Datum::SmallInt(value) => Some((*value).into()),
+            _ => None,
+        }
+    }
 }
 
 /// PostgreSQL data types.
@@ -343,6 +358,28 @@ mod tests {
     use super::*;
     use bytes::{BufMut, BytesMut};
     use std::assert_matches;
+
+    #[test]
+    fn test_compare_numeric_across_integer_widths() {
+        for (left, right, expected) in [
+            (Datum::Bigint(2), Datum::Integer(2), Ordering::Equal),
+            (Datum::Integer(2), Datum::SmallInt(3), Ordering::Less),
+            (Datum::SmallInt(3), Datum::Bigint(2), Ordering::Greater),
+            (
+                Datum::Bigint(i64::MAX),
+                Datum::Integer(i32::MAX),
+                Ordering::Greater,
+            ),
+        ] {
+            assert_eq!(left.compare_numeric(&right), Some(expected));
+        }
+
+        assert_eq!(
+            Datum::Text("2".into()).compare_numeric(&Datum::Integer(2)),
+            None
+        );
+        assert_eq!(Datum::Null.compare_numeric(&Datum::Integer(2)), None);
+    }
 
     #[test]
     fn test_multidimensional_text_array_falls_back_to_unknown() {

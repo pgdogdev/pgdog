@@ -2,11 +2,13 @@
 use pgdog_config::{LookupResult, OmnishardedTable, SystemCatalogsBehavior};
 
 use crate::{
+    backend::Schema,
     config::DataType,
     frontend::router::{
-        parser::Column,
+        parser::{Column, Table},
         sharding::{LookupCache, LookupTable, Mapping, ShardedTable},
     },
+    net::parameter::ParameterValue,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -175,6 +177,43 @@ impl ShardedTables {
         self.inner.system_catalogs == SystemCatalogsBehavior::Sharded
     }
 
+    pub(crate) fn is_system_catalog_sticky(&self) -> bool {
+        self.inner.system_catalogs == SystemCatalogsBehavior::OmnishardedSticky
+    }
+
+    pub(crate) fn is_table_sharded(
+        &self,
+        table: Table<'_>,
+        db_schema: &Schema,
+        user: &str,
+        search_path: Option<&ParameterValue>,
+    ) -> bool {
+        if self.omnishards().contains_key(table.name) {
+            return false;
+        }
+
+        let named = self.tables().iter().any(|config| {
+            config.name.is_some()
+                && config.name_matches(table.name)
+                && config
+                    .schema
+                    .as_deref()
+                    .is_none_or(|schema| table.schema == Some(schema))
+        });
+
+        if named {
+            return true;
+        }
+
+        let nameless = || self.tables().iter().filter(|config| config.name.is_none());
+        nameless().next().is_some()
+            && db_schema
+                .table(table, user, search_path)
+                .is_some_and(|relation| {
+                    nameless().any(|config| relation.has_column(&config.column))
+                })
+    }
+
     /// The deployment has only one sharded table.
     pub(crate) fn common_mapping(&self) -> &Option<CommonMapping> {
         &self.inner.common_mapping
@@ -278,5 +317,126 @@ mod lookup_result_test {
             SystemCatalogsBehavior::default(),
         );
         assert!(tables.common_mapping().is_none());
+    }
+}
+
+#[cfg(test)]
+mod is_table_sharded_test {
+    use super::*;
+    use crate::backend::schema::{Relation, columns::StatsColumn};
+    use indexmap::IndexMap;
+
+    fn config(name: Option<&str>, schema: Option<&str>, column: &str) -> ShardedTable {
+        ShardedTable {
+            database: "pgdog".into(),
+            name: name.map(Into::into),
+            schema: schema.map(Into::into),
+            column: column.into(),
+            ..Default::default()
+        }
+    }
+
+    fn sharded_tables(tables: Vec<ShardedTable>, omnisharded: &[&str]) -> ShardedTables {
+        ShardedTables::new(
+            tables,
+            omnisharded
+                .iter()
+                .map(|name| OmnishardedTable {
+                    name: name.to_string(),
+                    sticky_routing: false,
+                })
+                .collect(),
+            false,
+            SystemCatalogsBehavior::default(),
+        )
+    }
+
+    fn relation(schema: &str, name: &str, columns: &[&str]) -> ((String, String), Relation) {
+        let columns: IndexMap<_, _> = columns
+            .iter()
+            .map(|column| {
+                let stats = StatsColumn {
+                    table_schema: schema.into(),
+                    table_name: name.into(),
+                    column_name: column.to_string(),
+                    ..Default::default()
+                };
+                (column.to_string(), stats.into())
+            })
+            .collect();
+        (
+            (schema.into(), name.into()),
+            Relation::test_table(schema, name, columns),
+        )
+    }
+
+    fn db_schema() -> Schema {
+        Schema::from_parts(
+            vec!["public".into()],
+            HashMap::from([
+                relation("public", "orders", &["tenant_id", "id"]),
+                relation("public", "countries", &["id", "code"]),
+                relation("tenants", "invoices", &["tenant_id", "id"]),
+            ]),
+        )
+    }
+
+    fn table<'a>(schema: Option<&'a str>, name: &'a str) -> Table<'a> {
+        Table {
+            name,
+            schema,
+            alias: None,
+        }
+    }
+
+    fn is_sharded(tables: &ShardedTables, table: Table<'_>) -> bool {
+        tables.is_table_sharded(table, &db_schema(), "pgdog", None)
+    }
+
+    #[test]
+    fn test_named_config_without_schema_matches_any_schema() {
+        let tables = sharded_tables(vec![config(Some("orders"), None, "tenant_id")], &[]);
+
+        assert!(is_sharded(&tables, table(None, "orders")));
+        assert!(is_sharded(&tables, table(Some("public"), "orders")));
+        assert!(is_sharded(&tables, table(Some("other"), "orders")));
+        assert!(!is_sharded(&tables, table(None, "countries")));
+    }
+
+    #[test]
+    fn test_named_config_with_schema_requires_matching_schema() {
+        let tables = sharded_tables(
+            vec![config(Some("orders"), Some("public"), "tenant_id")],
+            &[],
+        );
+
+        assert!(is_sharded(&tables, table(Some("public"), "orders")));
+        assert!(!is_sharded(&tables, table(Some("other"), "orders")));
+    }
+
+    #[test]
+    fn test_nameless_config_uses_loaded_schema_columns() {
+        let tables = sharded_tables(vec![config(None, None, "tenant_id")], &[]);
+
+        assert!(is_sharded(&tables, table(None, "orders")));
+        assert!(is_sharded(&tables, table(Some("tenants"), "invoices")));
+        assert!(!is_sharded(&tables, table(None, "countries")));
+        assert!(!is_sharded(&tables, table(None, "invoices")));
+        assert!(!is_sharded(&tables, table(None, "unknown")));
+    }
+
+    #[test]
+    fn test_omnisharded_config_overrides_sharded_config() {
+        let tables = sharded_tables(
+            vec![
+                config(Some("orders"), None, "tenant_id"),
+                config(None, None, "tenant_id"),
+            ],
+            &["orders"],
+        );
+
+        assert!(!is_sharded(&tables, table(None, "orders")));
+        assert!(!is_sharded(&tables, table(Some("public"), "orders")));
+        assert!(is_sharded(&tables, table(Some("tenants"), "invoices")));
     }
 }
