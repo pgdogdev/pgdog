@@ -101,6 +101,31 @@ async fn test_omnisharded_prepared_crud() {
 }
 
 #[tokio::test]
+async fn test_cross_shard_prepared_having_is_rejected() {
+    let mut client = TestClient::new_sharded(Parameters::default())
+        .await
+        .with_full_prepared_statements();
+
+    query(
+        &mut client,
+        "PREPARE having_stmt AS SELECT count(*) FROM sharded HAVING count(*) > $1",
+    )
+    .await;
+    client
+        .send_simple(Query::new("EXECUTE having_stmt(0)"))
+        .await;
+    let error = client.read_until('Z').await.unwrap_err();
+    assert_eq!(error.code, "0A000");
+    assert_eq!(
+        error.message,
+        "cross-shard HAVING is unsupported: aggregates would be filtered on each shard before merging"
+    );
+
+    // The connection stays usable.
+    query(&mut client, "SELECT 1").await;
+}
+
+#[tokio::test]
 async fn test_cross_shard_prepared() {
     let mut client = TestClient::new_sharded(Parameters::default())
         .await
