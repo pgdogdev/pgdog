@@ -37,7 +37,9 @@ impl Waiting {
             } else {
                 guard.stats.counts.writes += 1;
             }
-            guard.waiting.push_back(Waiter { request, tx });
+            // Recheck availability while registering, since cancellation may
+            // have completed after get_internal's first checkout attempt.
+            guard.add_waiter(Waiter { request, tx })?;
             guard.full()
         };
 
@@ -89,6 +91,8 @@ pub(super) struct Waiter {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt;
+
     use super::*;
     use crate::backend::pool::Pool;
     use crate::net::messages::FrontendPid;
