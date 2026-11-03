@@ -457,73 +457,43 @@ mod tests {
     }
 
     #[test]
-    fn having_projects_unselected_grouping_column() {
-        let ast = pg_raw_parse::parse(
-            "SELECT COUNT(*) FROM purchases \
-             GROUP BY customer_id HAVING COUNT(*) > 2",
-        )
-        .unwrap();
-        let rewrite = build(&ast, &Schema::default(), false)
-            .unwrap()
-            .expect("HAVING requires a rewrite");
-        let plan = rewrite.plan.expect("projection plan");
-        let aggregate = plan.having.as_ref().expect("HAVING plan");
+    fn having_operands_are_merged_with_the_select_list() {
+        // (query, merged aggregates, GROUP BY columns, AVG count helpers)
+        for (sql, targets, group_by, helpers) in [
+            // The grouping column is projected so shards' groups can be matched.
+            (
+                "SELECT COUNT(*) FROM purchases GROUP BY customer_id HAVING COUNT(*) > 2",
+                2,
+                1,
+                0,
+            ),
+            // The selected and hidden AVG each need their own COUNT.
+            (
+                "SELECT customer_id, AVG(price) FROM purchases \
+                 GROUP BY customer_id HAVING AVG(price) > 10",
+                2,
+                1,
+                2,
+            ),
+            // An aggregate used only by HAVING is still merged.
+            (
+                "SELECT customer_id, 'total' FROM purchases GROUP BY 1 HAVING COUNT(*) > 2",
+                1,
+                1,
+                0,
+            ),
+        ] {
+            let ast = pg_raw_parse::parse(sql).unwrap();
+            let rewrite = build(&ast, &Schema::default(), false)
+                .unwrap()
+                .expect("HAVING requires a rewrite");
+            let plan = rewrite.plan.expect("projection plan");
+            let aggregate = plan.having.as_ref().expect("HAVING plan").aggregate();
 
-        assert_eq!(aggregate.aggregate().group_by().len(), 1);
-        assert_eq!(aggregate.aggregate().targets().len(), 2);
-    }
-
-    #[test]
-    fn having_avg_receives_independent_count_helper() {
-        let ast = pg_raw_parse::parse(
-            "SELECT customer_id, AVG(price) FROM purchases \
-             GROUP BY customer_id HAVING AVG(price) > 10",
-        )
-        .unwrap();
-        let rewrite = build(&ast, &Schema::default(), false)
-            .unwrap()
-            .expect("HAVING requires a rewrite");
-
-        assert_eq!(
-            rewrite
-                .plan
-                .as_deref()
-                .expect("projection plan")
-                .having
-                .as_ref()
-                .expect("HAVING plan")
-                .aggregate()
-                .targets()
-                .len(),
-            2
-        );
-        assert_eq!(
-            rewrite
-                .plan
-                .as_deref()
-                .expect("projection plan")
-                .aggregate_helpers
-                .len(),
-            2,
-            "selected and hidden AVG each require their own COUNT"
-        );
-    }
-
-    #[test]
-    fn aggregate_used_only_by_having_is_merged_and_hidden() {
-        let ast = pg_raw_parse::parse(
-            "SELECT customer_id, 'total' FROM purchases \
-             GROUP BY 1 HAVING COUNT(*) > 2",
-        )
-        .unwrap();
-        let rewrite = build(&ast, &Schema::default(), false)
-            .unwrap()
-            .expect("HAVING requires a rewrite");
-        let plan = rewrite.plan.expect("projection plan");
-        let aggregate = plan.having.as_ref().expect("HAVING plan");
-
-        assert_eq!(aggregate.aggregate().targets().len(), 1);
-        assert_eq!(aggregate.aggregate().group_by().len(), 1);
+            assert_eq!(aggregate.targets().len(), targets, "{sql}");
+            assert_eq!(aggregate.group_by().len(), group_by, "{sql}");
+            assert_eq!(plan.aggregate_helpers.len(), helpers, "{sql}");
+        }
     }
 
     #[test]

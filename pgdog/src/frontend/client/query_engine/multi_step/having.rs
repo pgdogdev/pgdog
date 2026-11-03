@@ -4,7 +4,7 @@
 //! columns. Once the groups are merged, the operands are sent to one shard as
 //! arrays, and the shard returns the positions of the groups that pass.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::{
@@ -68,8 +68,12 @@ impl<'a> HavingMulti<'a> {
             }
         }
 
-        let Some(inputs) = engine.backend.take_having_inputs() else {
-            // No groups, or the shards returned an error.
+        let Some(inputs) = engine
+            .backend
+            .take_having_inputs()
+            .filter(|inputs| inputs.rows() > 0)
+        else {
+            // No groups to filter, or the shards returned an error.
             for message in messages {
                 engine.process_server_message(context, message).await?;
             }
@@ -98,21 +102,26 @@ impl<'a> HavingMulti<'a> {
             Err(Error::Execution(error)) => {
                 return self.forward_error(context, messages, *error).await;
             }
+            Err(Error::Rewrite(err @ RewriteError::UnsupportedHaving(_))) => {
+                return self
+                    .forward_error(context, messages, ErrorResponse::unsupported(&err))
+                    .await;
+            }
             Err(err) => return Err(err),
         };
 
-        let mut row = 0;
+        let kept = keep.iter().filter(|&&keep| keep).count();
+        let mut keep = keep.into_iter();
         for message in messages {
             let message = match message.code() {
                 'D' => {
-                    row += 1;
-                    if !keep.contains(&row) {
+                    if !keep.next().unwrap_or(false) {
                         continue;
                     }
                     message
                 }
                 'C' => CommandComplete::from_bytes(message.to_bytes())?
-                    .rewrite(keep.len())?
+                    .rewrite(kept)?
                     .message(),
                 _ => message,
             };
@@ -144,13 +153,13 @@ impl<'a> HavingMulti<'a> {
     }
 }
 
-/// Run the `HAVING` filter over the merged groups and return the 1-based
-/// positions of the groups that pass.
+/// Run the `HAVING` filter over the merged groups and return, for each
+/// group in order, whether it passes.
 async fn filter(
     engine: &mut QueryEngine,
     having: &HavingRewritePlan,
     inputs: &HavingInputs,
-) -> Result<HashSet<usize>, Error> {
+) -> Result<Vec<bool>, Error> {
     let mut data_types = Vec::with_capacity(inputs.columns().len());
     let mut bind = Bind::default();
     for column in inputs.columns() {
@@ -179,13 +188,16 @@ async fn filter(
     ))));
 
     let (rows, _) = super::fetch_rows(engine, &request).await?;
-    rows.iter()
-        .map(|row| {
-            row.get::<i64>(0, Format::Text)
-                .and_then(|position| usize::try_from(position).ok())
-                .ok_or_else(|| invalid("invalid HAVING row number".into()))
-        })
-        .collect()
+    let mut keep = vec![false; inputs.rows()];
+    for row in rows {
+        let passed = row
+            .get::<i64>(0, Format::Text)
+            .and_then(|position| usize::try_from(position).ok()?.checked_sub(1))
+            .and_then(|index| keep.get_mut(index))
+            .ok_or_else(|| invalid("invalid HAVING row number".into()))?;
+        *passed = true;
+    }
+    Ok(keep)
 }
 
 fn invalid(reason: String) -> Error {

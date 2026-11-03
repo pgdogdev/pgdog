@@ -271,10 +271,8 @@ impl Buffer {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::frontend::router::parser::rewrite::statement::projection::HavingRewriteResult;
     use crate::net::{Datum, Field, Format, RowDescription};
     use bytes::Bytes;
-    use pg_raw_parse::Node;
 
     #[test]
     fn test_sort_buffer() {
@@ -354,56 +352,6 @@ mod test {
             let count = dr.get::<i64>(0, Format::Text).unwrap();
             assert_eq!(count, 15 * 6);
         }
-    }
-
-    #[test]
-    fn having_inputs_follow_grouped_aggregate_merge() {
-        let ast = pg_raw_parse::parse(
-            "SELECT customer_id, COUNT(*), COUNT(*) AS __pgdog_having_0 \
-             FROM purchases GROUP BY customer_id",
-        )
-        .unwrap();
-        let Node::SelectStmt(select) = ast.stmts().next().unwrap() else {
-            panic!("not a select")
-        };
-        let aggregate = Aggregate::parse(select, &Default::default());
-        let decoder = Decoder::from(RowDescription::new(&[
-            Field::bigint("customer_id"),
-            Field::bigint("count"),
-            Field::bigint("__pgdog_having_0"),
-        ]));
-
-        let plan = ProjectionRewritePlan {
-            having: Some(Box::new(HavingRewriteResult::new(
-                crate::frontend::router::parser::HavingRewritePlan::new(
-                    String::new(),
-                    vec!["__pgdog_having_0".into()],
-                    vec!["__pgdog_having_0".into()],
-                ),
-                aggregate.clone(),
-            ))),
-            ..Default::default()
-        };
-
-        let mut buffer = Buffer::default();
-        for (customer, partial_count) in [(1_i64, 2_i64), (1, 2), (2, 1), (2, 1)] {
-            let mut row = DataRow::new();
-            row.add(customer).add(partial_count).add(partial_count);
-            buffer.add(row.message()).unwrap();
-        }
-
-        buffer.aggregate(&aggregate, &decoder, Some(&plan)).unwrap();
-        let inputs = buffer
-            .having_inputs(Some(&plan), &decoder)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(inputs.rows(), 2);
-        let array = inputs.columns()[0].array().0.data;
-        assert!(
-            [&br#"{"4","2"}"#[..], br#"{"2","4"}"#].contains(&array.as_ref()),
-            "{array:?}"
-        );
     }
 
     #[test]

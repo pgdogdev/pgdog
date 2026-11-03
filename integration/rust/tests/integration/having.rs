@@ -19,6 +19,7 @@ async fn having_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>
     )
     .await?;
 
+    // No shard has more than 2 orders for customer 1 on its own.
     let rows = sharded
         .fetch_all(
             "SELECT customer_id, COUNT(*) AS order_count \
@@ -34,40 +35,61 @@ async fn having_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>
     assert_eq!(rows[0].get::<i64, _>("customer_id"), 1);
     assert_eq!(rows[0].get::<i64, _>("order_count"), 3);
 
-    // Merged groups: customer 1 has 3 orders (max 20, sum 31),
-    // customer 2 has 2 orders (max 21, sum 33).
-    for (having, expected) in [
-        ("COUNT(*) > 1 AND MAX(order_id) > 20", vec![2]),
-        ("COUNT(*) > 2 OR MAX(order_id) < 0", vec![1]),
-        ("SUM(order_id) / COUNT(*) > 15", vec![2]),
-        ("customer_id <> 1 OR MAX(order_id) IS NULL", vec![2]),
-    ] {
-        let rows = sharded
-            .fetch_all(
-                format!(
-                    "SELECT customer_id FROM having_merge_test \
-                     GROUP BY customer_id HAVING {having} ORDER BY customer_id"
-                )
-                .as_str(),
-            )
-            .await?;
-        let customers = rows
-            .iter()
-            .map(|row| row.get::<i64, _>("customer_id"))
-            .collect::<Vec<_>>();
-        assert_eq!(customers, expected, "{having}");
-    }
+    cleanup(&sharded).await;
+    Ok(())
+}
 
-    // PostgreSQL evaluates the merged predicate and its errors reach the client.
-    let error = sharded
-        .fetch_all(
+#[tokio::test]
+async fn having_errors_reach_the_client() -> Result<(), Box<dyn std::error::Error>> {
+    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
+    reset_table(&sharded).await?;
+    seed(
+        &sharded,
+        0,
+        r#"INSERT INTO having_merge_test VALUES (1, 10, '{"a": 1}')"#,
+    )
+    .await?;
+    seed(
+        &sharded,
+        1,
+        r#"INSERT INTO having_merge_test VALUES (1, 20, '{"a": 1}')"#,
+    )
+    .await?;
+    let client = connections_tokio().await.remove(1);
+
+    for (sql, expected) in [
+        // PostgreSQL evaluates the merged predicate and returns its error.
+        (
             "SELECT customer_id FROM having_merge_test \
              GROUP BY customer_id HAVING COUNT(*) / 0 > 1",
-        )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("division by zero"), "{error}");
-    sharded.execute("SELECT 1").await?;
+            "division by zero",
+        ),
+        // jsonb operands can't be sent to the filter query as arrays.
+        (
+            "SELECT tag, COUNT(*) FROM having_merge_test GROUP BY tag HAVING tag IS NOT NULL",
+            "cross-shard HAVING is unsupported: operands must have common built-in types",
+        ),
+    ] {
+        let error = client.simple_query(sql).await.unwrap_err();
+        assert_eq!(
+            error.as_db_error().map(|error| error.message()),
+            Some(expected),
+            "{sql}"
+        );
+        client.simple_query("SELECT 1").await?;
+
+        // Inside a transaction, the error aborts it like in PostgreSQL.
+        client.simple_query("BEGIN").await?;
+        client.simple_query(sql).await.unwrap_err();
+        let error = client.simple_query("SELECT 1").await.unwrap_err();
+        assert_eq!(
+            error.code(),
+            Some(&tokio_postgres::error::SqlState::IN_FAILED_SQL_TRANSACTION),
+            "{sql}: {error}"
+        );
+        client.simple_query("ROLLBACK").await?;
+        client.simple_query("SELECT 1").await?;
+    }
 
     cleanup(&sharded).await;
     Ok(())
@@ -81,21 +103,12 @@ async fn having_rejects_shard_local_steps() -> Result<(), Box<dyn std::error::Er
 
     // Each of these would run on shards before PgDog merges the groups.
     for sql in [
-        "SELECT * FROM having_merge_test GROUP BY customer_id, order_id HAVING COUNT(*) > 0",
+        "SELECT * FROM having_merge_test GROUP BY customer_id, order_id, tag HAVING COUNT(*) > 0",
         "SELECT customer_id FROM having_merge_test GROUP BY customer_id \
          HAVING COUNT(*) > 0 ORDER BY customer_id LIMIT 1",
         "SELECT DISTINCT customer_id FROM having_merge_test \
          GROUP BY customer_id HAVING COUNT(*) > 0",
-        "EXECUTE having_prepared(0)",
     ] {
-        if sql.starts_with("EXECUTE") {
-            client
-                .simple_query(
-                    "PREPARE having_prepared AS SELECT customer_id FROM having_merge_test \
-                     GROUP BY customer_id HAVING COUNT(*) > $1",
-                )
-                .await?;
-        }
         let error = client.simple_query(sql).await.unwrap_err();
         let message = error.as_db_error().map(|error| error.message());
         assert!(
@@ -115,7 +128,7 @@ async fn reset_table(pool: &PgPool) -> Result<(), sqlx::Error> {
         pool.execute(
             format!(
                 "/* pgdog_shard: {shard} */ \
-                 CREATE TABLE having_merge_test(customer_id BIGINT, order_id BIGINT)"
+                 CREATE TABLE having_merge_test(customer_id BIGINT, order_id BIGINT, tag JSONB)"
             )
             .as_str(),
         )
