@@ -5,6 +5,7 @@ use tokio::time::timeout;
 
 use crate::{
     expect_message,
+    frontend::UnlistenTarget,
     net::{BindComplete, CommandComplete, ErrorResponse, Parameters, ParseComplete, ReadyForQuery},
 };
 
@@ -90,7 +91,7 @@ async fn extended_unlisten_flush_does_not_emit_ready_for_query() {
         .unlisten(
             &mut context,
             &client_request.messages,
-            "pgdog_pipeline_listen",
+            &UnlistenTarget::Channel("pgdog_pipeline_listen".into()),
         )
         .await
         .unwrap();

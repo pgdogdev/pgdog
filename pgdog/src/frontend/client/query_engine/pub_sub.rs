@@ -54,9 +54,12 @@ impl QueryEngine {
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_messages: &[ProtocolMessage],
-        channel: &str,
+        target: &UnlistenTarget,
     ) -> Result<(), Error> {
-        self.backend.unlisten(channel);
+        match target {
+            UnlistenTarget::Channel(channel) => self.backend.unlisten(channel),
+            UnlistenTarget::All => self.backend.unlisten_all(),
+        }
         self.fake_command_response(context, client_messages, &FakeResponse::command("UNLISTEN"))
             .await?;
         Ok(())
