@@ -23,6 +23,10 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "cross-shard HAVING is unsupported: LIMIT and OFFSET are unsupported",
         ),
         (
+            "SELECT count(*) FROM sharded HAVING bool_or(id > 0)",
+            "unsupported aggregation bool_or: bool_or() is not yet supported",
+        ),
+        (
             "SELECT value FROM sharded GROUP BY value ORDER BY count(*)",
             "ORDER BY an expression with an aggregate or DISTINCT is not supported across shards",
         ),

@@ -301,7 +301,7 @@ fn build(
     let rewritten = make::try_owned(|mem| {
         let mut select = mem.make_unique(select);
         if has_having {
-            let having = having::rewrite_select(&mut select.as_mut(), mem)?;
+            let having = having::rewrite_select(&mut select.as_mut(), mem, schema)?;
             let rewritten_aggregate = Aggregate::parse(&select, schema);
             if rewritten_aggregate.is_empty() {
                 return Err(Error::UnsupportedHaving(
