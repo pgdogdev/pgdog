@@ -303,7 +303,6 @@ impl Pool {
         if let Some(key) = key {
             let _guard = CancelGuard::new(self, key.pid());
             Server::cancel(self.addr(), key).await?;
-            self.comms().ready.notify_one();
         }
 
         Ok(())
