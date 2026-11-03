@@ -2,7 +2,7 @@ use pgdog_config::QueryParserLevel;
 
 use crate::{
     config::config,
-    frontend::{Command, DiscardTarget},
+    frontend::{Command, DiscardTarget, UnlistenTarget},
 };
 
 use super::setup::*;
@@ -59,6 +59,29 @@ fn test_discard_variants() {
         let command = test.execute(vec![Query::new(query).into()]);
         assert!(
             matches!(command, Command::Discard { target, .. } if target == expected),
+            "expected {expected:?} for {query}, got {command:#?}",
+        );
+    }
+}
+
+#[test]
+fn test_unlisten_variants() {
+    let mut config = (*config()).clone();
+    config.config.general.query_parser = QueryParserLevel::On;
+
+    for (query, expected) in [
+        ("UNLISTEN *", UnlistenTarget::All),
+        ("unlisten *", UnlistenTarget::All),
+        ("UNLISTEN events", UnlistenTarget::Channel("events".into())),
+        (
+            r#"UNLISTEN "My Events""#,
+            UnlistenTarget::Channel("My Events".into()),
+        ),
+    ] {
+        let mut test = QueryParserTest::new_single_primary(&config);
+        let command = test.execute(vec![Query::new(query).into()]);
+        assert!(
+            matches!(&command, Command::Unlisten(target) if *target == expected),
             "expected {expected:?} for {query}, got {command:#?}",
         );
     }

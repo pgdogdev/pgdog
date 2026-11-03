@@ -445,10 +445,12 @@ impl QueryParser {
             }
 
             Node::UnlistenStmt(stmt) => {
-                // FIXME: UNLISTEN * is sent represented as None
-                return Ok(Command::Unlisten(
-                    stmt.conditionname().unwrap_or_default().to_owned(),
-                ));
+                // UNLISTEN * has no condition name.
+                let target = match stmt.conditionname() {
+                    Some(channel) => UnlistenTarget::Channel(channel.to_owned()),
+                    None => UnlistenTarget::All,
+                };
+                return Ok(Command::Unlisten(target));
             }
 
             Node::PrepareStmt(stmt) => self.prepare(stmt, context),
