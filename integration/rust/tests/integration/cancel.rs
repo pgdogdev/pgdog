@@ -1,10 +1,123 @@
-use std::time::Duration;
+use std::{panic::AssertUnwindSafe, time::Duration};
 
 use crate::setup::{admin_tokio, connection_sqlx_direct};
 use bytes::{BufMut, BytesMut};
+use futures_util::FutureExt;
 use sqlx::PgPool;
-use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinHandle, time::timeout};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    task::{JoinHandle, JoinSet},
+    time::{sleep, timeout},
+};
 use tokio_postgres::{CancelToken, Error as PgError, NoTls, SimpleQueryMessage};
+
+// Like psycopg's cancel_safe(), wait for the cancel connection to close.
+async fn cancel_and_wait(token: &CancelToken) -> anyhow::Result<()> {
+    let mut stream = TcpStream::connect("127.0.0.1:6432").await?;
+    token.cancel_query_raw(&mut stream, NoTls).await?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await?;
+    assert!(
+        response.is_empty(),
+        "CancelRequest must not return a response"
+    );
+    Ok(())
+}
+
+/// Reproduce #1505: seven holders and A fill an eight-connection pool, B queues,
+/// and two concurrent cancellations for A race with handing A's backend to B.
+#[tokio::test]
+#[serial_test::serial]
+async fn test_cancel_does_not_reach_next_client() -> anyhow::Result<()> {
+    let admin = admin_tokio().await;
+    let config = admin.simple_query("SHOW CONFIG").await?;
+    let original_pool_size = config
+        .iter()
+        .find_map(|message| match message {
+            SimpleQueryMessage::Row(row) if row.get("name") == Some("default_pool_size") => {
+                row.get("value")
+            }
+            _ => None,
+        })
+        .expect("SHOW CONFIG includes default_pool_size")
+        .parse::<usize>()?;
+    admin.simple_query("SET default_pool_size TO 8").await?;
+
+    // Restore the setting on query errors, timeouts, and assertion failures.
+    let result = AssertUnwindSafe(async {
+        for round in 0..5 {
+            timeout(Duration::from_secs(8), async {
+                // JoinSet aborts connection/query tasks on failure as well as success.
+                let mut connections = JoinSet::new();
+                let mut clients = Vec::new();
+                for _ in 0..9 {
+                    let (client, connection) = tokio_postgres::connect(
+                        "host=127.0.0.1 user=pgdog dbname=pgdog password=pgdog port=6432",
+                        NoTls,
+                    )
+                    .await?;
+                    connections.spawn(connection);
+                    client.simple_query("SET pgdog.role TO 'primary'").await?;
+                    clients.push(client);
+                }
+                let b = clients.pop().expect("nine clients were created");
+                let a = clients.pop().expect("eight clients remain");
+
+                let token = a.cancel_token();
+                let mut queries = JoinSet::new();
+                for holder in clients {
+                    queries.spawn(async move {
+                        let result = holder.simple_query("SELECT pg_sleep(1)").await;
+                        ("holder", result, holder)
+                    });
+                }
+                queries.spawn(async move {
+                    let result = a.simple_query("SELECT pg_sleep(0.5)").await;
+                    ("A", result, a)
+                });
+                sleep(Duration::from_millis(30)).await;
+
+                queries.spawn(async move {
+                    let result = b.simple_query("SELECT pg_sleep(0.5)").await;
+                    ("B", result, b)
+                });
+
+                let (first, second) =
+                    tokio::join!(cancel_and_wait(&token), cancel_and_wait(&token));
+                first?;
+                second?;
+
+                // Keep clients connected until all workers finish. Only A may receive a cancellation error.
+                let mut clients = Vec::new();
+                while let Some(result) = queries.join_next().await {
+                    let (label, result, client) = result?;
+                    if let Err(error) = result {
+                        assert!(
+                            label == "A"
+                                && error.code()
+                                    == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED),
+                            "round {round}: {label} failed: {error}"
+                        );
+                    }
+                    clients.push(client);
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+            .await??;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .catch_unwind()
+    .await;
+    admin
+        .simple_query(&format!("SET default_pool_size TO {original_pool_size}"))
+        .await?;
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
 
 /// Returns whether `pid` has an active `pg_sleep` query visible in `pg_stat_activity`.
 /// Uses a direct PostgreSQL connection so the result bypasses pgdog completely.

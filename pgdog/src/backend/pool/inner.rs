@@ -9,6 +9,7 @@ use crate::backend::{ConnectReason, DisconnectReason};
 use crate::backend::{Server, stats::Counts as BackendCounts};
 use crate::net::messages::{BackendKeyData, BackendPid, FrontendPid};
 
+use fnv::FnvHashSet;
 use pgdog_config::Role;
 use pgdog_stats::RoleSpecificConfig;
 use tokio::time::Instant;
@@ -20,9 +21,11 @@ use super::{Config, Error, Pool, Request, Stats, Taken, Waiter, lsn_monitor::Rep
 pub(super) struct Inner {
     /// Idle server connections.
     #[allow(clippy::vec_box)]
-    idle_connections: Vec<Box<Server>>,
+    idle_connections: VecDeque<Box<Server>>,
     /// Server connections currently checked out.
     taken: Taken,
+    /// Backends being cancelled.
+    cancelled: FnvHashSet<i32>,
     /// Pool configuration.
     pub(super) config: Config,
     /// Number of clients waiting for a connection.
@@ -72,8 +75,9 @@ impl Inner {
     /// New inner structure.
     pub(super) fn new(config: Config, id: u64) -> Self {
         Self {
-            idle_connections: Vec::new(),
+            idle_connections: Default::default(),
             taken: Taken::default(),
+            cancelled: Default::default(),
             config,
             waiting: VecDeque::new(),
             online: false,
@@ -107,7 +111,7 @@ impl Inner {
     }
 
     #[cfg(test)]
-    pub(super) fn idle_conns(&self) -> &[Box<Server>] {
+    pub(super) fn idle_conns(&self) -> &VecDeque<Box<Server>> {
         &self.idle_connections
     }
 
@@ -128,8 +132,27 @@ impl Inner {
     }
 
     /// Cancel key for the server currently assigned to this client.
-    pub(super) fn cancel_key(&self, client: FrontendPid) -> Option<&BackendKeyData> {
-        self.taken.cancel_key(client)
+    pub(super) fn cancel_key(&mut self, client: FrontendPid) -> Option<&BackendKeyData> {
+        let key = self.taken.cancel_key(client);
+        if let Some(key) = key {
+            // Only allow cancellation if there isn't one running already.
+            let new = self.cancelled.insert(key.pid);
+            if new { Some(key) } else { None }
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn cancel_done(&mut self, pid: &i32) {
+        self.cancelled.remove(pid);
+        let conn = self
+            .idle_connections
+            .iter()
+            .position(|conn| conn.id().pid == *pid);
+        if let Some(conn) = conn {
+            let conn = self.idle_connections.remove(conn).unwrap();
+            self.put(conn, Instant::now());
+        }
     }
 
     /// All cancel keys for currently checked-out server connections.
@@ -259,24 +282,57 @@ impl Inner {
 
     /// Take connection from the idle pool.
     pub(super) fn take(&mut self, request: &Request) -> Result<Option<Box<Server>>, Error> {
-        match self.idle_connections.pop() {
-            Some(conn) => {
-                let cancel_key = conn.key().clone();
-                self.taken.take(request.id, conn.id(), cancel_key);
-
-                Ok(Some(conn))
-            }
-            _ => Ok(None),
+        let conn = self.take_idle();
+        if let Some(ref conn) = conn {
+            self.taken.take(request.id, conn.id(), conn.key().clone());
         }
+        Ok(conn)
+    }
+
+    /// Remove an idle connection that is not being cancelled.
+    fn take_idle(&mut self) -> Option<Box<Server>> {
+        let max = self.idle_connections.len();
+
+        for _ in 0..max {
+            match self.idle_connections.pop_back() {
+                Some(conn) => {
+                    if self.cancelled.contains(&conn.id().pid) {
+                        // Push the connection to the front of the queue,
+                        // so it's less likely to be picked by the next client.
+                        self.idle_connections.push_front(conn);
+                        continue;
+                    }
+
+                    return Some(conn);
+                }
+                _ => return None,
+            }
+        }
+
+        None
+    }
+
+    /// Register a waiter and assign available connections under the same lock.
+    pub(super) fn add_waiter(&mut self, waiter: Waiter, now: Instant) -> Result<(), Error> {
+        self.waiting.push_back(waiter);
+        while !self.waiting.is_empty() {
+            let Some(conn) = self.take_idle() else {
+                break;
+            };
+            self.put(conn, now);
+        }
+        Ok(())
     }
 
     /// Place connection back into the pool
     /// or give it to a waiting client.
-    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) -> Result<(), Error> {
+    pub(super) fn put(&mut self, mut conn: Box<Server>, now: Instant) {
         // Try to give it to a client that's been waiting, if any.
         let cancel_key = conn.key().clone();
         let server_id = conn.id();
-        while let Some(waiter) = self.waiting.pop_front() {
+        let cancelled = self.cancelled.contains(&conn.id().pid);
+
+        while !cancelled && let Some(waiter) = self.waiting.pop_front() {
             match waiter.tx.send(Ok(conn)) {
                 Err(conn_ret) => {
                     conn = conn_ret.unwrap(); // SAFETY: We sent Ok(conn), we'll get back Ok(conn) if channel is closed.
@@ -285,15 +341,13 @@ impl Inner {
                     self.taken.take(waiter.request.id, server_id, cancel_key);
                     self.stats.counts.server_assignment_count += 1;
                     self.stats.counts.wait_time += now.duration_since(waiter.request.created_at);
-                    return Ok(());
+                    return;
                 }
             }
         }
 
         // No waiters, put connection in idle list.
-        self.idle_connections.push(conn);
-
-        Ok(())
+        self.idle_connections.push_back(conn);
     }
 
     pub(super) fn set_taken(&mut self, taken: Taken) {
@@ -322,7 +376,7 @@ impl Inner {
     /// Take all idle connections and tell active ones to
     /// be returned to a different pool instance.
     #[allow(clippy::vec_box)] // Server is a very large struct, reading it when moving between containers is expensive.
-    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (Vec<Box<Server>>, Taken) {
+    pub(super) fn move_conns_to(&mut self, destination: &Pool) -> (VecDeque<Box<Server>>, Taken) {
         self.moved = Some(destination.clone());
         let mut idle = std::mem::take(&mut self.idle_connections);
         let taken = std::mem::take(&mut self.taken);
@@ -418,7 +472,7 @@ impl Inner {
         // Finally, if the server is ok,
         // place the connection back into the idle list.
         if server.can_check_in() {
-            self.put(server, now)?;
+            self.put(server, now);
             result.replenish = false;
         } else {
             self.out_of_sync += 1;
@@ -709,8 +763,12 @@ mod test {
         assert!(!inner.full());
 
         // Add 2 idle connections and 1 checked out connection to reach max
-        inner.idle_connections.push(Box::new(Server::default()));
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
         inner.taken.take(
             FrontendPid::new(),
             BackendPid::for_test(1),
@@ -732,9 +790,15 @@ mod test {
         inner.config.idle_timeout = Duration::from_millis(5_000);
 
         // Add connections to max
-        inner.idle_connections.push(Box::new(Server::default()));
-        inner.idle_connections.push(Box::new(Server::default()));
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
 
         // Close idle connections - shouldn't close any initially
         inner.close_idle(Instant::now());
@@ -874,13 +938,19 @@ mod test {
 
         assert_eq!(inner.can_remove(), 0); // total=0, min=2
 
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
         assert_eq!(inner.can_remove(), 0); // total=1, min=2
 
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
         assert_eq!(inner.can_remove(), 0); // total=2, min=2
 
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
         assert_eq!(inner.can_remove(), 1); // total=3, min=2
     }
 
@@ -891,7 +961,9 @@ mod test {
 
         assert!(inner.take(&request).unwrap().is_none());
 
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
         let server = inner.take(&request);
         assert!(server.unwrap().is_some());
         assert_eq!(inner.idle(), 0);
@@ -910,7 +982,7 @@ mod test {
         });
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server, Instant::now());
 
         assert_eq!(inner.idle(), 0); // Connection given to waiter, not idle
         assert_eq!(inner.checked_out(), 1); // Connection now checked out to waiter
@@ -925,7 +997,7 @@ mod test {
         let mut inner = Inner::default();
         let server = Box::new(Server::default());
 
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server, Instant::now());
 
         assert_eq!(inner.idle(), 1); // Connection added to idle pool
         assert_eq!(inner.checked_out(), 0);
@@ -935,8 +1007,12 @@ mod test {
     #[test]
     fn test_dump_idle() {
         let mut inner = Inner::default();
-        inner.idle_connections.push(Box::new(Server::default()));
-        inner.idle_connections.push(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
+        inner
+            .idle_connections
+            .push_back(Box::new(Server::default()));
 
         assert_eq!(inner.idle(), 2);
         inner.dump_idle();
@@ -1100,7 +1176,7 @@ mod test {
         assert_eq!(inner.waiting.len(), 3);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server, Instant::now());
 
         // All waiters should be removed from queue since we tried each one
         assert_eq!(inner.waiting.len(), 0);
@@ -1137,7 +1213,7 @@ mod test {
         assert_eq!(inner.waiting.len(), 2);
 
         let server = Box::new(Server::default());
-        inner.put(server, Instant::now()).unwrap();
+        inner.put(server, Instant::now());
 
         // All waiters should be removed since they were all dropped
         assert_eq!(inner.waiting.len(), 0);
@@ -1160,8 +1236,8 @@ mod test {
         let server1_id = server1.id();
         let server2 = Box::new(Server::default());
         let server2_id = server2.id();
-        inner.idle_connections.push(server1);
-        inner.idle_connections.push(server2);
+        inner.idle_connections.push_back(server1);
+        inner.idle_connections.push_back(server2);
 
         assert_eq!(inner.idle(), 2);
         assert_eq!(inner.checked_out(), 0);
