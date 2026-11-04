@@ -76,7 +76,7 @@ mod insert {
 
         // Assert CommandComplete returns 4 rows
         let cc = CommandComplete::from_bytes(messages[5].to_bytes()).unwrap();
-        assert_eq!(cc.rows().unwrap(), Some(4));
+        assert_eq!(cc.rows(), Some(4));
 
         truncate_table("sharded", &mut stream).await;
     }
