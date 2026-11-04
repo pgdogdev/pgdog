@@ -55,6 +55,7 @@ pub(crate) fn parse_edge_comment<'a>(
             shard_or_lookup: None,
             role: None,
             sharding_key: None,
+            lsn: None,
         },
     };
     if let Some(c) = trailing {
@@ -67,6 +68,9 @@ pub(crate) fn parse_edge_comment<'a>(
         }
         if directive.sharding_key.is_none() {
             directive.sharding_key = t_directive.sharding_key;
+        }
+        if directive.lsn.is_none() {
+            directive.lsn = t_directive.lsn;
         }
     }
 
@@ -83,6 +87,7 @@ pub(crate) fn parse_edge_comment<'a>(
             sharding_key: directive.sharding_key,
             shard: directive.shard_or_lookup,
             role: directive.role,
+            lsn: directive.lsn,
         },
     })
 }

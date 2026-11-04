@@ -14,8 +14,8 @@ use super::logical::update::Update;
 /// XLogData (B) message.
 #[derive(Clone)]
 pub(crate) struct XLogData {
-    pub(crate) starting_point: i64,
-    pub(crate) current_end: i64,
+    pub(crate) starting_point: u64,
+    pub(crate) current_end: u64,
     pub(crate) system_clock: i64,
     pub(crate) bytes: Bytes,
 }
@@ -89,8 +89,8 @@ impl XLogData {
 impl FromBytes for XLogData {
     fn from_bytes(mut bytes: Bytes) -> Result<Self, Error> {
         code!(bytes, 'w');
-        let starting_point = bytes.get_i64();
-        let current_end = bytes.get_i64();
+        let starting_point = bytes.get_u64();
+        let current_end = bytes.get_u64();
         let system_clock = bytes.get_i64();
 
         Ok(Self {
@@ -106,8 +106,8 @@ impl ToBytes for XLogData {
     fn to_bytes(&self) -> Bytes {
         let mut payload = BytesMut::new();
         payload.put_u8(self.code() as u8);
-        payload.put_i64(self.starting_point);
-        payload.put_i64(self.current_end);
+        payload.put_u64(self.starting_point);
+        payload.put_u64(self.current_end);
         payload.put_i64(self.system_clock);
         payload.put(self.bytes.clone());
         payload.freeze()

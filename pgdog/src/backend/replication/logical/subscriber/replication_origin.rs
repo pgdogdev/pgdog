@@ -345,14 +345,14 @@ mod test {
         /// connections do: pipelined, the statement first, the origin
         /// statement last, committed by `Sync`. Without `statement`, the
         /// transaction only commits.
-        async fn apply(&self, session: &mut Server, end_lsn: i64, statement: Option<&str>) -> Lsn {
+        async fn apply(&self, session: &mut Server, end_lsn: u64, statement: Option<&str>) -> Lsn {
             self.try_apply(session, end_lsn, statement).await.unwrap()
         }
 
         async fn try_apply(
             &self,
             session: &mut Server,
-            end_lsn: i64,
+            end_lsn: u64,
             statement: Option<&str>,
         ) -> Result<Lsn, ErrorResponse> {
             let commit = Commit {
@@ -372,7 +372,7 @@ mod test {
             messages.push(Sync.into());
             Self::send(session, messages).await?;
 
-            Ok(Lsn::from_i64(end_lsn))
+            Ok(Lsn::from_u64(end_lsn))
         }
 
         async fn send(

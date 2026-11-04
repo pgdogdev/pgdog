@@ -289,6 +289,19 @@ mod test {
     use pgdog_stats::Lsn;
     use tokio::time::timeout;
 
+    #[test]
+    fn test_lsn_stats_unsigned_offset() {
+        let mut row = DataRow::new();
+        row.add(true);
+        row.add("FFFFFFFF/FFFFFFFF");
+        row.add("18446744073709551615");
+        row.add("2026-07-01 13:33:10.000000+00");
+        row.add(1i64);
+        let stats = LsnStats::from_row(row, false);
+        assert_eq!(stats.lsn.lsn, u64::MAX);
+        assert_eq!(stats.offset_bytes, u64::MAX);
+    }
+
     // A launched pool against the local Postgres. The default `lsn_check_delay`
     // is `MAX_DURATION`, so the background LSN monitor spawned by `launch()`
     // stays asleep and never competes with the `run_check` calls below.

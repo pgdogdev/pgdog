@@ -10,9 +10,9 @@ use super::super::prelude::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusUpdate {
-    pub(crate) last_written: i64,
-    pub(crate) last_flushed: i64,
-    pub(crate) last_applied: i64,
+    pub(crate) last_written: u64,
+    pub(crate) last_flushed: u64,
+    pub(crate) last_applied: u64,
     pub(crate) system_clock: i64,
     pub(crate) reply: u8,
 }
@@ -42,9 +42,9 @@ impl FromBytes for StatusUpdate {
         code!(bytes, 'r');
 
         Ok(Self {
-            last_written: bytes.get_i64(),
-            last_flushed: bytes.get_i64(),
-            last_applied: bytes.get_i64(),
+            last_written: bytes.get_u64(),
+            last_flushed: bytes.get_u64(),
+            last_applied: bytes.get_u64(),
             system_clock: bytes.get_i64(),
             reply: bytes.get_u8(),
         })
@@ -56,9 +56,9 @@ impl ToBytes for StatusUpdate {
         let mut payload = BytesMut::new();
         payload.put_u8(b'r');
 
-        payload.put_i64(self.last_written);
-        payload.put_i64(self.last_flushed);
-        payload.put_i64(self.last_applied);
+        payload.put_u64(self.last_written);
+        payload.put_u64(self.last_flushed);
+        payload.put_u64(self.last_applied);
         payload.put_i64(self.system_clock);
         payload.put_u8(self.reply);
 
