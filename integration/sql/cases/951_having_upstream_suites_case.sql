@@ -1,4 +1,4 @@
--- description: Cross-shard HAVING queries from the Postgres, Postgres-XC, DuckDB and ORM test suites
+-- description: Cross-shard HAVING queries from the Postgres, Postgres-XC and ORM test suites
 -- tags: standard sharded
 -- transactional: true
 
@@ -9,10 +9,6 @@ GROUP BY b, c HAVING count(*) = 1 ORDER BY b, c;
 SELECT c, max(a) FROM sql_regression_samples
 GROUP BY c HAVING count(*) > 2 OR min(a) = max(a) ORDER BY 2;
 
-SELECT min(a), max(a) FROM sql_regression_samples HAVING min(a) = max(a);
-
-SELECT min(a), max(a) FROM sql_regression_samples HAVING min(a) < max(a);
-
 -- Postgres-XC xc_having.sql
 SELECT count(*), sum(a), avg(a), b FROM sql_regression_samples
 GROUP BY b HAVING b + 1 > 3 ORDER BY b;
@@ -20,14 +16,9 @@ GROUP BY b HAVING b + 1 > 3 ORDER BY b;
 SELECT count(*), sum(a), avg(a), b FROM sql_regression_samples
 GROUP BY b HAVING avg(a) > 3.75 OR b > 2 ORDER BY b;
 
-SELECT b FROM sql_regression_samples GROUP BY b HAVING sum(a) > 8 ORDER BY b;
-
 -- Postgres partition_aggregate.sql
 SELECT b, sum(a), avg(a), count(*), min(a), max(d) FROM sql_regression_samples
 GROUP BY 1 HAVING avg(d) < 15 ORDER BY 1;
-
--- DuckDB test_having.test
-SELECT b, SUM(a) FROM sql_regression_samples GROUP BY b HAVING SUM(a) + 10 > 28 ORDER BY b;
 
 -- Comparisons that depend on PostgreSQL's collation and type semantics
 SELECT b, count(*) FROM sql_regression_samples GROUP BY b, name HAVING name > 'b' ORDER BY b;

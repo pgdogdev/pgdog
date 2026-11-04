@@ -35,9 +35,9 @@ impl HavingInputs {
         let columns = aliases
             .iter()
             .map(|alias| {
-                let index = row_description.field_index(alias).ok_or_else(|| {
-                    Error::InvalidHaving(format!("missing HAVING column \"{alias}\""))
-                })?;
+                let index = row_description
+                    .field_index(alias)
+                    .ok_or_else(|| Error::HavingColumnMissing(alias.clone()))?;
                 let element_oid = row_description
                     .field(index)
                     .expect("field_index returned a valid column")

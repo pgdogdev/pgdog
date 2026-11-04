@@ -85,10 +85,10 @@ impl<'a> HavingMulti<'a> {
             .filter(|message| message.code() == 'D')
             .count();
         if rows != inputs.rows() {
-            return Err(invalid(format!(
-                "expected {} rows, received {rows}",
-                inputs.rows()
-            )));
+            return Err(invalid(AggregateError::HavingRowCount {
+                expected: inputs.rows(),
+                received: rows,
+            }));
         }
 
         let having = self
@@ -194,12 +194,12 @@ async fn filter(
             .get::<i64>(0, Format::Text)
             .and_then(|position| usize::try_from(position).ok()?.checked_sub(1))
             .and_then(|index| keep.get_mut(index))
-            .ok_or_else(|| invalid("invalid HAVING row number".into()))?;
+            .ok_or_else(|| invalid(AggregateError::HavingRowNumber))?;
         *passed = true;
     }
     Ok(keep)
 }
 
-fn invalid(reason: String) -> Error {
-    BackendError::from(AggregateError::InvalidHaving(reason)).into()
+fn invalid(error: AggregateError) -> Error {
+    BackendError::from(error).into()
 }

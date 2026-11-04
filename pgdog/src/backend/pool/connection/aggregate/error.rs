@@ -14,8 +14,14 @@ pub(crate) enum Error {
     #[error("unsupported aggregation {function}: {reason}")]
     UnsupportedAggregation { function: String, reason: String },
 
-    #[error("invalid cross-shard HAVING state: {0}")]
-    InvalidHaving(String),
+    #[error("invalid cross-shard HAVING state: missing column \"{0}\"")]
+    HavingColumnMissing(String),
+
+    #[error("invalid cross-shard HAVING state: expected {expected} rows, received {received}")]
+    HavingRowCount { expected: usize, received: usize },
+
+    #[error("invalid cross-shard HAVING state: filter returned an invalid row number")]
+    HavingRowNumber,
 
     #[error("unexpected aggregation error: {0}")]
     Unexpected(String),

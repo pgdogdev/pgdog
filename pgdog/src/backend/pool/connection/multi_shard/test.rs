@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    backend::pool::connection::aggregate::Error as AggregateError,
     frontend::router::parser::{
         Aggregate, DistinctBy, HavingRewritePlan, OrderBy, Shard, ShardWithPriority,
         rewrite::statement::projection::{
@@ -242,7 +243,13 @@ fn test_having_evaluation_error_clears_buffer() {
     let mut multi_shard = MultiShard::new(2, &route);
 
     let error = send_having_shard_results(&mut multi_shard).unwrap_err();
-    assert!(error.to_string().contains("__pgdog_missing"), "{error}");
+    assert!(
+        matches!(
+            &error,
+            Error::Aggregate(AggregateError::HavingColumnMissing(alias)) if alias == "__pgdog_missing"
+        ),
+        "{error}"
+    );
     assert!(!multi_shard.buffer.can_take());
 }
 

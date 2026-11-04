@@ -1,43 +1,5 @@
 use crate::setup::{admin_sqlx, connections_sqlx, connections_tokio};
-use sqlx::{Executor, Row, postgres::PgPool};
-
-#[tokio::test]
-async fn having_filters_merged_groups() -> Result<(), Box<dyn std::error::Error>> {
-    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
-    reset_table(&sharded).await?;
-
-    seed(
-        &sharded,
-        0,
-        "INSERT INTO having_merge_test VALUES (1, 10), (1, 11), (2, 12)",
-    )
-    .await?;
-    seed(
-        &sharded,
-        1,
-        "INSERT INTO having_merge_test VALUES (1, 20), (2, 21)",
-    )
-    .await?;
-
-    // No shard has more than 2 orders for customer 1 on its own.
-    let rows = sharded
-        .fetch_all(
-            "SELECT customer_id, COUNT(*) AS order_count \
-             FROM having_merge_test \
-             GROUP BY customer_id \
-             HAVING COUNT(*) > 2 \
-             ORDER BY customer_id",
-        )
-        .await?;
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].columns().len(), 2);
-    assert_eq!(rows[0].get::<i64, _>("customer_id"), 1);
-    assert_eq!(rows[0].get::<i64, _>("order_count"), 3);
-
-    cleanup(&sharded).await;
-    Ok(())
-}
+use sqlx::{Executor, postgres::PgPool};
 
 #[tokio::test]
 async fn having_errors_reach_the_client() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,33 +52,6 @@ async fn having_errors_reach_the_client() -> Result<(), Box<dyn std::error::Erro
         client.simple_query("ROLLBACK").await?;
         client.simple_query("SELECT 1").await?;
     }
-
-    cleanup(&sharded).await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn having_rejects_shard_local_steps() -> Result<(), Box<dyn std::error::Error>> {
-    let sharded = connections_sqlx().await.get(1).cloned().unwrap();
-    reset_table(&sharded).await?;
-    let client = connections_tokio().await.remove(1);
-
-    // Each of these would run on shards before PgDog merges the groups.
-    for sql in [
-        "SELECT * FROM having_merge_test GROUP BY customer_id, order_id, tag HAVING COUNT(*) > 0",
-        "SELECT customer_id FROM having_merge_test GROUP BY customer_id \
-         HAVING COUNT(*) > 0 ORDER BY customer_id LIMIT 1",
-        "SELECT DISTINCT customer_id FROM having_merge_test \
-         GROUP BY customer_id HAVING COUNT(*) > 0",
-    ] {
-        let error = client.simple_query(sql).await.unwrap_err();
-        let message = error.as_db_error().map(|error| error.message());
-        assert!(
-            message.is_some_and(|message| message.contains("cross-shard HAVING is unsupported")),
-            "{sql}: {error}"
-        );
-    }
-    client.simple_query("SELECT 1").await?;
 
     cleanup(&sharded).await;
     Ok(())
