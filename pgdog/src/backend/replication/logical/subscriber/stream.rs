@@ -805,7 +805,10 @@ impl StreamSubscriber {
             // table.lsn represents every change UP TO the table LSN (not AT)
             // E.g., if it's at 100, we have 1-99
             //
-            // The watermark is inclusive, so store one less than the copy position.
+            // This `table_lsns` map is what we check in the `lsn_applied()` method, where we
+            // SKIP changes AT or below. If we stored 100, it would skip 100 (losing the change)
+            // So, we store one less (99)
+            //
             // Saturate at zero because LSNs are unsigned.
             let copied = table.lsn.lsn.saturating_sub(1);
             let watermark = self.table_lsns.entry(relation.oid).or_insert(copied);

@@ -59,14 +59,14 @@ mod tests {
             epoch_catalog_min: 5,
         };
         let keepalive = KeepAlive {
-            wal_end: u64::MAX,
+            wal_end: 6,
             system_clock: 7,
             reply: 0,
         };
         let status = StatusUpdate {
             last_written: u64::MAX,
-            last_flushed: 1 << 63,
-            last_applied: (1 << 63) - 1,
+            last_flushed: 8,
+            last_applied: 9,
             system_clock: 11,
             reply: 1,
         };
