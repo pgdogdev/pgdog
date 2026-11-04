@@ -82,7 +82,7 @@ impl Validator {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::messages::{DataRow, Field};
+    use crate::net::messages::Field;
 
     #[test]
     fn test_row_description_validation() {
@@ -154,26 +154,17 @@ mod test {
     }
 
     #[test]
-    fn test_data_row_validation() {
+    fn test_column_count_validation() {
         let mut validator = Validator::default();
 
-        let mut dr1 = DataRow::new();
-        dr1.add("test").add(123_i64);
-
-        let mut dr2 = DataRow::new();
-        dr2.add("another").add(456_i64);
-
-        let mut dr3 = DataRow::new();
-        dr3.add("only_one_column");
-
         // First data row sets the expected column count
-        validator.validate_column_count(dr1.len()).unwrap();
+        validator.validate_column_count(2).unwrap();
 
         // Second data row with same column count should be fine
-        validator.validate_column_count(dr2.len()).unwrap();
+        validator.validate_column_count(2).unwrap();
 
         // Third data row with different column count should fail
-        let result = validator.validate_column_count(dr3.len());
+        let result = validator.validate_column_count(1);
         assert!(matches!(
             result,
             Err(Error::InconsistentDataRowCount {
