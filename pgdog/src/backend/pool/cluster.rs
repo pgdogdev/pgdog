@@ -261,7 +261,7 @@ impl<'a> ClusterConfig<'a> {
             sharded_tables,
             multi_tenant,
             rw_strategy: general.read_write_strategy,
-            rw_split: general.read_write_split,
+            rw_split: user.read_write_split.unwrap_or(general.read_write_split),
             schema_admin: user.schema_admin,
             cross_shard_disabled: user
                 .cross_shard_disabled
