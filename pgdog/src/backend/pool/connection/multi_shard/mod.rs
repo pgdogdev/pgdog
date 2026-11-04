@@ -284,7 +284,10 @@ impl MultiShard {
                 }
                 self.buffer.drop_helper_columns(plan, &self.decoder);
                 self.buffer.distinct(self.route.distinct(), &self.decoder);
-                self.buffer.limit(self.route.limit());
+                // The HAVING filter query applies LIMIT and OFFSET to the groups it keeps.
+                if self.having_inputs.is_none() {
+                    self.buffer.limit(self.route.limit());
+                }
             }
 
             if has_rows {

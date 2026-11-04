@@ -19,8 +19,8 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
             "unsupported aggregation count: count(DISTINCT ...) is not yet supported",
         ),
         (
-            "SELECT count(*) FROM sharded HAVING count(*) > 0 LIMIT 1",
-            "cross-shard HAVING is unsupported: LIMIT and OFFSET are unsupported",
+            "SELECT DISTINCT count(*) FROM sharded HAVING count(*) > 0",
+            "cross-shard HAVING is unsupported: DISTINCT is unsupported",
         ),
         (
             "SELECT count(*) FROM sharded HAVING bool_or(id > 0)",
