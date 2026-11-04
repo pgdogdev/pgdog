@@ -1951,6 +1951,11 @@
           "description": "Routes all queries to the primary by default. Replicas are used only when a\nquery explicitly opts in (`SET pgdog.role`, `SET LOCAL pgdog.role`, or a\n`/* pgdog_role: replica */` comment); those opt-in reads go to the replicas.",
           "type": "string",
           "const": "prefer_primary"
+        },
+        {
+          "description": "Include primary if all replicas are lagging.",
+          "type": "string",
+          "const": "include_primary_if_replica_lag"
         }
       ]
     },
