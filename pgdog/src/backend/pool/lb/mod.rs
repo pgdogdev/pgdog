@@ -362,6 +362,9 @@ impl LoadBalancer {
         self.wait_primary().await?.get(request).await
     }
 
+    /// Check out a read connection using the configured load balancing strategy.
+    ///
+    #[doc = include_str!("get_internal.md")]
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
         use ReadWriteSplit::*;
@@ -373,25 +376,6 @@ impl LoadBalancer {
             .filter(|target| !target.pool.config().resharding_only) // Don't let reads on resharding-only replicas.
             .collect();
 
-        let has_unbanned_replica = candidates
-            .iter()
-            .any(|target| target.role() == Role::Replica && !target.ban.banned());
-        // If `read_only` is true, only allow if there's no replicas.
-        let primary_reads = match self.rw_split {
-            IncludePrimary => !(request.read_only && has_unbanned_replica),
-            IncludePrimaryIfReplicaBanned => {
-                !(request.read_only && has_unbanned_replica)
-                    && (candidates.iter().any(|target| target.ban.banned())
-                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
-            }
-            // we read from the primary if we have no replicas
-            ExcludePrimary => !has_unbanned_replica,
-            // PreferPrimary makes all queries writes. If a query lands here,
-            // it's because of pgdog.role=replica. Let it use the primary only if
-            // no replicas are available.
-            PreferPrimary => !has_unbanned_replica,
-        };
-
         // Remove any replicas that are behind the requested LSN.
         if let Some(lsn) = request.lsn {
             candidates.retain(|target| {
@@ -399,11 +383,28 @@ impl LoadBalancer {
             });
         }
 
-        // Only remove primary if:
-        //
-        // 1. We don't want primary reads and
-        // 2. All replicas have not been eliminated due to replica lag (lsn filter)
-        if !primary_reads && candidates.len() > 1 {
+        let has_unbanned_replica = candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica && !target.ban.banned());
+
+        // If `read_only` is true, only allow if there's no replicas.
+        let primary_reads = match self.rw_split {
+            IncludePrimary => !(request.read_only && has_unbanned_replica),
+            // Include primary only if all replicas have been eliminated by the replica
+            // lag filter or are banned.
+            IncludePrimaryIfReplicaLag => !has_unbanned_replica,
+            IncludePrimaryIfReplicaBanned => {
+                !(request.read_only && has_unbanned_replica)
+                    && (candidates.iter().any(|target| target.ban.banned())
+                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+            }
+            // We read from the primary anyway if we have no available replicas.
+            // PreferPrimary makes all queries writes. If a query lands here,
+            // it's because of pgdog.role=replica.
+            ExcludePrimary | PreferPrimary => !has_unbanned_replica,
+        };
+
+        if !primary_reads {
             candidates.retain(|target| target.role() == Role::Replica);
         }
 
