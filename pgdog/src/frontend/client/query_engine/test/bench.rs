@@ -366,6 +366,26 @@ fn bench_config() {
     reload_from_existing().unwrap();
 }
 
+fn bench_config_for(group: &Group) -> Option<tokio::runtime::Runtime> {
+    match group.scope {
+        Scope::Route => {
+            let background = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            {
+                let _guard = background.enter();
+                bench_config();
+            }
+            Some(background)
+        }
+        Scope::Full => {
+            bench_config();
+            None
+        }
+    }
+}
+
 fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -373,7 +393,7 @@ fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
         .unwrap();
 
     let _guard = rt.enter();
-    bench_config();
+    let _background = bench_config_for(group);
 
     let runner = RefCell::new(rt.block_on(Runner::new(case, group)));
 
@@ -436,7 +456,7 @@ fn count_instructions() {
 
     for group in GROUPS {
         for case in CASES {
-            bench_config();
+            let _background = bench_config_for(group);
             let mut runner = rt.block_on(Runner::new(case, group));
 
             for _ in 0..WARMUP {
