@@ -45,7 +45,7 @@ SELECT
     lsn - '0/0'::pg_lsn AS offset_bytes,
     CASE
         WHEN replica THEN
-            COALESCE(pg_last_xact_replay_timestamp(), now())
+            COALESCE(pg_last_xact_replay_timestamp() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
         ELSE
             now()
     END AS timestamp,
