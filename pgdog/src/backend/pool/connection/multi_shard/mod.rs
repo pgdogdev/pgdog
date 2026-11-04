@@ -3,7 +3,10 @@
 use std::collections::VecDeque;
 
 use crate::{
-    frontend::router::Route,
+    frontend::router::{
+        Route,
+        parser::{DistinctBy, DistinctColumn},
+    },
     net::{
         BackendPid, Bind, Decoder, ReadyForQuery,
         messages::{
@@ -247,6 +250,24 @@ impl MultiShard {
                 // Helpers remain in the internal row through aggregation and
                 // sorting, then are removed before client-visible operations.
                 let plan = self.route.projection_rewrite_plan.as_deref();
+
+                let decodes_rows = !self.route.aggregate().is_empty()
+                    || !self.route.order_by().is_empty()
+                    || plan.is_some()
+                    || matches!(
+                        self.route.distinct(),
+                        Some(DistinctBy::Columns(columns))
+                            if columns.iter().any(|column| matches!(column, DistinctColumn::Name(_)))
+                    );
+
+                // If the client sent Execute without Describe, the shards don't send a RowDescription.
+                // Aggregates, ORDER BY, helper columns and DISTINCT ON a column name decode the rows using the RowDescription, thus,
+                // we return an error instead of merging.
+                if decodes_rows && !self.decoder.has_row_description() {
+                    self.buffer.clear();
+                    return Err(Error::MissingRowDescription);
+                }
+
                 let result = self
                     .buffer
                     .aggregate(self.route.aggregate(), &self.decoder, plan)

@@ -36,6 +36,11 @@ pub(crate) enum Error {
     #[error("{0}")]
     Aggregate(#[from] AggregateError),
 
+    #[error(
+        "merging rows from several shards needs the columns of the result (send Describe before Execute)"
+    )]
+    MissingRowDescription,
+
     #[error("unexpected multi-shard error: {0}")]
     Unexpected(String),
 }
@@ -43,7 +48,7 @@ pub(crate) enum Error {
 impl Error {
     /// Caller attempted an aggregate we don't support.
     pub(crate) fn is_unsupported(&self) -> bool {
-        matches!(self, Self::Aggregate(..))
+        matches!(self, Self::Aggregate(..) | Self::MissingRowDescription)
     }
 }
 

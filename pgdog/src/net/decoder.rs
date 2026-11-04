@@ -56,6 +56,10 @@ impl Decoder {
         }
     }
 
+    pub(crate) fn has_row_description(&self) -> bool {
+        self.row_description.is_some()
+    }
+
     /// Get a reference to the [`RowDescription`] the server sent
     /// for the request.
     pub(crate) fn row_description(&self) -> &RowDescription {

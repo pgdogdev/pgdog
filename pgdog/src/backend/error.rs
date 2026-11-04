@@ -153,7 +153,8 @@ impl Error {
             ) | Self::MultiShard(MultiShardError::Aggregate(
                 AggregateError::UnsupportedAggregation { .. }
                     | AggregateError::UnsupportedHaving(_)
-            )) | Self::Pool(PoolError::PubSubDisabled)
+            )) | Self::MultiShard(MultiShardError::MissingRowDescription)
+                | Self::Pool(PoolError::PubSubDisabled)
         )
     }
 

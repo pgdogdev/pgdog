@@ -115,3 +115,70 @@ async fn test_unsupported_aggregation_keeps_connection_usable() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_cross_shard_aggregate_without_describe_returns_error() {
+    let mut client = SpawnedClient::new_sharded(Parameters::default()).await;
+
+    timeout(Duration::from_secs(5), async {
+        client
+            .send(Parse::new_anonymous("SELECT count(*) FROM sharded"))
+            .await;
+        client.send(Bind::new_statement("")).await;
+        client.send(Execute::new()).await;
+        client.send(Sync).await;
+
+        let messages = timeout(Duration::from_secs(2), client.read_until('E'))
+            .await
+            .expect("aggregate without Describe did not return an error");
+
+        let error = expect_message!(
+            messages.last().expect("error response").clone(),
+            ErrorResponse
+        );
+
+        assert_eq!(error.severity, "ERROR");
+        assert_eq!(error.code, "0A000");
+        assert_eq!(
+            error.message,
+            "merging rows from several shards needs the columns of the result (send Describe before Execute)"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
+
+        // LIMIT doesn't need to decode rows, keeps working without Describe
+        client
+            .send(Parse::new_anonymous("SELECT id FROM sharded LIMIT 1"))
+            .await;
+        client.send(Bind::new_statement("")).await;
+        client.send(Execute::new()).await;
+        client.send(Sync).await;
+
+        let messages = timeout(Duration::from_secs(2), client.read_until('Z'))
+            .await
+            .expect("LIMIT without Describe hung");
+        assert!(
+            messages.iter().all(|message| message.code() != 'E'),
+            "LIMIT without Describe returned an error"
+        );
+
+        client
+            .send(Query::new("SELECT count(*) FROM sharded WHERE false"))
+            .await;
+        expect_message!(client.read().await, RowDescription);
+        let row = expect_message!(client.read().await, DataRow);
+        assert_eq!(row.get_int(0, true), Some(0));
+        assert_eq!(
+            expect_message!(client.read().await, CommandComplete).command(),
+            "SELECT 1"
+        );
+        assert_eq!(
+            expect_message!(client.read().await, ReadyForQuery).status,
+            'I'
+        );
+    })
+    .await
+    .expect("aggregate without Describe or the queries after the aggregate hung");
+}
