@@ -45,9 +45,9 @@ SELECT
     lsn - '0/0'::pg_lsn AS offset_bytes,
     CASE
         WHEN replica THEN
-            COALESCE(pg_last_xact_replay_timestamp(), now())
+            COALESCE(pg_last_xact_replay_timestamp() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
         ELSE
-            now()
+            now() AT TIME ZONE 'UTC'
     END AS timestamp,
     CASE
         WHEN replica THEN
@@ -314,6 +314,11 @@ mod test {
         assert!(!stats.aurora, "local Postgres is not Aurora");
         assert!(stats.lsn.lsn > 0, "primary LSN should advance past 0");
         assert!(stats.offset_bytes > 0, "offset bytes should be positive");
+        assert_eq!(
+            stats.timestamp.offset,
+            Some(0),
+            "timestamp should be in UTC"
+        );
 
         monitor.pool.shutdown();
     }
