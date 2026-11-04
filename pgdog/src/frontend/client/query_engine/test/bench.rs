@@ -423,6 +423,8 @@ fn count_instructions() {
     const WARMUP: usize = 100;
     const ITERATIONS: usize = 1000;
 
+    fake_server::run_on_separate_thread();
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
