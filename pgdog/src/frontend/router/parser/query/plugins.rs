@@ -26,7 +26,7 @@ impl QueryParser {
         &mut self,
         context: &QueryParserContext,
         statement: &Ast,
-        read: bool,
+        write_override: bool,
     ) -> Result<(), Error> {
         let plugins = if let Some(plugins) = plugins() {
             plugins
@@ -66,10 +66,10 @@ impl QueryParser {
         };
         let context = PdRouterContext {
             shards: context.shards as u64,
-            has_replicas: !context.read_only,
-            has_primary: !context.write_only,
+            has_replicas: context.has_replicas,
+            has_primary: context.has_primary,
             in_transaction: context.router_context.in_transaction(),
-            write_override: self.write_override || !read, // This is set inside `QueryParser::plugins`.
+            write_override,
             query: statement.ast.first().ok_or(Error::EmptyQuery)?,
             params,
         };

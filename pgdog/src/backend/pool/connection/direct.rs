@@ -1,3 +1,5 @@
+use bon::bon;
+
 use crate::parameters::ParameterStore;
 use crate::{frontend::BufferedQuery, net::FrontendPid};
 use std::ops::{Deref, DerefMut};
@@ -12,17 +14,19 @@ pub(crate) struct DirectBinding {
     // Transaction start statement. Used for upgrades to `MultiShard` binding,
     // making it start a transaction on newly connected servers.
     pub(super) transaction_stmt: Option<BufferedQuery>,
-    // Read/write intent.
-    pub(super) is_read: bool,
+    // Servers this binding can use.
+    pub(super) role_target: RoleTarget,
 }
 
+#[bon]
 impl DirectBinding {
     /// Create new direct-to-shard binding.
+    #[builder]
     pub(super) fn new(
         server: Guard,
         shard: usize,
         transaction_stmt: Option<BufferedQuery>,
-        is_read: bool,
+        role_target: RoleTarget,
     ) -> Self {
         Self {
             server: LinkedServer {
@@ -31,10 +35,12 @@ impl DirectBinding {
                 linked: false,
             },
             transaction_stmt,
-            is_read,
+            role_target,
         }
     }
+}
 
+impl DirectBinding {
     /// Link client to server. This is idempotent.
     pub(super) async fn link_client(
         &mut self,
@@ -89,7 +95,7 @@ pub(crate) mod test {
                 } else {
                     None
                 },
-                is_read: false,
+                role_target: RoleTarget::Primary,
             };
 
             Self {

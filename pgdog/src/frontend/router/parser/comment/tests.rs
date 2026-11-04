@@ -1,8 +1,7 @@
-use pgdog_config::SystemCatalogsBehavior;
+use pgdog_config::{Role, SystemCatalogsBehavior};
 
 use crate::backend::ShardedTables;
 use crate::backend::ShardingSchema;
-use crate::config::database::Role;
 use crate::frontend::router::sharding::ShardOrLookup;
 
 use super::super::Shard;
@@ -111,6 +110,41 @@ fn test_replica_role_detection() {
     let query = "SELECT * FROM users /* pgdog_role: replica */";
     let result = parse_edge_comment(query, &schema).unwrap();
     assert_eq!(result.comment.role, Some(Role::Replica));
+}
+
+#[test]
+fn test_auto_role_detection() {
+    let schema = test_schema();
+    let query = "SELECT * FROM users /* pgdog_role: auto */";
+    let result = parse_edge_comment(query, &schema).unwrap();
+    assert_eq!(result.comment.role, Some(Role::Auto));
+}
+
+#[test]
+fn test_role_detection_ignores_value_case() {
+    let schema = test_schema();
+    for (query, role) in [
+        ("SELECT 1 /* pgdog_role: PRIMARY */", Role::Primary),
+        ("SELECT 1 /* pgdog_role: Replica */", Role::Replica),
+        ("SELECT 1 /* pgdog_role: AUTO */", Role::Auto),
+    ] {
+        let result = parse_edge_comment(query, &schema).unwrap();
+        assert_eq!(result.comment.role, Some(role), "{query}");
+    }
+}
+
+#[test]
+fn test_role_detection_rejects_word_suffix() {
+    let schema = test_schema();
+    for query in [
+        "SELECT 1 /* pgdog_role: primarys */",
+        "SELECT 1 /* pgdog_role: replicas */",
+        "SELECT 1 /* pgdog_role: automatic */",
+        "SELECT 1 /* pgdog_role: primary_x */",
+    ] {
+        let result = parse_edge_comment(query, &schema).unwrap();
+        assert_eq!(result.comment.role, None, "{query}");
+    }
 }
 
 #[test]

@@ -98,22 +98,17 @@ impl Router {
         Ok(&self.latest_command)
     }
 
-    pub(crate) fn skip(
-        &mut self,
-        cluster: &Cluster,
-        request: &ClientRequest,
-        sticky: &Sticky,
-    ) -> bool {
-        if cluster.router_needed() || request.ast.is_some() || sticky.role.is_some() {
+    pub(crate) fn skip(&mut self, cluster: &Cluster, request: &ClientRequest) -> bool {
+        if cluster.router_needed() || request.ast.is_some() {
             return false;
         }
 
         let shard = ShardWithPriority::new_override_parser_disabled(Shard::Direct(0));
 
-        let mut route = if cluster.read_only() {
-            Route::read(shard)
-        } else {
+        let mut route = if cluster.has_primary() {
             Route::write(shard)
+        } else {
+            Route::read(shard)
         };
 
         route.sharded_schema_only = !cluster.sharding_schema().schemas.is_empty()

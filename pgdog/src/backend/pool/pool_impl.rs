@@ -151,7 +151,7 @@ impl Pool {
                 if conn.is_some() {
                     guard.stats.counts.wait_time += elapsed;
                     guard.stats.counts.server_assignment_count += 1;
-                    if request.read {
+                    if request.role_target.allows_replica() {
                         guard.stats.counts.reads += 1;
                     } else {
                         guard.stats.counts.writes += 1;

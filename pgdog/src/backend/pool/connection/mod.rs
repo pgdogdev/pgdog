@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     super::{Error, Server, pool::Guard},
-    Address, Cluster, Request,
+    Address, Cluster, Request, RoleTarget,
 };
 
 use std::{
@@ -35,14 +35,12 @@ pub(crate) mod direct;
 pub(crate) mod linked_server;
 pub(crate) mod mirror;
 pub(crate) mod multi_shard;
-pub(crate) mod transaction;
 
 use aggregate::Aggregates;
 use binding::Binding;
 use cluster_connection::ClusterConnection;
 pub(crate) use direct::DirectBinding;
 pub(crate) use linked_server::LinkedServer;
-pub(crate) use transaction::TransactionBinding;
 
 use multi_shard::MultiBinding;
 
@@ -75,34 +73,10 @@ impl Connection {
     }
 
     /// Start a transaction on this connection, if the connection is idle.
-    pub(crate) fn start_transaction(
-        &mut self,
-        read_only: bool,
-        transaction_stmt: BufferedQuery,
-    ) -> Result<(), Error> {
-        let rw_aggressive = self.cluster()?.read_write_strategy().is_aggressive();
-        let cluster_read_only = self.cluster()?.read_only();
-
+    pub(crate) fn start_transaction(&mut self, transaction_stmt: BufferedQuery) {
         match self.binding {
             Binding::NotConnected => {
-                self.binding = Binding::Transaction(TransactionBinding {
-                    is_read: if read_only {
-                        // BEGIN READ ONLY
-                        Some(true)
-                    } else if rw_aggressive {
-                        // Let the first statement decide.
-                        None
-                    } else if !cluster_read_only {
-                        // BEGIN = write
-                        Some(false)
-                    } else {
-                        // FIXME(lev): We know that the cluster is read-only, so we
-                        // can make this call here, but we don't since the parser will do this for
-                        // us once it processes the next statement. This is dumb, we should just do this here.
-                        None
-                    },
-                    transaction_stmt: Some(transaction_stmt),
-                });
+                self.binding = Binding::Transaction(Some(transaction_stmt));
             }
 
             // Record that we are inside a transaction now
@@ -121,8 +95,6 @@ impl Connection {
 
             _ => (),
         }
-
-        Ok(())
     }
 
     /// When a transaction is finished, remove the transaction statement,
@@ -208,60 +180,56 @@ impl Connection {
     /// Try to get a connection for the given route.
     async fn connect_internal(&mut self, request: &Request, route: &Route) -> Result<(), Error> {
         // Start a transaction on the server(s) if client started one.
-        let (is_read, transaction_stmt) =
-            if let Binding::Transaction(ref mut transaction) = self.binding {
-                (transaction.is_read, transaction.transaction_stmt.take())
-            } else {
-                (None, None)
-            };
+        let transaction_stmt = match &mut self.binding {
+            Binding::Transaction(transaction_stmt) => transaction_stmt.take(),
+            _ => None,
+        };
 
-        // `read_write_split = "aggressive"` lets the first statement
-        // inside a transaction decide if it's a read or a write; we haven't
-        // connected to Postgres yet, so we can still make this call.
-        let is_read = is_read.unwrap_or(route.is_read());
+        let role_target = request.role_target;
 
         if let Shard::Direct(shard) = route.shard() {
-            let server = match self.cluster.get_conn(request, *shard, is_read).await {
+            let server = match self.cluster.get_conn(request, *shard).await {
                 Ok(server) => server,
                 Err(err) => {
-                    if let Binding::Transaction(ref mut transaction) = self.binding {
-                        transaction.transaction_stmt = transaction_stmt;
+                    if let Binding::Transaction(stmt) = &mut self.binding {
+                        *stmt = transaction_stmt;
                     }
                     return Err(err);
                 }
             };
 
-            self.binding = Binding::Direct(DirectBinding::new(
-                server,
-                *shard,
-                transaction_stmt,
-                is_read,
-            ));
+            self.binding = Binding::Direct(
+                DirectBinding::builder()
+                    .server(server)
+                    .shard(*shard)
+                    .maybe_transaction_stmt(transaction_stmt)
+                    .role_target(role_target)
+                    .build(),
+            );
         } else {
             // TODO(lev): Shard::Multi intentionally ignored because it's stupid
             // and we should remove it.
-            let (shards, shard_indices) = match self
-                .cluster
-                .get_conns(request, route.shard(), is_read)
-                .await
+            let (shards, shard_indices) = match self.cluster.get_conns(request, route.shard()).await
             {
                 Ok((shards, shard_indices)) => (shards, shard_indices),
                 Err(err) => {
-                    if let Binding::Transaction(ref mut transaction) = self.binding {
-                        transaction.transaction_stmt = transaction_stmt;
+                    if let Binding::Transaction(stmt) = &mut self.binding {
+                        *stmt = transaction_stmt;
                     }
 
                     return Err(err);
                 }
             };
 
-            self.binding = Binding::MultiShard(MultiBinding::new(
-                shards,
-                shard_indices,
-                route,
-                transaction_stmt,
-                is_read,
-            ));
+            self.binding = Binding::MultiShard(
+                MultiBinding::builder()
+                    .servers(shards)
+                    .shard_indices(shard_indices)
+                    .route(route)
+                    .maybe_transaction_stmt(transaction_stmt)
+                    .role_target(role_target)
+                    .build(),
+            );
         }
 
         Ok(())

@@ -20,9 +20,9 @@ impl QueryParser {
                     .push(ShardWithPriority::new_rr_no_table(Shard::Direct(
                         round_robin::next(context.shards),
                     )));
-                let route = Route::write(context.shards_calculator.shard().clone())
-                    .with_read(context.read_only);
-                Ok(Command::Query(route))
+                Ok(Command::Query(Route::write(
+                    context.shards_calculator.shard().clone(),
+                )))
             }
         }
     }

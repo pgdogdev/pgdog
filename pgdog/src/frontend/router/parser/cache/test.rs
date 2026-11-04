@@ -1,10 +1,10 @@
 #![allow(clippy::print_stdout)]
 
 use pg_raw_parse::parse;
+use pgdog_config::Role;
 use tokio::spawn;
 
 use crate::{
-    config::Role,
     frontend::router::parser::Shard,
     frontend::{BufferedQuery, PreparedStatements},
     net::{Parse, Query},

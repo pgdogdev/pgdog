@@ -445,7 +445,7 @@ impl Client {
 
         params.set_server_defaults(&server_params);
 
-        let sticky = Sticky::from_params(&params);
+        let sticky = Sticky::new();
 
         Ok(Some(Self {
             addr,
@@ -502,7 +502,7 @@ impl Client {
                 4096,
                 config().config.general.frontend_query_size_limit_block(),
             ),
-            sticky: Sticky::from_params(&params),
+            sticky: Sticky::new(),
             params: ParameterStore::new(params),
             database: "pgdog".to_string(),
             query_log_stdout: false,

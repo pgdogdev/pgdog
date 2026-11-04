@@ -489,7 +489,6 @@ fn test_set() {
     };
 
     let (_, mut qp) = command!("BEGIN");
-    assert!(qp.write_override);
     let command = query_parser!(qp, Query::new(r#"SET statement_timeout TO 3000"#), true);
     assert!(
         matches!(command, Command::Set { .. }),
@@ -530,8 +529,8 @@ fn test_set() {
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
     let mut context = QueryParserContext::new(router_context).unwrap();
 
-    for read_only in [true, false] {
-        context.read_only = read_only;
+    for has_primary in [true, false] {
+        context.has_primary = has_primary;
         // Overriding context above.
         let mut qp = QueryParser::default();
         let route = qp.query(&mut context).unwrap();
@@ -557,11 +556,9 @@ fn test_transaction() {
         _ => panic!("not a query"),
     };
 
-    assert!(qp.write_override);
-
     let route = query_parser!(qp, Parse::named("test", "SELECT $1"), true);
     match route {
-        Command::Query(q) => assert!(q.is_write()),
+        Command::Query(q) => assert_eq!(q.role_target(), RoleTarget::Primary),
         _ => panic!("not a select"),
     }
 
@@ -588,7 +585,7 @@ fn test_transaction() {
                 params[0].value.as_ref().and_then(|s| s.as_str()),
                 Some("test")
             );
-            assert!(!cluster.read_only());
+            assert!(cluster.has_primary());
         }
 
         _ => panic!("not a query"),
@@ -671,10 +668,9 @@ WHERE t2.account = (
     let transaction = Some(Transaction::new(TransactionType::ReadWrite));
     let router_context =
         RouterContext::new(&buffer, &cluster, &params, transaction, Sticky::new()).unwrap();
-    let mut context = QueryParserContext::new(router_context).unwrap();
-    let route = qp.query(&mut context).unwrap();
+    let route = qp.parse(router_context).unwrap();
     match route {
-        Command::Query(query) => assert!(query.is_write()),
+        Command::Query(query) => assert_eq!(query.role_target(), RoleTarget::Primary),
         _ => panic!("not a select"),
     }
 }

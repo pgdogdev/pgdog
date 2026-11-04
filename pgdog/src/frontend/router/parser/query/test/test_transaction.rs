@@ -31,20 +31,6 @@ fn test_begin_extended() {
 }
 
 #[test]
-fn test_begin_sets_write_override() {
-    let mut test = QueryParserTest::new();
-
-    let command = test.execute(vec![Query::new("BEGIN").into()]);
-    assert!(matches!(command, Command::StartTransaction { .. }));
-    assert!(test.parser.write_override);
-}
-
-// NOTE: The test for "SELECT after BEGIN is treated as write" requires passing
-// in_transaction=true to the router context for the subsequent query, plus reusing
-// the same QueryParser instance. This is better tested by the original
-// test_transaction test in mod.rs using the query_parser! macro.
-
-#[test]
 fn test_begin_with_aggressive_strategy() {
     let mut test = QueryParserTest::new().with_read_write_strategy(ReadWriteStrategy::Aggressive);
 
@@ -84,7 +70,7 @@ fn test_set_application_name_in_transaction() {
                 Some("test")
             );
             assert!(!params[0].local);
-            assert!(!test.cluster().read_only());
+            assert!(test.cluster().has_primary());
             assert!(route.is_write());
             assert!(route.shard().is_all());
         }

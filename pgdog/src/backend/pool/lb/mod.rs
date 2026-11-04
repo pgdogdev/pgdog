@@ -20,7 +20,7 @@ use crate::{
     net::Parameters,
 };
 
-use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request};
+use super::{Error, Guard, Oids, Pool, PoolConfig, PoolRole, Request, RoleTarget};
 use crate::util::safe_timeout;
 
 pub(crate) mod ban;
@@ -376,19 +376,17 @@ impl LoadBalancer {
         let has_unbanned_replica = candidates
             .iter()
             .any(|target| target.role() == Role::Replica && !target.ban.banned());
-        // If `read_only` is true, only allow if there's no replicas.
         let primary_reads = match self.rw_split {
-            IncludePrimary => !(request.read_only && has_unbanned_replica),
+            // An explicit replica role uses the primary only if no replica is available.
+            _ if request.role_target == RoleTarget::PreferReplica => !has_unbanned_replica,
+            IncludePrimary => true,
             IncludePrimaryIfReplicaBanned => {
-                !(request.read_only && has_unbanned_replica)
-                    && (candidates.iter().any(|target| target.ban.banned())
-                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+                candidates.iter().any(|target| target.ban.banned()) || candidates.len() == 1 // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
             }
             // we read from the primary if we have no replicas
             ExcludePrimary => !has_unbanned_replica,
-            // PreferPrimary makes all queries writes. If a query lands here,
-            // it's because of pgdog.role=replica. Let it use the primary only if
-            // no replicas are available.
+            // The connection sends PreferPrimary reads to the primary. Here they
+            // use the primary only if no replica is available.
             PreferPrimary => !has_unbanned_replica,
         };
 

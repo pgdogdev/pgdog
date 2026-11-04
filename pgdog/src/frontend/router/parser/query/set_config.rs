@@ -17,9 +17,7 @@ impl QueryParser {
                 set_config: true,
             }
         } else {
-            Command::Query(
-                Route::write(context.shards_calculator.shard()).with_read(context.read_only),
-            )
+            Command::Query(Route::write(context.shards_calculator.shard()))
         }
     }
 }

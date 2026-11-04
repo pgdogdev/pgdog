@@ -95,7 +95,7 @@ pub(crate) enum TransactionType {
 
 impl TransactionType {
     pub(crate) fn read_only(&self) -> bool {
-        matches!(self, Self::ReadOnly)
+        matches!(self, Self::ReadOnly | Self::ErrorReadOnly)
     }
 
     pub(crate) fn write(&self) -> bool {

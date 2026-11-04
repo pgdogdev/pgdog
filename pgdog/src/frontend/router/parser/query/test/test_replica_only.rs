@@ -29,13 +29,18 @@ fn query(sql: &str, protocol: &str) -> Vec<ProtocolMessage> {
     }
 }
 
+/// A transaction uses replicas when the cluster has no primary, like `main`.
 fn assert_transaction_route(cluster: &Cluster, read: bool) {
     for protocol in ["simple", "extended", "prepared"] {
         let mut test = QueryParserTest::new().with_cluster(cluster.clone());
         test.execute(query("BEGIN", protocol));
         let mut test = test.in_transaction(true);
         let command = test.execute(query("SELECT 1", protocol));
-        assert_eq!(command.route().is_read(), read, "{protocol}: {command:?}");
+        assert_eq!(
+            command.route().role_target().allows_replica(),
+            read,
+            "{protocol}: {command:?}"
+        );
         test.execute(query("COMMIT", protocol));
     }
 }
@@ -79,26 +84,29 @@ fn test_replica_only_transactions_after_role_detection() {
             .expect("cluster exists");
         let shard = &cluster.shards()[0];
         let pools = shard.pools();
-        assert!(!cluster.read_only());
+        assert!(cluster.has_primary());
         assert_transaction_route(&cluster, false);
 
         set_replica(&pools[0], true);
         shard.redetect_roles();
-        assert!(!cluster.read_only(), "one role is still unknown");
+        assert!(cluster.has_primary(), "one role is still unknown");
 
         set_replica(&pools[1], true);
         shard.redetect_roles();
-        assert!(cluster.read_only(), "all configured servers are replicas");
+        assert!(
+            !cluster.has_primary(),
+            "all configured servers are replicas"
+        );
         assert_transaction_route(&cluster, true);
 
         set_replica(&pools[1], false);
         shard.redetect_roles();
-        assert!(!cluster.read_only(), "a replica was promoted");
+        assert!(cluster.has_primary(), "a replica was promoted");
         assert_transaction_route(&cluster, false);
 
         set_replica(&pools[1], true);
         shard.redetect_roles();
-        assert!(cluster.read_only());
+        assert!(!cluster.has_primary());
         assert_transaction_route(&cluster, true);
     }
 }
