@@ -64,9 +64,9 @@ mod tests {
             reply: 0,
         };
         let status = StatusUpdate {
-            last_written: u64::MAX,
-            last_flushed: 8,
-            last_applied: 9,
+            last_written: 8,
+            last_flushed: 9,
+            last_applied: 10,
             system_clock: 11,
             reply: 1,
         };
