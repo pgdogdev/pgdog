@@ -273,7 +273,10 @@ impl QueryParser {
             }
         }
 
-        let statement = context.router_context.ast.ok_or(Error::EmptyQuery)?;
+        let statement = context
+            .router_context
+            .ast
+            .ok_or_else(|| Error::EmptyQuery)?;
         let routing_comment = context
             .router_context
             .comment

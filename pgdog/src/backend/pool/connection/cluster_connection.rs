@@ -43,7 +43,9 @@ impl ClusterConnection {
 
     /// Get cluster reference.
     pub(super) fn cluster(&self) -> Result<&Cluster, Error> {
-        self.cluster.as_ref().ok_or(Error::ClusterNotConnected)
+        self.cluster
+            .as_ref()
+            .ok_or_else(|| Error::ClusterNotConnected)
     }
 
     /// Get mirror references.
