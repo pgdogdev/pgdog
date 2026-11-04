@@ -356,9 +356,8 @@ impl MultiShard {
         let mut forward = None;
 
         if self.shards > 1 {
-            // Validate data row consistency.
-            let data_row = DataRow::from_bytes(message.to_bytes())?;
-            self.validator.validate_data_row(&data_row)?;
+            let column_count = DataRow::column_count(message.as_bytes())?;
+            self.validator.validate_column_count(column_count)?;
         }
 
         // INVARIANT: omni dedup relies on Source::Backend carrying a
