@@ -6,6 +6,7 @@ use super::{
 };
 use crate::frontend::{client::query_engine::TempTableChange, router::sharding::PendingLookup};
 use lazy_static::lazy_static;
+use pgdog_stats::Lsn;
 
 /// Table changes identified by the query parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -146,6 +147,7 @@ pub(crate) struct Route {
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
     stmt_type: Option<StatementType>,
     table_change: TableChange,
+    pub(crate) lsn: Option<Lsn>,
 }
 
 impl Display for Route {

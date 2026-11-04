@@ -392,7 +392,18 @@ impl LoadBalancer {
             PreferPrimary => !has_unbanned_replica,
         };
 
-        if !primary_reads {
+        // Remove any replicas that are behind the requested LSN.
+        if let Some(lsn) = request.lsn {
+            candidates.retain(|target| {
+                target.role() == Role::Primary || target.pool.lsn_stats().lsn >= lsn
+            });
+        }
+
+        // Only remove primary if:
+        //
+        // 1. We don't want primary reads and
+        // 2. All replicas have not been eliminated due to replica lag (lsn filter)
+        if !primary_reads && candidates.len() > 1 {
             candidates.retain(|target| target.role() == Role::Replica);
         }
 

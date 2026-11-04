@@ -6,6 +6,8 @@ use tokio::time::{Instant, sleep, timeout};
 use crate::backend::pool::{Address, Config, Error, PoolConfig, Request};
 use crate::backend::replication::publisher::Lsn;
 use crate::config::{LoadBalancingStrategy, Role};
+use crate::frontend::router::Route;
+use crate::frontend::router::parser::ShardWithPriority;
 use itertools::*;
 use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 
@@ -429,6 +431,44 @@ async fn test_read_write_split_exclude_primary() {
     replicas.shutdown();
 }
 
+#[tokio::test]
+async fn test_lsn_filtering() {
+    let primary = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
+    let primary_id = primary.id();
+    let replicas = LoadBalancer::new(
+        &Some(primary),
+        &[
+            create_test_pool_config("127.0.0.1", 5432),
+            create_test_pool_config("localhost", 5432),
+        ],
+        LoadBalancingStrategy::RoundRobin,
+        ReadWriteSplit::ExcludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+    set_lsn_stats(&replicas.targets[0], true, 100);
+    set_lsn_stats(&replicas.targets[1], true, 200);
+
+    let mut route = Route::read(ShardWithPriority::default());
+    route.lsn = Some(Lsn::from_i64(200));
+    let request = Request::new(Default::default(), &route, false);
+
+    // A replica exactly at the requested LSN is eligible; the lagging one is not.
+    for _ in 0..4 {
+        let conn = replicas.get(&request).await.expect("caught-up replica");
+        assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
+    }
+
+    // Fall back to primary when every replica is behind the requested LSN.
+    route.lsn = Some(Lsn::from_i64(201));
+    let request = Request::new(Default::default(), &route, false);
+    let conn = replicas.get(&request).await.expect("primary fallback");
+    assert_eq!(conn.pool.id(), primary_id);
+    drop(conn);
+
+    replicas.shutdown();
+}
+
 /// Sets the `Request.read_only` (normally derived from `User.read_only`) to true,
 /// then ensures that the primary is not chosen for reads. We have replicas available.
 #[tokio::test]
@@ -453,7 +493,11 @@ async fn test_user_read_only_include_primary() {
     replicas.launch();
 
     // Notice that we `read` to true and `read_only` to true.
-    let request = Request::new(Default::default(), true, true);
+    let request = Request::new(
+        Default::default(),
+        &Route::read(ShardWithPriority::default()),
+        true,
+    );
 
     // Try getting connections multiple times and verify primary is never used
     let mut replica_ids = HashSet::new();
@@ -498,7 +542,11 @@ async fn test_user_read_only_include_primary_no_replicas() {
 
     // `read_only` is set to true. This would usually override `IncludePrimary`,
     // but we have no replicas available.
-    let request = Request::new(Default::default(), true, true);
+    let request = Request::new(
+        Default::default(),
+        &Route::read(ShardWithPriority::default()),
+        true,
+    );
 
     // Should only use primary since replica is banned
     let mut used_pool_ids = HashSet::new();

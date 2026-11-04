@@ -1,4 +1,5 @@
 use pgdog_config::SystemCatalogsBehavior;
+use pgdog_stats::Lsn;
 
 use crate::backend::ShardedTables;
 use crate::backend::ShardingSchema;
@@ -15,6 +16,59 @@ fn test_schema() -> ShardingSchema {
         tables: ShardedTables::new(vec![], vec![], false, SystemCatalogsBehavior::default()),
         ..Default::default()
     }
+}
+
+#[test]
+fn test_lsn_directive() {
+    let schema = test_schema();
+    for query in [
+        "/* pgdog_lsn: 0/16B6C50 */ SELECT 1",
+        "SELECT 1 /* pgdog_lsn:0/16b6c50*/",
+        "/* pgdog_role: replica */ SELECT 1 /* pgdog_lsn: 0/16B6C50 */",
+        "/* pgdog_shard: 1 pgdog_lsn: 0/16B6C50 */ SELECT 1",
+    ] {
+        let result = parse_edge_comment(query, &schema).expect("valid directive");
+        assert_eq!(result.query, "SELECT 1");
+        assert_eq!(result.comment.lsn, Some(Lsn::from_i64(0x16B6C50)));
+    }
+
+    let result = parse_edge_comment("/* pgdog_lsn: FFFFFFFF/FFFFFFFF */ SELECT 1", &schema)
+        .expect("valid maximum LSN");
+    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(-1)));
+}
+
+#[test]
+fn test_leading_lsn_takes_precedence() {
+    let result = parse_edge_comment(
+        "/* pgdog_lsn: 1/0 */ SELECT 1 /* pgdog_lsn: 2/0 */",
+        &test_schema(),
+    )
+    .expect("valid directives");
+    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
+}
+
+#[test]
+fn test_invalid_or_missing_lsn_directive() {
+    let schema = test_schema();
+    for value in [
+        "",
+        "invalid",
+        "0",
+        "0/",
+        "/0",
+        "0/G",
+        "0/1G",
+        "0/1/2",
+        "100000000/0",
+        "0/100000000",
+        "-1/0",
+    ] {
+        let query = format!("/* pgdog_lsn: {value} */ SELECT 1");
+        let result = parse_edge_comment(&query, &schema).expect("invalid directive is ignored");
+        assert_eq!(result.comment.lsn, None, "{value}");
+    }
+    let result = parse_edge_comment("SELECT 1", &schema).expect("valid query");
+    assert_eq!(result.comment.lsn, None);
 }
 
 #[test]
@@ -474,8 +528,9 @@ fn test_sharding_key_with_schema_name() {
         ..Default::default()
     };
 
-    let query = "SELECT * FROM users /* pgdog_sharding_key: sales */";
+    let query = "SELECT * FROM users /* pgdog_sharding_key: sales pgdog_lsn: 1/0 */";
     let result = parse_edge_comment(query, &schema).unwrap();
+    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
     assert_eq!(
         result.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(1)))
@@ -511,8 +566,12 @@ fn lookup_schema() -> ShardingSchema {
 #[test]
 fn test_sharding_key_comment_misses_lookup_cache() {
     let schema = lookup_schema();
-    let result =
-        parse_edge_comment("/* pgdog_sharding_key: 'org_child' */ SELECT 1", &schema).unwrap();
+    let result = parse_edge_comment(
+        "/* pgdog_sharding_key: 'org_child' pgdog_lsn: 1/0 */ SELECT 1",
+        &schema,
+    )
+    .unwrap();
+    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
 
     match result.comment.shard {
         Some(ShardOrLookup::Lookup(pending)) => {
