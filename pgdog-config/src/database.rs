@@ -77,7 +77,9 @@ impl FromStr for LoadBalancingStrategy {
 /// How to handle the separation of read and write queries.
 ///
 /// <https://docs.pgdog.dev/configuration/pgdog.toml/general/#read_write_split>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Copy, JsonSchema, PartialOrd, Ord, Eq,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadWriteSplit {
     /// Uses the primary database as well as the replicas to serve read queries (default).
