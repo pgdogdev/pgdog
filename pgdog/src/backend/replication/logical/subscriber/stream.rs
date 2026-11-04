@@ -115,7 +115,7 @@ pub(crate) struct StreamSubscriber {
     // Mapping of table keys to their oid.
     keys: HashMap<Key, Oid>,
 
-    // Exclusive watermark of each table: changes of transactions that begin before
+    // Watermark of each table: changes of transactions that begin at or before
     // it are skipped. Starts at the table copy point and is raised to every
     // confirmed commit, so an already applied transaction is not applied again.
     table_lsns: HashMap<Oid, u64>,
@@ -672,7 +672,7 @@ impl StreamSubscriber {
     pub(crate) fn lsn_applied(&self, oid: &Oid) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
             // Don't apply change if the table copy or a confirmed commit already has it.
-            if self.lsn < *table_lsn {
+            if self.lsn <= *table_lsn {
                 return true;
             }
         }
@@ -805,9 +805,9 @@ impl StreamSubscriber {
             // table.lsn represents every change UP TO the table LSN (not AT)
             // E.g., if it's at 100, we have 1-99
             //
-            // Store the exclusive boundary directly, so a zero copy position
-            // needs no negative sentinel and changes at the copy position are kept.
-            let copied = table.lsn.lsn;
+            // The watermark is inclusive, so store one less than the copy position.
+            // Saturate at zero because LSNs are unsigned.
+            let copied = table.lsn.lsn.saturating_sub(1);
             let watermark = self.table_lsns.entry(relation.oid).or_insert(copied);
             *watermark = (*watermark).max(copied);
             self.relations.insert(relation.oid, relation);
@@ -886,7 +886,7 @@ impl StreamSubscriber {
         // here at once.
         // PERF: we probably don't need to update it after all tables synced..
         for watermark in self.table_lsns.values_mut() {
-            *watermark = (*watermark).max(confirmed);
+            *watermark = (*watermark).max(confirmed - 1);
         }
         self.set_committed_lsn(confirmed);
 
@@ -1047,6 +1047,8 @@ mod tests {
         let mut sub = StreamSubscriber::new(&cluster, vec![], vec![]);
         let oid = Oid(42);
         sub.table_lsns.insert(oid, 0);
+        assert!(sub.lsn_applied(&oid));
+        sub.set_working_lsn(1);
         assert!(!sub.lsn_applied(&oid));
         sub.set_current_lsn((1 << 63) - 1);
         sub.set_committed_lsn(1 << 63);
@@ -1102,14 +1104,14 @@ mod tests {
         sub.connect().await.unwrap();
         let oid = Oid(42);
 
-        sub.table_lsns.insert(oid, 51);
+        sub.table_lsns.insert(oid, 50);
         sub.handle(begin_copy_data(100)).await.unwrap();
 
         // Rows from the current transaction must remain eligible until commit.
         assert!(!sub.lsn_applied(&oid));
 
         sub.handle(commit_copy_data(200)).await.unwrap();
-        assert_eq!(sub.table_lsns.get(&oid), Some(&51));
+        assert_eq!(sub.table_lsns.get(&oid), Some(&50));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while sub.committed_lsn() < 200 {

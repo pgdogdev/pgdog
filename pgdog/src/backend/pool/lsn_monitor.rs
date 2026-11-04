@@ -110,10 +110,7 @@ impl LsnStats {
         StatsLsnStats {
             replica: value.get(0, Format::Text).unwrap_or_default(),
             lsn: value.get(1, Format::Text).unwrap_or_default(),
-            offset_bytes: value
-                .get::<String>(2, Format::Text)
-                .and_then(|offset| offset.parse().ok())
-                .unwrap_or_default(),
+            offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
             fetched: SystemTime::now(),
             aurora,
