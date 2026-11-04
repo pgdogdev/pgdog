@@ -356,6 +356,7 @@ impl MultiShard {
         let mut forward = None;
 
         if self.shards > 1 {
+            // Validate data row consistency.
             let column_count = DataRow::column_count(message.as_bytes())?;
             self.validator.validate_column_count(column_count)?;
         }
