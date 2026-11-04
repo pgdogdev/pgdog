@@ -5,6 +5,8 @@ pub(crate) mod connect_reason;
 pub(crate) mod databases;
 pub(crate) mod disconnect_reason;
 pub(crate) mod error;
+#[cfg(test)]
+pub(crate) mod fake_server;
 pub(crate) mod maintenance_mode;
 pub(crate) mod passthrough_auth;
 pub(crate) mod pool;

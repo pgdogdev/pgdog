@@ -1,4 +1,8 @@
-//! Micro benchmarking the QueryEngine
+//! Microbenchmarks of PgDog:
+//! - (1) routing alone
+//! - (2) whole requests against fake in-memory Postgres servers
+//!
+//! TODO(jkaczman): move this module out of the query engine, since full req now covers client loop, pool, backend, etc.
 
 #[cfg(feature = "bench")]
 use divan::AllocProfiler;
@@ -15,21 +19,34 @@ fn run_benches() {
     divan::Divan::default().run_benches();
 }
 
+use std::cell::RefCell;
 use std::fmt;
+use std::ops::Deref;
+
+use tokio::io::AsyncWriteExt;
 
 #[cfg(all(feature = "bench", target_os = "linux"))]
 mod instructions;
 
+use pgdog_config::{DataType, ShardedTableConfig};
+
 use super::prelude::*;
-use crate::config::load_test_sharded;
+use crate::backend::databases::{databases, reload_from_existing};
+use crate::backend::fake_server;
+use crate::config::{config, load_test_sharded, set};
 use crate::frontend::router::parser::Cache;
-use tokio::runtime::Runtime;
 
 struct Case(&'static str, &'static str);
 
 impl fmt::Display for Case {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
+    }
+}
+
+impl Case {
+    fn sql(&self) -> &'static str {
+        self.1
     }
 }
 
@@ -68,20 +85,166 @@ const CASES: &[Case] = &[
         "UPDATE sharded SET value = 'a' WHERE id = 1",
     ),
     Case("delete_by_key", "DELETE FROM sharded WHERE id = 1"),
+    Case("distinct", "SELECT DISTINCT value FROM sharded"),
+    Case(
+        "group_by",
+        "SELECT value, COUNT(*) FROM sharded GROUP BY value",
+    ),
+    Case(
+        "min_max_sum",
+        "SELECT MIN(id), MAX(id), SUM(id) FROM sharded",
+    ),
+    Case(
+        "insert_returning",
+        "INSERT INTO sharded (id, value) VALUES (1, 'a') RETURNING id",
+    ),
+    Case("update_all_shards", "UPDATE sharded SET value = 'a'"),
+    Case("delete_all_shards", "DELETE FROM sharded"),
+    Case(
+        "lookup",
+        "SELECT * FROM sharded_lookup WHERE org_id = 'acme'",
+    ),
     Case("begin", "BEGIN"),
     Case("set", "SET statement_timeout TO 1000"),
 ];
 
-fn messages(sql: &str, extended: bool) -> Vec<ProtocolMessage> {
-    if extended {
-        vec![
+#[derive(Clone, Copy)]
+enum ClientProtocol {
+    Simple,
+    Unnamed,
+    Named,
+}
+
+#[derive(Clone, Copy)]
+enum Caches {
+    Cold,
+    Warm,
+    Evicting,
+}
+
+#[derive(Clone, Copy)]
+enum Scope {
+    Route,
+    Full,
+}
+
+struct Group {
+    name: &'static str,
+    protocol: ClientProtocol,
+    caches: Caches,
+    scope: Scope,
+}
+
+const SIMPLE_COLD: Group = Group {
+    name: "simple_cold",
+    protocol: ClientProtocol::Simple,
+    caches: Caches::Cold,
+    scope: Scope::Route,
+};
+const EXTENDED_COLD: Group = Group {
+    name: "extended_cold",
+    protocol: ClientProtocol::Unnamed,
+    caches: Caches::Cold,
+    scope: Scope::Route,
+};
+const EXTENDED_CACHED: Group = Group {
+    name: "extended_cached",
+    protocol: ClientProtocol::Unnamed,
+    caches: Caches::Warm,
+    scope: Scope::Route,
+};
+const EXTENDED_EVICTING: Group = Group {
+    name: "extended_evicting",
+    protocol: ClientProtocol::Unnamed,
+    caches: Caches::Evicting,
+    scope: Scope::Route,
+};
+const FULL_SIMPLE: Group = Group {
+    name: "full_simple",
+    protocol: ClientProtocol::Simple,
+    caches: Caches::Cold,
+    scope: Scope::Full,
+};
+const FULL_EXTENDED_CACHED: Group = Group {
+    name: "full_extended_cached",
+    protocol: ClientProtocol::Unnamed,
+    caches: Caches::Warm,
+    scope: Scope::Full,
+};
+const FULL_NAMED_CACHED: Group = Group {
+    name: "full_named_cached",
+    protocol: ClientProtocol::Named,
+    caches: Caches::Warm,
+    scope: Scope::Full,
+};
+
+const GROUPS: &[Group] = &[
+    SIMPLE_COLD,
+    EXTENDED_COLD,
+    EXTENDED_CACHED,
+    EXTENDED_EVICTING,
+    FULL_SIMPLE,
+    FULL_EXTENDED_CACHED,
+    FULL_NAMED_CACHED,
+];
+
+const NAMED_STATEMENT: &str = "bench";
+
+fn messages(sql: &str, protocol: ClientProtocol) -> Vec<ProtocolMessage> {
+    match protocol {
+        ClientProtocol::Simple => vec![Query::new(sql).into()],
+        ClientProtocol::Unnamed => vec![
             Parse::new_anonymous(sql).into(),
             Bind::new_statement("").into(),
+            Describe::new_portal("").into(),
             Execute::new().into(),
             Sync.into(),
-        ]
-    } else {
-        vec![Query::new(sql).into()]
+        ],
+        ClientProtocol::Named => vec![
+            Bind::new_statement(NAMED_STATEMENT).into(),
+            Describe::new_portal("").into(),
+            Execute::new().into(),
+            Sync.into(),
+        ],
+    }
+}
+
+struct BenchClient {
+    stream: Stream,
+}
+
+impl BenchClient {
+    fn new() -> Self {
+        let (ours, pgdog) = tokio::io::duplex(1024 * 1024);
+        let client = Client::new_test(Stream::memory(pgdog), Parameters::default());
+        tokio::spawn(client.spawn_test());
+
+        Self {
+            stream: Stream::memory(ours),
+        }
+    }
+
+    async fn prepare(&mut self, sql: &str) {
+        let parse = [Parse::named(NAMED_STATEMENT, sql).into(), Sync.into()];
+        assert!(self.request(&parse).await, "{sql}: can't prepare");
+    }
+
+    async fn request(&mut self, messages: &[ProtocolMessage]) -> bool {
+        for message in messages {
+            self.stream.send(message).await.unwrap();
+        }
+        self.stream.flush().await.unwrap();
+
+        let mut ok = true;
+        loop {
+            let Ok(message) = self.stream.read().await else {
+                return false;
+            };
+            ok &= message.code() != 'E';
+            if message.code() == 'Z' {
+                return ok;
+            }
+        }
     }
 }
 
@@ -103,68 +266,155 @@ async fn route(client: &mut Client, engine: &mut QueryEngine) {
         .unwrap();
 }
 
-fn background() -> Runtime {
-    let background = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    let _guard = background.enter();
-
-    load_test_sharded();
-
-    background
+enum Input {
+    Route(Box<(Client, QueryEngine)>),
+    Full,
 }
 
-fn inputs(case: &Case, extended: bool, cached: bool) -> (Client, QueryEngine) {
-    if !cached {
-        Cache::reset();
+struct Runner {
+    messages: Vec<ProtocolMessage>,
+    caches: Caches,
+    bench_client: Option<BenchClient>,
+}
+
+impl Runner {
+    async fn new(case: &Case, group: &Group) -> Self {
+        let bench_client = match group.scope {
+            Scope::Route => None,
+            Scope::Full => {
+                let mut bench_client = BenchClient::new();
+                if let ClientProtocol::Named = group.protocol {
+                    Cache::reset();
+                    bench_client.prepare(case.sql()).await;
+                }
+                Some(bench_client)
+            }
+        };
+
+        Self {
+            messages: messages(case.sql(), group.protocol),
+            caches: group.caches,
+            bench_client,
+        }
     }
 
-    let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
-    client.client_request = messages(case.1, extended).into();
+    fn input(&self) -> Input {
+        prepare_caches(self.caches);
 
-    let engine = QueryEngine::from_client(&client).unwrap();
+        match self.bench_client {
+            None => {
+                let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
+                client.client_request = self.messages.clone().into();
+                let engine = QueryEngine::from_client(&client).unwrap();
+                Input::Route(Box::new((client, engine)))
+            }
+            Some(_) => Input::Full,
+        }
+    }
 
-    (client, engine)
+    async fn request(&mut self, input: Input) -> bool {
+        match (input, &mut self.bench_client) {
+            (Input::Route(mut route_input), _) => {
+                let (client, engine) = &mut *route_input;
+                route(client, engine).await;
+                true
+            }
+            (Input::Full, Some(bench_client)) => bench_client.request(&self.messages).await,
+            (Input::Full, None) => unreachable!("full requests always have a bench client"),
+        }
+    }
 }
 
-/// Build the Client & QueryEngine outside of the timed section, so that we only measure the
-/// query engine.
-///
-/// When **cached** is set to false, we clear the AST cache first, so that we measure
-/// parsing too (i.e., the first time PgDog sees a query).
-fn bench(bencher: divan::Bencher, case: &Case, extended: bool, cached: bool) {
+fn prepare_caches(caches: Caches) {
+    let query_cache_limit = config().config.general.query_cache_limit;
+
+    match caches {
+        Caches::Cold => {
+            Cache::resize(query_cache_limit);
+            Cache::reset();
+            for cluster in databases().all().values() {
+                cluster.sharded_tables().lookup_cache().clear();
+            }
+        }
+        Caches::Warm => Cache::resize(query_cache_limit),
+        Caches::Evicting => {
+            Cache::reset();
+            Cache::resize(1);
+            Cache::get().record("SELECT 'evicted'").unwrap();
+        }
+    }
+}
+
+fn bench_config() {
+    load_test_sharded();
+
+    let mut config = config().deref().clone();
+    for database in &mut config.config.databases {
+        database.host = fake_server::HOST.into();
+    }
+
+    config.config.sharded_tables.push(ShardedTableConfig {
+        database: "pgdog".into(),
+        name: Some("sharded_lookup".into()),
+        column: "org_id".into(),
+        data_type: DataType::Varchar,
+        lookup_query: Some("SELECT root_org_id FROM org_roots WHERE org_id = $1 LIMIT 1".into()),
+        ..Default::default()
+    });
+
+    set(config).unwrap();
+    reload_from_existing().unwrap();
+}
+
+fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
 
-    let _background = background();
     let _guard = rt.enter();
+    bench_config();
+
+    let runner = RefCell::new(rt.block_on(Runner::new(case, group)));
 
     bencher
-        .with_inputs(|| inputs(case, extended, cached))
-        .bench_local_values(|(mut client, mut engine)| {
-            rt.block_on(route(&mut client, &mut engine));
-
-            (client, engine)
-        });
+        .with_inputs(|| runner.borrow().input())
+        .bench_local_values(|input| rt.block_on(runner.borrow_mut().request(input)));
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 fn simple_cold(bencher: divan::Bencher, case: &Case) {
-    bench(bencher, case, false, false);
+    bench(bencher, case, &SIMPLE_COLD);
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 fn extended_cold(bencher: divan::Bencher, case: &Case) {
-    bench(bencher, case, true, false);
+    bench(bencher, case, &EXTENDED_COLD);
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 fn extended_cached(bencher: divan::Bencher, case: &Case) {
-    bench(bencher, case, true, true);
+    bench(bencher, case, &EXTENDED_CACHED);
+}
+
+#[divan::bench(args = CASES, sample_count = 1000)]
+fn extended_evicting(bencher: divan::Bencher, case: &Case) {
+    bench(bencher, case, &EXTENDED_EVICTING);
+}
+
+#[divan::bench(args = CASES, sample_count = 1000)]
+fn full_simple(bencher: divan::Bencher, case: &Case) {
+    bench(bencher, case, &FULL_SIMPLE);
+}
+
+#[divan::bench(args = CASES, sample_count = 1000)]
+fn full_extended_cached(bencher: divan::Bencher, case: &Case) {
+    bench(bencher, case, &FULL_EXTENDED_CACHED);
+}
+
+#[divan::bench(args = CASES, sample_count = 1000)]
+fn full_named_cached(bencher: divan::Bencher, case: &Case) {
+    bench(bencher, case, &FULL_NAMED_CACHED);
 }
 
 #[test]
@@ -178,20 +428,18 @@ fn count_instructions() {
         .build()
         .unwrap();
 
-    let _background = background();
     let _guard = rt.enter();
 
     let module = module_path!().trim_start_matches("pgdog::");
 
-    for (group, extended, cached) in [
-        ("simple_cold", false, false),
-        ("extended_cold", true, false),
-        ("extended_cached", true, true),
-    ] {
+    for group in GROUPS {
         for case in CASES {
+            bench_config();
+            let mut runner = rt.block_on(Runner::new(case, group));
+
             for _ in 0..WARMUP {
-                let (mut client, mut engine) = inputs(case, extended, cached);
-                rt.block_on(route(&mut client, &mut engine));
+                let input = runner.input();
+                rt.block_on(runner.request(input));
             }
 
             let mut counter = instructions::Instructions::new().unwrap();
@@ -199,10 +447,10 @@ fn count_instructions() {
             let mut previous = 0;
 
             for _ in 0..ITERATIONS {
-                let (mut client, mut engine) = inputs(case, extended, cached);
+                let input = runner.input();
 
                 counter.enable().unwrap();
-                rt.block_on(route(&mut client, &mut engine));
+                rt.block_on(runner.request(input));
                 counter.disable().unwrap();
 
                 let total = counter.read().unwrap();
@@ -213,7 +461,8 @@ fn count_instructions() {
             counts.sort_unstable();
 
             println!(
-                "instructions {module}::{group}::{case} {}",
+                "instructions {module}::{}::{case} {}",
+                group.name,
                 counts[ITERATIONS / 2]
             );
         }
@@ -221,21 +470,54 @@ fn count_instructions() {
 }
 
 #[tokio::test]
-async fn test_bench_cases_route() {
-    load_test_sharded();
-    for case in CASES {
-        for extended in [false, true] {
-            let mut client = Client::new_test(Stream::dev_null(), Parameters::default());
-            client.client_request = messages(case.1, extended).into();
+async fn test_bench_groups() {
+    for group in GROUPS {
+        for case in CASES {
+            bench_config();
+            let mut runner = Runner::new(case, group).await;
+            let input = runner.input();
+            let ok = Box::pin(runner.request(input)).await;
+            assert!(ok, "{}::{case}: error", group.name);
+        }
+    }
+}
 
-            let mut engine = QueryEngine::from_client(&client).unwrap();
+#[cfg(not(feature = "bench"))]
+#[test]
+fn test_bench_memory_steady() {
+    const WARMUP: usize = 100;
+    const REQUESTS: usize = 500;
+    const MAX_RETAINED_BYTES: isize = 4 * 1024;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _guard = rt.enter();
+
+    for group in [&FULL_EXTENDED_CACHED, &FULL_NAMED_CACHED] {
+        for case in CASES {
+            bench_config();
+            let mut runner = rt.block_on(Runner::new(case, group));
+            let mut run = |requests| {
+                for _ in 0..requests {
+                    let input = runner.input();
+                    rt.block_on(runner.request(input));
+                }
+            };
+
+            run(WARMUP);
+            let region = stats_alloc::Region::new(crate::GLOBAL);
+
+            run(REQUESTS);
+            let change = region.change();
+            let retained = change.bytes_allocated as isize - change.bytes_deallocated as isize;
 
             assert!(
-                engine.backend.cluster().is_ok(),
-                "{case}: no cluster to route to"
+                retained <= MAX_RETAINED_BYTES,
+                "{}::{case}: {retained} bytes still allocated after {REQUESTS} requests",
+                group.name
             );
-
-            route(&mut client, &mut engine).await;
         }
     }
 }
