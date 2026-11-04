@@ -530,7 +530,7 @@ impl QueryParser {
             }
 
             if let Some(lsn) = routing_comment.lsn {
-                route.lsn = Some(lsn);
+                route.lsn = Some(lsn.lsn);
             }
         }
 

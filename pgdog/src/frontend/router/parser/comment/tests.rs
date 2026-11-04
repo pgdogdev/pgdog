@@ -29,12 +29,12 @@ fn test_lsn_directive() {
     ] {
         let result = parse_edge_comment(query, &schema).expect("valid directive");
         assert_eq!(result.query, "SELECT 1");
-        assert_eq!(result.comment.lsn, Some(Lsn::from_i64(0x16B6C50)));
+        assert_eq!(result.comment.lsn, Some(Lsn::from_u64(0x16B6C50)));
     }
 
     let result = parse_edge_comment("/* pgdog_lsn: FFFFFFFF/FFFFFFFF */ SELECT 1", &schema)
         .expect("valid maximum LSN");
-    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(-1)));
+    assert_eq!(result.comment.lsn, Some(Lsn::from_u64(u64::MAX)));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn test_leading_lsn_takes_precedence() {
         &test_schema(),
     )
     .expect("valid directives");
-    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
+    assert_eq!(result.comment.lsn, Some(Lsn::from_u64(1 << 32)));
 }
 
 #[test]
@@ -530,7 +530,7 @@ fn test_sharding_key_with_schema_name() {
 
     let query = "SELECT * FROM users /* pgdog_sharding_key: sales pgdog_lsn: 1/0 */";
     let result = parse_edge_comment(query, &schema).unwrap();
-    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
+    assert_eq!(result.comment.lsn, Some(Lsn::from_u64(1 << 32)));
     assert_eq!(
         result.comment.shard,
         Some(ShardOrLookup::Shard(Shard::Direct(1)))
@@ -571,7 +571,7 @@ fn test_sharding_key_comment_misses_lookup_cache() {
         &schema,
     )
     .unwrap();
-    assert_eq!(result.comment.lsn, Some(Lsn::from_i64(1 << 32)));
+    assert_eq!(result.comment.lsn, Some(Lsn::from_u64(1 << 32)));
 
     match result.comment.shard {
         Some(ShardOrLookup::Lookup(pending)) => {

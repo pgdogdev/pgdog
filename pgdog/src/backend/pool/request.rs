@@ -1,4 +1,3 @@
-use pgdog_stats::Lsn;
 use tokio::time::Instant;
 
 use crate::{frontend::router::Route, net::messages::FrontendPid};
@@ -21,8 +20,8 @@ pub(crate) struct Request {
     /// Propagated from `User.read_only` setting.
     pub(crate) read_only: bool,
     /// Minimum replica LSN the client wants the replica to have
-    /// before allowing reads on it.
-    pub(crate) lsn: Option<Lsn>,
+    /// before allowing reads on it, in its 64-bit representation.
+    pub(crate) lsn: Option<u64>,
 }
 
 impl Request {

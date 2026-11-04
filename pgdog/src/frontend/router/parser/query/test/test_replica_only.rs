@@ -44,7 +44,7 @@ fn set_replica(pool: &Pool, replica: bool) {
     pool.set_lsn_stats(
         LsnStats {
             replica,
-            lsn: Lsn::from_i64(100),
+            lsn: Lsn::from_u64(100),
             offset_bytes: 100,
             fetched: SystemTime::now(),
             ..Default::default()

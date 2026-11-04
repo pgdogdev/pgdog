@@ -110,7 +110,10 @@ impl LsnStats {
         StatsLsnStats {
             replica: value.get(0, Format::Text).unwrap_or_default(),
             lsn: value.get(1, Format::Text).unwrap_or_default(),
-            offset_bytes: value.get(2, Format::Text).unwrap_or_default(),
+            offset_bytes: value
+                .get::<String>(2, Format::Text)
+                .and_then(|offset| offset.parse().ok())
+                .unwrap_or_default(),
             timestamp: value.get(3, Format::Text).unwrap_or_default(),
             fetched: SystemTime::now(),
             aurora,
@@ -288,6 +291,19 @@ mod test {
     use pgdog_postgres_types::TimestampTz;
     use pgdog_stats::Lsn;
     use tokio::time::timeout;
+
+    #[test]
+    fn test_lsn_stats_unsigned_offset() {
+        let mut row = DataRow::new();
+        row.add(true);
+        row.add("FFFFFFFF/FFFFFFFF");
+        row.add("18446744073709551615");
+        row.add("2026-07-01 13:33:10.000000+00");
+        row.add(1i64);
+        let stats = LsnStats::from_row(row, false);
+        assert_eq!(stats.lsn.lsn, u64::MAX);
+        assert_eq!(stats.offset_bytes, u64::MAX);
+    }
 
     // A launched pool against the local Postgres. The default `lsn_check_delay`
     // is `MAX_DURATION`, so the background LSN monitor spawned by `launch()`

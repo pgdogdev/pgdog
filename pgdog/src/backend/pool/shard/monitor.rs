@@ -141,7 +141,7 @@ fn calculate_replica_lag(primary: &LsnStats, replica: &LsnStats) -> ReplicaLag {
     );
 
     // Replica lag is how far the replica trails the primary.
-    let bytes = primary.lsn.lsn - replica.lsn.lsn;
+    let bytes = primary.lsn.distance_bytes(&replica.lsn);
     if bytes <= 0 {
         return ReplicaLag::default();
     }
@@ -184,11 +184,11 @@ mod test {
         }
     }
 
-    fn set_lsn_stats(shard: &Shard, index: usize, replica: bool, lsn: i64) {
+    fn set_lsn_stats(shard: &Shard, index: usize, replica: bool, lsn: u64) {
         let pools = shard.pools();
         let stats: LsnStats = StatsLsnStats {
             replica,
-            lsn: Lsn::from_i64(lsn),
+            lsn: Lsn::from_u64(lsn),
             offset_bytes: lsn,
             fetched: SystemTime::now(),
             ..Default::default()
@@ -197,14 +197,14 @@ mod test {
         *pools[index].inner().lsn_stats.write() = stats;
     }
 
-    fn set_pool_lsn_stats(pool: &Pool, replica: bool, lsn: i64, timestamp: &str) {
+    fn set_pool_lsn_stats(pool: &Pool, replica: bool, lsn: u64, timestamp: &str) {
         *pool.inner().lsn_stats.write() = lsn_stats(replica, lsn, timestamp);
     }
 
-    fn lsn_stats(replica: bool, lsn: i64, timestamp: &str) -> LsnStats {
+    fn lsn_stats(replica: bool, lsn: u64, timestamp: &str) -> LsnStats {
         StatsLsnStats {
             replica,
-            lsn: Lsn::from_i64(lsn),
+            lsn: Lsn::from_u64(lsn),
             offset_bytes: lsn,
             timestamp: TimestampTz::decode(timestamp.as_bytes(), Format::Text).unwrap(),
             fetched: SystemTime::now(),

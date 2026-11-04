@@ -76,10 +76,10 @@ fn setup_test_replicas() -> LoadBalancer {
     replicas
 }
 
-fn set_lsn_stats(target: &Target, replica: bool, lsn: i64) {
+fn set_lsn_stats(target: &Target, replica: bool, lsn: u64) {
     let stats: crate::backend::pool::lsn_monitor::LsnStats = StatsLsnStats {
         replica,
-        lsn: Lsn::from_i64(lsn),
+        lsn: Lsn::from_u64(lsn),
         offset_bytes: lsn,
         fetched: std::time::SystemTime::now(),
         ..Default::default()
@@ -446,25 +446,27 @@ async fn test_lsn_filtering() {
         Default::default(),
     );
     replicas.launch();
-    set_lsn_stats(&replicas.targets[0], true, 100);
-    set_lsn_stats(&replicas.targets[1], true, 200);
+    // Include positions across the high bit of the unsigned LSN.
+    for (behind, caught_up, ahead) in [(100, 200, 201), ((1 << 63) - 1, 1 << 63, (1 << 63) + 1)] {
+        set_lsn_stats(&replicas.targets[0], true, behind);
+        set_lsn_stats(&replicas.targets[1], true, caught_up);
 
-    let mut route = Route::read(ShardWithPriority::default());
-    route.lsn = Some(Lsn::from_i64(200));
-    let request = Request::new(Default::default(), &route, false);
+        let mut route = Route::read(ShardWithPriority::default());
+        route.lsn = Some(caught_up);
+        let request = Request::new(Default::default(), &route, false);
 
-    // A replica exactly at the requested LSN is eligible; the lagging one is not.
-    for _ in 0..4 {
-        let conn = replicas.get(&request).await.expect("caught-up replica");
-        assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
+        // A replica exactly at the requested LSN is eligible; the lagging one is not.
+        for _ in 0..4 {
+            let conn = replicas.get(&request).await.expect("caught-up replica");
+            assert_eq!(conn.pool.id(), replicas.targets[1].pool.id());
+        }
+
+        // Fall back to primary when every replica is behind the requested LSN.
+        route.lsn = Some(ahead);
+        let request = Request::new(Default::default(), &route, false);
+        let conn = replicas.get(&request).await.expect("primary fallback");
+        assert_eq!(conn.pool.id(), primary_id);
     }
-
-    // Fall back to primary when every replica is behind the requested LSN.
-    route.lsn = Some(Lsn::from_i64(201));
-    let request = Request::new(Default::default(), &route, false);
-    let conn = replicas.get(&request).await.expect("primary fallback");
-    assert_eq!(conn.pool.id(), primary_id);
-    drop(conn);
 
     replicas.shutdown();
 }
@@ -490,7 +492,7 @@ async fn test_include_primary_if_replica_lag() {
     for read_only in [false, true] {
         let mut route = Route::read(ShardWithPriority::default());
         for lsn in [None, Some(200), Some(201)] {
-            route.lsn = lsn.map(Lsn::from_i64);
+            route.lsn = lsn;
             let request = Request::new(Default::default(), &route, read_only);
 
             // Round robin must never select the primary while an eligible replica exists.

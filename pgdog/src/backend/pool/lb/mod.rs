@@ -379,7 +379,7 @@ impl LoadBalancer {
         // Remove any replicas that are behind the requested LSN.
         if let Some(lsn) = request.lsn {
             candidates.retain(|target| {
-                target.role() == Role::Primary || target.pool.lsn_stats().lsn >= lsn
+                target.role() == Role::Primary || target.pool.lsn_stats().lsn.lsn >= lsn
             });
         }
 

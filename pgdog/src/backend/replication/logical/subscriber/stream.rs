@@ -115,10 +115,10 @@ pub(crate) struct StreamSubscriber {
     // Mapping of table keys to their oid.
     keys: HashMap<Key, Oid>,
 
-    // Watermark of each table: changes of transactions that begin at or before
+    // Exclusive watermark of each table: changes of transactions that begin before
     // it are skipped. Starts at the table copy point and is raised to every
     // confirmed commit, so an already applied transaction is not applied again.
-    table_lsns: HashMap<Oid, i64>,
+    table_lsns: HashMap<Oid, u64>,
 
     // Pipelined connections to shards. DML is pushed without waiting per event;
     // a background task per connection reads responses and reconciles them.
@@ -128,15 +128,15 @@ pub(crate) struct StreamSubscriber {
     changed_shards: Vec<bool>,
     /// Source LSN recorded in the origin of each destination shard and
     /// flushed to disk.
-    applied_lsns: Vec<i64>,
+    applied_lsns: Vec<u64>,
     /// Source LSN of the last commit sent to the shards. Commits up to it
     /// that are not confirmed yet are in flight.
-    sent_lsn: i64,
+    sent_lsn: u64,
     // Last commit LSN acked to Postgres. Reported in status updates; never
     // advances mid-transaction so KeepAlive replies can't skip an open transaction.
-    committed_lsn: i64,
+    committed_lsn: u64,
     // Working position in the stream (advances on Begin for deduplication).
-    lsn: i64,
+    lsn: u64,
     lsn_changed: bool,
     in_transaction: bool,
 
@@ -672,7 +672,7 @@ impl StreamSubscriber {
     pub(crate) fn lsn_applied(&self, oid: &Oid) -> bool {
         if let Some(table_lsn) = self.table_lsns.get(oid) {
             // Don't apply change if the table copy or a confirmed commit already has it.
-            if self.lsn <= *table_lsn {
+            if self.lsn < *table_lsn {
                 return true;
             }
         }
@@ -805,10 +805,9 @@ impl StreamSubscriber {
             // table.lsn represents every change UP TO the table LSN (not AT)
             // E.g., if it's at 100, we have 1-99
             //
-            // This `table_lsns` map is what we check in the `lsn_applied()` method, where we
-            // SKIP changes AT or below. If we stored 100, it would skip 100 (losing the change)
-            // So, we store one less (99)
-            let copied = table.lsn.lsn - 1;
+            // Store the exclusive boundary directly, so a zero copy position
+            // needs no negative sentinel and changes at the copy position are kept.
+            let copied = table.lsn.lsn;
             let watermark = self.table_lsns.entry(relation.oid).or_insert(copied);
             *watermark = (*watermark).max(copied);
             self.relations.insert(relation.oid, relation);
@@ -870,7 +869,7 @@ impl StreamSubscriber {
             .connections
             .iter()
             .filter_map(PipelinedConnection::durable_lsn_progress)
-            .fold(self.sent_lsn, i64::min);
+            .fold(self.sent_lsn, u64::min);
 
         if confirmed <= self.committed_lsn {
             return Ok(false);
@@ -887,7 +886,7 @@ impl StreamSubscriber {
         // here at once.
         // PERF: we probably don't need to update it after all tables synced..
         for watermark in self.table_lsns.values_mut() {
-            *watermark = (*watermark).max(confirmed - 1);
+            *watermark = (*watermark).max(confirmed);
         }
         self.set_committed_lsn(confirmed);
 
@@ -959,14 +958,14 @@ impl StreamSubscriber {
     }
 
     /// Advance both LSN fields. Call after commit and on publisher init.
-    pub(crate) fn set_current_lsn(&mut self, lsn: i64) -> bool {
+    pub(crate) fn set_current_lsn(&mut self, lsn: u64) -> bool {
         self.lsn_changed = lsn != self.lsn;
         self.lsn = lsn;
         self.committed_lsn = lsn;
         self.lsn_changed
     }
 
-    fn set_committed_lsn(&mut self, lsn: i64) {
+    fn set_committed_lsn(&mut self, lsn: u64) {
         self.committed_lsn = lsn;
         if lsn > self.lsn {
             self.lsn_changed = true;
@@ -975,17 +974,17 @@ impl StreamSubscriber {
     }
 
     /// Advance working LSN only. Used on Begin; does not move the ack pointer.
-    fn set_working_lsn(&mut self, lsn: i64) {
+    fn set_working_lsn(&mut self, lsn: u64) {
         self.lsn_changed = lsn != self.lsn;
         self.lsn = lsn;
     }
 
     /// Get current LSN.
-    pub(crate) fn lsn(&self) -> i64 {
+    pub(crate) fn lsn(&self) -> u64 {
         self.lsn
     }
 
-    pub(crate) fn committed_lsn(&self) -> i64 {
+    pub(crate) fn committed_lsn(&self) -> u64 {
         self.committed_lsn
     }
 
@@ -1043,6 +1042,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsigned_lsn_progress() {
+        let cluster = Cluster::new_test(&config());
+        let mut sub = StreamSubscriber::new(&cluster, vec![], vec![]);
+        let oid = Oid(42);
+        sub.table_lsns.insert(oid, 0);
+        assert!(!sub.lsn_applied(&oid));
+        sub.set_current_lsn((1 << 63) - 1);
+        sub.set_committed_lsn(1 << 63);
+        assert_eq!(sub.lsn(), 1 << 63);
+        assert_eq!(sub.committed_lsn(), 1 << 63);
+        assert_eq!(sub.status_update().last_applied, 1 << 63);
+
+        sub.sent_lsn = u64::MAX;
+        assert!(sub.has_in_flight());
+        assert!(sub.check_confirmed_sent_lsn().await.expect("confirm LSN"));
+        assert_eq!(sub.status_update().last_applied, u64::MAX);
+        assert!(!sub.has_in_flight());
+        assert!(!sub.lsn_applied(&oid));
+        sub.set_working_lsn(u64::MAX - 1);
+        assert!(sub.lsn_applied(&oid));
+    }
+
+    #[tokio::test]
     async fn apply_begin_no_status_update() {
         let cluster = Cluster::new_test(&config());
         cluster.launch();
@@ -1080,14 +1102,14 @@ mod tests {
         sub.connect().await.unwrap();
         let oid = Oid(42);
 
-        sub.table_lsns.insert(oid, 50);
+        sub.table_lsns.insert(oid, 51);
         sub.handle(begin_copy_data(100)).await.unwrap();
 
         // Rows from the current transaction must remain eligible until commit.
         assert!(!sub.lsn_applied(&oid));
 
         sub.handle(commit_copy_data(200)).await.unwrap();
-        assert_eq!(sub.table_lsns.get(&oid), Some(&50));
+        assert_eq!(sub.table_lsns.get(&oid), Some(&51));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while sub.committed_lsn() < 200 {

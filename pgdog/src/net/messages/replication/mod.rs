@@ -59,14 +59,14 @@ mod tests {
             epoch_catalog_min: 5,
         };
         let keepalive = KeepAlive {
-            wal_end: 6,
+            wal_end: u64::MAX,
             system_clock: 7,
             reply: 0,
         };
         let status = StatusUpdate {
-            last_written: 8,
-            last_flushed: 9,
-            last_applied: 10,
+            last_written: u64::MAX,
+            last_flushed: 1 << 63,
+            last_applied: (1 << 63) - 1,
             system_clock: 11,
             reply: 1,
         };
@@ -95,10 +95,49 @@ mod tests {
                     ReplicationMeta::StatusUpdate(actual),
                 ) => {
                     assert_eq!(actual.last_written, expected.last_written);
+                    assert_eq!(actual.last_flushed, expected.last_flushed);
+                    assert_eq!(actual.last_applied, expected.last_applied);
                     assert_eq!(actual.reply, expected.reply);
                 }
                 _ => panic!("replication meta variant mismatch"),
             }
         }
+    }
+
+    #[test]
+    fn unsigned_lsn_logical_messages_roundtrip() {
+        use super::logical::begin::Begin;
+
+        let begin = Begin {
+            final_transaction_lsn: 1 << 63,
+            commit_timestamp: -1,
+            xid: 1,
+        };
+        let decoded = Begin::from_bytes(begin.to_bytes()).expect("decode begin");
+        assert_eq!(decoded.final_transaction_lsn, 1 << 63);
+        assert_eq!(decoded.commit_timestamp, -1);
+
+        let commit = Commit {
+            flags: 0,
+            commit_lsn: 1 << 63,
+            end_lsn: u64::MAX,
+            commit_timestamp: -1,
+        };
+        let decoded = Commit::from_bytes(commit.to_bytes()).expect("decode commit");
+        assert_eq!(decoded.commit_lsn, 1 << 63);
+        assert_eq!(decoded.end_lsn, u64::MAX);
+        assert_eq!(decoded.commit_timestamp, -1);
+
+        let xlog = XLogData {
+            starting_point: 1 << 63,
+            current_end: u64::MAX,
+            system_clock: -1,
+            bytes: commit.to_bytes(),
+        };
+        let decoded = XLogData::from_bytes(xlog.to_bytes()).expect("decode xlog");
+        assert_eq!(decoded.starting_point, 1 << 63);
+        assert_eq!(decoded.current_end, u64::MAX);
+        assert_eq!(decoded.system_clock, -1);
+        assert_eq!(decoded.bytes, xlog.bytes);
     }
 }
