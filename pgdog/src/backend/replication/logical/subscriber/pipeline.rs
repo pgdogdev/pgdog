@@ -355,7 +355,7 @@ impl Listener {
                 };
                 if is_direct
                     && let Ok(complete) = CommandComplete::try_from(message)
-                    && matches!(complete.rows(), Ok(Some(0)))
+                    && complete.rows() == Some(0)
                 {
                     let mut shared = self.shared.lock();
                     match complete.tag() {

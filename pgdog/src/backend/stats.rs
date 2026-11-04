@@ -194,7 +194,7 @@ impl Stats {
 
     /// Record rows affected from a Postgres CommandComplete message.
     pub(crate) fn rows_affected(&mut self, cmd: &CommandComplete) {
-        let Ok(Some(rows)) = cmd.rows() else {
+        let Some(rows) = cmd.rows() else {
             return;
         };
         match cmd.tag() {
