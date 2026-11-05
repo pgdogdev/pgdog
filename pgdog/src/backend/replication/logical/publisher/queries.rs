@@ -23,6 +23,8 @@ pub(crate) async fn server_version(server: &mut Server) -> Result<Option<i64>, B
 }
 
 /// Get list of tables in publication.
+///
+/// We exclude PgDog's own tables, as they strictly belong to the database they're in
 static TABLES: &str = "SELECT DISTINCT
   n.nspname,
   c.relname,
@@ -40,6 +42,10 @@ JOIN (
 LEFT JOIN pg_inherits i     ON i.inhrelid = c.oid           -- only present if c is a child partition
 LEFT JOIN pg_class    p     ON p.oid = i.inhparent          -- immediate parent partitioned table
 LEFT JOIN pg_namespace pn   ON pn.oid = p.relnamespace
+WHERE NOT (
+  n.nspname = 'pgdog'
+  AND c.relname IN ('config', 'validator_bigint', 'validator_uuid', 'ddl_replication_key')
+)
 ORDER BY n.nspname, c.relname;";
 
 /// Table included in a publication.
