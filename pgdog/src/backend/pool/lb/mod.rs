@@ -35,6 +35,52 @@ pub(crate) use target_health::*;
 #[cfg(test)]
 mod test;
 
+/// Read target state that decides if the primary can serve a read.
+trait Candidate {
+    fn role(&self) -> Role;
+    fn banned(&self) -> bool;
+}
+
+impl Candidate for &Target {
+    fn role(&self) -> Role {
+        Target::role(self)
+    }
+
+    fn banned(&self) -> bool {
+        self.ban.banned()
+    }
+}
+
+/// Decide if the primary stays in `candidates` for a read.
+///
+/// `candidates` must already exclude resharding-only targets and replicas
+/// behind the requested LSN.
+///
+#[doc = include_str!("primary_reads.md")]
+fn primary_reads(rw_split: ReadWriteSplit, read_only: bool, candidates: &[impl Candidate]) -> bool {
+    use ReadWriteSplit::*;
+
+    let has_unbanned_replica = candidates
+        .iter()
+        .any(|target| target.role() == Role::Replica && !target.banned());
+
+    match rw_split {
+        // If `read_only` is true, only allow if there's no replicas.
+        IncludePrimary => !(read_only && has_unbanned_replica),
+        // Include primary only if all replicas have been eliminated by the replica
+        // lag filter or are banned.
+        IncludePrimaryIfReplicaLag => !has_unbanned_replica,
+        IncludePrimaryIfReplicaBanned => {
+            !(read_only && has_unbanned_replica)
+                && (candidates.iter().any(|target| target.banned()) || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+        }
+        // We read from the primary anyway if we have no available replicas.
+        // PreferPrimary makes all queries writes. If a query lands here,
+        // it's because of pgdog.role=replica.
+        ExcludePrimary | PreferPrimary => !has_unbanned_replica,
+    }
+}
+
 /// Read query load balancer target.
 #[derive(Clone, Debug)]
 pub(crate) struct Target {
@@ -363,11 +409,8 @@ impl LoadBalancer {
     }
 
     /// Check out a read connection using the configured load balancing strategy.
-    ///
-    #[doc = include_str!("get_internal.md")]
     async fn get_internal(&self, request: &Request) -> Result<Guard, Error> {
         use LoadBalancingStrategy::*;
-        use ReadWriteSplit::*;
         use smallvec::SmallVec;
 
         let mut candidates: SmallVec<[&Target; 32]> = self
@@ -383,26 +426,7 @@ impl LoadBalancer {
             });
         }
 
-        let has_unbanned_replica = candidates
-            .iter()
-            .any(|target| target.role() == Role::Replica && !target.ban.banned());
-
-        // If `read_only` is true, only allow if there's no replicas.
-        let primary_reads = match self.rw_split {
-            IncludePrimary => !(request.read_only && has_unbanned_replica),
-            // Include primary only if all replicas have been eliminated by the replica
-            // lag filter or are banned.
-            IncludePrimaryIfReplicaLag => !has_unbanned_replica,
-            IncludePrimaryIfReplicaBanned => {
-                !(request.read_only && has_unbanned_replica)
-                    && (candidates.iter().any(|target| target.ban.banned())
-                        || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
-            }
-            // We read from the primary anyway if we have no available replicas.
-            // PreferPrimary makes all queries writes. If a query lands here,
-            // it's because of pgdog.role=replica.
-            ExcludePrimary | PreferPrimary => !has_unbanned_replica,
-        };
+        let primary_reads = primary_reads(self.rw_split, request.read_only, &candidates);
 
         if !primary_reads {
             candidates.retain(|target| target.role() == Role::Replica);

@@ -14,6 +14,7 @@ use pgdog_stats::{LsnStats as StatsLsnStats, ReplicaLag};
 use super::*;
 use monitor::Monitor;
 
+mod primary_reads;
 mod role_detection;
 
 fn create_test_pool_config(host: &str, port: u16) -> PoolConfig {
@@ -773,6 +774,69 @@ async fn test_read_write_split_exclude_primary_no_primary() {
     }
 
     assert_eq!(replica_ids.len(), 2);
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_read_write_split_exclude_primary_all_replicas_banned_falls_back_to_primary() {
+    let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
+    primary_pool.launch();
+
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &[
+            create_test_pool_config("localhost", 5432),
+            create_test_pool_config("127.0.0.1", 5432),
+        ],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::ExcludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+    replicas.targets[1]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+
+    let primary_id = replicas.primary().unwrap().id();
+    let conn = replicas.get(&Request::default()).await.unwrap();
+    assert_eq!(conn.pool.id(), primary_id);
+    drop(conn);
+
+    replicas.shutdown();
+}
+
+#[tokio::test]
+async fn test_read_write_split_exclude_primary_one_replica_banned() {
+    let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
+    primary_pool.launch();
+
+    let replicas = LoadBalancer::new(
+        &Some(primary_pool),
+        &[
+            create_test_pool_config("localhost", 5432),
+            create_test_pool_config("127.0.0.1", 5432),
+        ],
+        LoadBalancingStrategy::Random,
+        ReadWriteSplit::ExcludePrimary,
+        Default::default(),
+    );
+    replicas.launch();
+
+    replicas.targets[0]
+        .ban
+        .ban(Error::ServerError, Duration::from_secs(60));
+
+    let healthy_id = replicas.targets[1].pool.id();
+    let request = Request::default();
+    for _ in 0..20 {
+        let conn = replicas.get(&request).await.unwrap();
+        assert_eq!(conn.pool.id(), healthy_id);
+    }
 
     replicas.shutdown();
 }
