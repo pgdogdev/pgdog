@@ -386,42 +386,49 @@ fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
 #[inline(never)]
 fn simple_cold(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &SIMPLE_COLD);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn extended_cold(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &EXTENDED_COLD);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn extended_cached(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &EXTENDED_CACHED);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn extended_evicting(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &EXTENDED_EVICTING);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn full_simple(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &FULL_SIMPLE);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn full_extended_cached(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &FULL_EXTENDED_CACHED);
+    std::hint::black_box(());
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
 #[inline(never)]
 fn full_named_cached(bencher: divan::Bencher, case: &Case) {
     bench(bencher, case, &FULL_NAMED_CACHED);
+    std::hint::black_box(());
 }
 
 #[test]
