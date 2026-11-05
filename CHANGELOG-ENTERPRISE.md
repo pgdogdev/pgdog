@@ -3,6 +3,32 @@
 This file contains the list of changes made to the Enterprise edition of PgDog. Since it's being developed in a private repository, this seemed like
 the most optimal way to share those changes.
 
+### v2026-11-05
+
+**OS version**: [v0.1.64](CHANGELOG.md#v0164)
+
+| Application   | Docker image                                            |
+| ------------- | ------------------------------------------------------- |
+| PgDog         | `ghcr.io/pgdogdev/pgdog-enterprise:v2026-11-05`         |
+| Control plane | `ghcr.io/pgdogdev/pgdog-enterprise/control:v2026-11-05` |
+
+#### Security
+
+- The control plane UI would show passwords for users, which could trigger security scanners. We redact all passwords now, just to be extra safe.
+
+#### Features
+
+- **Breaking** Removed Redis backups. Use latest `helm-ee` chart version when upgrading (v0.4.0). Redis backups were not very useful and could cause intermittent timeout errors in the logs when storing too many metrics.
+- Maintenance mode can now be persisted in the Raft log, making it durable between control plane & PgDog restarts. This guarantees that PgDog does not allow traffic on the database if one of its pods is restarted by Kube. To use, enable Raft in the control plane and set:
+
+```toml
+# pgdog.toml
+[control]
+endpoint = "..."
+token = "..."
+required = true
+```
+
 ### v2026-11-02
 
 **OS version**: [v0.1.63](CHANGELOG.md#v0163)
