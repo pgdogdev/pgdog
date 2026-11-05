@@ -126,7 +126,7 @@ impl DataRow {
         decoder: &Decoder,
     ) -> Result<Column, Error> {
         self.get_column(idx, decoder)?
-            .ok_or(Error::RequiredColumnMissing(idx))
+            .ok_or_else(|| Error::RequiredColumnMissing(idx))
     }
 
     /// How many columns in the data row.
