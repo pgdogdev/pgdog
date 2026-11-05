@@ -5,7 +5,9 @@ Use primary for reads:
 | `IncludePrimary`                | Yes                                   | Yes                                      | No                                   | Yes                                     |
 | `IncludePrimaryIfReplicaLag`    | No                                    | Yes                                      | No                                   | Yes                                     |
 | `IncludePrimaryIfReplicaBanned` | Conditional                           | Conditional                              | No                                   | Conditional                             |
-| `ExcludePrimary`                | No                                    | Yes                                      | No                                   | Yes                                     |
+| `ExcludePrimary`                | No                                    | Filtered                                 | No                                   | Filtered                                |
 | `PreferPrimary`                 | No                                    | Yes                                      | No                                   | Yes                                     |
 
-**Conditional** means at least one remaining candidate is banned or exactly one candidate remains (assumed primary).
+**Conditional** means at least one remaining replica is banned or exactly one candidate remains (assumed primary). A banned primary does not count.
+
+**Filtered** means no replica remains after the resharding-only and LSN filters. Banned replicas still count, so `ExcludePrimary` returns `AllReplicasDown` when every replica is banned.

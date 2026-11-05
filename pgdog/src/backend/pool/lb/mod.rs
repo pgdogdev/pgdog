@@ -60,24 +60,34 @@ impl Candidate for &Target {
 fn primary_reads(rw_split: ReadWriteSplit, read_only: bool, candidates: &[impl Candidate]) -> bool {
     use ReadWriteSplit::*;
 
-    let has_unbanned_replica = candidates
-        .iter()
-        .any(|target| target.role() == Role::Replica && !target.banned());
+    let has_unbanned_replica = || {
+        candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica && !target.banned())
+    };
 
     match rw_split {
         // If `read_only` is true, only allow if there's no replicas.
-        IncludePrimary => !(read_only && has_unbanned_replica),
+        IncludePrimary => !(read_only && has_unbanned_replica()),
         // Include primary only if all replicas have been eliminated by the replica
         // lag filter or are banned.
-        IncludePrimaryIfReplicaLag => !has_unbanned_replica,
+        IncludePrimaryIfReplicaLag => !has_unbanned_replica(),
         IncludePrimaryIfReplicaBanned => {
-            !(read_only && has_unbanned_replica)
-                && (candidates.iter().any(|target| target.banned()) || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
+            !(read_only && has_unbanned_replica())
+                && (candidates
+                    .iter()
+                    .any(|target| target.role() == Role::Replica && target.banned())
+                    || candidates.len() == 1) // The second condition is for when there is only the primary (just one target, doesn't matter what role it is).
         }
+        // Read from primary only if there is no replicas at all.
+        // If replicas are banned that will lead to [`Error::AllReplicasDown`]
+        ExcludePrimary => !candidates
+            .iter()
+            .any(|target| target.role() == Role::Replica),
         // We read from the primary anyway if we have no available replicas.
         // PreferPrimary makes all queries writes. If a query lands here,
         // it's because of pgdog.role=replica.
-        ExcludePrimary | PreferPrimary => !has_unbanned_replica,
+        PreferPrimary => !has_unbanned_replica(),
     }
 }
 

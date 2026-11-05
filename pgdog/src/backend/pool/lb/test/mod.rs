@@ -779,7 +779,7 @@ async fn test_read_write_split_exclude_primary_no_primary() {
 }
 
 #[tokio::test]
-async fn test_read_write_split_exclude_primary_all_replicas_banned_falls_back_to_primary() {
+async fn test_read_write_split_exclude_primary_all_replicas_banned() {
     let primary_pool = Pool::new(&create_test_pool_config("127.0.0.1", 5432));
     primary_pool.launch();
 
@@ -802,10 +802,11 @@ async fn test_read_write_split_exclude_primary_all_replicas_banned_falls_back_to
         .ban
         .ban(Error::ServerError, Duration::from_secs(60));
 
-    let primary_id = replicas.primary().unwrap().id();
-    let conn = replicas.get(&Request::default()).await.unwrap();
-    assert_eq!(conn.pool.id(), primary_id);
-    drop(conn);
+    let result = replicas.get(&Request::default()).await;
+    assert!(
+        matches!(result, Err(Error::AllReplicasDown)),
+        "exclude_primary must not send reads to the primary when all replicas are banned"
+    );
 
     replicas.shutdown();
 }
