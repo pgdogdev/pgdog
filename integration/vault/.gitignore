@@ -1,2 +1,3 @@
 pgdog.toml
 vault-secret-id
+pgbench.pgpass
