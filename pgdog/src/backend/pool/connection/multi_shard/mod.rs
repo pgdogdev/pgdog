@@ -257,11 +257,10 @@ impl MultiShard {
                 // Helpers remain in the internal row through aggregation and
                 // sorting, then are removed before client-visible operations.
                 let plan = self.route.projection_rewrite_plan.as_deref();
-                let result = self
+                if let Err(err) = self
                     .buffer
                     .aggregate(self.route.aggregate(), &self.decoder, plan)
-                    .and_then(|_| self.buffer.having(plan, &self.decoder));
-                if let Err(err) = result {
+                {
                     self.buffer.clear();
                     return Err(err.into());
                 }
