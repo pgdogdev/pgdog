@@ -148,6 +148,8 @@ pub(crate) struct Route {
     pub(in crate::frontend) temp_table_change: Option<TempTableChange>,
     stmt_type: Option<StatementType>,
     table_change: TableChange,
+    /// Minimum replica LSN in its 64-bit representation.
+    pub(crate) lsn: Option<u64>,
 }
 
 impl Display for Route {

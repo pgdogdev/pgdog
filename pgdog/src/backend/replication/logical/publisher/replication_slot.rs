@@ -524,7 +524,7 @@ pub(crate) struct ReplicationLag {
 
 impl ReplicationLag {
     pub(crate) fn lag(&self) -> i64 {
-        self.current_lsn.lsn - self.confirmed_lsn.lsn
+        self.current_lsn.distance_bytes(&self.confirmed_lsn)
     }
 }
 
@@ -675,7 +675,7 @@ impl ReplicationSlotStream {
             self.server().addr()
         );
 
-        let lsn = Lsn::from_i64(status_update.last_flushed);
+        let lsn = Lsn::from_u64(status_update.last_flushed);
         self.slot.advance_lsn(lsn);
 
         self.server()
@@ -816,7 +816,7 @@ mod test {
             .await
             .unwrap();
         let lsn = Lsn::from_str(&result[0]).unwrap();
-        let lsn_2 = Lsn::from_i64(lsn.lsn);
+        let lsn_2 = Lsn::from_u64(lsn.lsn);
         assert_eq!(lsn.to_string(), result[0]);
         assert_eq!(lsn, lsn_2);
     }

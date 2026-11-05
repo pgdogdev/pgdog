@@ -29,7 +29,7 @@ impl QueryEngine {
         // Pass through the cluster's `read_only` flag (propagated from `User.read_only`)
         // to determine if we should exclude the primary from being allowed to read.
         let read_only = self.backend.cluster()?.read_only();
-        let request = Request::new(context.id, connect_route.is_read(), read_only);
+        let request = Request::new(context.id, connect_route, read_only);
 
         self.stats.waiting(request.created_at);
         self.comms.update_stats(self.stats);
