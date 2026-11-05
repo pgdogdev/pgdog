@@ -595,6 +595,36 @@ mod test {
     }
 
     #[test]
+    fn aggregate_max_min_compare_money_inet_by_value() {
+        let aggregate = parse("SELECT MAX(price), MIN(price) FROM samples");
+
+        for (oid, shards, max, min) in [
+            (790, ["₹1,000.00", "₹5.00"], "₹1,000.00", "₹5.00"),
+            (869, ["10.0.0.10", "9.0.0.1"], "10.0.0.10", "9.0.0.1"),
+        ] {
+            let mut max_field = integer_field("max");
+            max_field.type_oid = oid;
+            let mut min_field = integer_field("min");
+            min_field.type_oid = oid;
+            let decoder = Decoder::from(RowDescription::new(&[max_field, min_field]));
+
+            let rows = shards
+                .into_iter()
+                .map(|value| DataRow::from_columns(vec![value, value]))
+                .collect::<VecDeque<_>>();
+            let mut result = Aggregates::new(&rows, &decoder, &aggregate, None)
+                .unwrap()
+                .aggregate()
+                .unwrap();
+
+            assert_eq!(result.len(), 1);
+            let row = result.pop_front().unwrap();
+            assert_eq!(row.column(0), Some(Bytes::from(max)), "MAX for oid {oid}");
+            assert_eq!(row.column(1), Some(Bytes::from(min)), "MIN for oid {oid}");
+        }
+    }
+
+    #[test]
     fn aggregate_group_by_merges_rows() {
         let aggregate = parse("SELECT price, SUM(quantity) FROM menu GROUP BY 1");
 
