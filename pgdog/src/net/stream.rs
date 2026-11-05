@@ -1,17 +1,20 @@
 //! Network socket wrapper allowing us to treat secure, plain and UNIX
 //! connections the same across the code.
 use bytes::{BufMut, BytesMut};
-use futures::FutureExt;
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
+use socket2::SockRef;
+use tokio::io::{
+    AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf,
+};
 use tokio::net::TcpStream;
 use tracing::trace;
 
 use std::io::{Error, ErrorKind};
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::task::Context;
+use std::task::{Context, Poll, Waker};
 
 use super::messages::{ErrorResponse, Message, Protocol, ReadyForQuery};
 
@@ -185,19 +188,40 @@ impl Stream {
         }
     }
 
+    /// Whether the peer sent anything, or closed, since we last read.
+    ///
+    /// Looks at every buffer between the peer and us without waiting: our
+    /// read buffer, TLS's decrypted data, then the socket itself. The socket
+    /// is asked directly: the runtime's readiness lags behind data that
+    /// arrived while no task was polling it.
     pub(crate) fn liveness(&mut self) -> Liveness {
-        let mut buf = [0u8; 1];
-        let peeked = match &mut self.inner {
-            StreamInner::Plain(plain) => plain.get_mut().peek(&mut buf).now_or_never(),
-            StreamInner::Tls(tls) => tls.get_mut().get_mut().0.peek(&mut buf).now_or_never(),
+        let mut cx = Context::from_waker(Waker::noop());
+        let buffered = match &mut self.inner {
+            StreamInner::Plain(plain) => Pin::new(plain).poll_fill_buf(&mut cx).map_ok(<[u8]>::len),
+            StreamInner::Tls(tls) => Pin::new(tls).poll_fill_buf(&mut cx).map_ok(<[u8]>::len),
             StreamInner::DevNull => return Liveness::Clean,
         };
 
-        match peeked {
-            None => Liveness::Clean,
-            Some(Ok(0)) => Liveness::Closed,
-            Some(Ok(_)) => Liveness::DataPending,
-            Some(Err(_)) => Liveness::Closed,
+        match buffered {
+            Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => return Liveness::Closed,
+            Poll::Ready(Ok(_)) => return Liveness::DataPending,
+            Poll::Pending => (),
+        }
+
+        let socket = match &self.inner {
+            StreamInner::Plain(plain) => plain.get_ref(),
+            StreamInner::Tls(tls) => tls.get_ref().get_ref().0,
+            StreamInner::DevNull => return Liveness::Clean,
+        };
+
+        let mut buf = [MaybeUninit::uninit(); 1];
+        match SockRef::from(socket).peek(&mut buf) {
+            Ok(0) => Liveness::Closed,
+            Ok(_) => Liveness::DataPending,
+            Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+                Liveness::Clean
+            }
+            Err(_) => Liveness::Closed,
         }
     }
 
@@ -527,6 +551,38 @@ mod tests {
         let mut buf = [0u8; 5];
         stream.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"hello");
+    }
+
+    #[tokio::test]
+    async fn test_liveness_sees_the_read_buffer() {
+        let (mut stream, mut peer) = connected_pair().await;
+
+        peer.write_all(b"ZE").await.unwrap();
+        peer.flush().await.unwrap();
+
+        // Reading one byte fills our read buffer with both.
+        let mut first = [0u8; 1];
+        stream.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"Z");
+        assert_eq!(stream.liveness(), Liveness::DataPending);
+
+        let mut second = [0u8; 1];
+        stream.read_exact(&mut second).await.unwrap();
+        assert_eq!(&second, b"E");
+        assert_eq!(stream.liveness(), Liveness::Clean);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_sees_data_before_the_runtime_polls_the_socket() {
+        let (mut stream, mut peer) = connected_pair().await;
+        assert_eq!(stream.liveness(), Liveness::Clean);
+
+        // No yield between the write and the check: the runtime hasn't
+        // polled the socket since the data arrived.
+        peer.write_all(b"E").await.unwrap();
+        peer.flush().await.unwrap();
+
+        assert_eq!(stream.liveness(), Liveness::DataPending);
     }
 
     #[test]
