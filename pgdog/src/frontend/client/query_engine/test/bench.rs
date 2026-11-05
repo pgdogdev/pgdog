@@ -312,10 +312,10 @@ impl Runner {
         }
     }
 
-    async fn request(&mut self, input: Input) -> bool {
+    async fn request(&mut self, input: &mut Input) -> bool {
         match (input, &mut self.bench_client) {
-            (Input::Route(mut route_input), _) => {
-                let (client, engine) = &mut *route_input;
+            (Input::Route(route_input), _) => {
+                let (client, engine) = &mut **route_input;
                 route(client, engine).await;
                 true
             }
@@ -366,26 +366,6 @@ fn bench_config() {
     reload_from_existing().unwrap();
 }
 
-fn bench_config_for(group: &Group) -> Option<tokio::runtime::Runtime> {
-    match group.scope {
-        Scope::Route => {
-            let background = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            {
-                let _guard = background.enter();
-                bench_config();
-            }
-            Some(background)
-        }
-        Scope::Full => {
-            bench_config();
-            None
-        }
-    }
-}
-
 fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -393,13 +373,13 @@ fn bench(bencher: divan::Bencher, case: &Case, group: &Group) {
         .unwrap();
 
     let _guard = rt.enter();
-    let _background = bench_config_for(group);
+    bench_config();
 
     let runner = RefCell::new(rt.block_on(Runner::new(case, group)));
 
     bencher
         .with_inputs(|| runner.borrow().input())
-        .bench_local_values(|input| rt.block_on(runner.borrow_mut().request(input)));
+        .bench_local_refs(|input| rt.block_on(runner.borrow_mut().request(input)));
 }
 
 #[divan::bench(args = CASES, sample_count = 1000)]
@@ -456,12 +436,12 @@ fn count_instructions() {
 
     for group in GROUPS {
         for case in CASES {
-            let _background = bench_config_for(group);
+            bench_config();
             let mut runner = rt.block_on(Runner::new(case, group));
 
             for _ in 0..WARMUP {
-                let input = runner.input();
-                rt.block_on(runner.request(input));
+                let mut input = runner.input();
+                rt.block_on(runner.request(&mut input));
             }
 
             let mut counter = instructions::Instructions::new().unwrap();
@@ -469,10 +449,10 @@ fn count_instructions() {
             let mut previous = 0;
 
             for _ in 0..ITERATIONS {
-                let input = runner.input();
+                let mut input = runner.input();
 
                 counter.enable().unwrap();
-                rt.block_on(runner.request(input));
+                rt.block_on(runner.request(&mut input));
                 counter.disable().unwrap();
 
                 let total = counter.read().unwrap();
@@ -497,8 +477,8 @@ async fn test_bench_groups() {
         for case in CASES {
             bench_config();
             let mut runner = Runner::new(case, group).await;
-            let input = runner.input();
-            let ok = Box::pin(runner.request(input)).await;
+            let mut input = runner.input();
+            let ok = Box::pin(runner.request(&mut input)).await;
             assert!(ok, "{}::{case}: error", group.name);
         }
     }
@@ -523,8 +503,8 @@ fn test_bench_memory_steady() {
             let mut runner = rt.block_on(Runner::new(case, group));
             let mut run = |requests| {
                 for _ in 0..requests {
-                    let input = runner.input();
-                    rt.block_on(runner.request(input));
+                    let mut input = runner.input();
+                    rt.block_on(runner.request(&mut input));
                 }
             };
 
