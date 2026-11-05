@@ -9,7 +9,6 @@ use crate::api::task::TaskError;
 use crate::api::{MigrationError, run_task};
 use crate::backend::databases::databases;
 use crate::backend::replication::logical::Error::ReplicationAborted;
-use crate::backend::replication::logical::table_move::TableMove;
 use crate::backend::replication::resharding_state::ReshardingState;
 use crate::backend::schema::sync::config::ShardConfig;
 use crate::frontend::comms::comms;
@@ -84,21 +83,22 @@ pub(crate) enum Commands {
         from_database: String,
 
         /// Publication name.
-        #[arg(long, required_unless_present = "table", conflicts_with = "table")]
-        publication: Option<String>,
-
-        /// Move a single table ("table" or "schema.table") instead of a publication.
-        /// Schema sync creates only this table. Runs until interrupted, without cutover.
         #[arg(long)]
-        table: Option<String>,
+        publication: String,
 
         /// Destination database.
         #[arg(long)]
         to_database: String,
 
         /// Only replicate; skip the initial data copy.
-        #[arg(long, default_value = "false", conflicts_with = "table")]
+        #[arg(long, default_value = "false")]
         replicate_only: bool,
+
+        /// Copy only the publication's tables: schema sync creates just those
+        /// tables, referenced tables must already exist on the destination,
+        /// and replication runs until stopped, without cutover.
+        #[arg(long)]
+        tables_only: bool,
 
         /// Only copy data and synchronize tables; skip replication and cutover.
         #[arg(long, default_value = "false")]
@@ -236,20 +236,13 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         from_database,
         to_database,
         publication,
-        table,
         replicate_only,
+        tables_only,
         sync_only,
         replication_slot,
         skip_schema_sync,
     } = commands
     {
-        let table_move = table.map(TableMove::new);
-        let publication = match (&table_move, publication) {
-            (Some(table_move), _) => table_move.publication().to_owned(),
-            (None, Some(publication)) => publication,
-            (None, None) => return Err("--publication or --table is required".into()),
-        };
-
         let state = ReshardingState::builder()
             .source(&from_database)
             .destination(&to_database)
@@ -260,7 +253,7 @@ pub(crate) async fn data_sync(commands: Commands) -> Result<(), Box<dyn std::err
         let result = run_task(
             ReshardTask::builder()
                 .state(state)
-                .maybe_table_move(table_move)
+                .tables_only(tables_only)
                 .skip_schema_sync(skip_schema_sync)
                 .replicate_only(replicate_only)
                 .sync_only(sync_only)
@@ -380,31 +373,15 @@ mod test {
         }
 
         #[test]
-        fn test_table_or_publication() {
-            let Commands::DataSync {
-                table, publication, ..
-            } = parse(&["--table", "sales.orders"]).unwrap()
-            else {
-                panic!("not a data sync command");
-            };
-            assert_eq!(table.as_deref(), Some("sales.orders"));
-            assert_eq!(publication, None);
-
-            let Commands::DataSync {
-                table, publication, ..
-            } = parse(&["--publication", "p"]).unwrap()
-            else {
-                panic!("not a data sync command");
-            };
-            assert_eq!(table, None);
-            assert_eq!(publication.as_deref(), Some("p"));
-
-            for args in [
-                vec![],
-                vec!["--table", "t", "--publication", "p"],
-                vec!["--table", "t", "--replicate-only"],
+        fn test_tables_only() {
+            for (args, expected) in [
+                (vec!["--publication", "p"], false),
+                (vec!["--publication", "p", "--tables-only"], true),
             ] {
-                assert!(parse(&args).is_err(), "{args:?}");
+                let Commands::DataSync { tables_only, .. } = parse(&args).unwrap() else {
+                    panic!("not a data sync command");
+                };
+                assert_eq!(tables_only, expected, "{args:?}");
             }
         }
     }

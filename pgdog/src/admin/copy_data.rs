@@ -4,22 +4,17 @@ use tracing::info;
 
 use crate::api::resharding::ReshardTask;
 use crate::api::run_task;
-use crate::backend::replication::logical::table_move::TableMove;
 use crate::backend::replication::resharding_state::ReshardingState;
 
 use super::prelude::*;
 
-/// What to copy: the tables of an existing publication, or a single table.
-pub(crate) enum CopySource {
-    Publication(String),
-    Table(String),
-}
-
 pub(crate) struct CopyData {
     pub(crate) from_database: String,
     pub(crate) to_database: String,
-    pub(crate) source: CopySource,
+    pub(crate) publication: String,
     pub(crate) replication_slot: Option<String>,
+    /// `ONLY`: copy only the publication's tables, without cutover.
+    pub(crate) tables_only: bool,
 }
 
 #[async_trait]
@@ -29,58 +24,47 @@ impl Command for CopyData {
     }
 
     fn parse(sql: &str) -> Result<Self, Error> {
-        let parts = sql.split(" ").collect::<Vec<_>>();
+        let mut parts = sql.split(" ").collect::<Vec<_>>();
+        let tables_only = parts.len() > 4 && parts.last() == Some(&"only");
+        if tables_only {
+            parts.pop();
+        }
 
-        let (from_database, to_database, source, replication_slot) = match parts[..] {
-            ["copy_data", from, to, "table", table] => {
-                (from, to, CopySource::Table(table.to_owned()), None)
-            }
-            ["copy_data", from, to, publication] => (
-                from,
-                to,
-                CopySource::Publication(publication.to_owned()),
-                None,
-            ),
-            ["copy_data", from, to, publication, slot] => (
-                from,
-                to,
-                CopySource::Publication(publication.to_owned()),
-                Some(slot),
-            ),
-            _ => return Err(Error::Syntax),
-        };
-
-        Ok(Self {
-            from_database: from_database.to_owned(),
-            to_database: to_database.to_owned(),
-            source,
-            replication_slot: replication_slot.map(str::to_owned),
-        })
+        match parts[..] {
+            ["copy_data", from_database, to_database, publication] => Ok(Self {
+                from_database: from_database.to_owned(),
+                to_database: to_database.to_owned(),
+                publication: publication.to_owned(),
+                replication_slot: None,
+                tables_only,
+            }),
+            [
+                "copy_data",
+                from_database,
+                to_database,
+                publication,
+                replication_slot,
+            ] => Ok(Self {
+                from_database: from_database.to_owned(),
+                to_database: to_database.to_owned(),
+                publication: publication.to_owned(),
+                replication_slot: Some(replication_slot.to_owned()),
+                tables_only,
+            }),
+            _ => Err(Error::Syntax),
+        }
     }
 
     async fn execute(&self) -> Result<Vec<Message>, Error> {
-        let (publication, table_move) = match &self.source {
-            CopySource::Publication(publication) => {
-                info!(
-                    r#"copy_data "{}" to "{}", publication="{}""#,
-                    self.from_database, self.to_database, publication
-                );
-                (publication.clone(), None)
-            }
-            CopySource::Table(table) => {
-                info!(
-                    r#"copy_data "{}" to "{}", table="{}""#,
-                    self.from_database, self.to_database, table
-                );
-                let table_move = TableMove::new(table.clone());
-                (table_move.publication().to_owned(), Some(table_move))
-            }
-        };
+        info!(
+            r#"copy_data "{}" to "{}", publication="{}", tables_only={}"#,
+            self.from_database, self.to_database, self.publication, self.tables_only
+        );
 
         let state = ReshardingState::builder()
             .source(&self.from_database)
             .destination(&self.to_database)
-            .publication(&publication)
+            .publication(&self.publication)
             .maybe_replication_slot(self.replication_slot.clone())
             .build()?;
 
@@ -89,7 +73,7 @@ impl Command for CopyData {
         let task_id = run_task(
             ReshardTask::builder()
                 .state(state)
-                .maybe_table_move(table_move)
+                .tables_only(self.tables_only)
                 .build(),
         )
         .id();
@@ -110,21 +94,24 @@ mod test {
     use super::*;
 
     #[test]
-    fn parses_publication_and_table_forms() {
-        let cmd = CopyData::parse("copy_data a b pub").unwrap();
-        assert!(matches!(&cmd.source, CopySource::Publication(p) if p == "pub"));
-        assert_eq!(cmd.replication_slot, None);
+    fn parses_only() {
+        for (sql, slot, tables_only) in [
+            ("copy_data a b pub", None, false),
+            ("copy_data a b pub slot", Some("slot"), false),
+            ("copy_data a b pub only", None, true),
+            ("copy_data a b pub slot only", Some("slot"), true),
+        ] {
+            let cmd = CopyData::parse(sql).unwrap();
+            assert_eq!(cmd.publication, "pub", "{sql}");
+            assert_eq!(cmd.replication_slot.as_deref(), slot, "{sql}");
+            assert_eq!(cmd.tables_only, tables_only, "{sql}");
+        }
 
-        let cmd = CopyData::parse("copy_data a b pub slot").unwrap();
-        assert!(matches!(&cmd.source, CopySource::Publication(p) if p == "pub"));
-        assert_eq!(cmd.replication_slot.as_deref(), Some("slot"));
+        // A publication named "only".
+        let cmd = CopyData::parse("copy_data a b only").unwrap();
+        assert_eq!(cmd.publication, "only");
+        assert!(!cmd.tables_only);
 
-        let cmd = CopyData::parse("copy_data a b table sales.orders").unwrap();
-        assert!(matches!(&cmd.source, CopySource::Table(t) if t == "sales.orders"));
-        assert_eq!(cmd.replication_slot, None);
-        assert_eq!(cmd.from_database, "a");
-        assert_eq!(cmd.to_database, "b");
-
-        assert!(CopyData::parse("copy_data a b").is_err());
+        assert!(CopyData::parse("copy_data a b pub slot extra only").is_err());
     }
 }

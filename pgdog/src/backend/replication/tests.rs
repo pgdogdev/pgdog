@@ -10,7 +10,6 @@ use super::logical::Error;
 use super::logical::publisher::Table;
 use super::logical::publisher::replication_progress::ReplicationProgress;
 use super::logical::resharding_state::ReshardingState;
-use super::logical::table_move::TableMove;
 use crate::{
     api::{
         MigrationError,
@@ -979,10 +978,10 @@ async fn post_data_fails_when_index_rejects_copied_rows() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
-async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std::error::Error>> {
+async fn tables_only_copies_and_replicates_one_table() -> Result<(), Box<dyn std::error::Error>> {
     crate::logger();
-    let schema = "table_move_e2e";
-    let destination = "table_move_e2e_dest";
+    let schema = "tables_only_e2e";
+    let destination = "tables_only_e2e_dest";
     let original_config = config();
     let mut admin = test_server().await;
     let result = async {
@@ -996,25 +995,19 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
                  CREATE TABLE {schema}.main (id BIGSERIAL PRIMARY KEY, payload TEXT); \
                  CREATE INDEX main_payload_idx ON {schema}.main (payload); \
                  CREATE TABLE {schema}.other (id BIGINT PRIMARY KEY); \
-                 INSERT INTO {schema}.main (payload) SELECT 'row' FROM generate_series(1, 10)"
+                 INSERT INTO {schema}.main (payload) SELECT 'row' FROM generate_series(1, 10); \
+                 CREATE PUBLICATION {schema} FOR TABLE {schema}.main"
             ))
             .await?;
         let mut dest_server = dest.primary(0, &Request::default()).await?;
 
-        let table_move = TableMove::new(format!("{schema}.main"));
-        let publication = table_move.publication().to_owned();
         let state = ReshardingState::builder()
             .source(schema)
             .destination(destination)
-            .publication(&publication)
+            .publication(schema)
             .maybe_replication_slot(Some(schema.into()))
             .build()?;
-        let task = run_task(
-            ReshardTask::builder()
-                .state(state)
-                .table_move(table_move)
-                .build(),
-        );
+        let task = run_task(ReshardTask::builder().state(state).tables_only(true).build());
         let id = task.id();
 
         wait_for_reshard_status(
@@ -1049,11 +1042,6 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
         let outcome = tokio::time::timeout(Duration::from_secs(90), task).await?;
 
         let leftover_slots = source_slots(&mut server, schema).await?;
-        let leftover_publications: Vec<i64> = server
-            .fetch_all(format!(
-                "SELECT count(*) FROM pg_publication WHERE pubname = '{publication}'"
-            ))
-            .await?;
         let source_rows: Vec<i64> = server
             .fetch_all(format!("SELECT count(*) FROM {schema}.main"))
             .await?;
@@ -1077,7 +1065,6 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
             outcome.is_err(),
             cutover_accepted,
             leftover_slots,
-            leftover_publications,
             source_rows,
             next_id,
             other_on_dest,
@@ -1092,16 +1079,14 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
         stopped,
         cutover_accepted,
         leftover_slots,
-        leftover_publications,
         source_rows,
         next_id,
         other_on_dest,
         index_on_dest,
     ) = result?;
-    assert!(stopped, "a stopped table move reports as cancelled");
-    assert!(!cutover_accepted, "a table move must never cut over");
+    assert!(stopped, "a stopped copy reports as cancelled");
+    assert!(!cutover_accepted, "copying some tables must never cut over");
     assert_eq!(leftover_slots, Vec::<String>::new());
-    assert_eq!(leftover_publications, [0]);
     assert_eq!(source_rows, [15], "the source table is left in place");
     assert_eq!(next_id, [16], "the destination sequence follows the data");
     assert_eq!(other_on_dest, [0], "only the moved table is copied");
@@ -1109,81 +1094,6 @@ async fn table_move_copies_and_replicates_one_table() -> Result<(), Box<dyn std:
         index_on_dest,
         [1],
         "post-data schema sync adds the table's indexes"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn table_move_fails_before_copy_when_referenced_table_is_missing()
--> Result<(), Box<dyn std::error::Error>> {
-    let schema = "table_move_fk";
-    let destination = "table_move_fk_dest";
-    let original_config = config();
-    let mut admin = test_server().await;
-    let result = async {
-        setup_replication_test(&mut admin, schema, destination).await?;
-        let source = databases::databases().schema_owner(schema)?;
-        let dest = databases::databases().schema_owner(destination)?;
-        let mut server = source.primary(0, &Request::default()).await?;
-        server
-            .execute_checked(format!(
-                "CREATE SCHEMA {schema}; \
-                 CREATE TABLE {schema}.parent (id BIGINT PRIMARY KEY); \
-                 CREATE TABLE {schema}.child (id BIGINT PRIMARY KEY, \
-                 parent_id BIGINT REFERENCES {schema}.parent(id))"
-            ))
-            .await?;
-
-        let table_move = TableMove::new(format!("{schema}.child"));
-        let state = ReshardingState::builder()
-            .source(schema)
-            .destination(destination)
-            .publication(table_move.publication())
-            .build()?;
-        let outcome = tokio::time::timeout(
-            Duration::from_secs(30),
-            run_task(
-                ReshardTask::builder()
-                    .state(state)
-                    .table_move(table_move)
-                    .build(),
-            ),
-        )
-        .await?;
-
-        let publications: Vec<i64> = server
-            .fetch_all("SELECT count(*) FROM pg_publication WHERE pubname LIKE '__pgdog_move_%'")
-            .await?;
-        let slots: Vec<i64> = server
-            .fetch_all("SELECT count(*) FROM pg_replication_slots")
-            .await?;
-        let mut dest_server = dest.primary(0, &Request::default()).await?;
-        let child_on_dest: Vec<i64> = dest_server
-            .fetch_all(format!(
-                "SELECT count(*) FROM pg_tables WHERE schemaname = '{schema}' AND tablename = 'child'"
-            ))
-            .await?;
-
-        Ok::<_, Box<dyn std::error::Error>>((outcome, publications, slots, child_on_dest))
-    }
-    .await;
-
-    cleanup_replication_test(&mut admin, &original_config, [schema, destination]).await?;
-
-    let (outcome, publications, slots, child_on_dest) = result?;
-    let err = outcome.expect_err("a missing referenced table fails the move");
-    assert!(
-        err.to_string()
-            .contains("references tables that don't exist"),
-        "{err}"
-    );
-    assert_eq!(publications, [0]);
-    assert_eq!(slots, [0]);
-    assert_eq!(
-        child_on_dest,
-        [0],
-        "nothing is created before the checks pass"
     );
 
     Ok(())

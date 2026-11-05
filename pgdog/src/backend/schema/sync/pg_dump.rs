@@ -174,6 +174,27 @@ impl PgDump {
         patterns
     }
 
+    /// `pg_dump --table` doesn't dump the schemas the tables are in.
+    fn create_schemas(tables: &[PublicationTable]) -> String {
+        let mut schemas = vec![];
+        for table in tables {
+            for schema in [table.destination_schema(), table.schema.as_str()] {
+                if !schemas.contains(&schema) {
+                    schemas.push(schema);
+                }
+            }
+        }
+        schemas
+            .into_iter()
+            .map(|schema| {
+                format!(
+                    "CREATE SCHEMA IF NOT EXISTS \"{}\";\n",
+                    crate::util::escape_identifier(schema)
+                )
+            })
+            .collect()
+    }
+
     fn clean(source: &str) -> String {
         lazy_static! {
             static ref CLEANUP_RE: Regex = Regex::new(r"(?m)^\\(?:un)?restrict.*\n?").unwrap();
@@ -265,7 +286,10 @@ impl PgDump {
         let original = from_utf8(&output.stdout)?.to_string();
         trace!("[pg_dump (original)] {}", original);
 
-        let cleaned = Self::clean(&original);
+        let mut cleaned = Self::clean(&original);
+        if self.publication_tables_only {
+            cleaned.insert_str(0, &Self::create_schemas(&comparison));
+        }
         trace!("[pg_dump (clean)] {}", cleaned);
 
         let stmts = pg_raw_parse::parse(&cleaned)?.into_inner();
@@ -1026,7 +1050,7 @@ mod test {
     }
 
     #[test]
-    fn test_table_patterns_include_partition_parents() {
+    fn test_table_patterns_and_schemas_include_partition_parents() {
         let tables = [
             PublicationTable {
                 schema: "sales".into(),
@@ -1063,6 +1087,11 @@ mod test {
                 r#""sales"."events_2027""#,
                 r#""My ""Schema"""."T""#,
             ]
+        );
+        assert_eq!(
+            PgDump::create_schemas(&tables),
+            "CREATE SCHEMA IF NOT EXISTS \"sales\";\n\
+             CREATE SCHEMA IF NOT EXISTS \"My \"\"Schema\"\"\";\n"
         );
     }
 

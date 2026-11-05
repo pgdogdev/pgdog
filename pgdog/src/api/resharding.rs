@@ -16,7 +16,6 @@ use crate::api::synchronize_tables::SynchronizeTablesTask;
 use crate::api::task::TaskContext;
 use crate::api::{MigrationError, Task, run_task};
 use crate::backend::replication::logical::resharding_state::ReshardingState;
-use crate::backend::replication::logical::table_move::TableMove;
 use crate::config::config;
 use pgdog_stats::{ReshardDefinition, ReshardStatus, TaskDefinition};
 
@@ -39,9 +38,11 @@ pub(crate) struct ReshardTask {
     /// waiting for an operator `CUTOVER`. Set by the reshard flow.
     #[builder(default)]
     pub(crate) auto_cutover: bool,
-    /// Move this single table instead of the tables in a user publication.
-    /// Schema sync covers only this table, and replication never cuts over.
-    pub(crate) table_move: Option<TableMove>,
+    /// Copy only the publication's tables instead of the whole database:
+    /// schema sync creates just those tables, referenced tables must exist
+    /// on the destination, and replication never cuts over.
+    #[builder(default)]
+    pub(crate) tables_only: bool,
 }
 
 impl Task for ReshardTask {
@@ -70,32 +71,30 @@ impl Task for ReshardTask {
         let schema_sync = SchemaSyncTask::builder()
             .databases(state.databases())
             .publication(state.publication.clone())
-            .publication_tables_only(self.table_move.is_some());
+            .publication_tables_only(self.tables_only);
 
-        let mut copied = false;
+        // Pre-data schema sync, unless skipped. It runs before any replication
+        // slots exist, so it stays outside the cleanup guard below.
+        if !self.skip_schema_sync {
+            ctx.set_status(ReshardStatus::SchemaSync);
+            ctx.run(
+                schema_sync
+                    .clone()
+                    .phase(SchemaSyncPhase::Pre)
+                    .ignore_errors(true)
+                    .build(),
+            )
+            .await?;
+
+            // The pre-data sync changed the destination's schema, so its pools
+            // reloaded. `SchemaSync::reload_destination` refreshes only its own
+            // cluster refs, so the state still holds stale ones.
+            state.reload()?;
+        }
+
+        // Replicate-only continues an earlier copy.
+        let mut copied = self.replicate_only;
         let result: Result<(), MigrationError> = Box::pin(async {
-            if let Some(table_move) = &self.table_move {
-                table_move.prepare(&state).await?;
-            }
-
-            // Pre-data schema sync, unless skipped.
-            if !self.skip_schema_sync {
-                ctx.set_status(ReshardStatus::SchemaSync);
-                ctx.run(
-                    schema_sync
-                        .clone()
-                        .phase(SchemaSyncPhase::Pre)
-                        .ignore_errors(true)
-                        .build(),
-                )
-                .await?;
-
-                // The pre-data sync changed the destination's schema, so its pools
-                // reloaded. `SchemaSync::reload_destination` refreshes only its own
-                // cluster refs, so the state still holds stale ones.
-                state.reload()?;
-            }
-
             // Copy the data, unless replicate-only.
             if !self.replicate_only {
                 ctx.set_status(ReshardStatus::SyncingData);
@@ -162,8 +161,7 @@ impl Task for ReshardTask {
         })
         .await;
 
-        // A table move drops its publication, so its slots can't be reused.
-        if result.is_err() || cancel.is_cancelled() || self.table_move.is_some() {
+        if result.is_err() || cancel.is_cancelled() {
             // on error or cancellation make sure we drop the slots,
             // but only the slots we're actually created during this run.
             // If the slots were created outside or by calling pgdog
@@ -178,23 +176,20 @@ impl Task for ReshardTask {
             state.detach_slots();
         }
 
-        if let Some(table_move) = &self.table_move {
-            if copied {
-                // A table move never cuts over, so run the cutover phase
-                // here to set its sequences. It's a separate task because
-                // a stop cancels this one and every subtask.
-                let sequences = run_task(
-                    schema_sync
-                        .phase(SchemaSyncPhase::Cutover)
-                        .ignore_errors(true)
-                        .build(),
-                )
-                .await;
-                if let Err(err) = sequences {
-                    warn!("failed to sync sequences after the table move: {err}");
-                }
+        if self.tables_only && copied {
+            // There's no cutover, so run the cutover phase here to set the
+            // tables' sequences. It's a separate task because a stop cancels
+            // this one and every subtask.
+            let sequences = run_task(
+                schema_sync
+                    .phase(SchemaSyncPhase::Cutover)
+                    .ignore_errors(true)
+                    .build(),
+            )
+            .await;
+            if let Err(err) = sequences {
+                warn!("failed to sync sequences: {err}");
             }
-            table_move.finish(&state, copied).await;
         }
 
         result
@@ -202,9 +197,9 @@ impl Task for ReshardTask {
 }
 
 impl ReshardTask {
-    /// A table move never cuts over: a cutover swaps whole databases.
+    /// Copying only some tables never cuts over: a cutover swaps whole databases.
     fn cutover_mode(&self) -> CutoverMode {
-        if self.table_move.is_some() {
+        if self.tables_only {
             CutoverMode::Disabled
         } else if self.auto_cutover {
             CutoverMode::Auto
