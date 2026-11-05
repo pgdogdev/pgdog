@@ -9,7 +9,7 @@ use crate::frontend::router::Route;
 use crate::frontend::router::parser::ShardWithPriority;
 use crate::frontend::router::parser::rewrite::statement::insert::{Subquery, build_split_requests};
 use crate::frontend::router::parser::rewrite::statement::non_deterministic_funcs::NDFunction;
-use crate::frontend::{ClientRequest, PreparedStatements};
+use crate::frontend::{BufferedQuery, ClientRequest, PreparedOperation, PreparedStatements};
 use crate::net::messages::bind::{Format, Parameter};
 use crate::net::{Bind, Parse, ProtocolMessage, Query, parameter::ParameterValue};
 use crate::unique_id::UniqueId;
@@ -70,9 +70,14 @@ impl BindParams {
         }
     }
 
+    /// Any parameter PgDog generates itself, e.g. `pgdog.unique_id()`.
     fn has_generated(&self) -> bool {
-        self.iter()
-            .any(|param| !matches!(param.as_ref(), BindParam::FromClientBind(_)))
+        match self {
+            Self::Original { .. } => false,
+            Self::Modified { params } => params
+                .iter()
+                .any(|b| !matches!(b, BindParam::FromClientBind(_))),
+        }
     }
 
     #[cfg(test)]
@@ -139,6 +144,9 @@ pub(crate) struct RewritePlan {
     /// Prepared statements to prepend to the client request.
     /// Each tuple contains (name, statement) for ProtocolMessage::Prepare.
     pub(crate) prepare_rewrites: Vec<PrepareExecute>,
+
+    /// Mapping from SQL EXECUTE arguments to outer protocol Bind parameters.
+    pub(super) execute_bind_mapping: Option<Vec<usize>>,
 
     /// Splitting of multi-tuple INSERT statements into
     /// multiple queries.
@@ -329,43 +337,40 @@ impl RewritePlan {
         timezone: Option<&ParameterValue>,
         timestamps: QueryTimestamps,
     ) -> Result<RewriteResult, Error> {
+        let execute_prepare = self
+            .prepare_rewrites
+            .iter()
+            .find_map(|rewrite| match rewrite {
+                PrepareExecute::Execute(prepare) => Some(prepare),
+                PrepareExecute::Prepare(_) => None,
+            });
+        // An EXECUTE whose arguments come from Bind skips the outer statement:
+        // Bind is remapped and renamed to the SQL prepared statement.
+        let bound_execute = if let Some(prepare) = execute_prepare
+            && request
+                .parameters()?
+                .is_some_and(|bind| !bind.params_raw().is_empty())
+        {
+            if self.offset.is_some() {
+                return Err(Error::UnsupportedBoundExecute("LIMIT/OFFSET rewrites"));
+            }
+            let mapping =
+                self.execute_bind_mapping
+                    .as_ref()
+                    .ok_or(Error::UnsupportedBoundExecute(
+                        "mixed literal and protocol parameters",
+                    ))?;
+            Some((prepare.name(), mapping))
+        } else {
+            None
+        };
+
         // Add the internal state required by SQL PREPARE/EXECUTE.
         if !self.prepare_rewrites.is_empty() {
             let simple = request
                 .messages
                 .iter()
                 .any(|message| matches!(message, ProtocolMessage::Query(_)));
-
-            // Extended protocol: the client expects replies to its own Parse/Bind/Execute,
-            // so the messages can't be replaced with a simple-protocol PREPARE.
-            if !simple {
-                if request.opens_portal() {
-                    return Err(Error::UnsupportedExtendedPrepared(
-                        "portals spanning requests",
-                    ));
-                }
-
-                let anonymous = request.messages.iter().any(|message| match message {
-                    ProtocolMessage::Parse(parse) => parse.anonymous(),
-                    ProtocolMessage::Bind(bind) => bind.anonymous(),
-                    _ => false,
-                });
-                if anonymous {
-                    return Err(Error::UnsupportedExtendedPrepared("anonymous statements"));
-                }
-
-                let executes_sql_prepared = self
-                    .prepare_rewrites
-                    .iter()
-                    .any(|rewrite| matches!(rewrite, PrepareExecute::Execute(_)));
-                if executes_sql_prepared
-                    && (self.offset.is_some() || self.bind_params.has_generated())
-                {
-                    return Err(Error::UnsupportedExtendedPrepared(
-                        "execution-specific rewrites",
-                    ));
-                }
-            }
 
             self.prepare_rewrites
                 .iter()
@@ -377,7 +382,9 @@ impl RewritePlan {
                         } else {
                             // Keep the client's extended exchange intact. The backend
                             // records this SQL-level statement when Execute completes.
-                            request.prepare_on_execute = Some(Box::new(prepare.clone()));
+                            request.prepared_operation = Some(Box::new(
+                                PreparedOperation::PrepareOnExecute(prepare.clone()),
+                            ));
                         }
                     }
                     PrepareExecute::Execute(prepare) => {
@@ -396,11 +403,35 @@ impl RewritePlan {
                     anonymous_client_params = self.apply_parse(parse);
                 }
                 ProtocolMessage::Query(query) => self.apply_query(query).await?,
+                ProtocolMessage::Bind(bind) if let Some((statement, mapping)) = &bound_execute => {
+                    let in_order = mapping.len() == bind.params_raw().len()
+                        && mapping.iter().enumerate().all(|(i, &param)| i == param);
+                    if !in_order {
+                        bind.remap_params(mapping)?;
+                    }
+                    bind.rename(statement);
+                    self.apply_bind(bind, timezone, timestamps).await?;
+                }
                 ProtocolMessage::Bind(bind) if self.prepare_rewrites.is_empty() => {
                     self.apply_bind(bind, timezone, timestamps).await?
                 }
                 _ => {}
             }
+        }
+
+        if bound_execute.is_none()
+            && execute_prepare.is_some()
+            && (self.offset.is_some() || self.bind_params.has_generated())
+            && request.parameters()?.is_some()
+            && let Some(BufferedQuery::Prepared(mut parse)) = request.query()?
+        {
+            // Drivers reuse the outer named statement and send only Bind next time, so
+            // values generated for this execution (unique IDs, per-shard LIMIT/OFFSET)
+            // would go stale. Parse an anonymous copy right before Bind instead.
+            parse.anonymize();
+            anonymous_client_params = self.apply_parse(&mut parse);
+            request.last_parse = None;
+            request.prepared_operation = Some(Box::new(PreparedOperation::RewriteExecute(parse)));
         }
 
         if request.is_executable()
@@ -628,7 +659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extended_sql_prepare_rejects_anonymous_statement() {
+    async fn extended_sql_prepare_supports_anonymous_and_spanning_portal() {
         let plan = RewritePlan {
             prepare_rewrites: vec![PrepareExecute::Prepare(crate::net::Prepare::new(
                 "__pgdog_1",
@@ -636,25 +667,37 @@ mod tests {
             ))],
             ..Default::default()
         };
-        let mut request = ClientRequest::from(vec![
-            Parse::new_anonymous("PREPARE stmt AS SELECT $1").into(),
-            Bind::default().into(),
-        ]);
+        let requests: [Vec<ProtocolMessage>; 2] = [
+            vec![
+                Parse::new_anonymous("PREPARE stmt AS SELECT $1").into(),
+                Bind::default().into(),
+            ],
+            vec![
+                Parse::named("outer", "PREPARE stmt AS SELECT $1").into(),
+                Bind::new_statement("outer").into(),
+                Execute::new().into(),
+                crate::net::Flush.into(),
+            ],
+        ];
 
-        let error = plan
-            .apply(&mut request, None, QueryTimestamps::now())
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::UnsupportedExtendedPrepared("anonymous statements")
-        ));
+        for messages in requests {
+            let mut request = ClientRequest::from(messages);
+            assert!(matches!(
+                plan.apply(&mut request, None, QueryTimestamps::now()).await,
+                Ok(RewriteResult::InPlace { .. })
+            ));
+            assert!(matches!(
+                request.prepared_operation.as_deref(),
+                Some(PreparedOperation::PrepareOnExecute(_))
+            ));
+        }
     }
 
     #[tokio::test]
-    async fn extended_sql_execute_rejects_generated_values() {
+    async fn extended_sql_execute_uses_anonymous_per_execution_parse() {
         let plan = RewritePlan {
             bind_params: vec![BindParam::UniqueId].into(),
+            stmt: Some("EXECUTE __pgdog_1(42)".to_string()),
             prepare_rewrites: vec![PrepareExecute::Execute(crate::net::Prepare::new(
                 "__pgdog_1",
                 "PREPARE __pgdog_template_name AS SELECT $1",
@@ -666,39 +709,40 @@ mod tests {
             Bind::new_statement("outer").into(),
         ]);
 
-        let error = plan
-            .apply(&mut request, None, QueryTimestamps::now())
+        plan.apply(&mut request, None, QueryTimestamps::now())
             .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::UnsupportedExtendedPrepared("execution-specific rewrites")
-        ));
+            .unwrap();
+        let Some(PreparedOperation::RewriteExecute(parse)) = request.prepared_operation.as_deref()
+        else {
+            panic!("expected an execution-specific Parse");
+        };
+        assert!(parse.anonymous());
+        assert_eq!(parse.query(), "EXECUTE __pgdog_1(42)");
     }
 
     #[tokio::test]
-    async fn extended_sql_prepare_rejects_spanning_portal() {
+    async fn extended_sql_execute_without_generated_values_keeps_client_statement() {
         let plan = RewritePlan {
-            prepare_rewrites: vec![PrepareExecute::Prepare(crate::net::Prepare::new(
+            stmt: Some("EXECUTE __pgdog_1(5)".to_string()),
+            prepare_rewrites: vec![PrepareExecute::Execute(crate::net::Prepare::new(
                 "__pgdog_1",
                 "PREPARE __pgdog_template_name AS SELECT $1",
             ))],
             ..Default::default()
         };
         let mut request = ClientRequest::from(vec![
-            Parse::named("outer", "PREPARE stmt AS SELECT $1").into(),
+            Parse::named("outer", "EXECUTE stmt(5)").into(),
             Bind::new_statement("outer").into(),
-            Execute::new().into(),
-            crate::net::Flush.into(),
         ]);
 
-        let error = plan
-            .apply(&mut request, None, QueryTimestamps::now())
+        plan.apply(&mut request, None, QueryTimestamps::now())
             .await
-            .unwrap_err();
+            .unwrap();
+
+        assert!(request.prepared_operation.is_none());
         assert!(matches!(
-            error,
-            Error::UnsupportedExtendedPrepared("portals spanning requests")
+            request.parameters().unwrap(),
+            Some(bind) if bind.statement() == "outer"
         ));
     }
 }

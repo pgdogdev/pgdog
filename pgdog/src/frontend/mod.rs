@@ -15,7 +15,7 @@ pub(crate) mod stats;
 
 pub(crate) use buffered_query::BufferedQuery;
 pub(crate) use client::Client;
-pub(crate) use client_request::ClientRequest;
+pub(crate) use client_request::{ClientRequest, PreparedOperation};
 pub(crate) use comms::ClientComms;
 pub(crate) use connected_client::ConnectedClient;
 pub(crate) use error::Error;

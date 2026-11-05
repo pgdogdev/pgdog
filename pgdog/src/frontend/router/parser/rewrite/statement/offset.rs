@@ -2,8 +2,8 @@ use std::ops::Deref;
 
 use pg_raw_parse::{ConstValue, Node, deparse, make, nodes};
 
-use crate::frontend::ClientRequest;
 use crate::frontend::router::parser::Limit;
+use crate::frontend::{ClientRequest, PreparedOperation};
 use crate::net::ProtocolMessage;
 
 use super::*;
@@ -124,13 +124,19 @@ impl OffsetPlan {
         let new_execute = new_execute.deref();
         let new_execute_sql = deparse(new_execute)?;
 
-        // `ExecuteStmt` will be a Query, because this is simple-protocol.
-        // Replace with our re-written `ExecuteStmt`
-        // (replacing limit/offset with proper multi-shard vlaues)
+        // Replace SQL EXECUTE's LIMIT/OFFSET arguments with the values each
+        // shard needs. Extended execution uses an internal anonymous Parse.
         for message in request.messages.iter_mut() {
-            if let ProtocolMessage::Query(query) = message {
-                query.set_query(new_execute_sql.as_str());
+            match message {
+                ProtocolMessage::Query(query) => query.set_query(new_execute_sql.as_str()),
+                ProtocolMessage::Parse(parse) => parse.set_query(new_execute_sql.as_str()),
+                _ => {}
             }
+        }
+        if let Some(PreparedOperation::RewriteExecute(parse)) =
+            request.prepared_operation.as_deref_mut()
+        {
+            parse.set_query(new_execute_sql.as_str());
         }
 
         route.set_limit(Limit {
