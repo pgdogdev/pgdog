@@ -625,6 +625,47 @@ mod test {
     }
 
     #[test]
+    fn aggregate_group_by_money_inet_merges_equal_values() {
+        let aggregate = parse("SELECT key, COUNT(*) FROM samples GROUP BY 1");
+
+        for (oid, shards, expected) in [
+            (
+                790,
+                [("$5.00", "2"), ("$1,000.00", "1"), ("$5.00", "3")],
+                [("$1,000.00", 1), ("$5.00", 5)],
+            ),
+            (
+                869,
+                [("10.0.0.1", "2"), ("9.0.0.1", "1"), ("10.0.0.1/32", "3")],
+                [("10.0.0.1", 5), ("9.0.0.1", 1)],
+            ),
+        ] {
+            let mut key = integer_field("key");
+            key.type_oid = oid;
+            let decoder = Decoder::from(RowDescription::new(&[key, Field::bigint("count")]));
+
+            let rows = shards
+                .into_iter()
+                .map(|(key, count)| DataRow::from_columns(vec![key, count]))
+                .collect::<VecDeque<_>>();
+            let result = Aggregates::new(&rows, &decoder, &aggregate, None)
+                .unwrap()
+                .aggregate()
+                .unwrap();
+
+            let mut groups = result
+                .iter()
+                .map(|row| (row.column(0).unwrap(), row.get_int(1, true).unwrap()))
+                .collect::<Vec<_>>();
+            groups.sort();
+            let expected = expected
+                .map(|(key, count)| (Bytes::from(key), count))
+                .to_vec();
+            assert_eq!(groups, expected, "GROUP BY oid {oid}");
+        }
+    }
+
+    #[test]
     fn aggregate_group_by_merges_rows() {
         let aggregate = parse("SELECT price, SUM(quantity) FROM menu GROUP BY 1");
 

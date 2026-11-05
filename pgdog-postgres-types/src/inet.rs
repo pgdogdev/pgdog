@@ -41,6 +41,18 @@ impl Inet {
         max_bits(&self.addr)
     }
 
+    fn text(&self) -> Bytes {
+        if let Some(bytes) = self.original.get(Format::Text) {
+            return bytes;
+        }
+        let text = if self.cidr || self.bits != self.max_bits() {
+            format!("{}/{}", self.addr, self.bits)
+        } else {
+            self.addr.to_string()
+        };
+        Bytes::from(text)
+    }
+
     fn decode_text(text: &str) -> Result<(IpAddr, u8), Error> {
         let (addr, bits) = match text.split_once('/') {
             Some((addr, bits)) => (addr, Some(bits)),
@@ -161,14 +173,7 @@ impl FromDataType for Inet {
         }
 
         match encoding {
-            Format::Text => {
-                let text = if self.cidr || self.bits != self.max_bits() {
-                    format!("{}/{}", self.addr, self.bits)
-                } else {
-                    self.addr.to_string()
-                };
-                Ok(Bytes::from(text))
-            }
+            Format::Text => Ok(self.text()),
             Format::Binary => {
                 let (family, addr) = match self.addr {
                     IpAddr::V4(addr) => (PGSQL_AF_INET, addr.octets().to_vec()),
@@ -184,9 +189,7 @@ impl FromDataType for Inet {
 
 impl ToDataRowColumn for Inet {
     fn to_data_row_column(&self) -> Data {
-        self.encode(Format::Text)
-            .unwrap_or_else(|_| self.original.bytes().clone())
-            .into()
+        self.text().into()
     }
 }
 

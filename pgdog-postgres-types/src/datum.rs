@@ -435,6 +435,30 @@ mod tests {
     }
 
     #[test]
+    fn test_money_inet_data_row_column_is_original_text() {
+        for (oid, value) in [(790, "₹1,00,000.00"), (869, "10.0.0.1/32")] {
+            let column = text_datum(oid, value).to_data_row_column();
+            assert_eq!(column.data, Bytes::from(value));
+        }
+    }
+
+    #[test]
+    fn test_money_inet_do_not_compare_with_other_types() {
+        let money = text_datum(790, "$5.00");
+        let inet = text_datum(869, "10.0.0.1");
+        assert_eq!(money.partial_cmp(&Datum::Bigint(500)), None);
+        assert_eq!(inet.partial_cmp(&money), None);
+
+        for (data_type, name) in [
+            (DataType::Money, "money"),
+            (DataType::Inet, "inet"),
+            (DataType::Cidr, "cidr"),
+        ] {
+            assert_eq!(data_type.to_string(), name);
+        }
+    }
+
+    #[test]
     fn test_type_arrays_compare_elements_by_value() {
         let larger = text_datum(791, r#"{"₹1,000.00"}"#);
         let smaller = text_datum(791, "{₹5.00}");
