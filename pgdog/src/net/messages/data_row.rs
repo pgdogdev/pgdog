@@ -202,6 +202,33 @@ mod test {
     use std::assert_matches;
 
     #[test]
+    fn test_get_u64() {
+        let row = DataRow::from_columns(vec![
+            "0",
+            "9223372036854775808",
+            "18446744073709551615",
+            "-1",
+            "18446744073709551616",
+            "invalid",
+        ]);
+        assert_eq!(row.get::<u64>(0, Format::Text), Some(0));
+        assert_eq!(row.get::<u64>(1, Format::Text), Some(1_u64 << 63));
+        assert_eq!(row.get::<u64>(2, Format::Text), Some(u64::MAX));
+        for index in 3..=6 {
+            assert_eq!(row.get::<u64>(index, Format::Text), None);
+        }
+
+        let row = DataRow::from_columns(vec![
+            Bytes::from_static(&[0; 8]),
+            Bytes::from_static(&[255; 8]),
+            Bytes::from_static(&[0; 7]),
+        ]);
+        assert_eq!(row.get::<u64>(0, Format::Binary), Some(0));
+        assert_eq!(row.get::<u64>(1, Format::Binary), Some(u64::MAX));
+        assert_eq!(row.get::<u64>(2, Format::Binary), None);
+    }
+
+    #[test]
     fn test_insert() {
         let mut dr = DataRow::new();
         dr.insert(4, "test", false);

@@ -283,7 +283,7 @@ impl QueryParser {
             self.ensure_explain_recorder(stmt, context);
         }
 
-        // Parse hardcoded shard from a query comment.
+        // Parse hardcoded shard, role or LSN from a query comment.
         if context.router_needed || context.dry_run {
             let mut comment_shard_set = false;
             match &routing_comment.shard {
@@ -515,11 +515,9 @@ impl QueryParser {
             if shard.is_direct() {
                 route.set_shard(shard);
             }
-        }
 
-        // Set plugin-specified route, if available.
-        // Plugins override what we calculated above.
-        if let Command::Query(ref mut route) = command {
+            // Set plugin-specified route, if available.
+            // Plugins override what we calculated above.
             if let Some(read) = self.plugin_output.read {
                 route.set_read(read);
             }
@@ -529,6 +527,10 @@ impl QueryParser {
                     .shards_calculator
                     .push(ShardWithPriority::new_plugin(shard.clone()));
                 route.set_shard(context.shards_calculator.shard());
+            }
+
+            if let Some(lsn) = routing_comment.lsn {
+                route.lsn = Some(lsn.lsn);
             }
         }
 

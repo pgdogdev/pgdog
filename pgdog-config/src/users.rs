@@ -8,7 +8,7 @@ use tracing::warn;
 use super::core::Config;
 use super::pooling::PoolerMode;
 use crate::util::random_string;
-use crate::{AuthType, RoleConfig};
+use crate::{AuthType, ReadWriteSplit, RoleConfig};
 use schemars::JsonSchema;
 
 /// Plugins are dynamically loaded at PgDog startup. These settings control which plugins are loaded.
@@ -421,6 +421,9 @@ pub struct User {
 
     /// Client auth type, overrides the same setting in [general].
     pub auth_type: Option<AuthType>,
+
+    /// Read-write split algorithm to use for this user.
+    pub read_write_split: Option<ReadWriteSplit>,
 }
 
 impl User {

@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use pgdog_stats::Lsn;
 use regex::Regex;
 
 use crate::backend::ShardingSchema;
@@ -15,6 +16,10 @@ pub(super) static SHARDING_KEY: Lazy<Regex> = Lazy::new(|| {
 });
 pub(super) static ROLE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"pgdog_role: *(primary|replica)"#).unwrap());
+pub(super) static LSN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"pgdog_lsn: *([0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8})(?:\s|\*/|$)")
+        .expect("valid LSN directive regex")
+});
 
 pub(super) fn get_matched_value<'a>(caps: &'a regex::Captures<'a>) -> Option<&'a str> {
     caps.get(1)
@@ -27,6 +32,7 @@ pub(crate) struct Directive {
     pub(crate) shard_or_lookup: Option<ShardOrLookup>,
     pub(crate) role: Option<Role>,
     pub(crate) sharding_key: Option<String>,
+    pub(crate) lsn: Option<Lsn>,
 }
 
 pub(super) fn shard_role_from_comment(
@@ -34,6 +40,9 @@ pub(super) fn shard_role_from_comment(
     schema: &ShardingSchema,
 ) -> Result<Directive, Error> {
     let mut role = None;
+    let lsn = LSN
+        .captures(comment)
+        .and_then(|cap| cap.get(1)?.as_str().parse::<Lsn>().ok());
 
     if let Some(cap) = ROLE.captures(comment)
         && let Some(r) = cap.get(1)
@@ -51,12 +60,14 @@ pub(super) fn shard_role_from_comment(
             return Ok(Directive {
                 shard_or_lookup: Some(ShardOrLookup::Shard(schema.shard().into())),
                 role,
+                lsn,
                 sharding_key: Some(sharding_key.to_string()),
             });
         }
         return Ok(Directive {
             shard_or_lookup: Some(shard_for_bare_key(sharding_key, schema, None)?),
             role,
+            lsn,
             sharding_key: Some(sharding_key.to_string()),
         });
     }
@@ -73,6 +84,7 @@ pub(super) fn shard_role_from_comment(
                     .unwrap_or(Shard::All),
             )),
             role,
+            lsn,
             sharding_key: None,
         });
     }
@@ -80,6 +92,7 @@ pub(super) fn shard_role_from_comment(
     Ok(Directive {
         shard_or_lookup: None,
         role,
+        lsn,
         sharding_key: None,
     })
 }

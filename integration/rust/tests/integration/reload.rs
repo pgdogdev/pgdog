@@ -10,7 +10,12 @@ use crate::setup::{
 use rust_decimal::Decimal;
 use serial_test::serial;
 use sqlx::{Executor, Pool, Postgres, Row, postgres::PgPoolOptions};
-use tokio::time::{Instant, sleep};
+use tokio::{
+    runtime::Handle,
+    sync::Barrier,
+    task::spawn_blocking,
+    time::{Instant, sleep},
+};
 
 async fn total_query_count(admin: &Pool<Postgres>) -> i64 {
     admin
@@ -138,6 +143,44 @@ async fn test_reload() {
         admin.execute("RELOAD").await.unwrap();
     })
     .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_queries_survive_consecutive_reloads() {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect("postgres://pgdog:pgdog@127.0.0.1:6432/pgdog")
+        .await
+        .expect("connect client");
+    let mut conn = pool.acquire().await.expect("acquire client connection");
+    conn.execute("SELECT 1").await.expect("warm up backend");
+
+    let barrier = Arc::new(Barrier::new(2));
+    let reload_barrier = Arc::clone(&barrier);
+    let runtime = Handle::current();
+    let reloader = spawn_blocking(move || {
+        runtime.block_on(async move {
+            let admin = admin_tokio().await;
+            reload_barrier.wait().await;
+            for _ in 0..100 {
+                admin.simple_query("RELOAD").await.expect("reload config");
+            }
+        });
+    });
+
+    barrier.wait().await;
+    for _ in 0..1000 {
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("query must succeed during consecutive reloads");
+        assert_eq!(value, 1);
+    }
+
+    reloader.await.expect("reload thread must succeed");
+    drop(conn);
+    pool.close().await;
 }
 
 #[cfg(unix)]

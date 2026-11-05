@@ -52,16 +52,16 @@ struct Shared {
     missed: MissedRows,
     /// Missed rows of acknowledged commits, keyed by the commit's source LSN,
     /// counted once the commit is confirmed to the source.
-    pending_missed: VecDeque<(i64, MissedRows)>,
+    pending_missed: VecDeque<(u64, MissedRows)>,
     /// Source LSN of the last commit acknowledged with ReadyForQuery.
     /// It's only acknowledged by backend, but could be not yet durable.
-    source_lsn_acked: i64,
+    source_lsn_acked: u64,
     /// Source LSN that should be committed on this shard and should
     /// become durable eventually. It's higher than or equal
     /// to [`Self::source_lsn_durable`]
-    source_lsn_changed: i64,
+    source_lsn_changed: u64,
     /// Source LSN that is marked durable by replication origin tracker.
-    source_lsn_durable: i64,
+    source_lsn_durable: u64,
 }
 
 /// How a sync point completes.
@@ -78,7 +78,7 @@ enum OpSyncPoint {
     DirectDml { is_direct: bool },
     // Commit or out-of-transaction prepare (Sync): resolved by ReadyForQuery ('Z').
     // `source_lsn` is the source LSN of the commit.
-    ReadyForQuery { source_lsn: Option<i64> },
+    ReadyForQuery { source_lsn: Option<u64> },
 }
 
 // Work sent from the handle to the listener task.
@@ -92,7 +92,7 @@ enum Command {
     SyncPoint {
         messages: Vec<ProtocolMessage>,
         kind: SyncPointKind,
-        source_lsn: Option<i64>,
+        source_lsn: Option<u64>,
     },
 }
 
@@ -153,13 +153,13 @@ impl PipelinedConnection {
     /// Some(durable_lsn) - on shard, if there are commits in progress that
     /// are not yet durable. Returns the last durable lsn.
     /// None - all pushed commits already durable
-    pub(crate) fn durable_lsn_progress(&self) -> Option<i64> {
+    pub(crate) fn durable_lsn_progress(&self) -> Option<u64> {
         let shared = self.shared.lock();
         (shared.source_lsn_durable < shared.source_lsn_changed).then_some(shared.source_lsn_durable)
     }
 
     /// Missed rows of the commits confirmed up to `source_lsn_confirmed`.
-    pub(crate) fn take_confirmed_missed(&self, source_lsn_confirmed: i64) -> MissedRows {
+    pub(crate) fn take_confirmed_missed(&self, source_lsn_confirmed: u64) -> MissedRows {
         let mut shared = self.shared.lock();
         let mut missed = MissedRows::default();
         while let Some((_, rows)) = shared
@@ -205,7 +205,7 @@ impl PipelinedConnection {
 
     /// Commit the open implicit transaction on this shard as the source
     /// commit at `source_lsn`, recording it in the replication origin first.
-    pub(crate) async fn commit(&self, origin: Bind, source_lsn: i64) -> Result<(), Error> {
+    pub(crate) async fn commit(&self, origin: Bind, source_lsn: u64) -> Result<(), Error> {
         self.shared.lock().source_lsn_changed = source_lsn;
         self.execute(origin, false).await?;
         self.sync(Some(source_lsn)).await
@@ -213,7 +213,7 @@ impl PipelinedConnection {
 
     /// Send `Sync` and wait for `ReadyForQuery` (commits the open implicit
     /// transaction on this shard). `source_lsn` is the source LSN of the commit.
-    async fn sync(&self, source_lsn: Option<i64>) -> Result<(), Error> {
+    async fn sync(&self, source_lsn: Option<u64>) -> Result<(), Error> {
         self.send_command(vec![Sync.into()], SyncPointKind::ReadyForQuery, source_lsn)
             .await
     }
@@ -229,7 +229,7 @@ impl PipelinedConnection {
         &self,
         messages: Vec<ProtocolMessage>,
         kind: SyncPointKind,
-        source_lsn: Option<i64>,
+        source_lsn: Option<u64>,
     ) -> Result<(), Error> {
         self.tx
             .send(Command::SyncPoint {
@@ -528,7 +528,7 @@ mod test {
         PipelinedConnection::new(server, origin, check).unwrap()
     }
 
-    async fn commit_and_wait(conn: &PipelinedConnection, lsn: i64) -> bool {
+    async fn commit_and_wait(conn: &PipelinedConnection, lsn: u64) -> bool {
         conn.sync(Some(lsn)).await.unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -813,8 +813,8 @@ mod test {
         origin: ReplicationOrigin,
         address: Address,
         check: ProgressCheck,
-        changed: i64,
-        acked: i64,
+        changed: u64,
+        acked: u64,
     ) -> (Arc<Mutex<Shared>>, JoinHandle<()>) {
         let shared = Arc::new(Mutex::new(Shared {
             source_lsn_changed: changed,

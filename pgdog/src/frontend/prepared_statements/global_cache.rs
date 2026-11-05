@@ -1,9 +1,6 @@
 use crate::{
     frontend::router::parser::rewrite::statement::plan::BindParams,
-    net::{
-        Prepare,
-        messages::{Parse, RowDescription},
-    },
+    net::{Prepare, messages::Parse},
     stats::memory::MemoryUsage,
 };
 use std::collections::hash_map::HashMap;
@@ -26,9 +23,8 @@ fn cross_shard_variant_name(name: &str) -> String {
 ///    Statements created by SQL `PREPARE` carry a key of their own, so they are
 ///    never handed to a second client.
 ///
-/// 2. Mapping between the global unique names and Parse & RowDescription messages
-///    used to prepare the statement on server connections and to decode
-///    results returned by executing those statements in a multi-shard context.
+/// 2. Mapping between the global unique names and Parse messages
+///    used to prepare the statement on server connections.
 ///
 #[derive(Default, Debug, Clone)]
 pub(crate) struct GlobalCache {
@@ -85,7 +81,6 @@ impl GlobalCache {
                 client_params: None,
             },
             cache_key: cache_key.clone(),
-            row_description: None,
         };
 
         self.insert_internal(&name, cache_key, statement);
@@ -132,7 +127,6 @@ impl GlobalCache {
                 offset_plan,
                 bind_params,
             }),
-            row_description: None,
             cache_key: cache_key.clone(),
         };
 
@@ -172,7 +166,6 @@ impl GlobalCache {
                     rewrite: None,
                     client_params,
                 },
-                row_description: None,
                 cache_key,
             },
         );
@@ -187,19 +180,6 @@ impl GlobalCache {
             .get(name)
             .or_else(|| self.names.get(name))
             .and_then(|stmt| stmt.client_params())
-    }
-
-    /// Client sent a Describe for a prepared statement and received a RowDescription.
-    /// We record the RowDescription for later use by the results decoder.
-    pub(crate) fn insert_row_description(&mut self, name: &str, row_description: RowDescription) {
-        if let Some(entry) = self
-            .names
-            .get_mut(name)
-            .or_else(|| self.cross_shard_variants.get_mut(name))
-            && entry.row_description.is_none()
-        {
-            entry.row_description = Some(row_description);
-        }
     }
 
     /// Get the Parse message for a globally unique prepared statement
@@ -239,23 +219,6 @@ impl GlobalCache {
             .get(name)
             .map(|p| p.rewritten_parse().is_some())
             .unwrap_or_default()
-    }
-
-    /// Get the RowDescription message for the prepared statement.
-    ///
-    /// It can be used to decode results received from executing the prepared
-    /// statement.
-    pub(crate) fn row_description(&self, name: &str) -> Option<RowDescription> {
-        self.cross_shard_variants
-            .get(name)
-            .or_else(|| self.names.get(name))
-            .and_then(|p| p.row_description.clone())
-    }
-
-    pub(crate) fn cross_shard_variant_needs_row_description(&self, name: &str) -> bool {
-        self.cross_shard_variants
-            .get(name)
-            .is_some_and(|statement| statement.row_description.is_none())
     }
 
     /// Number of prepared statements in the local cache.
@@ -377,7 +340,6 @@ impl GlobalCache {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::messages::Field;
 
     impl GlobalCache {
         /// Get the query string stored in the global cache
@@ -454,30 +416,6 @@ mod test {
         cache.close(&base);
         assert_eq!(cache.close_unused(0), 1);
         assert!(cache.rewritten_parse(&variant).is_none());
-    }
-
-    #[test]
-    fn cross_shard_variant_has_separate_row_description() {
-        let mut cache = GlobalCache::default();
-        let (_, base) = cache.insert(&Parse::named(
-            "client",
-            "SELECT AVG(value) FROM measurements",
-        ));
-        let variant = cache
-            .cross_shard_variant(
-                &base,
-                "SELECT AVG(value), COUNT(value) AS __pgdog_count_col0 FROM measurements",
-            )
-            .unwrap();
-
-        cache.insert_row_description(&base, RowDescription::new(&[Field::double("avg")]));
-        cache.insert_row_description(
-            &variant,
-            RowDescription::new(&[Field::double("avg"), Field::bigint("__pgdog_count_col0")]),
-        );
-
-        assert_eq!(cache.row_description(&base).unwrap().len(), 1);
-        assert_eq!(cache.row_description(&variant).unwrap().len(), 2);
     }
 
     #[test]

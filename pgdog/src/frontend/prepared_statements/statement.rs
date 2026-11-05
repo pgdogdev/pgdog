@@ -9,7 +9,6 @@ use super::prelude::*;
 #[derive(Debug, Clone)]
 pub(crate) struct Statement {
     pub(super) stmt: StatementType,
-    pub(super) row_description: Option<RowDescription>,
     pub(super) cache_key: CacheKey,
 }
 
@@ -53,13 +52,7 @@ impl MemoryUsage for StatementType {
 
 impl MemoryUsage for Statement {
     fn memory_usage(&self) -> usize {
-        self.stmt.memory_usage()
-            + if let Some(row_description) = &self.row_description {
-                row_description.memory_usage()
-            } else {
-                0
-            }
-            + self.cache_key.memory_usage()
+        self.stmt.memory_usage() + self.cache_key.memory_usage()
     }
 }
 
