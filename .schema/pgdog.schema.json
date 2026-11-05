@@ -46,7 +46,6 @@
         "cross_shard_disabled": false,
         "cutover_last_transaction_delay": 1000,
         "cutover_replication_lag_threshold": 0,
-        "cutover_save_config": false,
         "cutover_timeout": 30000,
         "cutover_timeout_action": "abort",
         "cutover_traffic_stop_threshold": 1000000,
@@ -843,11 +842,6 @@
           "format": "uint64",
           "default": 0,
           "minimum": 0
-        },
-        "cutover_save_config": {
-          "description": "Save the swapped configuration to disk after a traffic cutover. When enabled, PgDog will backup both configuration files as `pgdog.bak.toml` and `users.bak.toml`, and write the new configuration to `pgdog.toml` and `users.toml`.\n\n_Default:_ `false`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config>",
-          "type": "boolean",
-          "default": false
         },
         "cutover_timeout": {
           "description": "Maximum amount of time (in milliseconds) to wait for the cutover thresholds to be met. If exceeded, PgDog will take the action specified by `cutover_timeout_action`.\n\n_Default:_ `30000`\n\n<https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_timeout>",
