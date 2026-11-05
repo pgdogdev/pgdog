@@ -342,7 +342,7 @@ impl QueryEngine {
         // Messages that we need to send to the client immediately.
         // ReadyForQuery (B) | CopyInResponse (B) | ErrorResponse(B) | NoticeResponse(B) | NotificationResponse (B)
         let flush = matches!(code, 'Z' | 'G' | 'E' | 'N' | 'A')
-            || !self.backend.has_more_messages()
+            || (!self.backend.has_more_messages() && !self.defer_flush)
             || message.streaming();
 
         self.stats.sent(message.len());
