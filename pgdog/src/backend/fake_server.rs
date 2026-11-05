@@ -111,7 +111,7 @@ async fn serve(mut stream: Stream) -> Result<(), Error> {
 
             ProtocolMessage::Describe(describe) => {
                 let sql = if describe.is_statement() {
-                    stream.send(&ParameterDescription::empty()).await?;
+                    stream.send(&ParameterDescription::default()).await?;
 
                     prepared_sql
                         .get(describe.statement())
