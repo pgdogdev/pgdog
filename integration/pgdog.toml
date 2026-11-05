@@ -31,6 +31,7 @@ unique_id_function = "standard"
 auth_type = "scram"
 workers = 4
 resharding_parallel_copies = 3
+resharding_replay_ddl = true
 resharding_copy_retry_min_delay = 100
 # log_dedup_window = 30_000
 # log_dedup_threshold =

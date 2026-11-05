@@ -596,14 +596,16 @@ impl ReplicationSlotStream {
     pub(crate) async fn start_replication(&mut self) -> Result<(), Error> {
         // Fresh copy stream (including after a reconnect): re-enable status updates.
         self.stopped = false;
-        let is_binary = config().config.general.resharding_copy_format == CopyFormat::Binary;
+        let general = &config().config.general;
+        let is_binary = general.resharding_copy_format == CopyFormat::Binary;
         // TODO: This is definitely Postgres version-specific.
         let query = Query::new(format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"', "binary" '{}')"#,
+            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '4', origin 'any', "publication_names" '"{}"', "binary" '{}', "messages" '{}')"#,
             self.slot.name,
             self.slot.lsn(),
             self.slot.publication,
-            is_binary
+            is_binary,
+            general.resharding_replay_ddl
         ));
         self.server().send(&vec![query.into()].into()).await?;
 
