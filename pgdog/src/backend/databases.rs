@@ -190,9 +190,7 @@ pub(crate) fn reload(force: bool) -> Result<(), Error> {
 /// Both databases keep their names, but their configs (host, port, etc.) are exchanged.
 /// User database references are also swapped.
 /// Persists changes to disk (best effort).
-pub(crate) async fn cutover(source: &str, destination: &str) -> Result<(), Error> {
-    use tokio::fs::{copy, write};
-
+pub(crate) async fn cutover(source: &str, destination: &str) -> Result<ConfigAndUsers, Error> {
     let config = {
         let _lock = lock();
 
@@ -211,46 +209,7 @@ pub(crate) async fn cutover(source: &str, destination: &str) -> Result<(), Error
 
     info!(r#"databases swapped: "{}" <-> "{}""#, source, destination);
 
-    if config.config.general.cutover_save_config {
-        if let Err(err) = copy(
-            &config.config_path,
-            config.config_path.clone().with_extension("bak.toml"),
-        )
-        .await
-        {
-            warn!(
-                "{} is read-only, skipping config persistence (err: {})",
-                config
-                    .config_path
-                    .parent()
-                    .map(|path| path.to_owned())
-                    .unwrap_or_default()
-                    .display(),
-                err
-            );
-            return Ok(());
-        }
-
-        copy(
-            &config.users_path,
-            &config.users_path.clone().with_extension("bak.toml"),
-        )
-        .await?;
-
-        write(
-            &config.config_path,
-            toml::to_string_pretty(&config.config)?.as_bytes(),
-        )
-        .await?;
-
-        write(
-            &config.users_path,
-            toml::to_string_pretty(&config.users)?.as_bytes(),
-        )
-        .await?;
-    }
-
-    Ok(())
+    Ok(config)
 }
 
 pub(crate) use pgdog_stats::User;
@@ -1710,101 +1669,6 @@ mod tests {
         assert!(databases.cluster(("test_user", "nonexistent")).is_err());
 
         assert_eq!(databases.all().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_cutover_persists_to_disk() {
-        use tempfile::TempDir;
-        use tokio::fs;
-
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("pgdog.toml");
-        let users_path = temp_dir.path().join("users.toml");
-
-        let original_config = r#"
-[[databases]]
-name = "source_db"
-host = "127.0.0.1"
-port = 5432
-role = "primary"
-
-[[databases]]
-name = "destination_db"
-host = "127.0.0.2"
-port = 5433
-role = "primary"
-"#;
-
-        let original_users = r#"
-[[users]]
-name = "testuser"
-database = "source_db"
-password = "testpass"
-"#;
-
-        fs::write(&config_path, original_config).await.unwrap();
-        fs::write(&users_path, original_users).await.unwrap();
-
-        // Load config from temp files and set in global state
-        let mut config = crate::config::ConfigAndUsers::load(&config_path, &users_path).unwrap();
-        config.config.general.cutover_save_config = true;
-        crate::config::set(config).unwrap();
-
-        // Call the actual cutover function
-        cutover("source_db", "destination_db").await.unwrap();
-
-        // Verify backup files contain original content
-        let backup_config = fs::read_to_string(config_path.with_extension("bak.toml"))
-            .await
-            .unwrap();
-        let backup_config: crate::config::Config = toml::from_str(&backup_config).unwrap();
-        let backup_source = backup_config
-            .databases
-            .iter()
-            .find(|d| d.name == "source_db")
-            .unwrap();
-        assert_eq!(backup_source.host, "127.0.0.1");
-        assert_eq!(backup_source.port, 5432);
-        let backup_dest = backup_config
-            .databases
-            .iter()
-            .find(|d| d.name == "destination_db")
-            .unwrap();
-        assert_eq!(backup_dest.host, "127.0.0.2");
-        assert_eq!(backup_dest.port, 5433);
-
-        let backup_users = fs::read_to_string(users_path.with_extension("bak.toml"))
-            .await
-            .unwrap();
-        let backup_users: crate::config::Users = toml::from_str(&backup_users).unwrap();
-        assert_eq!(backup_users.users.len(), 1);
-        assert_eq!(backup_users.users[0].name, "testuser");
-        assert_eq!(backup_users.users[0].database, "source_db");
-
-        // Verify new config files have swapped values
-        let new_config = fs::read_to_string(&config_path).await.unwrap();
-        let new_config: crate::config::Config = toml::from_str(&new_config).unwrap();
-        let new_source = new_config
-            .databases
-            .iter()
-            .find(|d| d.name == "source_db")
-            .unwrap();
-        assert_eq!(new_source.host, "127.0.0.2");
-        assert_eq!(new_source.port, 5433);
-        let new_dest = new_config
-            .databases
-            .iter()
-            .find(|d| d.name == "destination_db")
-            .unwrap();
-        assert_eq!(new_dest.host, "127.0.0.1");
-        assert_eq!(new_dest.port, 5432);
-
-        // Verify users were swapped
-        let new_users = fs::read_to_string(&users_path).await.unwrap();
-        let new_users: crate::config::Users = toml::from_str(&new_users).unwrap();
-        assert_eq!(new_users.users.len(), 1);
-        assert_eq!(new_users.users[0].name, "testuser");
-        assert_eq!(new_users.users[0].database, "destination_db");
     }
 
     /// PostgreSQL folds unquoted identifiers to lower case, so the parser
