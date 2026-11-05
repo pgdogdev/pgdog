@@ -118,7 +118,8 @@ impl<'a> HavingMulti<'a> {
 
         let kept = keep.iter().filter(|&&keep| keep).count();
         let mut keep = keep.into_iter();
-        for message in messages {
+        let last = messages.len();
+        for (position, message) in messages.into_iter().enumerate() {
             let message = match message.code() {
                 'D' => {
                     if !keep.next().unwrap_or(false) {
@@ -131,7 +132,17 @@ impl<'a> HavingMulti<'a> {
                     .message(),
                 _ => message,
             };
-            self.engine.process_server_message(context, message).await?;
+
+            // `QueryEngine::process_server_message()` flushes whenever `has_more_messages()` is false.
+            // However, we read all of the messages from the shards before we filter the rows, so `has_more_messages()` is false while we send the rows, meaning that we'd write the rows to the client one at a time.
+            // Therefore, we set `defer_flush` to skip that flush on all messages except for the last one.
+            // This is necessary to ensure that the rows go to the client in a few large writes.
+            self.engine.defer_flush = position + 1 < last;
+            let result = self.engine.process_server_message(context, message).await;
+
+            // We clear `defer_flush` even if the call fails (before result?), as otherwise, later responses wouldn't flush.
+            self.engine.defer_flush = false;
+            result?;
         }
 
         Ok(())
