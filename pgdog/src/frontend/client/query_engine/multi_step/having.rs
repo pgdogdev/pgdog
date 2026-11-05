@@ -10,7 +10,10 @@ use std::sync::Arc;
 use crate::{
     backend::{
         Error as BackendError,
-        pool::connection::{aggregate::Error as AggregateError, buffer::having::HavingInputs},
+        pool::{
+            Connection,
+            connection::{aggregate::Error as AggregateError, buffer::having::HavingInputs},
+        },
     },
     frontend::{
         ClientRequest,
@@ -31,17 +34,20 @@ use crate::{
 
 use super::Error;
 
-pub(crate) struct HavingMulti<'a> {
+pub(in crate::frontend::client::query_engine) struct HavingMulti<'a> {
     engine: &'a mut QueryEngine,
     plan: Arc<ProjectionRewritePlan>,
 }
 
 impl<'a> HavingMulti<'a> {
-    pub(crate) fn new(engine: &'a mut QueryEngine, plan: Arc<ProjectionRewritePlan>) -> Self {
+    pub(in crate::frontend::client::query_engine) fn new(
+        engine: &'a mut QueryEngine,
+        plan: Arc<ProjectionRewritePlan>,
+    ) -> Self {
         Self { engine, plan }
     }
 
-    pub(crate) async fn execute(
+    pub(in crate::frontend::client::query_engine) async fn execute(
         &mut self,
         context: &mut QueryEngineContext<'_>,
         client_request: &ClientRequest,
@@ -97,7 +103,7 @@ impl<'a> HavingMulti<'a> {
             .as_deref()
             .expect("HAVING execution requires a HAVING plan")
             .rewrite();
-        let keep = match filter(self.engine, having, &inputs).await {
+        let keep = match filter(&mut self.engine.backend, having, &inputs).await {
             Ok(keep) => keep,
             Err(Error::Execution(error)) => {
                 return self.forward_error(context, messages, *error).await;
@@ -156,7 +162,7 @@ impl<'a> HavingMulti<'a> {
 /// Run the `HAVING` filter over the merged groups and return, for each
 /// group in order, whether it passes.
 async fn filter(
-    engine: &mut QueryEngine,
+    backend: &mut Connection,
     having: &HavingRewritePlan,
     inputs: &HavingInputs,
 ) -> Result<Vec<bool>, Error> {
@@ -171,8 +177,7 @@ async fn filter(
         bind.push_param(array, format);
     }
 
-    let shard = engine
-        .backend
+    let shard = backend
         .any_connected_shard()
         .ok_or(BackendError::NotConnected)?;
     let mut request = ClientRequest::from(vec![
@@ -187,7 +192,7 @@ async fn filter(
         shard,
     ))));
 
-    let (rows, _) = super::fetch_rows(engine, &request).await?;
+    let (rows, _) = super::fetch_rows(backend, &request).await?;
     let mut keep = vec![false; inputs.rows()];
     for row in rows {
         let passed = row

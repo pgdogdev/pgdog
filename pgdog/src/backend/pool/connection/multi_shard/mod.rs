@@ -67,7 +67,9 @@ pub(crate) struct MultiShard {
     validator: Validator,
     /// [`Bind`]s waiting for their [`crate::net::BindComplete`], in the order they were sent.
     bound_statements: VecDeque<Bind>,
-    /// Merged `HAVING` operands, taken by the query engine once the request completes.
+    /// Merged `HAVING` operands. The query engine takes them rather than
+    /// borrowing them, because it sends the filter query on this same
+    /// connection, and that request resets this state.
     having_inputs: Option<HavingInputs>,
     /// Who asked for each description the shards have yet to send, in the order they were sent.
     describes: VecDeque<DescribedBy>,
