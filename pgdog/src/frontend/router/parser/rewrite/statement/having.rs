@@ -6,7 +6,6 @@ use itertools::Itertools;
 use pg_raw_parse::{
     ConstValue, Node, NodeMut, make, nodes,
     transform::{self, Assignable},
-    walk,
 };
 
 use crate::backend::schema::Schema;
@@ -50,8 +49,8 @@ const TABLE_ALIAS: &str = "__pgdog_having";
 /// WHERE __pgdog_having_0 > 2 AND __pgdog_having_1 < 100
 /// ```
 ///
-/// which returns the positions of the groups to keep. LIMIT and OFFSET move
-/// from the shard query to the filter query, after `ORDER BY __pgdog_row`.
+/// which returns the positions of the groups to keep. LIMIT and OFFSET are
+/// removed from the shard query, since they apply to the groups that pass.
 pub(super) fn rewrite_select<'a>(
     select: &mut nodes::SelectStmtMut<'a, '_>,
     mem: make::MemoryToken<'a>,
@@ -77,9 +76,6 @@ pub(super) fn rewrite_select<'a>(
         error: None,
     };
 
-    let paginated =
-        !matches!(select.limit_count(), Node::None) || !matches!(select.limit_offset(), Node::None);
-
     let filter = make::try_owned(|filter_mem| {
         let mut filter = filter_mem.make_unique(having);
         transform::transform(&mut filter, |node| operands.replace(mem, filter_mem, node));
@@ -91,36 +87,35 @@ pub(super) fn rewrite_select<'a>(
                 "HAVING must reference an aggregate or a grouped column",
             ));
         }
-        let mut limit = filter_mem.make_unique(select.limit_count());
-        let mut limit_offset = filter_mem.make_unique(select.limit_offset());
-        operands.record_params(limit.as_ref());
-        operands.record_params(limit_offset.as_ref());
-
         // Client parameters follow the operand arrays in the filter query.
         let offset = operands.projected.len();
-        for node in [&mut filter, &mut limit, &mut limit_offset] {
-            renumber_params(node, filter_mem, offset, &operands.params);
-        }
+        transform::transform(&mut filter, |node| match &*node {
+            NodeMut::ParamRef(param) => {
+                let position = operands
+                    .params
+                    .iter()
+                    .position(|&number| number + 1 == param.number as usize)
+                    .expect("HAVING parameter recorded");
+                node.replace(
+                    filter_mem
+                        .make_param_ref((offset + position + 1) as i32)
+                        .uncast(),
+                );
+                None
+            }
+            _ => Some(node),
+        });
 
-        // Ordering by position keeps the order PgDog sorted the groups in.
         let template = pg_raw_parse::parse(&format!(
-            "SELECT {ROW_COLUMN} FROM unnest({}) WITH ORDINALITY AS {TABLE_ALIAS}({}, {ROW_COLUMN}){}",
+            "SELECT {ROW_COLUMN} FROM unnest({}) WITH ORDINALITY AS {TABLE_ALIAS}({}, {ROW_COLUMN})",
             (1..=offset).map(|number| format!("${number}")).join(", "),
             operands.projected.iter().map(|(alias, _)| alias).join(", "),
-            if paginated {
-                format!(" ORDER BY {ROW_COLUMN}")
-            } else {
-                String::new()
-            },
         ))?;
         let Some(Node::SelectStmt(template)) = template.stmts().next() else {
             unreachable!("HAVING filter template is a SELECT");
         };
         let mut query = filter_mem.make_unique(template);
         query.as_mut().set_where_clause(filter);
-        query.as_mut().set_limit_count(limit);
-        query.as_mut().set_limit_offset(limit_offset);
-        query.as_mut().set_limit_option(select.limit_option);
         Ok::<_, Error>(query)
     })?;
     let filter_sql = pg_raw_parse::deparse(&*filter)?.as_str().to_owned();
@@ -183,7 +178,7 @@ pub(super) fn rewrite_select<'a>(
         .set_args(mem.make_list(&[original, true_value]));
     select.set_having_clause(neutralized.uncast());
 
-    // Shards return every group; the filter query applies LIMIT and OFFSET.
+    // Shards return every group; PgDog applies LIMIT and OFFSET after the filter.
     let limit = without_limit(select.limit_count(), mem);
     let offset = without_limit(select.limit_offset(), mem);
     select.set_limit_count(limit);
@@ -197,43 +192,22 @@ pub(super) fn rewrite_select<'a>(
     ))
 }
 
-/// Point each `$n` at its position after the `offset` operand arrays.
-fn renumber_params<'f>(
-    node: &mut make::Unique<'f, Node<'_>>,
-    mem: make::MemoryToken<'f>,
-    offset: usize,
-    params: &[usize],
-) {
-    if matches!(node.as_ref(), Node::None) {
-        return;
-    }
-    transform::transform(node, |node| match &*node {
-        NodeMut::ParamRef(param) => {
-            let position = params
-                .iter()
-                .position(|&number| number + 1 == param.number as usize)
-                .expect("HAVING parameter recorded");
-            node.replace(mem.make_param_ref((offset + position + 1) as i32).uncast());
-            None
-        }
-        _ => Some(node),
-    });
-}
-
-/// Remove LIMIT or OFFSET from the shard query. An expression with `$n`
-/// stays as `CASE WHEN false THEN (expr)::bigint END`, so Postgres infers the
-/// same parameter types without evaluating it.
+/// Remove LIMIT or OFFSET from the shard query, keeping it as
+/// `CASE WHEN (x)::bigint < 0 THEN (x)::bigint END`. That is NULL (no limit)
+/// unless the value is negative, where Postgres returns its own error. It also
+/// keeps `$n` in the query, so Postgres infers the same parameter types.
 fn without_limit<'a>(node: Node<'_>, mem: make::MemoryToken<'a>) -> make::Unique<'a, Node<'a>> {
-    let mut has_param = false;
-    if !matches!(node, Node::None) {
-        walk::walk(node, |node| has_param |= matches!(node, Node::ParamRef(_)));
-    }
-    if !has_param {
+    if matches!(node, Node::None) {
         return mem.none();
     }
+    let negative = mem.make_a_expr(
+        nodes::A_Expr_Kind::AEXPR_OP,
+        mem.make_list(&[mem.make_string(Some("<")).uncast()]),
+        offset::to_bigint(node, mem),
+        mem.make_a_const(ConstValue::Integer(0)).uncast(),
+    );
     let mut when = mem.make_node::<nodes::CaseWhen>();
-    when.as_mut()
-        .set_expr(mem.make_a_const(ConstValue::Boolean(false)).uncast());
+    when.as_mut().set_expr(negative.uncast());
     when.as_mut().set_result(offset::to_bigint(node, mem));
     let mut case = mem.make_node::<nodes::CaseExpr>();
     case.as_mut().set_args(mem.make_list(&[when.uncast()]));
@@ -298,7 +272,10 @@ impl<'a> Operands<'a, '_> {
                 return None;
             }
             NodeMut::ParamRef(param) => {
-                self.record_param(param.number);
+                let param = param.number as usize - 1;
+                if !self.params.contains(&param) {
+                    self.params.push(param);
+                }
                 return None;
             }
             _ => return Some(node),
@@ -315,25 +292,6 @@ impl<'a> Operands<'a, '_> {
                 .uncast(),
         );
         None
-    }
-
-    /// Record the client parameters LIMIT and OFFSET pass to the filter query.
-    fn record_params(&mut self, node: Node<'_>) {
-        if matches!(node, Node::None) {
-            return;
-        }
-        walk::walk(node, |node| {
-            if let Node::ParamRef(param) = node {
-                self.record_param(param.number);
-            }
-        });
-    }
-
-    fn record_param(&mut self, number: i32) {
-        let param = number as usize - 1;
-        if !self.params.contains(&param) {
-            self.params.push(param);
-        }
     }
 
     fn next_alias(&mut self) -> String {
@@ -414,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn moves_limit_and_offset_to_filter_query() {
+    fn removes_limit_and_offset_from_shard_query() {
         let (sql, plan) = rewrite(
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > $2 ORDER BY customer_id LIMIT $1 OFFSET 1",
@@ -426,15 +384,14 @@ mod tests {
             "SELECT customer_id, count(*), count(*) AS __pgdog_having_0, \
              customer_id AS __pgdog_having_1 FROM purchases GROUP BY customer_id \
              HAVING count(*) > $2 OR true ORDER BY customer_id \
-             LIMIT CASE WHEN false THEN $1::bigint END"
+             LIMIT CASE WHEN $1::bigint < 0 THEN $1::bigint END \
+             OFFSET CASE WHEN 1::bigint < 0 THEN 1::bigint END"
         );
         assert_eq!(
             plan.filter_sql(),
             "SELECT __pgdog_row FROM unnest($1) WITH ORDINALITY \
-             __pgdog_having(__pgdog_having_0, __pgdog_row) \
-             WHERE __pgdog_having_0 > $2 ORDER BY __pgdog_row LIMIT $3 OFFSET 1"
+             __pgdog_having(__pgdog_having_0, __pgdog_row) WHERE __pgdog_having_0 > $2"
         );
-        assert_eq!(plan.params(), &[1, 0]);
     }
 
     #[test]

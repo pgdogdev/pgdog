@@ -283,9 +283,9 @@ impl MultiShard {
                     }
                 }
                 self.buffer.drop_helper_columns(plan, &self.decoder);
-                self.buffer.distinct(self.route.distinct(), &self.decoder);
-                // The HAVING filter query applies LIMIT and OFFSET to the groups it keeps.
+                // With HAVING, the query engine applies these to the groups that pass.
                 if self.having_inputs.is_none() {
+                    self.buffer.distinct(self.route.distinct(), &self.decoder);
                     self.buffer.limit(self.route.limit());
                 }
             }

@@ -15,7 +15,7 @@ use crate::frontend::router::parser::{
 };
 use crate::frontend::{ClientRequest, PreparedStatements};
 use crate::net::{ProtocolMessage, RowDescription};
-use pg_raw_parse::{Node, StmtList, make, nodes, walk};
+use pg_raw_parse::{ConstValue, Node, StmtList, make, nodes};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -250,23 +250,24 @@ fn unsupported_with_having(select: &nodes::SelectStmt, schema: &Schema) -> Optio
     if wraps_aggregate {
         return Some("expressions over aggregates in the SELECT list are unsupported");
     }
-    // The filter query pages by group position, so it can't find ties on the sort keys.
+    // PgDog pages the filtered groups by position, without the sort keys to find ties.
     if select.limit_option == nodes::LimitOption::LIMIT_OPTION_WITH_TIES {
         return Some("FETCH FIRST WITH TIES is unsupported");
     }
-    // The filter query runs on one shard, where a subquery sees only that shard's rows.
-    let mut subquery = false;
-    for node in [select.limit_count(), select.limit_offset()] {
-        if !matches!(node, Node::None) {
-            walk::walk(node, |node| subquery |= matches!(node, Node::SubLink(_)));
+    // PgDog applies LIMIT and OFFSET itself, so it has to read their values.
+    let decodable = |node: Node<'_>| match node {
+        Node::None | Node::ParamRef(_) => true,
+        Node::A_Const(constant) => {
+            matches!(constant.val(), None | Some(ConstValue::Integer(_)))
         }
+        _ => false,
+    };
+    if !decodable(select.limit_count()) || !decodable(select.limit_offset()) {
+        return Some("LIMIT and OFFSET must be integers or parameters");
     }
-    if subquery {
-        return Some("subqueries in LIMIT and OFFSET are unsupported");
-    }
-    // DISTINCT has to run after the merged groups are filtered.
-    if !select.distinct_clause().is_empty() {
-        return Some("DISTINCT is unsupported");
+    // Only whole-row DISTINCT is applied after the filter.
+    if !matches!(select.distinct_clause().first(), None | Some(Node::None)) {
+        return Some("DISTINCT ON is unsupported");
     }
     None
 }
@@ -522,14 +523,13 @@ mod tests {
             // An expression over aggregates would keep one shard's value.
             "SELECT customer_id, SUM(price) / COUNT(*) FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
-            // Shards would deduplicate groups before they are filtered.
+            // Only whole-row DISTINCT and decodable LIMIT/OFFSET run after the filter.
             "SELECT DISTINCT ON (customer_id) customer_id FROM purchases \
              GROUP BY customer_id HAVING COUNT(*) > 2",
-            // The filter query pages by position and runs on one shard.
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
              HAVING COUNT(*) > 2 ORDER BY customer_id FETCH FIRST 1 ROWS WITH TIES",
             "SELECT customer_id, COUNT(*) FROM purchases GROUP BY customer_id \
-             HAVING COUNT(*) > 2 LIMIT (SELECT 1)",
+             HAVING COUNT(*) > 2 LIMIT 1 + 1",
         ] {
             let ast = pg_raw_parse::parse(sql).unwrap();
             let error = build(&ast, &Schema::default(), false).unwrap_err();

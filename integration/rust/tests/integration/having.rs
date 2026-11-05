@@ -127,6 +127,14 @@ async fn prepared_having_parameter_typed_and_untyped() -> Result<(), Box<dyn std
         let customers = rows.iter().map(|row| row.get(0)).collect::<Vec<i64>>();
         assert_eq!(customers, expected, "LIMIT {limit:?} OFFSET {offset}");
     }
+    let error = client
+        .query(&statement, &[&1_i64, &-1_i64, &0_i64])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_db_error().map(|error| error.message()),
+        Some("LIMIT must not be negative")
+    );
 
     cleanup(&sharded).await;
     Ok(())
