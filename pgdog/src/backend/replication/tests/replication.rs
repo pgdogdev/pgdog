@@ -1,5 +1,5 @@
 use super::*;
-use crate::api::replication::ReplicationTask;
+use crate::api::replication::{CutoverMode, ReplicationTask};
 use pgdog_stats::{ReshardingDirection, SyncState};
 
 #[tokio::test]
@@ -105,7 +105,7 @@ async fn cutover_and_rollback_swap_the_direction() -> Result<(), Box<dyn std::er
                         .publication(schema.to_owned()),
                 )
                 .validate(false)
-                .auto_cutover(true)
+                .cutover(CutoverMode::Auto)
                 .build(),
         );
         let id = task.id();
