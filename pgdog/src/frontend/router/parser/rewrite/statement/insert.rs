@@ -97,7 +97,7 @@ impl InsertSplit {
         for param in &self.params {
             let param = bind
                 .parameter(*param as usize - 1)?
-                .ok_or(Error::MissingParameter(*param))?;
+                .ok_or_else(|| Error::MissingParameter(*param))?;
             new.push_param(param.parameter().clone(), param.format());
         }
 
@@ -156,7 +156,7 @@ pub(crate) fn group_split_requests_by_shard(
         groups.entry(split.route().shard()).or_default().push(tuple);
     }
 
-    let query = request.query()?.ok_or(Error::EmptyQuery)?;
+    let query = request.query()?.ok_or_else(|| Error::EmptyQuery)?;
     let ast = pg_raw_parse::parse(query.query())?;
     let Some(Node::InsertStmt(insert)) = ast.stmts().next() else {
         return Err(Error::EmptyQuery);

@@ -456,13 +456,21 @@ impl Cluster {
 
     /// Get a connection to a primary of the given shard.
     pub(crate) async fn primary(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
-        let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let shard = self
+            .shards
+            .get(shard)
+            .ok_or_else(|| Error::NoShard(shard))?;
         shard.primary(request).await
     }
 
     /// Get a connection to a replica of the given shard.
     pub(crate) async fn replica(&self, shard: usize, request: &Request) -> Result<Guard, Error> {
-        let shard = self.shards.get(shard).ok_or(Error::NoShard(shard))?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let shard = self
+            .shards
+            .get(shard)
+            .ok_or_else(|| Error::NoShard(shard))?;
         shard.replica(request).await
     }
 
@@ -763,10 +771,11 @@ impl Cluster {
         query: &str,
         params: &[BindParameter],
     ) -> Result<Vec<T>, crate::backend::Error> {
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         let shard = self
             .shards
             .get(round_robin::next(self.shards.len().max(1)))
-            .ok_or(crate::backend::pool::Error::NoDatabases)?;
+            .ok_or_else(|| crate::backend::pool::Error::NoDatabases)?;
         let mut server = shard.primary_or_replica(&Request::default()).await?;
 
         server

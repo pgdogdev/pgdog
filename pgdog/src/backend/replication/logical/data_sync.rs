@@ -245,7 +245,7 @@ impl DataSync<'_> {
             .fetch_all::<String>("SELECT pg_export_snapshot()")
             .await?
             .pop()
-            .ok_or(Error::MissingData)
+            .ok_or_else(|| Error::MissingData)
     }
 
     pub(crate) async fn connect_reader(
@@ -302,9 +302,9 @@ pub(crate) async fn estimate_table(
         .fetch_all(sql)
         .await?
         .pop()
-        .ok_or(Error::MissingData)?;
-    let rows: i64 = row.get(0, Format::Text).ok_or(Error::MissingData)?;
-    let bytes: i64 = row.get(1, Format::Text).ok_or(Error::MissingData)?;
+        .ok_or_else(|| Error::MissingData)?;
+    let rows: i64 = row.get(0, Format::Text).ok_or_else(|| Error::MissingData)?;
+    let bytes: i64 = row.get(1, Format::Text).ok_or_else(|| Error::MissingData)?;
     Ok(TableEstimate {
         rows: u64::try_from(rows).ok(),
         bytes: bytes as u64,

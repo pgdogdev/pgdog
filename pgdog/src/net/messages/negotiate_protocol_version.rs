@@ -43,7 +43,8 @@ impl FromBytes for NegotiateProtocolVersion {
         code!(bytes, 'v');
 
         let _len = bytes.get_i32();
-        let version = ProtocolVersion::from_i32(bytes.get_i32()).ok_or(Error::UnexpectedPayload)?;
+        let version =
+            ProtocolVersion::from_i32(bytes.get_i32()).ok_or_else(|| Error::UnexpectedPayload)?;
         let count = bytes.get_i32();
         if count < 0 {
             return Err(Error::UnexpectedPayload);

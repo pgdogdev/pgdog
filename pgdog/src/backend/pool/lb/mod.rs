@@ -391,6 +391,7 @@ impl LoadBalancer {
     /// Wait until automatic role detection elects a primary.
     ///
     /// Fails with [`Error::CheckoutTimeout`] if no election happens in time.
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     async fn wait_primary(&self) -> Result<Pool, Error> {
         let mut receiver = self.elected_primary.subscribe();
 
@@ -399,7 +400,7 @@ impl LoadBalancer {
             .map_err(|_| Error::CheckoutTimeout)?
             .ok()
             .and_then(|elected| elected.as_ref().cloned())
-            .ok_or(Error::NoPrimary)
+            .ok_or_else(|| Error::NoPrimary)
     }
 
     /// Check out a connection from the primary.
