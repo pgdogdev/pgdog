@@ -240,7 +240,7 @@ fn test_distinct_state_resets_between_requests() {
             .get_server_message()
             .unwrap_or_else(|| panic!("request {request} should return CommandComplete"));
         let complete = CommandComplete::from_bytes(message.to_bytes()).unwrap();
-        assert_eq!(complete.rows().unwrap(), Some(1), "request {request}");
+        assert_eq!(complete.rows(), Some(1), "request {request}");
         assert!(multi_shard.get_server_message().is_none());
 
         multi_shard.query_complete();
@@ -310,7 +310,7 @@ fn test_omni_command_complete_not_summed() {
     let result = multi_shard.get_server_message();
     let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 5 (from one shard), not 15 (sum of all shards)
-    assert_eq!(cc.rows().unwrap(), Some(5));
+    assert_eq!(cc.rows(), Some(5));
 }
 
 #[test]
@@ -343,7 +343,7 @@ fn test_omni_command_complete_uses_first_shard_row_count() {
     let result = multi_shard.get_server_message();
     let cc = CommandComplete::from_bytes(result.unwrap().to_bytes()).unwrap();
     // Should be 7 (from FIRST shard), not 9 (from last)
-    assert_eq!(cc.rows().unwrap(), Some(7));
+    assert_eq!(cc.rows(), Some(7));
 }
 
 #[test]
