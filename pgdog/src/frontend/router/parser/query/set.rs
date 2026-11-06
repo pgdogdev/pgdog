@@ -16,8 +16,8 @@ impl QueryParser {
     ) -> Result<Command, Error> {
         if stmt.kind == VAR_RESET_ALL {
             Ok(Command::ResetAll)
-        } else if stmt.kind == VAR_SET_MULTI {
-            // SET TRANSACTION
+        } else if stmt.kind == VAR_SET_MULTI || stmt.kind == VAR_SET_CURRENT {
+            // SET TRANSACTION, or SET ... FROM CURRENT which doesn't change the value.
             Ok(Command::Query(
                 Route::write(context.shards_calculator.shard().clone())
                     .with_read(context.read_only),
