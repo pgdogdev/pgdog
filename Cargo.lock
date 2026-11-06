@@ -3194,24 +3194,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pg_raw_parse"
-version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85#a4784fc603563d3db8e9f381347f039f39b1dd85"
-dependencies = [
- "bindgen 0.72.1",
- "cc",
- "convert_case 0.11.0",
- "generativity",
- "glob",
- "include_dir",
- "libc",
- "prettyplease",
- "regex",
- "syn 2.0.118",
- "thiserror",
-]
-
-[[package]]
 name = "pg_stream"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
