@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use pg_internals::guc::normalize_datestyle;
+
 use crate::{
     net::{Error, Parameter},
     stats::memory::MemoryUsage,
@@ -43,13 +45,22 @@ impl Deref for Parameters {
 }
 
 impl Parameters {
-    /// Add the server's DateStyle if the client didn't supply one. We'll
-    /// use it to normalize and RESET DateStyle without talking to the server again.
+    /// Add the server's DateStyle if the client didn't supply one, and normalize
+    /// the client's DateStyle against the server's, like PostgreSQL does at startup.
+    /// We'll use DateStyle to normalize and RESET without talking to the server again.
     pub(crate) fn set_server_defaults(&mut self, server_params: &Parameters) {
-        if let Some(value) = server_params.get("DateStyle")
-            && !self.contains_key("DateStyle")
-        {
-            self.insert("DateStyle", value.clone());
+        let Some(server) = server_params
+            .get("DateStyle")
+            .and_then(ParameterValue::as_str)
+        else {
+            return;
+        };
+        let value = match self.get("DateStyle").and_then(ParameterValue::as_str) {
+            Some(client) => normalize_datestyle(client, server, server).ok(),
+            None => Some(server.to_owned()),
+        };
+        if let Some(value) = value {
+            self.insert("DateStyle", value);
         }
     }
 
