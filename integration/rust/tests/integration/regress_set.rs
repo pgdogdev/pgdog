@@ -285,14 +285,18 @@ async fn set_and_reset_in_one_query_reports_nothing() {
     RegressTest::new(&[
         "SET timezone = 'Europe/Paris'; RESET timezone",
         "SET intervalstyle = 'sql_standard'; SET datestyle = 'SQL, DMY'; RESET intervalstyle; RESET datestyle",
+        "SET application_name = 'apples'; SET application_name = 'pears'; RESET application_name",
         "BEGIN; SET timezone = 'Europe/Paris'; ROLLBACK",
         "SHOW timezone",
         "SHOW intervalstyle",
         "SHOW datestyle",
+        "/* server_reset */ SHOW application_name",
     ])
     // pgdog splits this batch and reports a ParameterStatus per statement.
     // Tracked in https://github.com/pgdogdev/pgdog/issues/395.
     .known_bad_queries(&["BEGIN; SET timezone = 'Europe/Paris'; ROLLBACK"])
+    // Clients without a name see pgdog's own application_name, not PostgreSQL's ''.
+    .known_bad_queries(&["/* server_reset */ SHOW application_name"])
     .no_fail_fast()
     .run_simple_ci()
     .await
@@ -305,6 +309,11 @@ async fn multiple_set_local_transaction() {
         "BEGIN",
         "SET application_name = 'startup'",
         "SET timezone = 'UTC'",
+        "SET application_name = 'session'; SET LOCAL application_name = 'local'",
+        "SHOW application_name",
+        "COMMIT",
+        "SHOW application_name",
+        "BEGIN",
         "SET work_mem = '4MB';
          SET LOCAL application_name = 'ignored';
          SET LOCAL timezone = 'Europe/Paris';

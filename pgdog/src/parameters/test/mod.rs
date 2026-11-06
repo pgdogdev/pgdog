@@ -563,6 +563,37 @@ fn test_partial_startup_datestyle_syncs_full_value() {
     );
 }
 
+#[test]
+fn test_reset_application_name_reports_server_name() {
+    let server_params = Parameters::from([("application_name", "PgDog")].as_slice());
+    let mut startup = Parameters::default();
+    startup.set_server_defaults(&server_params);
+    let mut client = ParameterStore::new(startup).with_server_reported(Arc::new(server_params));
+    let mut server = ParameterStore::default();
+
+    assert!(
+        server.sync(&client).is_empty(),
+        "no SET for a client without a name"
+    );
+
+    client.set("application_name", "myapp");
+    let queries = server.sync(&client);
+    server.sync_complete(queries);
+    client.reset("application_name");
+
+    assert_eq!(
+        client
+            .get_reported("application_name")
+            .and_then(ParameterValue::as_str),
+        Some("PgDog"),
+        "the client sees the name the server connection really uses"
+    );
+    assert_eq!(
+        server.sync(&client),
+        vec![Query::new(r#"RESET "application_name""#)]
+    );
+}
+
 fn store_with_server_timezone(startup: &[(&str, &str)]) -> ParameterStore {
     ParameterStore::new(Parameters::from(startup))
         .with_server_reported(Arc::new(Parameters::from([("TimeZone", "UTC")].as_slice())))

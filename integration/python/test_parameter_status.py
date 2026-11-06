@@ -2,6 +2,7 @@ import psycopg
 import pytest
 
 REPORTED = [
+    "application_name",
     "client_encoding",
     "DateStyle",
     "IntervalStyle",
@@ -11,13 +12,18 @@ REPORTED = [
 ]
 
 STARTUP = {
-    "no_options": {},
+    "default_name": {},
+    "application_name": {"application_name": "myapp"},
     "lowercase_client_encoding": {"client_encoding": "utf8"},
     "options": {
         "options": "-c TimeZone=Europe/Paris -c IntervalStyle=sql_standard -c DateStyle=sql,dmy"
     },
     "partial_datestyle": {"options": "-c DateStyle=YMD"},
     "lowercase_datestyle": {"options": "-c datestyle=german"},
+    "application_name_and_options": {
+        "application_name": "myapp",
+        "options": "-c TimeZone=Asia/Tokyo",
+    },
 }
 
 DATESTYLE_STARTUP = {
@@ -47,9 +53,10 @@ def status(conn, name):
 
 
 def reports(port, startup):
-    with connect(port, startup) as conn:
+    with connect(port, {"application_name": "pytest", **startup}) as conn:
         result = {f"login {name}": status(conn, name) for name in REPORTED}
         for name, value in [
+            ("application_name", "changed"),
             ("TimeZone", "America/New_York"),
             ("DateStyle", "Postgres"),
             ("IntervalStyle", "iso_8601"),
@@ -89,3 +96,13 @@ def test_parameter_status_matches_postgres(startup):
 )
 def test_startup_datestyle_matches_postgres(options):
     assert datestyle_reports(6432, options) == datestyle_reports(5432, options)
+
+
+def test_client_without_name_sees_pgdog_name():
+    with connect(6432, {}) as conn:
+        assert status(conn, "application_name") == "PgDog"
+        conn.execute("SET application_name = 'changed'")
+        assert status(conn, "application_name") == "changed"
+        conn.execute("RESET application_name")
+        assert status(conn, "application_name") == "PgDog"
+        assert conn.execute("SHOW application_name").fetchone()[0] == "PgDog"
