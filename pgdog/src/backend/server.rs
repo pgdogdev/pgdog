@@ -35,7 +35,7 @@ use crate::{
     stats::memory::MemoryUsage,
 };
 use crate::{
-    config::{ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
+    config::{ConfigAndUsers, ConnectionRecovery, PoolerMode, TlsVerifyMode, config},
     net::{
         CommandComplete, Stream,
         messages::{DataRow, NoticeResponse},
@@ -231,6 +231,24 @@ impl Server {
         ))))
     }
 
+    async fn open(addr: &Address, config: &ConfigAndUsers) -> Result<Stream, Error> {
+        #[cfg(test)]
+        if addr.host == super::fake_server::HOST {
+            return Ok(super::fake_server::connect());
+        }
+
+        let stream = TcpStream::connect(addr.addr().await?).await?;
+
+        if let Err(err) = tweak(&stream, &config.config.tcp) {
+            warn!(
+                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
+                config.config.tcp, err, addr,
+            );
+        }
+
+        Ok(Stream::plain(stream, config.config.memory.net_buffer))
+    }
+
     /// Create new PostgreSQL server connection with the given auth secret (e.g. password).
     async fn connect_with_auth_secret(
         addr: &Address,
@@ -241,17 +259,8 @@ impl Server {
         oids: Arc<Oids>,
     ) -> Result<Self, Error> {
         debug!("=> {}", addr);
-        let stream = TcpStream::connect(addr.addr().await?).await?;
         let config = config();
-
-        if let Err(err) = tweak(&stream, &config.config.tcp) {
-            warn!(
-                "keepalive settings ({}) are not supported on this system, ignoring, error: {} [{}]",
-                config.config.tcp, err, addr,
-            );
-        }
-
-        let mut stream = Stream::plain(stream, config.config.memory.net_buffer);
+        let mut stream = Self::open(addr, &config).await?;
 
         let tls = UpstreamTlsSettings::resolve(&config.config.general, &addr.tls);
 

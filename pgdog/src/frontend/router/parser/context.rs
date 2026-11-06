@@ -119,7 +119,10 @@ impl<'a> QueryParserContext<'a> {
 
     /// Get the query we're parsing, if any.
     pub(super) fn query(&self) -> Result<&BufferedQuery, Error> {
-        self.router_context.query.as_ref().ok_or(Error::EmptyQuery)
+        self.router_context
+            .query
+            .as_ref()
+            .ok_or_else(|| Error::EmptyQuery)
     }
 
     /// Multi-tenant checks.

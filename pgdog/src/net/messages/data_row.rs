@@ -25,6 +25,16 @@ impl DataRow {
         Self { columns: vec![] }
     }
 
+    /// Returns the number of columns in a DataRow message.
+    /// DataRow message starts with `'D'`, then a 4-byte length, then the 2-byte column count, so we read bytes 5 and 6, which is cheaper than parsing the whole row with `DataRow::from_bytes`.
+    pub(crate) fn column_count(message: &[u8]) -> Result<usize, Error> {
+        match message {
+            [b'D', _, _, _, _, high, low, ..] => Ok(i16::from_be_bytes([*high, *low]) as usize),
+            [b'D', ..] | [] => Err(Error::UnexpectedEof),
+            [code, ..] => Err(Error::UnexpectedMessage('D', *code as char)),
+        }
+    }
+
     /// Add a column to the data row.
     pub(crate) fn add(&mut self, value: impl ToDataRowColumn) -> &mut Self {
         self.columns.push(value.to_data_row_column());
@@ -126,7 +136,7 @@ impl DataRow {
         decoder: &Decoder,
     ) -> Result<Column, Error> {
         self.get_column(idx, decoder)?
-            .ok_or(Error::RequiredColumnMissing(idx))
+            .ok_or_else(|| Error::RequiredColumnMissing(idx))
     }
 
     /// How many columns in the data row.
@@ -226,6 +236,27 @@ mod test {
         assert_eq!(row.get::<u64>(0, Format::Binary), Some(0));
         assert_eq!(row.get::<u64>(1, Format::Binary), Some(u64::MAX));
         assert_eq!(row.get::<u64>(2, Format::Binary), None);
+    }
+
+    #[test]
+    fn test_column_count() {
+        let mut dr = DataRow::new();
+        dr.add("test").add(123_i64).add(Data::null());
+        assert_eq!(DataRow::column_count(&dr.to_bytes()).unwrap(), 3);
+
+        assert_eq!(
+            DataRow::column_count(&DataRow::new().to_bytes()).unwrap(),
+            0
+        );
+
+        assert!(matches!(
+            DataRow::column_count(b"D\0\0"),
+            Err(Error::UnexpectedEof)
+        ));
+        assert!(matches!(
+            DataRow::column_count(b"C\0\0\0\x06\0\x01"),
+            Err(Error::UnexpectedMessage('D', 'C'))
+        ));
     }
 
     #[test]

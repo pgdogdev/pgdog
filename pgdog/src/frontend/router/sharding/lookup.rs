@@ -410,6 +410,11 @@ impl LookupCache {
         self.cache.insert(CacheKey { table, value }, translated);
     }
 
+    #[cfg(test)]
+    pub(crate) fn clear(&self) {
+        self.cache.invalidate_all();
+    }
+
     /// Lookup metrics recorded by this cache.
     pub(crate) fn stats(&self) -> &Arc<LookupStats> {
         &self.stats

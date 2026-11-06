@@ -11,6 +11,7 @@ use crate::backend::schema::sync::SchemaSyncError;
 use task::{TaskError, TaskStorage, TaskWaiter};
 
 pub(crate) mod copy_data;
+pub(crate) mod ee;
 pub(crate) mod replication;
 pub(crate) mod resharding;
 pub(crate) mod schema_sync;

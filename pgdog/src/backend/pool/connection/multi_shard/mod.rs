@@ -239,7 +239,7 @@ impl MultiShard {
         let cc = CommandComplete::from_bytes(message.to_bytes())?;
 
         // DDL commands don't return rows.
-        let has_rows = if let Some(rows) = cc.rows()? {
+        let has_rows = if let Some(rows) = cc.rows() {
             if self.route.is_omnisharded() {
                 // Only use the first shard's row count for consistency with DataRow.
                 if self.request_state.command_complete_count == 0 {
@@ -293,7 +293,7 @@ impl MultiShard {
                 } else {
                     self.request_state.rows
                 };
-                self.request_state.command_complete = Some(cc.rewrite(rows)?.message());
+                self.request_state.command_complete = Some(cc.rewrite(rows).message());
             } else {
                 return Ok(Some(cc.message()));
             }
@@ -373,8 +373,8 @@ impl MultiShard {
 
         if self.shards > 1 {
             // Validate data row consistency.
-            let data_row = DataRow::from_bytes(message.to_bytes())?;
-            self.validator.validate_data_row(&data_row)?;
+            let column_count = DataRow::column_count(message.as_bytes())?;
+            self.validator.validate_column_count(column_count)?;
         }
 
         // INVARIANT: omni dedup relies on Source::Backend carrying a

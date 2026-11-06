@@ -1,6 +1,6 @@
 //! Row consistency validator for multi-shard queries.
 
-use crate::net::messages::{DataRow, RowDescription};
+use crate::net::messages::RowDescription;
 
 use super::Error;
 
@@ -58,9 +58,7 @@ impl Validator {
     }
 
     /// Validate a data row's column count against expected count.
-    pub(super) fn validate_data_row(&mut self, data_row: &DataRow) -> Result<(), Error> {
-        let column_count = data_row.len();
-
+    pub(super) fn validate_column_count(&mut self, column_count: usize) -> Result<(), Error> {
         match self.expected_column_count {
             None => {
                 // First data row - store column count
@@ -156,26 +154,17 @@ mod test {
     }
 
     #[test]
-    fn test_data_row_validation() {
+    fn test_column_count_validation() {
         let mut validator = Validator::default();
 
-        let mut dr1 = DataRow::new();
-        dr1.add("test").add(123_i64);
-
-        let mut dr2 = DataRow::new();
-        dr2.add("another").add(456_i64);
-
-        let mut dr3 = DataRow::new();
-        dr3.add("only_one_column");
-
         // First data row sets the expected column count
-        validator.validate_data_row(&dr1).unwrap();
+        validator.validate_column_count(2).unwrap();
 
         // Second data row with same column count should be fine
-        validator.validate_data_row(&dr2).unwrap();
+        validator.validate_column_count(2).unwrap();
 
         // Third data row with different column count should fail
-        let result = validator.validate_data_row(&dr3);
+        let result = validator.validate_column_count(1);
         assert!(matches!(
             result,
             Err(Error::InconsistentDataRowCount {
