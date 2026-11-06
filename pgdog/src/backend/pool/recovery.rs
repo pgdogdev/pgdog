@@ -206,7 +206,9 @@ mod test {
     use pgdog_config::pooling::ConnectionRecovery;
 
     use crate::backend::pool::{Address, Config, Pool, PoolConfig, Request};
+    use crate::backend::server::test::test_server;
     use crate::net::{Bind, Execute, Flush, Parse, Protocol, Query};
+    use uuid::Uuid;
 
     const RECOVERY_MODES: [ConnectionRecovery; 3] = [
         ConnectionRecovery::Recover,
@@ -227,6 +229,119 @@ mod test {
         });
         pool.launch();
         pool
+    }
+
+    #[tokio::test]
+    async fn test_recovery_does_not_commit_unsynchronized_execute()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut observer = test_server().await;
+        for recovery in RECOVERY_MODES {
+            for explicit in [false, true] {
+                for read_response in [false, true] {
+                    let table = format!("recovery_implicit_{}", Uuid::new_v4().simple());
+                    observer
+                        .execute(format!(
+                            "CREATE TABLE {table} AS SELECT 10::integer AS value"
+                        ))
+                        .await?;
+                    let pool = pool(recovery);
+                    let mut guard = pool.get(&Request::default()).await?;
+                    let id = guard.id();
+                    if explicit {
+                        guard.execute("BEGIN").await?;
+                    }
+                    guard
+                        .send(
+                            &vec![
+                                Parse::new_anonymous(&format!("UPDATE {table} SET value = 77"))
+                                    .into(),
+                                Bind::new_statement("").into(),
+                                Execute::new().into(),
+                                Flush.into(),
+                            ]
+                            .into(),
+                        )
+                        .await?;
+                    if read_response {
+                        for code in ['1', '2', 'C'] {
+                            assert_eq!(guard.read().await?.code(), code);
+                        }
+                    }
+                    drop(guard);
+
+                    // Waiting for the only pool slot ensures recovery has completed.
+                    let guard = pool.get(&Request::default()).await?;
+                    assert!(guard.in_sync());
+                    assert!(!guard.has_more_messages());
+                    assert!(!guard.in_transaction());
+                    if recovery.can_recover() || (recovery.can_rollback() && read_response) {
+                        assert_eq!(
+                            guard.id(),
+                            id,
+                            "{recovery:?}, read_response={read_response}"
+                        );
+                        assert_eq!(pool.state().force_close, 0);
+                    } else {
+                        assert_ne!(guard.id(), id);
+                    }
+                    let values: Vec<i32> = observer
+                        .fetch_all(format!("SELECT value FROM {table}"))
+                        .await?;
+                    observer.execute(format!("DROP TABLE {table}")).await?;
+                    assert_eq!(
+                        values,
+                        vec![10],
+                        "{recovery:?}, explicit={explicit}, read_response={read_response}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_recovery_after_failed_unsynchronized_execute()
+    -> Result<(), Box<dyn std::error::Error>> {
+        crate::logger();
+        for explicit in [false, true] {
+            for read_response in [false, true] {
+                let pool = pool(ConnectionRecovery::Recover);
+                let mut guard = pool.get(&Request::default()).await?;
+                let id = guard.id();
+                if explicit {
+                    guard.execute("BEGIN").await?;
+                }
+                guard
+                    .send(
+                        &vec![
+                            Parse::new_anonymous("SELECT 1 / 0").into(),
+                            Bind::new_statement("").into(),
+                            Execute::new().into(),
+                            Flush.into(),
+                        ]
+                        .into(),
+                    )
+                    .await?;
+                if read_response {
+                    while guard.read().await?.code() != 'E' {}
+                }
+                drop(guard);
+
+                let mut guard = pool.get(&Request::default()).await?;
+                assert_eq!(
+                    guard.id(),
+                    id,
+                    "explicit={explicit}, read_response={read_response}"
+                );
+                assert!(guard.in_sync());
+                assert!(!guard.has_more_messages());
+                assert!(!guard.in_transaction());
+                assert_eq!(pool.state().force_close, 0);
+                let values: Vec<i32> = guard.fetch_all("SELECT 1").await?;
+                assert_eq!(values, vec![1]);
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]
