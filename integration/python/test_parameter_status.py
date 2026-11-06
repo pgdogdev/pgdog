@@ -14,8 +14,17 @@ STARTUP = {
     "no_options": {},
     "lowercase_client_encoding": {"client_encoding": "utf8"},
     "options": {
-        "options": "-c TimeZone=Europe/Paris -c IntervalStyle=sql_standard"
+        "options": "-c TimeZone=Europe/Paris -c IntervalStyle=sql_standard -c DateStyle=sql,dmy"
     },
+    "partial_datestyle": {"options": "-c DateStyle=YMD"},
+    "lowercase_datestyle": {"options": "-c datestyle=german"},
+}
+
+DATESTYLE_STARTUP = {
+    "full": "-c DateStyle=sql,dmy",
+    "partial_order": "-c DateStyle=YMD",
+    "partial_style": "-c DateStyle=german",
+    "lowercase_name": "-c datestyle=iso,ymd",
 }
 
 
@@ -52,6 +61,31 @@ def reports(port, startup):
         return result
 
 
+def datestyle_reports(port, options):
+    with connect(port, {"options": options}) as conn:
+        result = {"login": status(conn, "DateStyle")}
+        result["SHOW at login"] = conn.execute("SHOW datestyle").fetchone()[0]
+        for query in [
+            "SET datestyle = 'SQL'",
+            "SET datestyle = 'DMY'",
+            "RESET datestyle",
+            "SET datestyle = 'Postgres'; RESET datestyle; SET datestyle = 'German'",
+            "RESET datestyle",
+        ]:
+            conn.execute(query)
+            result[query] = status(conn, "DateStyle")
+        result["SHOW at end"] = conn.execute("SHOW datestyle").fetchone()[0]
+        result["date text"] = conn.execute("SELECT '2026-03-04'::date::text").fetchone()[0]
+        return result
+
+
 @pytest.mark.parametrize("startup", STARTUP.values(), ids=STARTUP.keys())
 def test_parameter_status_matches_postgres(startup):
     assert reports(6432, startup) == reports(5432, startup)
+
+
+@pytest.mark.parametrize(
+    "options", DATESTYLE_STARTUP.values(), ids=DATESTYLE_STARTUP.keys()
+)
+def test_startup_datestyle_matches_postgres(options):
+    assert datestyle_reports(6432, options) == datestyle_reports(5432, options)
