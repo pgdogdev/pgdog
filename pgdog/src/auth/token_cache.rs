@@ -104,6 +104,22 @@ struct CacheInner {
     keys_ord: VecDeque<Key>,
 }
 
+impl CacheInner {
+    /// O(N) algorithm to remove a key
+    /// from the cache.
+    ///
+    /// Use it cautiously.
+    fn remove(&mut self, key: &Key) {
+        self.keys.remove(key);
+
+        // Pretty expensive: O(N).
+        let pos = self.keys_ord.iter().position(|val| val == key);
+        if let Some(pos) = pos {
+            self.keys_ord.remove(pos);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct AuthTokenCache {
     inner: Arc<Mutex<CacheInner>>,
@@ -221,6 +237,13 @@ impl AuthTokenCache {
         if ok {
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
         } else {
+            let mut guard = self.inner.lock();
+            // Remove expired key and let the cache re-validate it
+            // against Postgres. This is to protect against
+            // mismatched cache expiration setting.
+            if let Some(true) = guard.keys.get(key).map(|value| value.expired()) {
+                guard.remove(key);
+            }
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -269,6 +292,49 @@ pub(crate) struct TokenCacheStats {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[tokio::test]
+    async fn test_expired_key_is_validated_again() {
+        crate::logger();
+        crate::config::load_test();
+        let cache = AuthTokenCache::default();
+        let key = Key::new("pgdog", "pgdog", "pgdog");
+
+        assert!(
+            cache
+                .check("pgdog", "pgdog", "pgdog")
+                .await
+                .expect("initial token validation should succeed")
+        );
+
+        let expired = {
+            let mut guard = cache.inner.lock();
+            let entry = guard.keys.get_mut(&key).expect("token should be cached");
+            Arc::get_mut(entry)
+                .expect("cache should be the only entry owner")
+                .expires_at = SystemTime::now() - Duration::from_secs(1);
+            entry.clone()
+        };
+        assert!(expired.expired());
+
+        assert!(
+            cache
+                .check("pgdog", "pgdog", "pgdog")
+                .await
+                .expect("expired token should be revalidated")
+        );
+        {
+            let guard = cache.inner.lock();
+            let refreshed = guard.keys.get(&key).expect("token should be cached again");
+            assert!(!Arc::ptr_eq(&expired, refreshed));
+            assert_eq!(refreshed.validation.get(), Some(&true));
+            assert!(!refreshed.expired());
+        }
+
+        // A stale queue entry must not evict the newly validated token.
+        cache.run_eviction(1);
+        assert!(cache.get_and_check(&key));
+    }
 
     #[tokio::test]
     async fn test_cache() {
