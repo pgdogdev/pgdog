@@ -54,6 +54,7 @@ impl From<NetError> for Error {
                 Self::UnexpectedMessage(expected, actual)
             }
             NetError::Utf8(error) => Self::Utf8(error),
+            NetError::TypeError(error) => Self::Aggregate(AggregateError::Type(error)),
             other => Self::Unexpected(other.to_string()),
         }
     }
@@ -63,6 +64,7 @@ impl From<BackendError> for Error {
     fn from(value: BackendError) -> Self {
         match value {
             BackendError::Aggregate(error) => Self::Aggregate(error),
+            BackendError::Type(error) => Self::Aggregate(AggregateError::Type(error)),
             BackendError::Net(error) => error.into(),
             other => Self::Unexpected(other.to_string()),
         }
