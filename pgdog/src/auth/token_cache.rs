@@ -5,12 +5,12 @@
 //! This is effectively passthrough auth for RDS IAM, Azure Workload Identity, etc.
 //!
 
+use lru::LruCache;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use pgdog_config::ServerAuth;
 use rand::seq::{IndexedRandom, IteratorRandom};
 use std::{
-    collections::{HashMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -98,38 +98,17 @@ struct Stats {
     misses: AtomicU64,
 }
 
-#[derive(Debug, Default)]
-struct CacheInner {
-    keys: HashMap<Key, Arc<Entry>>,
-    keys_ord: VecDeque<Key>,
-}
-
-impl CacheInner {
-    /// O(N) algorithm to remove a key
-    /// from the cache.
-    ///
-    /// Use it cautiously.
-    fn remove(&mut self, key: &Key) {
-        self.keys.remove(key);
-
-        // Pretty expensive: O(N).
-        let pos = self.keys_ord.iter().position(|val| val == key);
-        if let Some(pos) = pos {
-            self.keys_ord.remove(pos);
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct AuthTokenCache {
-    inner: Arc<Mutex<CacheInner>>,
+    // Lookups use peek to preserve FIFO eviction order.
+    inner: Arc<Mutex<LruCache<Key, Arc<Entry>>>>,
     stats: Arc<Stats>,
 }
 
 impl Default for AuthTokenCache {
     fn default() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(CacheInner::default())),
+            inner: Arc::new(Mutex::new(LruCache::unbounded())),
             stats: Arc::new(Stats::default()),
         }
     }
@@ -212,37 +191,33 @@ impl AuthTokenCache {
 
         // Clients should not be sending the same token
         // that's expired but we can't trust them.
-        let exists = guard.keys.get(key);
+        let exists = guard.peek(key);
 
         if let Some(exists) = exists {
             exists.clone()
         } else {
             let value = Arc::new(Entry::new(expires_at));
-            guard.keys.insert(key.clone(), value.clone());
-            guard.keys_ord.push_back(key.clone());
+            guard.put(key.clone(), value.clone());
 
             value
         }
     }
 
     fn get_and_check(&self, key: &Key) -> bool {
-        let ok = self
-            .inner
-            .lock()
-            .keys
-            .get(key)
-            .map(|key| key.valid())
+        let mut guard = self.inner.lock();
+        let (ok, exists, expired) = guard
+            .peek(key)
+            .map(|entry| (entry.valid(), true, entry.expired()))
             .unwrap_or_default();
 
         if ok {
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
         } else {
-            let mut guard = self.inner.lock();
             // Remove expired key and let the cache re-validate it
             // against Postgres. This is to protect against
             // mismatched cache expiration setting.
-            if let Some(true) = guard.keys.get(key).map(|value| value.expired()) {
-                guard.remove(key);
+            if exists && expired {
+                guard.pop(key);
             }
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
         }
@@ -253,10 +228,8 @@ impl AuthTokenCache {
     fn run_eviction(&self, capacity: usize) {
         let mut guard = self.inner.lock();
 
-        while guard.keys_ord.len() > capacity {
-            let key = guard.keys_ord.pop_front();
-            if let Some(key) = key {
-                guard.keys.remove(&key);
+        while guard.len() > capacity {
+            if guard.pop_lru().is_some() {
                 self.stats.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -273,7 +246,7 @@ impl AuthTokenCache {
     /// Get stats from cache.
     pub(crate) fn stats(&self) -> TokenCacheStats {
         TokenCacheStats {
-            entries: self.inner.lock().keys.len() as u64,
+            entries: self.inner.lock().len() as u64,
             evictions: self.stats.evictions.load(Ordering::Relaxed),
             misses: self.stats.misses.load(Ordering::Relaxed),
             hits: self.stats.hits.load(Ordering::Relaxed),
@@ -309,7 +282,7 @@ mod test {
 
         let expired = {
             let mut guard = cache.inner.lock();
-            let entry = guard.keys.get_mut(&key).expect("token should be cached");
+            let entry = guard.peek_mut(&key).expect("token should be cached");
             Arc::get_mut(entry)
                 .expect("cache should be the only entry owner")
                 .expires_at = SystemTime::now() - Duration::from_secs(1);
@@ -325,7 +298,7 @@ mod test {
         );
         {
             let guard = cache.inner.lock();
-            let refreshed = guard.keys.get(&key).expect("token should be cached again");
+            let refreshed = guard.peek(&key).expect("token should be cached again");
             assert!(!Arc::ptr_eq(&expired, refreshed));
             assert_eq!(refreshed.validation.get(), Some(&true));
             assert!(!refreshed.expired());
