@@ -3179,13 +3179,14 @@ dependencies = [
 [[package]]
 name = "pg_raw_parse"
 version = "0.1.0"
-source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1#89937b1a9c39bbb53b679f12aba3ff7c5ab3c093"
+source = "git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85#a4784fc603563d3db8e9f381347f039f39b1dd85"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
  "convert_case 0.11.0",
  "generativity",
  "glob",
+ "include_dir",
  "libc",
  "prettyplease",
  "regex",
@@ -3252,7 +3253,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "pg_internals",
- "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
+ "pg_raw_parse",
  "pgdog-config",
  "pgdog-macros",
  "pgdog-plugin",
@@ -3320,7 +3321,7 @@ version = "0.1.0"
 dependencies = [
  "once_cell",
  "parking_lot",
- "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
+ "pg_raw_parse",
  "pgdog-plugin",
  "thiserror",
 ]
@@ -3353,7 +3354,7 @@ version = "0.5.0"
 dependencies = [
  "bindgen 0.71.1",
  "libloading",
- "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
+ "pg_raw_parse",
  "pgdog-postgres-types",
  "tracing",
  "tracing-subscriber",
@@ -3381,7 +3382,7 @@ dependencies = [
  "arc-swap",
  "once_cell",
  "parking_lot",
- "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=89937b1)",
+ "pg_raw_parse",
  "pgdog-plugin",
  "serde",
  "thiserror",
@@ -3396,7 +3397,7 @@ source = "git+https://github.com/pgdogdev/regress.git?rev=22032787eeaef9bf97aaa3
 dependencies = [
  "bytes",
  "fallible-iterator",
- "pg_raw_parse 0.1.0 (git+https://github.com/pgdogdev/pg_raw_parse.git?rev=a4784fc603563d3db8e9f381347f039f39b1dd85)",
+ "pg_raw_parse",
  "postgres-protocol 0.6.12",
  "tokio",
 ]
