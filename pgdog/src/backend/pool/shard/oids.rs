@@ -38,7 +38,7 @@ impl Oids {
                     let canonical = canonical
                         .get(&type_name)
                         .copied()
-                        .ok_or(Error::MissingCanonicalOid(type_name))?;
+                        .ok_or_else(|| Error::MissingCanonicalOid(type_name))?;
                     if canonical == oid {
                         continue;
                     }

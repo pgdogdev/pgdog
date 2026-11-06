@@ -141,7 +141,7 @@ impl CopySubscriber {
         cluster: &Cluster,
     ) -> Result<Self, Error> {
         let ast = pg_raw_parse::parse(&copy_stmt.copy_in()).map_err(ParseError::from)?;
-        let stmt = ast.stmts().next().ok_or(ParseError::EmptyQuery)?;
+        let stmt = ast.stmts().next().ok_or_else(|| ParseError::EmptyQuery)?;
         let mut copy = if let Node::CopyStmt(stmt) = stmt {
             CopyParser::new(stmt, cluster).map_err(|_| Error::MissingData)?
         } else {

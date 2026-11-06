@@ -31,7 +31,7 @@ fn primary(shard: &Shard) -> Result<Pool, Error> {
         .into_iter()
         .find(|(role, _)| role == &Role::Primary)
         .map(|(_, pool)| pool)
-        .ok_or(Error::NoPrimary)
+        .ok_or_else(|| Error::NoPrimary)
 }
 
 pub(super) async fn connect_primary(shard: &Shard) -> Result<Server, Error> {

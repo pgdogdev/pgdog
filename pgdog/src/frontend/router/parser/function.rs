@@ -49,10 +49,11 @@ impl<'a> Function<'a> {
 impl<'a> TryFrom<Node<'a>> for Function<'a> {
     type Error = ();
 
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     fn try_from(value: Node<'a>) -> Result<Self, Self::Error> {
         Self::extract_func_call(value)
             .and_then(|f| Self::from_strings(f.funcname().iter().filter_map(Node::as_str)))
-            .ok_or(())
+            .ok_or_else(|| ())
     }
 }
 

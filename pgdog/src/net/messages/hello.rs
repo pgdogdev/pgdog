@@ -53,7 +53,7 @@ impl Startup {
                 let secret_len = usize::try_from(len)
                     .ok()
                     .and_then(|len| len.checked_sub(12))
-                    .ok_or(Error::UnexpectedPayload)?;
+                    .ok_or_else(|| Error::UnexpectedPayload)?;
                 let mut secret = vec![0_u8; secret_len];
                 stream.read_exact(&mut secret).await?;
 
@@ -66,8 +66,8 @@ impl Startup {
             }
             // StartupMessage (F)
             code => {
-                let version =
-                    ProtocolVersion::from_i32(code).ok_or(Error::UnsupportedStartup(code))?;
+                let version = ProtocolVersion::from_i32(code)
+                    .ok_or_else(|| Error::UnsupportedStartup(code))?;
                 if version.major() != 3 {
                     return Err(Error::UnsupportedStartup(code));
                 }

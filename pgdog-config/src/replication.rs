@@ -235,8 +235,11 @@ impl FromStr for Mirroring {
             }
         }
 
-        let source_db = source_db.ok_or("Missing required parameter: source_db")?;
-        let destination_db = destination_db.ok_or("Missing required parameter: destination_db")?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let source_db = source_db.ok_or_else(|| "Missing required parameter: source_db")?;
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        let destination_db =
+            destination_db.ok_or_else(|| "Missing required parameter: destination_db")?;
 
         Ok(Mirroring {
             source_db,

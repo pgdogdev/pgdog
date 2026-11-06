@@ -140,8 +140,11 @@ impl<'a> ContextBuilder<'a> {
     }
 
     pub(crate) fn build(mut self) -> Result<Context<'a>, Error> {
-        let operator = self.operator.take().ok_or(Error::IncompleteContext)?;
-        let value = self.value.take().ok_or(Error::IncompleteContext)?;
+        let operator = self
+            .operator
+            .take()
+            .ok_or_else(|| Error::IncompleteContext)?;
+        let value = self.value.take().ok_or_else(|| Error::IncompleteContext)?;
 
         Ok(Context {
             operator,

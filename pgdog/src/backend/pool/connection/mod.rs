@@ -317,7 +317,7 @@ impl Connection {
     pub(crate) async fn read(&mut self) -> Result<Message, Error> {
         select! {
             notification = self.pub_sub.recv() => {
-                Ok(notification.ok_or(Error::ProtocolOutOfSync)?.message())
+                Ok(notification.ok_or_else(|| Error::ProtocolOutOfSync)?.message())
             }
 
             // This is cancel-safe.
