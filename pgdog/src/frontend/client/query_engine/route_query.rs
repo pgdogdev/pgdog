@@ -198,6 +198,15 @@ impl QueryEngine {
 
                 return Ok(false);
             }
+            Err(RouterError::Parser(err @ ParserError::InsertSelectWithoutShardingKey)) => {
+                if let Some(transaction) = context.transaction.as_mut() {
+                    transaction.set_error();
+                }
+                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                    .await?;
+
+                return Ok(false);
+            }
             Err(RouterError::Parser(ParserError::UnmappedShardKey(shard_key))) => {
                 self.error_response(
                     context,

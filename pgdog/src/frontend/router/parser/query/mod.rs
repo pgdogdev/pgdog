@@ -629,10 +629,16 @@ impl QueryParser {
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
+        let insert_rewritten = context
+            .router_context
+            .ast
+            .is_some_and(|ast| !ast.rewrite_plan.subqueries.is_empty());
+
         let mut parser =
             StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)
                 .with_schema_lookup(schema_lookup)
-                .with_explain(self.recorder_mut().is_some());
+                .with_explain(self.recorder_mut().is_some())
+                .with_insert_rewritten(insert_rewritten);
         parser.set_resolved_lookups(&context.router_context.resolved_lookups);
 
         let is_sharded = parser.is_sharded(
