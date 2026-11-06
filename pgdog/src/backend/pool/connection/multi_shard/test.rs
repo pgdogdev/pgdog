@@ -228,7 +228,7 @@ fn test_having_collects_merged_inputs_and_drops_hidden_columns() {
 
     let command_complete =
         CommandComplete::from_bytes(multi_shard.get_server_message().unwrap().to_bytes()).unwrap();
-    assert_eq!(command_complete.rows().unwrap(), Some(2));
+    assert_eq!(command_complete.rows(), Some(2));
     assert!(multi_shard.get_server_message().is_none());
 
     multi_shard.query_complete();

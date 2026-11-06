@@ -127,7 +127,7 @@ impl<'a> HavingMulti<'a> {
                     message
                 }
                 'C' => CommandComplete::from_bytes(message.to_bytes())?
-                    .rewrite(kept)?
+                    .rewrite(kept)
                     .message(),
                 _ => message,
             };
