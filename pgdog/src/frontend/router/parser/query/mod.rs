@@ -41,6 +41,7 @@ use multi_tenant::MultiTenantCheck;
 use pg_raw_parse::{Node, nodes};
 use plugins::PluginOutput;
 
+use crate::frontend::router::parser::rewrite::statement::insert::InsertSplitPlan;
 use tracing::{debug, trace};
 
 /// Query parser.
@@ -629,10 +630,13 @@ impl QueryParser {
             user: context.router_context.cluster.user(),
             search_path: context.router_context.parameter_hints.search_path,
         };
-        let insert_rewritten = context
-            .router_context
-            .ast
-            .is_some_and(|ast| !ast.rewrite_plan.subqueries.is_empty());
+        let insert_rewritten = context.router_context.ast.is_some_and(|ast| {
+            !ast.rewrite_plan.subqueries.is_empty()
+                || matches!(
+                    ast.rewrite_plan.insert_split,
+                    Some(InsertSplitPlan::Unnest(_))
+                )
+        });
 
         let mut parser =
             StatementParser::new(stmt, context.router_context.bind, context.sharding_schema)

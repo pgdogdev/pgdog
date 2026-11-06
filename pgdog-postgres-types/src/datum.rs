@@ -311,6 +311,27 @@ impl DataType {
         }
     }
 
+    pub fn to_oid(&self) -> Option<i32> {
+        match self {
+            DataType::Bool => Some(16),
+            DataType::Bigint => Some(20),
+            DataType::SmallInt => Some(21),
+            DataType::Integer => Some(23),
+            DataType::Text => Some(25), //or 1043 (varchar)
+            DataType::Oid => Some(26),
+            DataType::Real => Some(700),
+            DataType::DoublePrecision => Some(701),
+            DataType::Timestamp => Some(1114),
+            DataType::TimestampTz => Some(1184),
+            DataType::Interval => Some(1186),
+            DataType::Numeric => Some(1700),
+            DataType::Uuid => Some(2950),
+            DataType::Array(oid) => Some(*oid),
+            DataType::Other(oid) => Some(*oid),
+            DataType::Vector => None,
+        }
+    }
+
     /// Format the `DataType` into a type that can be
     /// expressed as pg_catalog.<TYPE>
     ///
@@ -357,6 +378,39 @@ impl DataType {
                 panic!("This needs to be handled properly with a client-facing error")
             }
         }
+    }
+
+    pub fn pg_catalog_type_to_datatype(pg_catalog_type: &str) -> Option<Self> {
+        Some(match pg_catalog_type {
+            "int8" => DataType::Bigint,
+            "int4" => DataType::Integer,
+            "text" => DataType::Text,
+            "interval" => DataType::Interval,
+            "timestamp" => DataType::Timestamp,
+            "timestamptz" => DataType::TimestampTz,
+            "float4" => DataType::Real,
+            "float8" => DataType::DoublePrecision,
+            "bool" => DataType::Bool,
+            "int2" => DataType::SmallInt,
+            "numeric" => DataType::Numeric,
+            "uuid" => DataType::Uuid,
+            "oid" => DataType::Oid,
+            "_bool" => DataType::Array(16),
+            "_int2" => DataType::Array(21),
+            "_int4" => DataType::Array(23),
+            "_text" => DataType::Array(25),
+            "_varchar" => DataType::Array(1043),
+            "_int8" => DataType::Array(20),
+            "_float4" => DataType::Array(700),
+            "_float8" => DataType::Array(701),
+            "_oid" => DataType::Array(26),
+            "_timestamp" => DataType::Array(1114),
+            "_timestamptz" => DataType::Array(1184),
+            "_interval" => DataType::Array(1186),
+            "_numeric" => DataType::Array(1700),
+            "_uuid" => DataType::Array(2950),
+            _ => return None,
+        })
     }
 }
 

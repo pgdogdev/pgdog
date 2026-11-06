@@ -125,6 +125,52 @@ fn test_insert_default_values() {
     assert!(command.route().shard().is_direct());
 }
 
+// Check that the router doesn't return the INSERT .. SELECT error for the unnest(..) INSERTs that go to split insert,
+// and that it still returns the error when the rewrite doesn't split the INSERT (e.g., with LIMIT).
+#[test]
+fn test_insert_select_from_unnest() {
+    let mut config = crate::config::config().deref().clone();
+    config.config.rewrite.split_inserts = pgdog_config::RewriteMode::Rewrite;
+
+    let unnest_insert = |sql: &str| -> Vec<crate::net::ProtocolMessage> {
+        vec![
+            Parse::new_anonymous(sql).into(),
+            Bind::new_params("", &[Parameter::new(b"{1,2}"), Parameter::new(b"{a,b}")]).into(),
+            Execute::new().into(),
+            Sync.into(),
+        ]
+    };
+
+    // Rewrite splits the rows of the INSERT by shard (thus, no error)
+    let mut test = QueryParserTest::new_with_config(&config);
+    let command = test.execute(unnest_insert(
+        "INSERT INTO sharded (id, value) SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text)",
+    ));
+    assert!(command.route().is_write());
+
+    // With LIMIT, the rewrite doesn't split the INSERT, router returns error
+    let mut test = QueryParserTest::new_with_config(&config);
+    let error = test
+        .try_execute(unnest_insert(
+            "INSERT INTO sharded (id, value) SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._text) LIMIT 1",
+        ))
+        .unwrap_err();
+    assert!(matches!(error, Error::InsertSelectWithoutShardingKey));
+
+    // Without the sharding key column, rewrite doesn't split the INSERT, column default generates the keys on round-robin shard
+    let mut test = QueryParserTest::new_with_config(&config);
+    let command = test.execute(vec![
+        Parse::new_anonymous(
+            "INSERT INTO sharded (value) SELECT * FROM unnest($1::pg_catalog._text)",
+        )
+        .into(),
+        Bind::new_params("", &[Parameter::new(b"{a,b}")]).into(),
+        Execute::new().into(),
+        Sync.into(),
+    ]);
+    assert!(command.route().shard().is_direct());
+}
+
 #[test]
 fn test_insert_select_with_subquery_rewrite() {
     let mut config = crate::config::config().deref().clone();

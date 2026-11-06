@@ -1,11 +1,16 @@
 use indexmap::{IndexMap, IndexSet};
 use pg_raw_parse::{Node, NodeMut, deparse, make, nodes, walk};
 use pgdog_config::RewriteMode;
+use pgdog_postgres_types::{Array, DataType, Datum};
 use smallvec::SmallVec;
 
-use crate::frontend::router::parser::{Cache, Shard};
+use crate::frontend::router::parser::{Cache, Shard, Table};
+use crate::frontend::router::sharding::Tables;
 use crate::frontend::{ClientRequest, PreparedStatements};
-use crate::net::{Bind, Parse, ProtocolMessage, Query};
+use crate::net::{
+    Bind, Parse, ProtocolMessage, Query,
+    messages::bind::{Format, Parameter},
+};
 
 use super::{Error, InsertSplitRewriteResult, RewritePlan, StatementRewrite};
 
@@ -28,6 +33,119 @@ pub(crate) enum Subquery {
 
     /// CTE present in WHERE clause
     WhereClauseCte(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum InsertSplitPlan {
+    // INSERT .. VALUES (..), (..), split into one INSERT per tuple.
+    Values(Vec<InsertSplit>),
+    // INSERT .. SELECT * FROM unnest($1, ..), split by shards of the rows.
+    Unnest(UnnestInsert),
+}
+
+// INSERT INTO .. SELECT * FROM unnest($1::pg_catalog._int8, ..)
+#[derive(Debug, Clone)]
+pub(crate) struct UnnestInsert {
+    // The Bind parameter numbers of the unnest(..) arguments (in argument order) + OIDs of the array elements
+    array_params: Vec<(u16, i32)>,
+    // INSERT with VALUES ($1, .., $k) instead of unnest(..); only used to route the rows one at a time (there's
+    // a perf TODO to remove this later).
+    single_row_insert_sql: String,
+}
+
+// Singular decoded unnest(..) array
+// We cut this into one array per shard after routing the rows
+#[derive(Debug, Clone)]
+pub(crate) struct UnnestArray {
+    bind_index: usize,
+    element_oid: i32,
+    format: Format,
+    elements: Vec<Datum>,
+}
+
+impl UnnestInsert {
+    pub(crate) fn build(&self, request: &ClientRequest) -> Result<InsertSplitRewriteResult, Error> {
+        let client_bind = request
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                ProtocolMessage::Bind(bind) => Some(bind),
+                _ => None,
+            })
+            .ok_or_else(|| Error::MissingParameter(self.array_params[0].0))?;
+
+        let unnest_arrays = self
+            .array_params
+            .iter()
+            .map(|&(param_number, element_oid)| {
+                let bind_index = param_number as usize - 1;
+                let array_param = client_bind
+                    .parameter(bind_index)?
+                    .ok_or_else(|| Error::MissingParameter(param_number))?;
+
+                let elements = if array_param.is_null() {
+                    vec![]
+                } else {
+                    Array::decode_typed(array_param.data(), array_param.format(), element_oid)?
+                        .elements()
+                        .clone()
+                };
+
+                Ok(UnnestArray {
+                    bind_index,
+                    element_oid,
+                    format: array_param.format(),
+                    elements,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        // unnest(..) pads shorter arrays with NULLs, (longest array = the number of rows)
+        let row_count = unnest_arrays
+            .iter()
+            .map(|unnest_array| unnest_array.elements.len())
+            .max()
+            .unwrap_or(0);
+
+        // If the arrays are empty, we send the original INSERT (inserts no rows)
+        if row_count == 0 {
+            return Ok(InsertSplitRewriteResult::new(vec![request.clone()]));
+        }
+
+        // PERF(jkaczman): We route the rows through the router one at a time (one Router::query call per row) to ensure that the rows use the same sharding logic as VALUES
+        // For tables without lookups, we could compute the shards of the rows from the sharding key column directly instead
+        // This is especially important if theres TONS of rows; would be a lot of speedup
+        let single_row_ast = Cache::get().record(&self.single_row_insert_sql)?.ast;
+
+        let single_row_requests = (0..row_count)
+            .map(|row_index| {
+                let mut single_row_bind = Bind::new_statement("");
+                for unnest_array in &unnest_arrays {
+                    let element_param = match unnest_array.elements.get(row_index) {
+                        Some(element) if !element.is_null() => {
+                            Parameter::new(&element.encode(unnest_array.format)?)
+                        }
+                        _ => Parameter::new_null(),
+                    };
+                    single_row_bind.push_param(element_param, unnest_array.format);
+                }
+
+                Ok(ClientRequest {
+                    messages: vec![
+                        ProtocolMessage::Parse(Parse::new_anonymous(&self.single_row_insert_sql)),
+                        ProtocolMessage::Bind(single_row_bind),
+                    ],
+                    ast: Some(single_row_ast.clone()),
+                    ..Default::default()
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(InsertSplitRewriteResult::new_unnest_insert(
+            single_row_requests,
+            unnest_arrays,
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +327,65 @@ pub(crate) fn group_split_requests_by_shard(
     Ok(InsertSplitRewriteResult {
         requests: grouped,
         tuples: reordered.then_some(tuple_groups),
+        unnest_arrays: None,
+    })
+}
+
+// We send the original INSERT to all shards that the router sent rows to with the unnest(..) arrays cut down to the rows of each shard.
+// The single-row requests only route the rows so we always group unnest INSERTs (even if all rows go to different shards).
+pub(crate) fn group_unnest_insert_by_shard(
+    single_row_requests: Vec<ClientRequest>,
+    request: &ClientRequest,
+    unnest_arrays: Vec<UnnestArray>,
+) -> Result<InsertSplitRewriteResult, Error> {
+    let mut rows_by_shard: IndexMap<&Shard, Vec<usize>> = IndexMap::new();
+    for (row_index, single_row_request) in single_row_requests.iter().enumerate() {
+        rows_by_shard
+            .entry(single_row_request.route().shard())
+            .or_default()
+            .push(row_index);
+    }
+
+    let mut shard_requests = Vec::with_capacity(rows_by_shard.len());
+    for row_indices in rows_by_shard.values() {
+        let mut shard_request = request.clone();
+
+        for message in &mut shard_request.messages {
+            let ProtocolMessage::Bind(shard_bind) = message else {
+                continue;
+            };
+
+            for unnest_array in &unnest_arrays {
+                let shard_elements = row_indices
+                    .iter()
+                    .map(|&row_index| {
+                        unnest_array
+                            .elements
+                            .get(row_index)
+                            .cloned()
+                            .unwrap_or(Datum::Null)
+                    })
+                    .collect();
+                let shard_array = Array::new(shard_elements, unnest_array.element_oid)
+                    .encode(unnest_array.format)?;
+
+                shard_bind
+                    .set_param(unnest_array.bind_index, Parameter::new(&shard_array))
+                    .ok_or_else(|| Error::MissingParameter(unnest_array.bind_index as u16 + 1))?;
+            }
+        }
+
+        shard_request.route = single_row_requests[row_indices[0]].route.clone();
+        shard_requests.push(shard_request);
+    }
+
+    let tuple_groups: Vec<Vec<usize>> = rows_by_shard.into_values().collect();
+    let reordered = !tuple_groups.iter().flatten().is_sorted();
+
+    Ok(InsertSplitRewriteResult {
+        requests: shard_requests,
+        tuples: reordered.then_some(tuple_groups),
+        unnest_arrays: None,
     })
 }
 
@@ -228,6 +405,132 @@ fn needs_grouping(requests: &[ClientRequest]) -> bool {
     });
 
     !same_shard && !distinct_shards
+}
+
+// If the unnest(..) argument is a Bind parameter with a type cast (e.g., $1::pg_catalog._int8), this returns the parameter and the OID of the array elements.
+// This reads the type from the last part of the name, since the first part can be the schema (e.g., pg_catalog in pg_catalog._int8).
+fn typed_array_param<'a>(arg: Node<'a>) -> Option<(&'a nodes::ParamRef, i32)> {
+    let Node::TypeCast(cast) = arg else {
+        return None;
+    };
+
+    let param_ref = param_ref_under_casts(arg)?;
+    let type_name = cast.type_name()?.names().into_iter().next_back()?.sval()?;
+    let type_oid = DataType::pg_catalog_type_to_datatype(type_name)?.to_oid()?;
+
+    Some((param_ref, type_oid))
+}
+
+fn param_ref_under_casts<'a>(mut node: Node<'a>) -> Option<&'a nodes::ParamRef> {
+    while let Node::TypeCast(cast) = node {
+        node = cast.arg();
+    }
+
+    match node {
+        Node::ParamRef(param_ref) => Some(param_ref),
+        _ => None,
+    }
+}
+
+// If the INSERT selects from unnest(..), returns the SELECT, the RangeFunction and the unnest(..) call.
+fn find_unnest_call(
+    insert: &nodes::InsertStmt,
+) -> Option<(&nodes::SelectStmt, &nodes::RangeFunction, &nodes::FuncCall)> {
+    if let Node::SelectStmt(select) = insert.select_stmt()
+        && let Some(Node::RangeFunction(unnest_range_function)) = select.from_clause().first()
+        && let Some(Node::NodeList(node_list)) = unnest_range_function.functions().first()
+        && let Some(Node::FuncCall(unnest_call)) = node_list.first()
+        && let Some(func_name) = unnest_call.funcname().first()
+        && let Some(func_name) = func_name.as_str()
+        && func_name.eq("unnest")
+    {
+        return Some((select, unnest_range_function, unnest_call));
+    }
+
+    None
+}
+
+// We only split INSERT INTO .. SELECT * FROM unnest(..) where all arguments are typed Bind parameters since we can cut those arrays into one Bind per shard.
+// Other parts in the SELECT (e.g., WHERE or LIMIT) would apply to all rows at once, so cutting the rows into one INSERT per shard would change the result.
+// Therefore, we don't consider those, yet.
+fn plan_unnest_insert(
+    insert: &nodes::InsertStmt,
+    select: &nodes::SelectStmt,
+    unnest_range_function: &nodes::RangeFunction,
+    unnest_call: &nodes::FuncCall,
+) -> Result<Option<UnnestInsert>, Error> {
+    let select_star = select.target_list().len() == 1
+        && select.target_list().into_iter().all(|target| {
+            matches!(target.val(), Node::ColumnRef(column)
+                if matches!(column.fields().first(), Some(Node::A_Star(_))))
+        });
+
+    let only_unnest = select_star
+        && select.from_clause().len() == 1
+        && unnest_range_function.functions().len() == 1
+        && matches!(select.where_clause(), Node::None)
+        && select.group_clause().is_empty()
+        && matches!(select.having_clause(), Node::None)
+        && select.sort_clause().is_empty()
+        && matches!(select.limit_count(), Node::None)
+        && matches!(select.limit_offset(), Node::None)
+        && select.distinct_clause().is_empty()
+        && select.with_clause().is_none()
+        && insert.with_clause().is_none();
+
+    if !only_unnest {
+        return Ok(None);
+    }
+
+    let Some(array_params) = unnest_call
+        .args()
+        .into_iter()
+        .map(|arg| {
+            typed_array_param(arg)
+                .map(|(param_ref, element_oid)| (param_ref.number as u16, element_oid))
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|array_params| !array_params.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let mut single_row_insert_sql = String::new();
+    make::try_owned(|mem| {
+        let mut single_row_insert = mem.make_unique(insert);
+
+        let value_params: Vec<_> = (1..=array_params.len())
+            .map(|param_number| {
+                let mut value_param = mem.make_node::<nodes::ParamRef>();
+                value_param.as_mut().set_number(param_number as i32);
+                value_param.uncast()
+            })
+            .collect();
+
+        let mut values_select = mem.make_node::<nodes::SelectStmt>();
+        values_select
+            .as_mut()
+            .set_values_lists(mem.make_list(&[mem.make_list(&value_params)]));
+
+        single_row_insert
+            .as_mut()
+            .set_select_stmt(values_select.uncast());
+        single_row_insert
+            .as_mut()
+            .set_on_conflict_clause(mem.make_unique(None::<&nodes::OnConflictClause>));
+        single_row_insert
+            .as_mut()
+            .set_returning_clause(mem.make_unique(None::<&nodes::ReturningClause>));
+
+        single_row_insert_sql = deparse(&*single_row_insert)?.as_str().to_string();
+
+        Ok::<_, Error>(single_row_insert)
+    })?;
+
+    Ok(Some(UnnestInsert {
+        array_params,
+        single_row_insert_sql,
+    }))
 }
 
 fn split_insert_statements(
@@ -303,6 +606,26 @@ impl StatementRewrite<'_> {
             return Ok(());
         }
 
+        let tables = Tables::new(self.schema);
+        if let Some((select, unnest_range_function, unnest_call)) = find_unnest_call(insert)
+            && let Some(relation) = insert.relation()
+            && tables
+                .sharded(Table::from(relation))
+                .is_some_and(|sharded_table| sharded_table.insert_sends_key_column(insert))
+
+            // Without a column list, the router reads the columns from the schema, so we only split if the schema has the table (otherwise, the router can't find the keys, and the rows would go to random shards).
+            && (!insert.cols().is_empty()
+                || self
+                    .db_schema
+                    .table(Table::from(relation), self.user, self.search_path)
+                    .is_some())
+            && let Some(unnest_insert) =
+                plan_unnest_insert(insert, select, unnest_range_function, unnest_call)?
+        {
+            plan.insert_split = Some(InsertSplitPlan::Unnest(unnest_insert));
+            return Ok(());
+        }
+
         let splits = split_insert_statements(insert)?;
 
         if splits.len() <= 1 {
@@ -315,6 +638,7 @@ impl StatementRewrite<'_> {
         // base and make this behave consistently.
 
         // Now create Ast for each split (needs mutable borrow of prepared_statements)
+        let mut values_splits = Vec::with_capacity(splits.len());
         for (params, stmt) in splits {
             // If this is a named prepared statement, register the split in the global cache
             // and store the assigned name for use in Bind messages.
@@ -327,12 +651,14 @@ impl StatementRewrite<'_> {
                 None
             };
 
-            plan.insert_split.push(InsertSplit {
+            values_splits.push(InsertSplit {
                 params,
                 stmt,
                 statement_name,
             });
         }
+
+        plan.insert_split = Some(InsertSplitPlan::Values(values_splits));
 
         Ok(())
     }
@@ -369,11 +695,12 @@ mod tests {
     use pgdog_config::Rewrite;
 
     use super::*;
-    use crate::backend::ShardingSchema;
     use crate::backend::schema::Schema;
+    use crate::backend::{ShardedTables, ShardingSchema};
     use crate::frontend::PreparedStatements;
     use crate::frontend::client::QueryTimestamps;
     use crate::frontend::router::parser::{Route, ShardWithPriority, StatementRewriteContext};
+    use crate::frontend::router::sharding::ShardedTable;
     use crate::net::messages::bind::{Format, Parameter};
 
     fn default_db_schema() -> Schema {
@@ -381,8 +708,22 @@ mod tests {
     }
 
     fn default_schema() -> ShardingSchema {
+        let sharded_tables = ["my_table", "t"]
+            .map(|name| ShardedTable {
+                name: Some(name.into()),
+                column: "id".into(),
+                ..Default::default()
+            })
+            .to_vec();
+
         ShardingSchema {
             shards: 2,
+            tables: ShardedTables::new(
+                sharded_tables,
+                vec![],
+                false,
+                pgdog_config::SystemCatalogsBehavior::default(),
+            ),
             rewrite: Rewrite {
                 enabled: true,
                 split_inserts: RewriteMode::Rewrite,
@@ -392,7 +733,7 @@ mod tests {
         }
     }
 
-    fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
+    fn parse_and_plan(sql: &str) -> RewritePlan {
         let root = pg_raw_parse::parse(sql).unwrap();
         let insert = match root.stmts().next() {
             Some(Node::InsertStmt(insert)) => insert,
@@ -414,7 +755,34 @@ mod tests {
         });
         let mut plan = RewritePlan::default();
         rewriter.split_insert(insert, &mut plan).unwrap();
-        plan.insert_split
+        plan
+    }
+
+    fn parse_and_split(sql: &str) -> Vec<InsertSplit> {
+        match parse_and_plan(sql).insert_split {
+            Some(InsertSplitPlan::Values(splits)) => splits,
+            _ => Vec::new(),
+        }
+    }
+
+    // check that we plan the unnest(..) split for `INSERT .. SELECT * FROM unnest(..)` with typed array parameters
+    #[test]
+    fn test_split_insert_with_unnest_and_params() {
+        let plan = parse_and_plan(
+            "INSERT INTO my_table (id, value) SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._int8)",
+        );
+
+        assert!(matches!(
+            plan.insert_split,
+            Some(InsertSplitPlan::Unnest(_))
+        ));
+
+        // Without a column list and without the table in the schema, the router can't find the keys, so we don't split the INSERT.
+        let plan = parse_and_plan(
+            "INSERT INTO my_table SELECT * FROM unnest($1::pg_catalog._int8, $2::pg_catalog._int8)",
+        );
+
+        assert!(plan.insert_split.is_none());
     }
 
     #[test]
