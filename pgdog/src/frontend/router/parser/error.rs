@@ -103,6 +103,9 @@ pub(crate) enum Error {
     #[error("unmapped sharding key was specified")]
     UnmappedShardKey(String),
 
+    #[error("INSERT .. SELECT into sharded table is not supported without explicit sharding key")]
+    InsertSelectWithoutShardingKey,
+
     #[error("execute requires prepared statements to be set to full")]
     ExecuteRequiresFull,
 
