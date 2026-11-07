@@ -19,6 +19,8 @@ use crate::state::State;
 
 use super::*;
 
+mod passthrough_reload_stats;
+
 pub(crate) fn pool() -> Pool {
     let config = Config {
         max: 1,
