@@ -1,6 +1,7 @@
 -- PLACEHOLDERS
 --   <st1>, <st2>   sharded tables
---   <omni>         omni table 
+--   <omni>         omni table
+--   <t>            table not in the sharding config
 --   <a>, <b>       a table that is either sharded or omni (given by case)
 --   <key>          sharding key column
 --   <col>          any column that is not the sharding key
@@ -31,7 +32,7 @@
 
 -- FIRST
 --   basis: Mastodon's test suite (highest to lowest share of subquery calls)
---   progress: 24 out of 49 done
+--   progress: 24 out of 46 done
 --
 -- [DONE] [A1 A2 A3 A4 A5 A6] [insert, update, delete] .. WHERE <col> IN (<sq> WHERE <x> = $1)
 --       case: <x> is <col>
@@ -62,17 +63,9 @@
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <key> = $1 AND <col> IN (<sq> WHERE <key> = $1)
 --       condition: same parameter in outer and inner
 -- [DONE] [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq> WHERE <col> = $1)
---   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
---       case: <op> = AND
---       case: <op> = OR
---       case: <op> = AND NOT
---   [A1 A2 A3 A4 A6 O1 O2 O3 O4 O5 O7] [select] SELECT <agg>(..) FROM (<sq>) s
---       condition: <sq> is cross-shard
 -- [DONE] [A1 A2 A3 A4 A5 A6 O2 O7 Q5] [select] .. WHERE NOT EXISTS (<sq>)
 -- [DONE] [A1 A2 A3 A4 A6 Q3] [select] .. WHERE <col> NOT IN (<sq>)
 --       condition: <sq> result with and without NULLs
---   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
---   [A1 A2 A3 A4 A6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
 -- [DONE] [A1 A2 A4 A5 A6] [select, insert, delete] .. (SELECT <agg>(<col>) FROM <st2>)
 --       condition: computed across all shards
 --       case: <agg> = count
@@ -80,49 +73,113 @@
 --       case: <agg> = min
 --       case: <agg> = max
 --       case: <agg> = avg
+-- [DONE] [A1 A2 A3 A6 Q3] [select] .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert, update] .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
+--       condition: <sq> is cross-shard; the <n> rows come from several shards
+-- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq>)
+--       case: key in outer only
+--       case: key in both, same shard
+-- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
+-- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert] .. (SELECT DISTINCT .. FROM <st2>)
+-- [DONE] [A1 A2 A3 A4 A6 Q1 Q5] [insert] INSERT INTO <st1> SELECT .. ON CONFLICT ..
+--       case: DO NOTHING
+--       case: DO UPDATE SET <col> = EXCLUDED.<col>
+
+-- Derived tables
+-- [DONE] [A1 A2 A3 A4 A6 O1 O2 O3 O4 O5 O7] [select] SELECT <agg>(..) FROM (<sq>) s
+--       condition: <sq> is cross-shard
+-- [DONE] [A1 A2 A4 A5 A6] [select] SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s
+--       condition: <sq> is cross-shard; the <n> rows come from several shards
+-- [DONE] [A1 A2 A4 A6 Oa] [select] SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>
+--       condition: <sq> is cross-shard
+-- [DONE] [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
+
+-- Plain CTEs
+--   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (..) SELECT .. WHERE <col> IN (SELECT .. FROM c)
+--   [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
+--   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
+--   [A1 A2 A3 A4 A5 A6] [select, insert] WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b ..
+--       case: one CTE over another
+--       case: same CTE referenced more than once
+
+-- WHERE follow-ups
+--   [A1 A2 A3 A4 A5 A6] [select] .. WHERE <col> IN (<sq>) <op> EXISTS (<sq>)
+--       case: <op> = AND
+--       case: <op> = OR
+--       case: <op> = AND NOT
 --   [A1 A2 A3 A4 A5 A6] [select, update, delete] .. WHERE <col> IN (<sq> WHERE <col> IN (<sq> WHERE <col> IN (<sq>)))
 --       condition: mix of single-shard and cross-shard levels
--- [DONE] [A1 A2 A3 A6 Q3] [select] .. WHERE <col> IN (WITH c AS (..) SELECT .. FROM c)
---   [A1 A2 A4 A6] [select] WITH c (a, b) AS (..) SELECT .. FROM c
+
+-- Subqueries in select list
+--   [A1 A2 A3] [select] SELECT ARRAY(<sq>) FROM <st1>
+--   [A1 A2 A3 A4 A6] [select] SELECT EXISTS (<sq>) FROM <st1>
+
+-- Set operations
+--   [A1 A2 A4 A6] [select] SELECT .. FROM (<q1> UNION <q2>) s
+--   [A1 A2 A5 A6] [select] WITH c AS (<q1> UNION <q2>) SELECT .. FROM c
+
+-- Inner result: cross-shard merging
+--   [A1 A2 A3 A4 A6] [select] .. (SELECT .. FROM <st2> ORDER BY .. OFFSET <n>)
+--   [A1 A2 A3 A4 A6] [select, insert] .. (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col> HAVING ..)
+--       condition: groups split across shards
+--   [A1 A2 A3 A4 A6 O3 O9 Q5] [select, insert] .. (SELECT .., <fn>() OVER (..) FROM <st2>)
+
+-- Correlated subqueries
 --   [A1 A2 A3 A4 A6 O7 O9 Ob] [select] .. WHERE EXISTS (<sq> WHERE <st2>.<x> = <st1>.<x> AND <filter>)
+--   [A1 A2 A4 A5 A6] [select] SELECT <col>, (<sq> WHERE <st2>.<x> = <st1>.<x>) FROM <st1>
 --   [A1 A2 A6 O9 Oc Q6] [select] .. FROM <st1> <join> LATERAL (<sq> WHERE <st2>.<x> = <st1>.<x>) s ..
 --       case: <join> = comma
 --       case: <join> = LEFT JOIN .. ON TRUE
 --       case: <join> = CROSS JOIN
 --       case: <join> = JOIN .. ON TRUE
--- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert, update] .. (SELECT .. FROM <st2> ORDER BY .. LIMIT <n>)
---       condition: <sq> is cross-shard; the <n> rows come from several shards
---   [A1 A2 A3 A4 A5 A6 O9 Q2 Q3] [update] UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
---   [A1 A2 A3 A4 A6 O3 O9 Q5] [select, insert] .. (SELECT .., <fn>() OVER (..) FROM <st2>)
+
+-- Recursive CTEs
+--   [A1 A2 A3 A4 A6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM <st1> JOIN c ON ..) SELECT .. FROM c
 --   [A1 A2 A6 Q6] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM c, LATERAL (<sq>) s) SELECT .. FROM c
--- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <key> = <k1> AND <col> IN (<sq>)
---       case: key in outer only
---       case: key in both, same shard
---   [A1 A2 A4 A5 A6] [select] SELECT .. FROM (SELECT .. ORDER BY .. LIMIT <n>) s
---       condition: <sq> is cross-shard; the <n> rows come from several shards
---   [A1 A2 A3 A4 A5 A6] [select] WITH c AS (SELECT .. FROM <st1>) SELECT <col>, <agg>(..) FROM c GROUP BY <col>
--- [DONE] [A1 A2 A3 A4 A5 A6] [update, delete] .. WHERE <col> IN (<sq> WHERE <key> = <k1>)
---   [A1 A2 A4 A6] [select] SELECT .. FROM (<q1> UNION <q2>) s
---   [A1 A2 A4 A6 O7 O9] [select] SELECT .. FROM <st1> JOIN (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col>) s ON ..
---   [A1 A2 A3 A4 A6] [select] .. (SELECT .. FROM <st2> ORDER BY .. OFFSET <n>)
---   [A1 A2 A4 A6 Oa] [select] SELECT .. FROM (<sq>) s ORDER BY .. LIMIT <n>
---       condition: <sq> is cross-shard
---   [A1 A2 A4 A5 A6] [select] SELECT <col>, (<sq> WHERE <st2>.<x> = <st1>.<x>) FROM <st1>
---   [A1 A2 A3] [select] SELECT ARRAY(<sq>) FROM <st1>
--- [DONE] [A1 A2 A3 A4 A5 A6] [select, insert] .. (SELECT DISTINCT .. FROM <st2>)
---   [A1 A2 A5 A6] [select] WITH c AS (<q1> UNION <q2>) SELECT .. FROM c
--- [DONE] [A1 A2 A3 A4 A6 Q1 Q5] [insert] INSERT INTO <st1> SELECT .. ON CONFLICT ..
---       case: DO NOTHING
---       case: DO UPDATE SET <col> = EXCLUDED.<col>
---   [A1 A2 A3 A4 A6] [select] SELECT EXISTS (<sq>) FROM <st1>
+
+
+-- JOINS
+
+-- Co-located on the key
+--   [A1] [select] .. FROM <st1> JOIN <st2> ON <st1>.<key> = <st2>.<key>
+--   [A1 A2 A4 A5 O4] [update] UPDATE <st1> SET .. FROM <st2> WHERE <st1>.<key> = <st2>.<key>
+--       relevant to subqueries
+-- 
+-- Sharding key on one side only
+--   [A1] [select] .. FROM <st1> JOIN <st2> ON <st1>.<col> = <st2>.<key>
+--       condition: <col> has sharding key values of rows on other shards
 --   [A1 A2 A3 A4 Q5] [insert] INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
---   [A1 A2 A3 A4 A5 A6] [select, insert] WITH a AS (..), b AS (SELECT .. FROM a) .. FROM a JOIN b ..
---       case: one CTE over another
---       case: same CTE referenced more than once
---   [A1 A2 A3 A4 A6] [select, insert] .. (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col> HAVING ..)
---       condition: groups split across shards
---   [A1 A2 A4 A5 O4] [update] UPDATE <st1> SET .. FROM <st2> WHERE <st1>.<x> = <st2>.<x>
---       case: <x> is <key> (co-located)
+--       relevant to subqueries
+--       case: co-located on the key
+--       case: key on one side only
+
+-- Sharding key on neither side
+--   [A1] [select] .. FROM <st1> <join> <st2> ON <st1>.<col> = <st2>.<col>
+--       case: <join> = JOIN
+--       case: <join> = LEFT JOIN
+
+-- Broadcast of a materialized side
+--   [A1 A2 A4 A6 O7 O9] [select] SELECT .. FROM <st1> JOIN (SELECT <col>, <agg>(..) FROM <st2> GROUP BY <col>) s ON ..
+--       relevant to subqueries
+--       condition: <sq> is evaluated first and inlined 
+
+-- Tables not in the sharding config
+--   [A1] [select] .. FROM <st1> JOIN <t> ON <t>.<col> = <st1>.<col>
+--   [A1] [select] .. FROM <a> JOIN <t> ON .. JOIN <st1> ON ..
+--       condition: <t> links two other tables
+
+-- Multi-way joins
+--   [A1] [select] SELECT .. FROM <st1> <join> .. <join> .. <join> ..
+--       condition: three or more tables; mix of co-located and cross-shard joins
+--       case: <join> = JOIN, with WHERE <col> IN (<sq>) AND NOT EXISTS (<sq>)
+--       case: <join> = LEFT JOIN
+
+-- Recursive joins
+--   [A1] [select] WITH RECURSIVE c AS (<q1> UNION ALL SELECT .. FROM c JOIN <st1> ON <st1>.<col> = c.<col>) SELECT .. FROM c
+--       condition: each step can go on another shard
+--       case: child to parent
+--       case: parent to children
+--       case: LEFT JOIN <st2> in each step
 
 
 -- CORE

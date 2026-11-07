@@ -9,11 +9,8 @@ use crate::frontend::router::parser::{
     rewrite::statement::{Error, insert::Subquery},
 };
 
-// Determine if there's a SELECT FROM in an INSERT.
-// E.g., INSERT INTO .. SELECT FROM generate_series(..)
+pub(crate) mod from_clause;
 pub(crate) mod insert_select;
-
-// Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
 pub(crate) mod where_clause;
 
 impl<'a> StatementRewrite<'a> {
@@ -55,8 +52,13 @@ impl<'a, 'mem> SubqueryRewrite<'a, 'mem> {
 
     fn plan_subquery(&mut self) -> Result<Option<Subquery>, Error> {
         // Determine if there's a SubLink node in the WHERE clause of a SELECT / UPDATE / DELETE statement.
-        if let Some((sub_link, _)) = where_clause::has_sub_link_in_where(self.outer_stmt) {
-            return self.handle_subquery_in_where(sub_link);
+        if let Some(subquery) = self.handle_subquery_in_where()? {
+            return Ok(Some(subquery));
+        }
+
+        // Determine if there's a RangeSubselect within a FROM clause of a SELECT / UPDATE statement.
+        if let Some(subquery) = self.handle_subquery_in_from_clause() {
+            return Ok(Some(subquery));
         }
 
         // Determine if there's a SELECT FROM in an INSERT.

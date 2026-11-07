@@ -126,3 +126,10 @@ INSERT INTO subusers(id) SELECT id FROM UNNEST($1::int[]) as id
 -- route insert: 0,1
 -- verify: SELECT * FROM subpackages ORDER BY id
 INSERT INTO subpackages (id, user_id) SELECT id, id FROM subusers ORDER BY id DESC LIMIT 3
+
+-- case
+-- what: INSERT INTO <st1> SELECT .. FROM <st2> JOIN .. ON ..
+-- route select: 0,1
+-- route insert: 0
+-- verify: SELECT * FROM subpackages ORDER BY id
+INSERT INTO subpackages (id, user_id, order_id) SELECT suborders.id, suborders.user_id, suborders.id FROM suborders JOIN subusers ON suborders.user_id = subusers.id

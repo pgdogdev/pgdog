@@ -90,3 +90,25 @@ UPDATE subusers SET status = 'changed' WHERE id = 3 AND status IN (SELECT status
 -- verify: SELECT * FROM subusers ORDER BY id
 UPDATE subusers SET status = 'changed' WHERE status IN (SELECT status FROM subusers WHERE id = 3)
 
+-- case
+-- TODO(jkaczman): This case is not handled yet, as noted by the `ShardingKeyUpdate` TODO
+-- present in the file (parser/rewrite/statement/subquery/from_clause.rs)
+-- marked TODO
+-- what: ShardingKeyUpdate pulling data from non-sharded values (generate_series method)
+-- route select: any
+-- route update: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+UPDATE suborders SET user_id = s.new_user_id FROM (SELECT val AS old_user_id, val + 2 AS new_user_id FROM generate_series(1, 2) AS g(val)) s WHERE suborders.user_id = s.old_user_id
+
+-- case
+-- what: UPDATE <st1> SET .. FROM (<sq>) s WHERE ..
+-- route select: 0,1
+-- route update: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+UPDATE suborders SET state = 'NC' FROM (SELECT id FROM subusers WHERE status = 'VIP') s WHERE suborders.id = s.id
+
+-- case
+-- what: UPDATE <st1> SET .. FROM <st2> WHERE <st1>.<x> = <st2>.<x>, <x> is <key> (co-located)
+-- route update: 0,1
+-- verify: SELECT * FROM suborders ORDER BY id
+UPDATE suborders SET state = 'NC' FROM subusers WHERE suborders.user_id = subusers.id AND subusers.status = 'VIP'
