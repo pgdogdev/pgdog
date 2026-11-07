@@ -16,7 +16,7 @@ use crate::{
         },
     },
     frontend::{
-        ClientRequest,
+        ClientRequest, PreparedStatements,
         client::query_engine::{QueryEngine, QueryEngineContext},
         router::{
             Route,
@@ -103,7 +103,7 @@ impl<'a> HavingMulti<'a> {
             .as_deref()
             .expect("HAVING execution requires a HAVING plan")
             .rewrite();
-        let keep = match filter(&mut self.engine.backend, having, &inputs).await {
+        let keep = match filter(&mut self.engine.backend, having, &inputs, client_request).await {
             Ok(keep) => keep,
             Err(Error::Execution(error)) => {
                 return self.forward_error(context, messages, *error).await;
@@ -176,8 +176,9 @@ async fn filter(
     backend: &mut Connection,
     having: &HavingRewritePlan,
     inputs: &HavingInputs,
+    client_request: &ClientRequest,
 ) -> Result<Vec<bool>, Error> {
-    let mut data_types = Vec::with_capacity(inputs.columns().len());
+    let mut data_types = Vec::with_capacity(inputs.columns().len() + having.params().len());
     let mut bind = Bind::default();
     for column in inputs.columns() {
         let array_oid = column.array_oid().ok_or(RewriteError::UnsupportedHaving(
@@ -186,6 +187,25 @@ async fn filter(
         data_types.push(array_oid);
         let (array, format) = column.array();
         bind.push_param(array, format);
+    }
+
+    if !having.params().is_empty() {
+        let client_bind = client_request
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                ProtocolMessage::Bind(bind) => Some(bind),
+                _ => None,
+            })
+            .ok_or(RewriteError::MissingParameter(1))?;
+        let client_types = client_param_types(client_request, client_bind);
+        for &param in having.params() {
+            let value = client_bind
+                .parameter(param)?
+                .ok_or(RewriteError::MissingParameter(param as u16 + 1))?;
+            data_types.push(client_types.get(param).copied().unwrap_or_default());
+            bind.push_param(value.parameter().clone(), value.format());
+        }
     }
 
     let shard = backend
@@ -218,4 +238,27 @@ async fn filter(
 
 fn invalid(error: AggregateError) -> Error {
     BackendError::from(error).into()
+}
+
+/// Parameter types the client declared for the statement `bind` executes.
+fn client_param_types(client_request: &ClientRequest, bind: &Bind) -> Vec<u32> {
+    let parse = client_request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            ProtocolMessage::Parse(parse) => Some(parse.clone()),
+            _ => None,
+        })
+        .or_else(|| client_request.last_parse.clone())
+        .or_else(|| PreparedStatements::global().read().parse(bind.statement()));
+    let Some(parse) = parse else {
+        return vec![];
+    };
+    parse
+        .data_types_ref()
+        .get(2..)
+        .unwrap_or_default()
+        .chunks_exact(4)
+        .map(|oid| u32::from_be_bytes([oid[0], oid[1], oid[2], oid[3]]))
+        .collect()
 }
