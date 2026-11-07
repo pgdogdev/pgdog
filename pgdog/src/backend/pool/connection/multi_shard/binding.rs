@@ -15,7 +15,7 @@ use crate::net::{Bind, FrontendPid, Message, ProtocolMessage};
 use crate::parameters::ParameterStore;
 
 use super::{
-    super::{Guard, LinkedServer},
+    super::{Guard, LinkedServer, buffer::having::HavingInputs},
     MultiShard,
     describe::describe_portals,
 };
@@ -148,6 +148,12 @@ impl MultiBinding {
     /// Reset cross-shard state after a query finished executing.
     pub(in crate::backend::pool::connection) fn query_complete(&mut self) {
         self.state.query_complete();
+    }
+
+    pub(in crate::backend::pool::connection) fn take_having_inputs(
+        &mut self,
+    ) -> Option<HavingInputs> {
+        self.state.take_having_inputs()
     }
 
     /// Handle a [`Bind`] message received from the client. In cross-shard

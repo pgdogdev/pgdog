@@ -197,6 +197,6 @@ impl<'a> SubqueryMulti<'a> {
         &mut self,
         client_request: &mut ClientRequest,
     ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-        multi_step::fetch_rows(self.engine, client_request).await
+        multi_step::fetch_rows(&mut self.engine.backend, client_request).await
     }
 }

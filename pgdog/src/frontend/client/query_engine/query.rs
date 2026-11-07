@@ -4,10 +4,7 @@ use crate::{
     backend::Error as BackendError,
     frontend::{
         client::{TransactionType, transaction_type::Transaction},
-        router::parser::{
-            explain_trace::ExplainTrace,
-            rewrite::statement::{Error as RewriteError, plan::RewriteResult},
-        },
+        router::parser::{explain_trace::ExplainTrace, rewrite::statement::plan::RewriteResult},
     },
     net::{
         Bind, DataRow, FromBytes, Message, Protocol, ProtocolMessage, Query, ReadyForQuery,
@@ -157,19 +154,13 @@ impl QueryEngine {
             }
 
             Some(RewriteResult::InPlace { .. }) | None
-                if client_request
+                if let Some(plan) = client_request
                     .route()
                     .projection_rewrite_plan
-                    .as_ref()
-                    .is_some_and(|plan| plan.having.is_some()) =>
+                    .clone()
+                    .filter(|plan| plan.having.is_some()) =>
             {
-                if let Some(transaction) = context.transaction.as_mut() {
-                    transaction.set_error();
-                }
-                let err = RewriteError::UnsupportedHaving(
-                    "aggregates would be filtered on each shard before merging",
-                );
-                self.error_response(context, client_request, ErrorResponse::unsupported(&err))
+                Box::pin(multi_step::HavingMulti::new(self, plan).execute(context, client_request))
                     .await?;
             }
 

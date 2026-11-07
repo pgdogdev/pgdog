@@ -21,6 +21,10 @@ use pgdog_postgres_types::Datum;
 
 use super::Aggregates;
 
+pub(crate) mod having;
+
+use having::HavingInputs;
+
 /// Sort and aggregate rows received from multiple shards.
 #[derive(Default, Debug, Clone)]
 pub(super) struct Buffer {
@@ -154,6 +158,22 @@ impl Buffer {
         self.buffer = rows;
 
         Ok(())
+    }
+
+    /// Collect the merged `HAVING` operands, before hidden columns are dropped.
+    pub(super) fn having_inputs(
+        &self,
+        plan: Option<&ProjectionRewritePlan>,
+        decoder: &Decoder,
+    ) -> Result<Option<HavingInputs>, super::Error> {
+        let Some(having) = plan.and_then(|plan| plan.having.as_deref()) else {
+            return Ok(None);
+        };
+        Ok(Some(HavingInputs::new(
+            &self.buffer,
+            having.rewrite().operand_aliases(),
+            decoder,
+        )?))
     }
 
     pub(super) fn drop_helper_columns(

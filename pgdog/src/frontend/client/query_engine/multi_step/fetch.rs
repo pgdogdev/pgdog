@@ -1,7 +1,8 @@
 //! Run an internal query and collect its result instead of sending it to the client.
 
 use crate::{
-    frontend::{ClientRequest, Router, client::query_engine::QueryEngine},
+    backend::pool::Connection,
+    frontend::{ClientRequest, Router},
     net::{DataRow, ErrorResponse, Protocol, RowDescription},
 };
 
@@ -12,11 +13,10 @@ use super::Error;
 /// Every reply is read, so the connection stays in sync even when
 /// PostgreSQL returns an error, which is returned after the drain.
 pub(crate) async fn fetch_rows(
-    engine: &mut QueryEngine,
+    backend: &mut Connection,
     request: &ClientRequest,
 ) -> Result<(Vec<DataRow>, Option<RowDescription>), Error> {
-    engine
-        .backend
+    backend
         .handle_client_request(request, &mut Router::default(), false)
         .await?;
 
@@ -24,8 +24,8 @@ pub(crate) async fn fetch_rows(
     let mut data_rows = Vec::new();
     let mut error = None;
 
-    while engine.backend.has_more_messages() {
-        let message = engine.read_server_message().await?;
+    while backend.has_more_messages() {
+        let message = backend.read().await?;
         match message.code() {
             'D' => data_rows.push(DataRow::try_from(message)?),
             'T' => row_description = Some(RowDescription::try_from(message)?),
